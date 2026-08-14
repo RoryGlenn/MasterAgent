@@ -48,7 +48,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
             transport=transport,
             timeout_seconds=config.timeout_seconds,
             max_response_bytes=config.max_response_bytes,
-            ca_bundle=config.ca_bundle,
+            ca_bundle_data=config.ca_bundle_data,
             allowed_methods=frozenset({"GET", "POST", "PUT", "DELETE"}),
         )
         self._last: dict[str, dict[str, Any]] = {}

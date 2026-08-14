@@ -223,6 +223,7 @@ class EntraClientCredentialsProvider:
         scopes: tuple[str, ...],
         transport: HttpTransport | None = None,
         timeout_seconds: float = 20.0,
+        ca_bundle_data: bytes | None = None,
     ) -> None:
         for name, value in (
             ("tenant_id", tenant_id),
@@ -243,6 +244,7 @@ class EntraClientCredentialsProvider:
             timeout_seconds=timeout_seconds,
             max_response_bytes=1024 * 1024,
             retry_attempts=1,
+            ca_bundle_data=ca_bundle_data,
             allowed_methods=frozenset({"POST"}),
         )
 

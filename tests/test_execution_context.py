@@ -8,11 +8,13 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from master_agent.cli import main
 from master_agent.config import IntegrationConfig
+from master_agent.connectors.factory import build_live_registry
 from master_agent.errors import ConfigurationError
 from master_agent.execution_context import (
     build_execution_context,
@@ -181,7 +183,120 @@ class ExecutionContextTests(unittest.TestCase):
 
             self.assertEqual(result, 1)
             build_registry.assert_called_once()
+            self.assertIsNotNone(
+                build_registry.call_args.kwargs["approved_execution_context"]
+            )
             orchestrator.assert_not_called()
+
+    def test_factory_rejects_each_changed_approved_connector_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(_JIRA_CA_CONFIG, encoding="utf-8")
+            ca_bundle = root / "approved.pem"
+            ca_bundle.write_text("APPROVED CA\n", encoding="ascii")
+            environ = {"MASTER_AGENT_ENTERPRISE_CA_BUNDLE": str(ca_bundle)}
+            integrations = IntegrationConfig.from_toml(integrations_path)
+            approved = build_execution_context(integrations, environ=environ)
+            binding = approved.connectors[0]
+            changed_bindings = (
+                (
+                    "config identity",
+                    replace(binding, config_identity_sha256="0" * 64),
+                ),
+                (
+                    "base URL",
+                    replace(
+                        binding,
+                        resolved_base_url="https://other.atlassian.net",
+                    ),
+                ),
+                (
+                    "origin",
+                    replace(binding, resolved_origin="https://other.atlassian.net"),
+                ),
+                (
+                    "CA path",
+                    replace(binding, ca_bundle_path=str(root / "other.pem")),
+                ),
+                (
+                    "CA digest",
+                    replace(binding, ca_bundle_sha256="0" * 64),
+                ),
+            )
+
+            for expected_detail, changed in changed_bindings:
+                with self.subTest(expected_detail=expected_detail):
+                    changed_context = replace(approved, connectors=(changed,))
+                    with self.assertRaisesRegex(ConfigurationError, expected_detail):
+                        build_live_registry(
+                            integrations,
+                            environ=environ,
+                            systems={"jira"},
+                            approved_execution_context=changed_context,
+                        )
+
+            changed_integrations = replace(approved, integrations_sha256="0" * 64)
+            with self.assertRaisesRegex(ConfigurationError, "integrations bundle"):
+                build_live_registry(
+                    integrations,
+                    environ=environ,
+                    systems={"jira"},
+                    approved_execution_context=changed_integrations,
+                )
+
+    def test_tls_uses_approved_bytes_during_ca_path_swap_and_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(_JIRA_CA_CONFIG, encoding="utf-8")
+            ca_bundle = root / "active.pem"
+            replacement = root / "replacement.pem"
+            saved = root / "saved.pem"
+            approved_bytes = b"APPROVED CA\n"
+            attacker_bytes = b"ATTACKER CA\n"
+            ca_bundle.write_bytes(approved_bytes)
+            replacement.write_bytes(attacker_bytes)
+            environ = {"MASTER_AGENT_ENTERPRISE_CA_BUNDLE": str(ca_bundle)}
+            integrations = IntegrationConfig.from_toml(integrations_path)
+            approved = build_execution_context(integrations, environ=environ)
+            before_build = build_execution_context(integrations, environ=environ)
+            during_swap = []
+
+            def swap_path_then_restore(*args: object, **kwargs: object) -> MagicMock:
+                self.assertEqual(args, ())
+                ca_bundle.replace(saved)
+                replacement.replace(ca_bundle)
+                try:
+                    during_swap.append(
+                        build_execution_context(integrations, environ=environ)
+                    )
+                finally:
+                    ca_bundle.replace(replacement)
+                    saved.replace(ca_bundle)
+                return MagicMock()
+
+            with patch(
+                "master_agent.http.ssl.create_default_context",
+                side_effect=swap_path_then_restore,
+            ) as create_context:
+                registry = build_live_registry(
+                    integrations,
+                    environ=environ,
+                    systems={"jira"},
+                    approved_execution_context=approved,
+                )
+
+            after_build = build_execution_context(integrations, environ=environ)
+            self.assertIn("jira", registry.systems())
+            self.assertEqual(before_build, approved)
+            self.assertEqual(after_build, approved)
+            self.assertEqual(len(during_swap), 1)
+            self.assertNotEqual(during_swap[0], approved)
+            create_context.assert_called_once_with(
+                cadata=approved_bytes.decode("ascii")
+            )
+            self.assertEqual(ca_bundle.read_bytes(), approved_bytes)
 
     def test_context_round_trip_is_part_of_plan_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

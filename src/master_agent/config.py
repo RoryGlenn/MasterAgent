@@ -26,6 +26,7 @@ from master_agent.oauth import (
     RestrictedTokenFileProvider,
     TokenProvider,
 )
+from master_agent.trust_store import CaBundleSnapshot, capture_ca_bundle
 
 
 class DeploymentType(StrEnum):
@@ -252,11 +253,26 @@ class ConnectorConfig:
                 )
         return base_url.rstrip("/"), ca_bundle
 
+    def capture_execution_target(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> ResolvedExecutionTarget:
+        """Capture the destination and immutable CA bytes used by live TLS."""
+
+        base_url, ca_bundle = self.resolve_execution_target(environ)
+        return ResolvedExecutionTarget(
+            system=self.system,
+            config_identity=self.identity,
+            base_url=base_url,
+            ca_bundle=(capture_ca_bundle(ca_bundle) if ca_bundle is not None else None),
+        )
+
     def resolve(
         self,
         environ: Mapping[str, str] | None = None,
         *,
         auth_transport: HttpTransport | None = None,
+        execution_target: ResolvedExecutionTarget | None = None,
     ) -> ResolvedConnectorConfig:
         """Resolve environment references into an in-memory connector config.
 
@@ -286,7 +302,13 @@ class ConnectorConfig:
                 + "; ".join(errors)
             )
 
-        base_url, ca_bundle = self.resolve_execution_target(source)
+        target = execution_target or self.capture_execution_target(source)
+        if target.system != self.system or target.config_identity != self.identity:
+            raise ConfigurationError(
+                f"connector {self.system} execution target does not match its config"
+            )
+        base_url = target.base_url
+        ca_bundle = target.ca_bundle
 
         username = source.get(self.username_env) if self.username_env else None
         secret = source.get(self.secret_env) if self.secret_env else None
@@ -313,6 +335,7 @@ class ConnectorConfig:
                     scopes=scopes,
                     transport=auth_transport,
                     timeout_seconds=self.timeout_seconds,
+                    ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
                 )
             )
             secret = None
@@ -356,10 +379,22 @@ class ConnectorConfig:
             max_pages=self.max_pages,
             max_items=self.max_items,
             max_response_bytes=self.max_response_bytes,
-            ca_bundle=ca_bundle,
+            ca_bundle=(ca_bundle.path if ca_bundle is not None else None),
+            ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
+            ca_bundle_sha256=(ca_bundle.sha256 if ca_bundle is not None else None),
             extra=self.extra,
             config_identity=self.identity,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedExecutionTarget:
+    """One captured connector destination before credentials are resolved."""
+
+    system: str
+    config_identity: str
+    base_url: str
+    ca_bundle: CaBundleSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,10 +410,28 @@ class ResolvedConnectorConfig:
     max_items: int = 200
     max_response_bytes: int = 10 * 1024 * 1024
     ca_bundle: Path | None = None
+    ca_bundle_data: bytes | None = field(default=None, repr=False)
+    ca_bundle_sha256: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
     config_identity: str | None = None
 
     def __post_init__(self) -> None:
+        if self.ca_bundle is not None and self.ca_bundle_data is None:
+            snapshot = capture_ca_bundle(self.ca_bundle)
+            object.__setattr__(self, "ca_bundle", snapshot.path)
+            object.__setattr__(self, "ca_bundle_data", snapshot.data)
+            object.__setattr__(self, "ca_bundle_sha256", snapshot.sha256)
+        elif self.ca_bundle_data is not None:
+            digest = hashlib.sha256(self.ca_bundle_data).hexdigest()
+            if self.ca_bundle_sha256 is not None and self.ca_bundle_sha256 != digest:
+                raise ConfigurationError(
+                    "resolved connector CA data does not match its digest"
+                )
+            object.__setattr__(self, "ca_bundle_sha256", digest)
+        elif self.ca_bundle_sha256 is not None:
+            raise ConfigurationError(
+                "resolved connector CA digest requires captured data"
+            )
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
 
 

@@ -36,6 +36,7 @@ from master_agent.errors import (
     RateLimitError,
     ResourceNotFoundError,
 )
+from master_agent.trust_store import capture_ca_bundle
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,13 +283,43 @@ class _PinnedHTTPSHandler(HTTPSHandler):
         )
 
 
+def _create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
+    """Create TLS trust from immutable captured data, never from a live path."""
+
+    if ca_bundle_data is None:
+        return ssl.create_default_context()
+    try:
+        try:
+            certificate_data: str | bytes = ca_bundle_data.decode("ascii")
+        except UnicodeDecodeError:
+            # ``ssl`` accepts binary DER certificates as bytes and PEM as text.
+            certificate_data = ca_bundle_data
+        return ssl.create_default_context(cadata=certificate_data)
+    except (ValueError, ssl.SSLError) as error:
+        raise ConfigurationError(
+            "connector CA bundle is not valid certificate data"
+        ) from error
+
+
 class UrllibTransport:
     """Standard-library HTTP transport with same-origin redirects."""
 
-    def __init__(self, *, ca_bundle: Path | None = None) -> None:
-        context = ssl.create_default_context(
-            cafile=str(ca_bundle) if ca_bundle is not None else None
+    def __init__(
+        self,
+        *,
+        ca_bundle: Path | None = None,
+        ca_bundle_data: bytes | None = None,
+    ) -> None:
+        if ca_bundle is not None and ca_bundle_data is not None:
+            raise ConfigurationError(
+                "CA bundle path and captured data are mutually exclusive"
+            )
+        captured_data = (
+            capture_ca_bundle(ca_bundle).data
+            if ca_bundle is not None
+            else ca_bundle_data
         )
+        context = _create_ssl_context(captured_data)
         self._opener = build_opener(
             # Never inherit HTTP(S)_PROXY, macOS System Configuration proxies,
             # or credentials embedded in ambient proxy settings.
@@ -379,6 +410,7 @@ class SafeHttpClient:
         max_response_bytes: int = 10 * 1024 * 1024,
         retry_attempts: int = 2,
         ca_bundle: Path | None = None,
+        ca_bundle_data: bytes | None = None,
         allowed_methods: frozenset[str] = frozenset({"GET", "HEAD"}),
     ) -> None:
         self._base_url = base_url.rstrip("/") + "/"
@@ -398,7 +430,14 @@ class SafeHttpClient:
             **dict(default_headers or {}),
         }
         self._header_provider = header_provider
-        self._transport = transport or UrllibTransport(ca_bundle=ca_bundle)
+        if ca_bundle is not None and ca_bundle_data is not None:
+            raise ConfigurationError(
+                "CA bundle path and captured data are mutually exclusive"
+            )
+        self._transport = transport or UrllibTransport(
+            ca_bundle=ca_bundle,
+            ca_bundle_data=ca_bundle_data,
+        )
         self._timeout_seconds = timeout_seconds
         self._max_response_bytes = max_response_bytes
         self._retry_attempts = max(0, retry_attempts)

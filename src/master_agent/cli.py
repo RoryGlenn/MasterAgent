@@ -731,6 +731,7 @@ def _run(
             include_communications=include_communications,
             workspace_root=workspace_root,
             artifact_root=draft_output_dir,
+            approved_execution_context=plan.execution_context,
         )
         register_draft_connectors(connectors, draft_output_dir)
         identities = IdentityRegistry.from_toml(

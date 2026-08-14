@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import stat
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from master_agent.config import IntegrationConfig
+from master_agent.config import (
+    ConnectorConfig,
+    IntegrationConfig,
+    ResolvedExecutionTarget,
+)
 from master_agent.errors import ConfigurationError
 from master_agent.models import (
     ChangePlan,
@@ -18,6 +20,51 @@ from master_agent.models import (
     PluginExecutionBinding,
 )
 from master_agent.plugins import PluginDescriptor
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedConnectorExecution:
+    """Immutable runtime material plus its secret-free approval binding."""
+
+    config: ConnectorConfig
+    target: ResolvedExecutionTarget
+    binding: ConnectorExecutionBinding
+
+
+def capture_connector_executions(
+    integrations: IntegrationConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[CapturedConnectorExecution, ...]:
+    """Capture all enabled connector destinations and CA bytes exactly once."""
+
+    source = environ if environ is not None else os.environ
+    captured: list[CapturedConnectorExecution] = []
+    for config in integrations.connectors.values():
+        if not config.enabled:
+            continue
+        target = config.capture_execution_target(source)
+        ca_bundle = target.ca_bundle
+        captured.append(
+            CapturedConnectorExecution(
+                config=config,
+                target=target,
+                binding=ConnectorExecutionBinding(
+                    system=config.system,
+                    deployment=str(config.deployment),
+                    config_identity_sha256=target.config_identity,
+                    resolved_base_url=target.base_url,
+                    resolved_origin=_origin(target.base_url, system=config.system),
+                    ca_bundle_path=(
+                        str(ca_bundle.path) if ca_bundle is not None else None
+                    ),
+                    ca_bundle_sha256=(
+                        ca_bundle.sha256 if ca_bundle is not None else None
+                    ),
+                ),
+            )
+        )
+    return tuple(sorted(captured, key=lambda item: item.binding.system))
 
 
 def build_execution_context(
@@ -32,28 +79,13 @@ def build_execution_context(
         raise ConfigurationError(
             "live execution context requires a hashed integrations bundle"
         )
-    source = environ if environ is not None else os.environ
-    connector_bindings: list[ConnectorExecutionBinding] = []
-    for config in integrations.connectors.values():
-        if not config.enabled:
-            continue
-        base_url, ca_bundle = config.resolve_execution_target(source)
-        ca_path: str | None = None
-        ca_digest: str | None = None
-        if ca_bundle is not None:
-            ca_path = str(ca_bundle)
-            ca_digest = _hash_stable_regular_file(ca_bundle)
-        connector_bindings.append(
-            ConnectorExecutionBinding(
-                system=config.system,
-                deployment=str(config.deployment),
-                config_identity_sha256=config.identity,
-                resolved_base_url=base_url,
-                resolved_origin=_origin(base_url, system=config.system),
-                ca_bundle_path=ca_path,
-                ca_bundle_sha256=ca_digest,
-            )
+    connector_bindings = tuple(
+        item.binding
+        for item in capture_connector_executions(
+            integrations,
+            environ=environ,
         )
+    )
 
     plugin_bindings: list[PluginExecutionBinding] = []
     for descriptor in plugin_descriptors:
@@ -79,7 +111,7 @@ def build_execution_context(
 
     return ExecutionContext(
         integrations_sha256=integrations.source_sha256,
-        connectors=tuple(connector_bindings),
+        connectors=connector_bindings,
         plugins=tuple(plugin_bindings),
     )
 
@@ -120,41 +152,3 @@ def _origin(base_url: str, *, system: str) -> str:
     if port is not None and not (parsed.scheme == "https" and port == 443):
         rendered_host = f"{rendered_host}:{port}"
     return f"{parsed.scheme.lower()}://{rendered_host}"
-
-
-def _hash_stable_regular_file(path: Path) -> str:
-    try:
-        path_metadata = path.lstat()
-        if not stat.S_ISREG(path_metadata.st_mode):
-            raise ConfigurationError("connector CA bundle must be a regular file")
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            opened_metadata = os.fstat(handle.fileno())
-            if (
-                not stat.S_ISREG(opened_metadata.st_mode)
-                or opened_metadata.st_dev != path_metadata.st_dev
-                or opened_metadata.st_ino != path_metadata.st_ino
-            ):
-                raise ConfigurationError(
-                    "connector CA bundle changed during identity verification"
-                )
-            total = 0
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                total += len(block)
-                digest.update(block)
-            final_metadata = os.fstat(handle.fileno())
-        if (
-            total != opened_metadata.st_size
-            or final_metadata.st_size != opened_metadata.st_size
-            or final_metadata.st_mtime_ns != opened_metadata.st_mtime_ns
-        ):
-            raise ConfigurationError(
-                "connector CA bundle changed during identity verification"
-            )
-        return digest.hexdigest()
-    except ConfigurationError:
-        raise
-    except OSError as error:
-        raise ConfigurationError(
-            "connector CA bundle could not be identified"
-        ) from error
