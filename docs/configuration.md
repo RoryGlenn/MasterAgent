@@ -5,8 +5,9 @@
 Each CLI configuration option resolves in this order:
 
 1. explicit path supplied to the command;
-2. same-named file under the current project's `config/` directory;
-3. the wheel-packaged safe default.
+2. the wheel-packaged safe default.
+
+The current working directory is never an implicit configuration authority.
 
 Packaged defaults are intended for installation verification. They enable no live connector, write, send, or recurring schedule.
 
@@ -30,6 +31,30 @@ Packaged defaults are intended for installation verification. They enable no liv
 TOML contains environment-variable **names**, never secret values. The runtime rejects credentials embedded in URLs and redacts query strings from errors.
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
+
+Exact-plan binding records the non-secret credential principal, not the token
+or password. Basic usernames and Entra client-credential tenant/client IDs are
+derived from their configured environment variables. Opaque bearer and
+delegated credentials require an explicit reviewed `credential_identity` in
+the connector table (for example, a tenant ID plus provider object ID or UPN).
+Changing that identity invalidates the approved execution context while normal
+secret rotation for the same identity remains possible.
+
+## Applied-run manifest
+
+`bind-context` must receive the same execution arguments later supplied to
+`run --apply`. Its plan fingerprint covers connector mode and write/send gates,
+canonical workspace and artifact roots, effective Bitbucket publication roots,
+the audit database, optional result path and evidence type, and SHA-256 digests
+of policy, source-of-truth, capability, governance, identity, retention, and
+approval-authority snapshots. A missing legacy binding or any mismatch is
+rejected before connector construction.
+
+An unbound policy dry run remains free of live connector credential resolution
+and is non-persistent: its audit chain exists only in a temporary directory
+that is removed before the command returns, and `--result-json` is rejected
+unless `--apply` is selected. Durable audit and retained evidence therefore use
+only manifest-bound paths.
 
 ## Live connector gates
 

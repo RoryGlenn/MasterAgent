@@ -25,8 +25,10 @@ class VersionOneCliTests(unittest.TestCase):
         with TemporaryDirectory() as raw:
             root = Path(raw)
             plan = root / "sample-plan.json"
+            bound_plan = root / "bound-sample-plan.json"
             database = root / "audit.sqlite3"
             report = root / "report.json"
+            drafts = root / "drafts"
             original = Path.cwd()
             try:
                 os.chdir(root)
@@ -36,13 +38,32 @@ class VersionOneCliTests(unittest.TestCase):
                 self.assertEqual(status, 0, stderr)
                 status, _stdout, stderr = _run_cli(
                     [
-                        "run",
+                        "bind-context",
                         str(plan),
+                        "--connector-mode",
+                        "mock",
+                        "--database",
+                        str(database),
+                        "--result-json",
+                        str(report),
+                        "--draft-output-dir",
+                        str(drafts),
+                        "--output",
+                        str(bound_plan),
+                    ]
+                )
+                self.assertEqual(status, 0, stderr)
+                status, _stdout, stderr = _run_cli(
+                    [
+                        "run",
+                        str(bound_plan),
                         "--apply",
                         "--database",
                         str(database),
                         "--result-json",
                         str(report),
+                        "--draft-output-dir",
+                        str(drafts),
                     ]
                 )
                 self.assertEqual(status, 0, stderr)

@@ -10,6 +10,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -263,6 +264,7 @@ class ConnectorExecutionBinding:
     config_identity_sha256: str
     resolved_base_url: str
     resolved_origin: str
+    credential_identity: str | None = None
     ca_bundle_path: str | None = None
     ca_bundle_sha256: str | None = None
 
@@ -283,6 +285,13 @@ class ConnectorExecutionBinding:
             raise ValidationError(
                 "connector execution binding CA path and digest must be supplied together"
             )
+        if (
+            self.credential_identity is not None
+            and not self.credential_identity.strip()
+        ):
+            raise ValidationError(
+                "connector execution binding credential_identity is empty"
+            )
         if self.ca_bundle_path is not None and not self.ca_bundle_path.strip():
             raise ValidationError("connector execution binding CA path is empty")
         if self.ca_bundle_sha256 is not None:
@@ -294,7 +303,7 @@ class ConnectorExecutionBinding:
     def to_dict(self) -> dict[str, str | None]:
         """Serialize the connector binding."""
 
-        return {
+        payload: dict[str, str | None] = {
             "system": self.system,
             "deployment": self.deployment,
             "config_identity_sha256": self.config_identity_sha256,
@@ -303,6 +312,9 @@ class ConnectorExecutionBinding:
             "ca_bundle_path": self.ca_bundle_path,
             "ca_bundle_sha256": self.ca_bundle_sha256,
         }
+        if self.credential_identity is not None:
+            payload["credential_identity"] = self.credential_identity
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectorExecutionBinding:
@@ -314,6 +326,11 @@ class ConnectorExecutionBinding:
             config_identity_sha256=str(data["config_identity_sha256"]),
             resolved_base_url=str(data["resolved_base_url"]),
             resolved_origin=str(data["resolved_origin"]),
+            credential_identity=(
+                str(data["credential_identity"])
+                if data.get("credential_identity") is not None
+                else None
+            ),
             ca_bundle_path=(
                 str(data["ca_bundle_path"])
                 if data.get("ca_bundle_path") is not None
@@ -323,6 +340,181 @@ class ConnectorExecutionBinding:
                 str(data["ca_bundle_sha256"])
                 if data.get("ca_bundle_sha256") is not None
                 else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationExecutionBinding:
+    """Digest of one trusted, secret-free runtime configuration snapshot."""
+
+    name: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValidationError("configuration execution binding name is empty")
+        _validate_sha256(self.sha256, f"configuration binding {self.name} sha256")
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the configuration binding."""
+
+        return {"name": self.name, "sha256": self.sha256}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ConfigurationExecutionBinding:
+        """Parse a configuration binding."""
+
+        return cls(name=str(data["name"]), sha256=str(data["sha256"]))
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePathExecutionBinding:
+    """Canonical path selected for a named execution-time side effect."""
+
+    name: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValidationError("runtime path execution binding name is empty")
+        if not self.path.strip() or not Path(self.path).is_absolute():
+            raise ValidationError(
+                f"runtime path execution binding {self.name} must be absolute"
+            )
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the path binding."""
+
+        return {"name": self.name, "path": self.path}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RuntimePathExecutionBinding:
+        """Parse a path binding."""
+
+        return cls(name=str(data["name"]), path=str(data["path"]))
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionBinding:
+    """All non-secret CLI and policy inputs that can change an applied run."""
+
+    connector_mode: str
+    include_writes: bool
+    include_communications: bool
+    audit_database: str
+    artifact_root: str
+    workspace_root: str | None
+    result_json: str | None
+    evidence_type: str | None
+    configurations: tuple[ConfigurationExecutionBinding, ...]
+    publication_roots: tuple[RuntimePathExecutionBinding, ...] = ()
+    schema: str = "master-agent/runtime-execution-binding@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/runtime-execution-binding@1":
+            raise ValidationError("unsupported runtime execution binding schema")
+        if self.connector_mode not in {"mock", "live"}:
+            raise ValidationError("runtime connector_mode must be mock or live")
+        if not isinstance(self.include_writes, bool) or not isinstance(
+            self.include_communications, bool
+        ):
+            raise ValidationError("runtime connector gates must be booleans")
+        for name, value in (
+            ("audit_database", self.audit_database),
+            ("artifact_root", self.artifact_root),
+        ):
+            if not value.strip() or not Path(value).is_absolute():
+                raise ValidationError(f"runtime {name} must be an absolute path")
+        for name, optional_value in (
+            ("workspace_root", self.workspace_root),
+            ("result_json", self.result_json),
+        ):
+            if optional_value is not None and (
+                not optional_value.strip() or not Path(optional_value).is_absolute()
+            ):
+                raise ValidationError(f"runtime {name} must be an absolute path")
+        if (self.result_json is None) != (self.evidence_type is None):
+            raise ValidationError(
+                "runtime result_json and evidence_type must be supplied together"
+            )
+        if self.evidence_type is not None and not self.evidence_type.strip():
+            raise ValidationError("runtime evidence_type is empty")
+        configurations = tuple(sorted(self.configurations, key=lambda item: item.name))
+        publication_roots = tuple(
+            sorted(self.publication_roots, key=lambda item: item.name)
+        )
+        if len({item.name for item in configurations}) != len(configurations):
+            raise ValidationError("runtime configuration binding names must be unique")
+        if len({item.name for item in publication_roots}) != len(publication_roots):
+            raise ValidationError("runtime publication root names must be unique")
+        object.__setattr__(self, "configurations", configurations)
+        object.__setattr__(self, "publication_roots", publication_roots)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the runtime binding."""
+
+        return {
+            "schema": self.schema,
+            "connector_mode": self.connector_mode,
+            "include_writes": self.include_writes,
+            "include_communications": self.include_communications,
+            "audit_database": self.audit_database,
+            "artifact_root": self.artifact_root,
+            "workspace_root": self.workspace_root,
+            "result_json": self.result_json,
+            "evidence_type": self.evidence_type,
+            "configurations": [item.to_dict() for item in self.configurations],
+            "publication_roots": [item.to_dict() for item in self.publication_roots],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RuntimeExecutionBinding:
+        """Parse a runtime binding."""
+
+        configurations = data.get("configurations")
+        publication_roots = data.get("publication_roots", [])
+        if not isinstance(configurations, list) or not all(
+            isinstance(item, Mapping) for item in configurations
+        ):
+            raise ValidationError("runtime configurations must be a list of objects")
+        if not isinstance(publication_roots, list) or not all(
+            isinstance(item, Mapping) for item in publication_roots
+        ):
+            raise ValidationError("runtime publication_roots must be a list of objects")
+        return cls(
+            schema=str(data.get("schema", "")),
+            connector_mode=str(data["connector_mode"]),
+            include_writes=_strict_bool(
+                data.get("include_writes"), "runtime include_writes"
+            ),
+            include_communications=_strict_bool(
+                data.get("include_communications"),
+                "runtime include_communications",
+            ),
+            audit_database=str(data["audit_database"]),
+            artifact_root=str(data["artifact_root"]),
+            workspace_root=(
+                str(data["workspace_root"])
+                if data.get("workspace_root") is not None
+                else None
+            ),
+            result_json=(
+                str(data["result_json"])
+                if data.get("result_json") is not None
+                else None
+            ),
+            evidence_type=(
+                str(data["evidence_type"])
+                if data.get("evidence_type") is not None
+                else None
+            ),
+            configurations=tuple(
+                ConfigurationExecutionBinding.from_dict(item) for item in configurations
+            ),
+            publication_roots=tuple(
+                RuntimePathExecutionBinding.from_dict(item)
+                for item in publication_roots
             ),
         )
 
@@ -393,6 +585,7 @@ class ExecutionContext:
     integrations_sha256: str
     connectors: tuple[ConnectorExecutionBinding, ...] = ()
     plugins: tuple[PluginExecutionBinding, ...] = ()
+    runtime: RuntimeExecutionBinding | None = None
     schema: str = "master-agent/execution-context@1"
 
     def __post_init__(self) -> None:
@@ -427,12 +620,15 @@ class ExecutionContext:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the execution context."""
 
-        return {
+        payload: dict[str, Any] = {
             "schema": self.schema,
             "integrations_sha256": self.integrations_sha256,
             "connectors": [item.to_dict() for item in self.connectors],
             "plugins": [item.to_dict() for item in self.plugins],
         }
+        if self.runtime is not None:
+            payload["runtime"] = self.runtime.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ExecutionContext:
@@ -455,6 +651,11 @@ class ExecutionContext:
                 ConnectorExecutionBinding.from_dict(item) for item in connectors
             ),
             plugins=tuple(PluginExecutionBinding.from_dict(item) for item in plugins),
+            runtime=(
+                RuntimeExecutionBinding.from_dict(_expect_mapping(data, "runtime"))
+                if data.get("runtime") is not None
+                else None
+            ),
         )
 
 

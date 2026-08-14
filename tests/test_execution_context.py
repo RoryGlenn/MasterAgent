@@ -14,10 +14,12 @@ from unittest.mock import MagicMock, patch
 
 from master_agent.cli import main
 from master_agent.config import IntegrationConfig
+from master_agent.config_sources import ConfigSnapshot
 from master_agent.connectors.factory import build_live_registry
 from master_agent.errors import ConfigurationError
 from master_agent.execution_context import (
     build_execution_context,
+    build_runtime_execution_binding,
     enforce_execution_context,
 )
 from master_agent.models import (
@@ -144,6 +146,8 @@ class ExecutionContextTests(unittest.TestCase):
                                 str(source_plan),
                                 "--integrations",
                                 str(integrations_path),
+                                "--draft-output-dir",
+                                str(root / "drafts"),
                                 "--output",
                                 str(bound_plan),
                             ]
@@ -321,6 +325,386 @@ class ExecutionContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "bind-context"):
             enforce_execution_context(original, context)
 
+    def test_runtime_paths_gates_and_configuration_digests_are_approval_bound(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(integrations_path)
+            sources = _runtime_sources(root, suffix="approved")
+            approved_runtime = build_runtime_execution_binding(
+                integrations,
+                connector_mode="live",
+                include_writes=True,
+                include_communications=False,
+                audit_database=root / "approved-audit.sqlite3",
+                artifact_root=root / "approved-artifacts",
+                workspace_root=root / "approved-workspaces",
+                result_json=root / "approved-result.json",
+                evidence_type="run-result/approved",
+                configuration_sources=sources,
+                environ={
+                    "MASTER_AGENT_JIRA_BASE_URL": "https://tenant-a.atlassian.net"
+                },
+            )
+            self.assertEqual(
+                {item.name for item in approved_runtime.configurations},
+                {
+                    "approval_authorities",
+                    "capabilities",
+                    "governance",
+                    "identities",
+                    "policy",
+                    "retention",
+                    "sources_of_truth",
+                },
+            )
+            approved = build_execution_context(
+                integrations,
+                environ={
+                    "MASTER_AGENT_JIRA_BASE_URL": "https://tenant-a.atlassian.net"
+                },
+                runtime=approved_runtime,
+            )
+            bound_plan = replace(_plan(), execution_context=approved)
+
+            variants = {
+                "workspace root": replace(
+                    approved_runtime, workspace_root=str(root / "other-workspaces")
+                ),
+                "artifact root": replace(
+                    approved_runtime, artifact_root=str(root / "other-artifacts")
+                ),
+                "audit database": replace(
+                    approved_runtime,
+                    audit_database=str(root / "other-audit.sqlite3"),
+                ),
+                "result destination": replace(
+                    approved_runtime, result_json=str(root / "other-result.json")
+                ),
+                "retention evidence type": replace(
+                    approved_runtime, evidence_type="run-result/other"
+                ),
+                "write gate": replace(approved_runtime, include_writes=False),
+                "policy configurations": build_runtime_execution_binding(
+                    integrations,
+                    connector_mode="live",
+                    include_writes=True,
+                    include_communications=False,
+                    audit_database=root / "approved-audit.sqlite3",
+                    artifact_root=root / "approved-artifacts",
+                    workspace_root=root / "approved-workspaces",
+                    result_json=root / "approved-result.json",
+                    evidence_type="run-result/approved",
+                    configuration_sources=_runtime_sources(root, suffix="changed"),
+                    environ={
+                        "MASTER_AGENT_JIRA_BASE_URL": ("https://tenant-a.atlassian.net")
+                    },
+                ),
+            }
+            for name, changed_runtime in variants.items():
+                with self.subTest(name=name):
+                    observed = replace(approved, runtime=changed_runtime)
+                    with self.assertRaisesRegex(
+                        ConfigurationError,
+                        "runtime policy, principal, gate, or path binding",
+                    ):
+                        enforce_execution_context(bound_plan, observed)
+
+    def test_basic_username_is_bound_without_binding_the_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(_JIRA_BASIC_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            alice = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_JIRA_USERNAME": "alice@example.test"},
+            )
+            bob = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_JIRA_USERNAME": "bob@example.test"},
+            )
+
+        self.assertNotEqual(alice, bob)
+        self.assertEqual(
+            alice.connectors[0].credential_identity,
+            "basic:alice@example.test",
+        )
+        self.assertNotIn("TOKEN", json.dumps(alice.to_dict()))
+
+    def test_effective_bitbucket_publication_root_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "integrations.toml"
+            path.write_text(_BITBUCKET_PUBLICATION_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            sources = _runtime_sources(root, suffix="same")
+            first = build_runtime_execution_binding(
+                integrations,
+                connector_mode="live",
+                include_writes=True,
+                include_communications=False,
+                audit_database=root / "audit.sqlite3",
+                artifact_root=root / "artifacts",
+                workspace_root=root / "fallback",
+                result_json=None,
+                evidence_type="ignored-without-result",
+                configuration_sources=sources,
+                environ={"MASTER_AGENT_REPOSITORY_ROOT": str(root / "repo-a")},
+            )
+            second = build_runtime_execution_binding(
+                integrations,
+                connector_mode="live",
+                include_writes=True,
+                include_communications=False,
+                audit_database=root / "audit.sqlite3",
+                artifact_root=root / "artifacts",
+                workspace_root=root / "fallback",
+                result_json=None,
+                evidence_type="ignored-without-result",
+                configuration_sources=sources,
+                environ={"MASTER_AGENT_REPOSITORY_ROOT": str(root / "repo-b")},
+            )
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(
+            first.publication_roots[0].path,
+            str((root / "repo-a").resolve()),
+        )
+
+    def test_opaque_token_requires_explicit_non_secret_credential_identity(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(_MICROSOFT_BEARER_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            with self.assertRaisesRegex(ConfigurationError, "credential_identity"):
+                build_execution_context(integrations)
+
+            path.write_text(
+                _MICROSOFT_BEARER_CONFIG
+                + '\ncredential_identity = "tenant-a:user-object-1"\n',
+                encoding="utf-8",
+            )
+            declared = build_execution_context(IntegrationConfig.from_toml(path))
+
+        self.assertEqual(
+            declared.connectors[0].credential_identity,
+            "tenant-a:user-object-1",
+        )
+
+    def test_entra_application_tenant_and_client_are_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(_MICROSOFT_CLIENT_CREDENTIAL_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            first = build_execution_context(
+                integrations,
+                environ={
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-a",
+                },
+            )
+            changed_tenant = build_execution_context(
+                integrations,
+                environ={
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-b",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-a",
+                },
+            )
+            changed_client = build_execution_context(
+                integrations,
+                environ={
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-b",
+                },
+            )
+
+        self.assertNotEqual(first, changed_tenant)
+        self.assertNotEqual(first, changed_client)
+        self.assertEqual(
+            first.connectors[0].credential_identity,
+            "entra-application:tenant=tenant-a;client=client-a",
+        )
+
+    def test_cli_rejects_changed_runtime_input_before_connector_construction(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+            bound_path = root / "bound.json"
+            approved_workspace = root / "approved-workspace"
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            result_path = root / "result.json"
+            retention = root / "retention.toml"
+            changed_retention = root / "changed-retention.toml"
+            retention_payload = (
+                Path(__file__).resolve().parents[1] / "config/retention.toml"
+            ).read_bytes()
+            retention.write_bytes(retention_payload)
+            changed_retention.write_bytes(retention_payload + b"\n")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            "--connector-mode",
+                            "mock",
+                            "--workspace-root",
+                            str(approved_workspace),
+                            "--database",
+                            str(database),
+                            "--draft-output-dir",
+                            str(drafts),
+                            "--result-json",
+                            str(result_path),
+                            "--evidence-type",
+                            "run-result/full",
+                            "--retention",
+                            str(retention),
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+
+            baseline = {
+                "--connector-mode": "mock",
+                "--workspace-root": str(approved_workspace),
+                "--database": str(database),
+                "--draft-output-dir": str(drafts),
+                "--result-json": str(result_path),
+                "--evidence-type": "run-result/full",
+                "--retention": str(retention),
+            }
+            variants: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
+                "workspace root": (
+                    {"--workspace-root": str(root / "changed-workspace")},
+                    (),
+                ),
+                "audit database": (
+                    {"--database": str(root / "changed-audit.sqlite3")},
+                    (),
+                ),
+                "artifact and draft root": (
+                    {"--draft-output-dir": str(root / "changed-drafts")},
+                    (),
+                ),
+                "result path": (
+                    {"--result-json": str(root / "changed-result.json")},
+                    (),
+                ),
+                "evidence type": (
+                    {"--evidence-type": "run-result/changed"},
+                    (),
+                ),
+                "retention configuration": (
+                    {"--retention": str(changed_retention)},
+                    (),
+                ),
+                "write gate": ({}, ("--enable-writes",)),
+            }
+            for name, (changes, flags) in variants.items():
+                with self.subTest(name=name):
+                    selected = {**baseline, **changes}
+                    runtime_arguments = [
+                        item
+                        for option, value in selected.items()
+                        for item in (option, value)
+                    ]
+                    stderr = io.StringIO()
+                    with (
+                        patch("master_agent.cli._mock_registry") as mock_registry,
+                        redirect_stderr(stderr),
+                    ):
+                        result = main(
+                            [
+                                "run",
+                                str(bound_path),
+                                "--apply",
+                                *runtime_arguments,
+                                *flags,
+                            ]
+                        )
+
+                    self.assertEqual(result, 1)
+                    self.assertIn(
+                        "runtime policy, principal, gate, or path",
+                        stderr.getvalue(),
+                    )
+                    mock_registry.assert_not_called()
+            self.assertFalse((root / "changed-audit.sqlite3").exists())
+            self.assertFalse((root / "changed-result.json").exists())
+
+    def test_cli_rejects_changed_capability_snapshot_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+            bound_path = root / "bound.json"
+            capabilities = root / "capabilities.toml"
+            capabilities.write_bytes(
+                (
+                    Path(__file__).resolve().parents[1] / "config/capabilities.toml"
+                ).read_bytes()
+            )
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            "--connector-mode",
+                            "mock",
+                            "--capabilities",
+                            str(capabilities),
+                            "--database",
+                            str(database),
+                            "--draft-output-dir",
+                            str(drafts),
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+            capabilities.write_bytes(capabilities.read_bytes() + b"\n")
+
+            stderr = io.StringIO()
+            with (
+                patch("master_agent.cli._mock_registry") as mock_registry,
+                redirect_stderr(stderr),
+            ):
+                result = main(
+                    [
+                        "run",
+                        str(bound_path),
+                        "--apply",
+                        "--connector-mode",
+                        "mock",
+                        "--capabilities",
+                        str(capabilities),
+                        "--database",
+                        str(database),
+                        "--draft-output-dir",
+                        str(drafts),
+                    ]
+                )
+
+        self.assertEqual(result, 1)
+        self.assertIn("runtime policy, principal, gate, or path", stderr.getvalue())
+        mock_registry.assert_not_called()
+
 
 def _plan() -> ChangePlan:
     action = AgentAction(
@@ -360,6 +744,72 @@ base_url = "https://tenant-a.atlassian.net"
 auth_mode = "none"
 ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
 """.strip()
+
+
+_JIRA_BASIC_CONFIG = """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://tenant-a.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+""".strip()
+
+
+_MICROSOFT_BEARER_CONFIG = """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+""".strip()
+
+
+_BITBUCKET_PUBLICATION_CONFIG = """
+[connectors.bitbucket]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.bitbucket.org/2.0"
+auth_mode = "none"
+write_enabled = true
+branch_push_enabled = true
+repository_root_env = "MASTER_AGENT_REPOSITORY_ROOT"
+""".strip()
+
+
+_MICROSOFT_CLIENT_CREDENTIAL_CONFIG = """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "oauth_application"
+oauth_flow = "client_credentials"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_APP_CLIENT_ID"
+client_secret_env = "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET"
+scopes = ["https://graph.microsoft.com/.default"]
+""".strip()
+
+
+def _runtime_sources(root: Path, *, suffix: str) -> dict[str, ConfigSnapshot]:
+    names = (
+        "policy",
+        "sources_of_truth",
+        "capabilities",
+        "governance",
+        "identities",
+        "retention",
+        "approval_authorities",
+    )
+    return {
+        name: ConfigSnapshot(
+            display_path=root / f"{name}.toml",
+            payload=f"{name}:{suffix}\n".encode(),
+        )
+        for name in names
+    }
 
 
 if __name__ == "__main__":

@@ -60,6 +60,9 @@ deployment = "cloud"
 # Change this root for a supported Microsoft national cloud.
 base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "oauth_delegated" # oauth_delegated | oauth_application | bearer
+# Non-secret tenant/principal label reviewed with the plan. Opaque delegated
+# tokens cannot be inspected safely by the runtime.
+credential_identity = "entra-tenant-id:user-object-id-or-upn"
 # Recommended local delegated mode: run `master-agent oauth-device-code`, then
 # point this environment variable at the resulting mode-0600 token file.
 oauth_flow = "token_file" # token_file | environment | client_credentials

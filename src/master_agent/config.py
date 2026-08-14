@@ -181,6 +181,19 @@ class ConnectorConfig:
                 )
         elif self.auth_mode is not AuthMode.NONE and not self.secret_env:
             errors.append("secret_env is required for authenticated connectors")
+        if self.auth_mode in {
+            AuthMode.BEARER,
+            AuthMode.OAUTH_DELEGATED,
+            AuthMode.OAUTH_APPLICATION,
+        } and not (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
+            declared_identity = self.extra.get("credential_identity")
+            if not isinstance(declared_identity, str) or not declared_identity.strip():
+                errors.append(
+                    "credential_identity is required for opaque authentication"
+                )
         errors.extend(
             f"environment variable {name} is missing"
             for name in self.missing_environment_variables(source)
@@ -266,6 +279,51 @@ class ConnectorConfig:
             base_url=base_url,
             ca_bundle=(capture_ca_bundle(ca_bundle) if ca_bundle is not None else None),
         )
+
+    def credential_identity(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> str | None:
+        """Return the non-secret credential principal bound to plan approval.
+
+        Principal facts are derived from non-secret runtime values where that is
+        reliable. Opaque bearer and delegated tokens cannot be inspected safely,
+        so those modes require an explicit operator-reviewed
+        ``credential_identity`` in integrations.toml.
+        """
+
+        if self.auth_mode is AuthMode.NONE:
+            return None
+        source = environ if environ is not None else os.environ
+        if self.auth_mode is AuthMode.BASIC:
+            if not self.username_env:
+                raise ConfigurationError(
+                    f"connector {self.system} requires a Basic-auth username"
+                )
+            username = source.get(self.username_env, "").strip()
+            if not username:
+                raise ConfigurationError(
+                    f"connector {self.system} credential identity requires "
+                    f"environment variable {self.username_env}"
+                )
+            return f"basic:{username}"
+
+        oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
+        if (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
+            tenant_id = _environment_value(source, self.extra, "tenant_id_env")
+            client_id = _environment_value(source, self.extra, "client_id_env")
+            return f"entra-application:tenant={tenant_id};client={client_id}"
+
+        declared = self.extra.get("credential_identity")
+        if not isinstance(declared, str) or not declared.strip():
+            raise ConfigurationError(
+                f"connector {self.system} uses an opaque credential; set a "
+                "non-secret credential_identity before binding the plan"
+            )
+        return declared.strip()
 
     def resolve(
         self,

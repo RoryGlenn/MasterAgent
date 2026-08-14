@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -19,7 +20,7 @@ from master_agent.capabilities import CapabilityCatalog
 from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
 from master_agent.config import IntegrationConfig
-from master_agent.config_sources import resolve_config_source
+from master_agent.config_sources import ConfigSource, resolve_config_source
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
@@ -35,6 +36,7 @@ from master_agent.errors import (
 )
 from master_agent.execution_context import (
     build_execution_context,
+    build_runtime_execution_binding,
     enforce_execution_context,
 )
 from master_agent.governance import GovernanceProfile
@@ -99,6 +101,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 integrations_path=args.integrations,
                 plugin_names=args.plugin,
                 plugin_lock_path=args.plugin_lock,
+                connector_mode=args.connector_mode,
+                approval_authorities=args.approval_authorities,
+                database=args.database,
+                result_json=args.result_json,
+                retention_path=args.retention,
+                evidence_type=args.evidence_type,
+                identities_path=args.identities,
+                include_writes=args.enable_writes,
+                include_communications=args.enable_communications,
+                workspace_root=args.workspace_root,
+                draft_output_dir=args.draft_output_dir,
+                policy_path=args.policy,
+                sources_of_truth_path=args.sources_of_truth,
+                capabilities_path=args.capabilities,
+                governance_path=args.governance,
                 output=args.output,
             )
         if args.command == "approve":
@@ -130,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 draft_output_dir=args.draft_output_dir,
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
+                policy_path=args.policy,
+                sources_of_truth_path=args.sources_of_truth,
                 plugin_names=args.plugin,
                 plugin_lock_path=args.plugin_lock,
             )
@@ -269,10 +288,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
     bind_context = subparsers.add_parser(
         "bind-context",
-        help="bind reviewed live connector and plugin identities into a plan",
+        help="bind the complete reviewed apply-time runtime into a plan",
     )
     bind_context.add_argument("plan", type=Path)
     bind_context.add_argument("--integrations", type=Path, default=None)
+    bind_context.add_argument(
+        "--connector-mode",
+        choices=("mock", "live"),
+        default="live",
+    )
+    bind_context.add_argument("--approval-authorities", type=Path)
+    bind_context.add_argument(
+        "--database",
+        type=Path,
+        default=Path(".master-agent/audit.sqlite3"),
+    )
+    bind_context.add_argument("--result-json", type=Path)
+    bind_context.add_argument("--retention", type=Path, default=None)
+    bind_context.add_argument("--evidence-type", default="run-result/full")
+    bind_context.add_argument("--identities", type=Path, default=None)
+    bind_context.add_argument("--enable-writes", action="store_true")
+    bind_context.add_argument("--enable-communications", action="store_true")
+    bind_context.add_argument("--workspace-root", type=Path)
+    bind_context.add_argument(
+        "--draft-output-dir",
+        type=Path,
+        default=Path(".master-agent/drafts"),
+    )
+    bind_context.add_argument("--policy", type=Path, default=None)
+    bind_context.add_argument("--sources-of-truth", type=Path, default=None)
+    bind_context.add_argument("--capabilities", type=Path, default=None)
+    bind_context.add_argument("--governance", type=Path, default=None)
     bind_context.add_argument(
         "--plugin",
         action="append",
@@ -349,6 +395,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--capabilities", type=Path, default=None)
     run.add_argument("--governance", type=Path, default=None)
+    run.add_argument("--policy", type=Path, default=None)
+    run.add_argument("--sources-of-truth", type=Path, default=None)
     run.add_argument(
         "--plugin",
         action="append",
@@ -583,13 +631,36 @@ def _bind_context(
     integrations_path: Path | None,
     plugin_names: list[str],
     plugin_lock_path: Path | None,
+    connector_mode: str,
+    approval_authorities: Path | None,
+    database: Path,
+    result_json: Path | None,
+    retention_path: Path | None,
+    evidence_type: str,
+    identities_path: Path | None,
+    include_writes: bool,
+    include_communications: bool,
+    workspace_root: Path | None,
+    draft_output_dir: Path,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
     output: Path,
 ) -> int:
-    """Write a plan whose fingerprint covers exact live runtime identities."""
+    """Write a plan whose fingerprint covers the complete applied runtime."""
 
     plan = _load_plan(plan_path)
-    integrations = IntegrationConfig.from_toml(
-        resolve_config_source(integrations_path, "integrations.toml")
+    integrations_source = resolve_config_source(integrations_path, "integrations.toml")
+    integrations = IntegrationConfig.from_toml(integrations_source)
+    configuration_sources = _execution_configuration_sources(
+        approval_authorities=approval_authorities,
+        retention_path=retention_path,
+        identities_path=identities_path,
+        policy_path=policy_path,
+        sources_of_truth_path=sources_of_truth_path,
+        capabilities_path=capabilities_path,
+        governance_path=governance_path,
     )
     plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
     descriptors = (
@@ -604,6 +675,20 @@ def _bind_context(
         integrations,
         environ=os.environ,
         plugin_descriptors=descriptors,
+        runtime=build_runtime_execution_binding(
+            integrations,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            audit_database=database,
+            artifact_root=draft_output_dir,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            evidence_type=evidence_type,
+            configuration_sources=configuration_sources,
+            environ=os.environ,
+        ),
+        include_connectors=connector_mode == "live",
     )
     bound = replace(plan, execution_context=context)
     _write_json(output, bound.to_dict(), restricted=True)
@@ -676,6 +761,8 @@ def _run(
     draft_output_dir: Path,
     capabilities_path: Path | None,
     governance_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
     plugin_names: list[str],
     plugin_lock_path: Path | None,
 ) -> int:
@@ -688,88 +775,169 @@ def _run(
         )
     if apply and plugin_lock_path is not None:
         raise ValueError("--plugin-lock requires at least one --plugin")
+    if not apply and result_json is not None:
+        raise ValueError(
+            "--result-json requires --apply and an approval-bound runtime manifest"
+        )
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
     if approvals and approval_authorities is None:
         raise ValueError(
             "--approval-authorities is required when approval artifacts are supplied"
         )
-    approval_authenticator = (
-        HmacApprovalAuthenticator.from_toml(
-            resolve_config_source(
-                approval_authorities,
-                "approval-authorities.toml",
-            ),
-            environ=os.environ,
-        )
-        if approval_authorities is not None
-        else None
+    configuration_sources = _execution_configuration_sources(
+        approval_authorities=approval_authorities,
+        retention_path=retention_path,
+        identities_path=identities_path,
+        policy_path=policy_path,
+        sources_of_truth_path=sources_of_truth_path,
+        capabilities_path=capabilities_path,
+        governance_path=governance_path,
     )
+    approval_authenticator: HmacApprovalAuthenticator | None = None
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
         connectors = ConnectorRegistry()
-    elif connector_mode == "mock":
-        connectors = _mock_registry()
-        register_draft_connectors(connectors, draft_output_dir)
+        if approval_authorities is not None:
+            approval_authenticator = HmacApprovalAuthenticator.from_toml(
+                configuration_sources["approval_authorities"],
+                environ=os.environ,
+            )
     else:
         execution_environ = dict(os.environ)
-        integration_config = IntegrationConfig.from_toml(
-            resolve_config_source(integrations_path, "integrations.toml")
+        integrations_source = resolve_config_source(
+            integrations_path, "integrations.toml"
+        )
+        integration_config = IntegrationConfig.from_toml(integrations_source)
+        observed_context = build_execution_context(
+            integration_config,
+            environ=execution_environ,
+            runtime=build_runtime_execution_binding(
+                integration_config,
+                connector_mode=connector_mode,
+                include_writes=include_writes,
+                include_communications=include_communications,
+                audit_database=database,
+                artifact_root=draft_output_dir,
+                workspace_root=workspace_root,
+                result_json=result_json,
+                evidence_type=evidence_type,
+                configuration_sources=configuration_sources,
+                environ=execution_environ,
+            ),
+            include_connectors=connector_mode == "live",
         )
         enforce_execution_context(
             plan,
-            build_execution_context(
+            observed_context,
+        )
+        if approval_authorities is not None:
+            approval_authenticator = HmacApprovalAuthenticator.from_toml(
+                configuration_sources["approval_authorities"],
+                environ=execution_environ,
+            )
+        if connector_mode == "mock":
+            connectors = _mock_registry()
+            register_draft_connectors(connectors, draft_output_dir)
+        else:
+            connectors = build_live_registry(
                 integration_config,
                 environ=execution_environ,
-            ),
+                include_writes=include_writes,
+                include_communications=include_communications,
+                workspace_root=workspace_root,
+                artifact_root=draft_output_dir,
+                approved_execution_context=plan.execution_context,
+            )
+            register_draft_connectors(connectors, draft_output_dir)
+            identities = IdentityRegistry.from_toml(configuration_sources["identities"])
+            if "identity" not in connectors.systems():
+                connectors.register(IdentityMapConnector(identities))
+
+        # Re-capture every path-backed policy input and non-secret environment
+        # identity after connector construction. Connector clients use the
+        # first immutable snapshots; this second gate prevents a concurrent
+        # change from creating ambiguity about which reviewed runtime executed.
+        current_configuration_sources = _execution_configuration_sources(
+            approval_authorities=approval_authorities,
+            retention_path=retention_path,
+            identities_path=identities_path,
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
         )
-        connectors = build_live_registry(
-            integration_config,
-            environ=execution_environ,
-            include_writes=include_writes,
-            include_communications=include_communications,
-            workspace_root=workspace_root,
-            artifact_root=draft_output_dir,
-            approved_execution_context=plan.execution_context,
-        )
-        register_draft_connectors(connectors, draft_output_dir)
-        identities = IdentityRegistry.from_toml(
-            resolve_config_source(identities_path, "identities.toml")
-        )
-        if "identity" not in connectors.systems():
-            connectors.register(IdentityMapConnector(identities))
-    if apply and connector_mode == "live":
-        # Re-read identities immediately before execution. This catches an
-        # integrations, environment-origin, or CA change that occurs after
-        # client construction.
         current_integrations = IntegrationConfig.from_toml(
             resolve_config_source(integrations_path, "integrations.toml")
         )
+        current_environ = dict(os.environ)
         enforce_execution_context(
             plan,
             build_execution_context(
                 current_integrations,
-                environ=os.environ,
+                environ=current_environ,
+                runtime=build_runtime_execution_binding(
+                    current_integrations,
+                    connector_mode=connector_mode,
+                    include_writes=include_writes,
+                    include_communications=include_communications,
+                    audit_database=database,
+                    artifact_root=draft_output_dir,
+                    workspace_root=workspace_root,
+                    result_json=result_json,
+                    evidence_type=evidence_type,
+                    configuration_sources=current_configuration_sources,
+                    environ=current_environ,
+                ),
+                include_connectors=connector_mode == "live",
             ),
         )
 
-    report = _orchestrator(
-        connectors,
-        database,
-        capabilities_path=capabilities_path,
-        governance_path=governance_path,
-        approval_authenticator=approval_authenticator,
-    ).run(
-        plan,
-        approvals=approvals,
-        dry_run=not apply,
-    )
+    if apply:
+        report = _orchestrator(
+            connectors,
+            database,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
+            policy_source=configuration_sources["policy"],
+            sources_of_truth_source=configuration_sources["sources_of_truth"],
+            capabilities_source=configuration_sources["capabilities"],
+            governance_source=configuration_sources["governance"],
+            approval_authenticator=approval_authenticator,
+        ).run(
+            plan,
+            approvals=approvals,
+            dry_run=False,
+        )
+    else:
+        # Policy preview is intentionally non-persistent. This prevents an
+        # unbound review command from selecting an arbitrary audit/evidence
+        # destination while preserving credential-free plan inspection.
+        with tempfile.TemporaryDirectory(prefix="master-agent-dry-run-") as directory:
+            ephemeral_audit = AuditLog(Path(directory) / "audit.sqlite3")
+            try:
+                report = _orchestrator(
+                    connectors,
+                    Path(directory) / "audit.sqlite3",
+                    capabilities_path=capabilities_path,
+                    governance_path=governance_path,
+                    policy_source=configuration_sources["policy"],
+                    sources_of_truth_source=configuration_sources["sources_of_truth"],
+                    capabilities_source=configuration_sources["capabilities"],
+                    governance_source=configuration_sources["governance"],
+                    approval_authenticator=approval_authenticator,
+                    audit=ephemeral_audit,
+                ).run(
+                    plan,
+                    approvals=approvals,
+                    dry_run=True,
+                )
+            finally:
+                ephemeral_audit.close()
     _print_report(report)
     if result_json is not None:
-        retention = RetentionConfig.from_toml(
-            resolve_config_source(retention_path, "retention.toml")
-        )
+        retention = RetentionConfig.from_toml(configuration_sources["retention"])
         evidence, sidecar = write_retained_json(
             result_json,
             report.to_dict(),
@@ -1463,31 +1631,71 @@ def _mock_registry() -> ConnectorRegistry:
     return registry
 
 
+def _execution_configuration_sources(
+    *,
+    approval_authorities: Path | None,
+    retention_path: Path | None,
+    identities_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+) -> dict[str, ConfigSource]:
+    """Capture the exact policy/configuration snapshots used by one run."""
+
+    sources: dict[str, ConfigSource] = {
+        "policy": resolve_config_source(policy_path, "policy.toml"),
+        "sources_of_truth": resolve_config_source(
+            sources_of_truth_path, "sources_of_truth.toml"
+        ),
+        "capabilities": resolve_config_source(capabilities_path, "capabilities.toml"),
+        "governance": resolve_config_source(governance_path, "governance.toml"),
+        "identities": resolve_config_source(identities_path, "identities.toml"),
+        "retention": resolve_config_source(retention_path, "retention.toml"),
+    }
+    if approval_authorities is not None:
+        sources["approval_authorities"] = resolve_config_source(
+            approval_authorities,
+            "approval-authorities.toml",
+        )
+    return sources
+
+
 def _orchestrator(
     connectors: ConnectorRegistry,
     database: Path,
     *,
     capabilities_path: Path | None = None,
     governance_path: Path | None = None,
+    policy_source: ConfigSource | None = None,
+    sources_of_truth_source: ConfigSource | None = None,
+    capabilities_source: ConfigSource | None = None,
+    governance_source: ConfigSource | None = None,
     approval_authenticator: HmacApprovalAuthenticator | None = None,
+    audit: AuditLog | None = None,
 ) -> WorkflowOrchestrator:
     """Build the governed runtime from repository or packaged defaults."""
 
     return WorkflowOrchestrator(
         policy=PolicyEngine(
-            PolicyConfig.from_toml(resolve_config_source(None, "policy.toml")),
+            PolicyConfig.from_toml(
+                policy_source or resolve_config_source(None, "policy.toml")
+            ),
             approval_authenticator=approval_authenticator,
         ),
         sources=SourceOfTruthRegistry.from_toml(
-            resolve_config_source(None, "sources_of_truth.toml")
+            sources_of_truth_source
+            or resolve_config_source(None, "sources_of_truth.toml")
         ),
         connectors=connectors,
-        audit=AuditLog(database),
+        audit=audit if audit is not None else AuditLog(database),
         capabilities=CapabilityCatalog.from_toml(
-            resolve_config_source(capabilities_path, "capabilities.toml")
+            capabilities_source
+            or resolve_config_source(capabilities_path, "capabilities.toml")
         ),
         governance=GovernanceProfile.from_toml(
-            resolve_config_source(governance_path, "governance.toml")
+            governance_source
+            or resolve_config_source(governance_path, "governance.toml")
         ),
     )
 

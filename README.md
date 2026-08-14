@@ -204,14 +204,37 @@ Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI do
 
 ## Exact-plan approvals
 
-Before approving a live plan, bind the exact integrations file, resolved
-destinations, CA bundle identities, and selected plugin identities into it:
+Before approving an applied plan, bind the complete runtime manifest into it.
+The manifest covers integrations and credential principals, resolved
+destinations and CA bundles, policy/source/capability/governance/identity and
+retention snapshots, connector gates, filesystem roots, audit database, and
+retained-result destination:
 
 ```bash
 master-agent bind-context change-plan.json \
+  --connector-mode live \
+  --enable-writes \
   --integrations /trusted/config/integrations.toml \
+  --policy /trusted/config/policy.toml \
+  --sources-of-truth /trusted/config/sources_of_truth.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --identities /trusted/config/identities.toml \
+  --approval-authorities /trusted/config/approval-authorities.toml \
+  --retention /trusted/config/retention.toml \
+  --database /absolute/state/audit.sqlite3 \
+  --draft-output-dir /absolute/state/drafts \
+  --result-json /absolute/state/run-report.json \
+  --workspace-root /absolute/path/to/approved/workspaces \
   --output bound-change-plan.json
 ```
+
+Every corresponding `run --apply` argument must match. Opaque bearer or
+delegated credentials must declare a reviewed, non-secret
+`credential_identity` in `integrations.toml`; Basic usernames and Entra
+application tenant/client IDs are derived and bound automatically. Credential
+secrets and token bytes are never fingerprinted, so ordinary rotation remains
+possible within the approved principal identity.
 
 Inspect the bound plan and its new fingerprint:
 
@@ -245,8 +268,7 @@ A write requires all of these:
 
 1. the capability is enabled in `config/capabilities.toml`;
 2. governance permits it in `config/governance.toml`;
-3. the plan binds the current integrations and resolved origin/CA identities
-   and uses an exact approval;
+3. the plan binds the complete runtime manifest and uses an exact approval;
 4. `--enable-writes` is supplied;
 5. the connector and its granular write flag are enabled in `config/integrations.toml`;
 6. valid credentials and expected versions are present.
@@ -256,21 +278,24 @@ master-agent run bound-change-plan.json \
   --connector-mode live \
   --apply \
   --enable-writes \
-  --integrations config/integrations.toml \
-  --capabilities config/capabilities.toml \
-  --governance config/governance.toml \
+  --integrations /trusted/config/integrations.toml \
+  --policy /trusted/config/policy.toml \
+  --sources-of-truth /trusted/config/sources_of_truth.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --identities /trusted/config/identities.toml \
   --approval approval-rory.json \
   --approval-authorities /trusted/config/approval-authorities.toml \
-  --database .master-agent/audit.sqlite3 \
-  --result-json .master-agent/run-report.json \
-  --retention config/retention.toml
+  --database /absolute/state/audit.sqlite3 \
+  --draft-output-dir /absolute/state/drafts \
+  --workspace-root /absolute/path/to/approved/workspaces \
+  --result-json /absolute/state/run-report.json \
+  --retention /trusted/config/retention.toml
 ```
 
-For local Git actions, also provide an approved workspace boundary:
-
-```bash
---workspace-root /absolute/path/to/approved/workspaces
-```
+For local Git actions, the same canonical `--workspace-root` must appear in
+both binding and execution. Bitbucket branch-publication roots selected through
+`MASTER_AGENT_REPOSITORY_ROOT` are captured separately in the manifest.
 
 Build a separately reviewable compensation plan from a completed run:
 

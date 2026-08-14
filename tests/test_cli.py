@@ -48,6 +48,38 @@ class CliTests(unittest.TestCase):
                 )
             self.assertEqual(status, 0, stderr.getvalue())
             self.assertIn("mode: dry-run", stdout.getvalue())
+            self.assertFalse((root / "audit.sqlite3").exists())
+
+    def test_dry_run_cannot_persist_an_unbound_result(self) -> None:
+        """Review mode must not write audit or result files outside a manifest."""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                __import__("json").dumps(
+                    build_weekly_status_plan().to_dict(),
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            stderr = StringIO()
+            with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "run",
+                        str(plan_path),
+                        "--database",
+                        str(root / "audit.sqlite3"),
+                        "--result-json",
+                        str(root / "result.json"),
+                    ]
+                )
+
+            self.assertEqual(status, 1)
+            self.assertIn("--result-json requires --apply", stderr.getvalue())
+            self.assertFalse((root / "audit.sqlite3").exists())
+            self.assertFalse((root / "result.json").exists())
 
     def test_discovery_returns_nonzero_for_enabled_missing_environment(self) -> None:
         """Enabled but unusable connectors should fail readiness checks."""

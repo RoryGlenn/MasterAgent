@@ -324,6 +324,8 @@ def _verify_approved_execution_context(
             detail = "base URL"
         elif actual.resolved_origin != reviewed.resolved_origin:
             detail = "origin"
+        elif actual.credential_identity != reviewed.credential_identity:
+            detail = "credential identity"
         elif actual.ca_bundle_path != reviewed.ca_bundle_path:
             detail = "CA path"
         elif actual.ca_bundle_sha256 != reviewed.ca_bundle_sha256:
