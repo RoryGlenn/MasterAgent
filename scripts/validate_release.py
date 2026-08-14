@@ -331,6 +331,8 @@ def _validate_demo(
     if verified == len(entries):
         checks.append(f"validated {verified} v1 demonstration artifacts")
 
+    _validate_demo_readiness(root, demo_root, checks, errors)
+
     draft_manifest_path = demo_root / "draft-package/manifest.json"
     draft_manifest = json.loads(draft_manifest_path.read_text(encoding="utf-8"))
     if draft_manifest.get("published") is not False:
@@ -353,6 +355,61 @@ def _validate_demo(
             checks.append("v1 demonstration PowerPoint opens with 3 slides")
     except (KeyError, OSError, PackageNotFoundError, TypeError, ValueError) as error:
         errors.append(f"v1 demonstration PowerPoint failed to open: {error}")
+
+
+def _validate_demo_readiness(
+    root: Path,
+    demo_root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Cross-check demo readiness claims against the shipped capability catalog."""
+
+    readiness_path = demo_root / "readiness.json"
+    catalog_path = root / "config/capabilities.toml"
+    try:
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        with catalog_path.open("rb") as handle:
+            catalog = tomllib.load(handle)
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        tomllib.TOMLDecodeError,
+    ) as error:
+        errors.append(f"v1 demonstration readiness could not be validated: {error}")
+        return
+
+    if not isinstance(readiness, dict):
+        errors.append("v1 demonstration readiness must be an object")
+        return
+    raw_checks = readiness.get("checks")
+    if not isinstance(raw_checks, list):
+        errors.append("v1 demonstration readiness checks must be a list")
+        return
+    coverage = next(
+        (
+            item
+            for item in raw_checks
+            if isinstance(item, dict) and item.get("name") == "governance_coverage"
+        ),
+        None,
+    )
+    capabilities = catalog.get("capabilities")
+    if coverage is None or not isinstance(capabilities, dict):
+        errors.append("v1 demonstration readiness lacks governance coverage metadata")
+        return
+    observed = coverage.get("covered_capabilities")
+    expected = len(capabilities)
+    if not isinstance(observed, int) or isinstance(observed, bool):
+        errors.append("v1 demonstration covered_capabilities must be an integer")
+    elif observed != expected:
+        errors.append(
+            "v1 demonstration readiness capability count does not match the "
+            f"catalog ({observed} != {expected})"
+        )
+    else:
+        checks.append(f"v1 demonstration readiness covers all {expected} capabilities")
 
 
 def _validate_file_hygiene(

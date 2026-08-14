@@ -177,7 +177,8 @@ class GitWorkspaceConnector(CompensatingConnector):
 
         if action.capability == "repository.branch.push":
             raise ConnectorError(
-                "automatic remote compensation is unavailable; use bitbucket.branch.push"
+                "automatic remote compensation is unavailable; use a separately "
+                "reviewed provider recovery"
             )
         if not self.verify(action, result).verified:
             raise VersionConflictError(
@@ -582,10 +583,14 @@ class GitWorkspaceConnector(CompensatingConnector):
             "commit": commit,
             "previous_remote_commit": before_hash,
             "force": False,
-            "compensation": {
-                "kind": "open_revert_or_decline_pr",
-                "automatic_remote_branch_delete_disabled": True,
-            },
+            "compensation": CompensationDescriptor(
+                kind="review_remote_branch_recovery",
+                mode=CompensationMode.MANUAL,
+                reason=(
+                    "remote branch rollback is manual because rewriting or deleting "
+                    "a published ref could destroy concurrent work"
+                ),
+            ).to_dict(),
         }
         return ExecutionResult(
             action_id=action.action_id,

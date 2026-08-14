@@ -62,7 +62,7 @@ Supported domains:
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with restore compensation |
 | OneNote | notebooks, sections, pages | generated HTML/proposals | delegated page create/update with rollback |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
-| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, and push; verified in-process compensation only |
+| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, and push; verified in-process rollback for local changes, manual recovery for remote pushes |
 | Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
 ## Core safety properties

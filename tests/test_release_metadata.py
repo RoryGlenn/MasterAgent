@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scripts.validate_release import _validate_file_hygiene, validate_project
+from scripts.validate_release import (
+    _validate_demo_readiness,
+    _validate_file_hygiene,
+    validate_project,
+)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -36,6 +40,30 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             self.assertEqual(checks, [])
             self.assertTrue(any("runtime directory" in error for error in errors))
+
+    def test_demo_readiness_count_must_match_capability_catalog(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            demo = root / "examples/v1-demo"
+            config = root / "config"
+            demo.mkdir(parents=True)
+            config.mkdir()
+            (demo / "readiness.json").write_text(
+                '{"checks":[{"name":"governance_coverage",'
+                '"covered_capabilities":71}]}\n',
+                encoding="utf-8",
+            )
+            (config / "capabilities.toml").write_text(
+                '[capabilities."one"]\nenabled=true\n',
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_demo_readiness(root, demo, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(any("does not match" in error for error in errors))
 
 
 if __name__ == "__main__":

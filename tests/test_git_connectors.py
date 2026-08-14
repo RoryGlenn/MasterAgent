@@ -164,6 +164,51 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             )
             self.assertIsNone(compensation["capability"])
 
+    def test_remote_push_reports_manual_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)],
+                check=True,
+                capture_output=True,
+            )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(remote))
+            _git(repository, "switch", "-c", "agent/change")
+            action = action_for(
+                "repository.branch.push",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "remote": "origin",
+                    "remote_url": str(remote),
+                    "branch": "agent/change",
+                },
+            )
+            connector = GitWorkspaceConnector(
+                workspace_root=root,
+                allow_file_remotes=True,
+            )
+
+            result = connector.execute(action)
+
+            self.assertIsNotNone(result.compensation)
+            assert result.compensation is not None
+            self.assertEqual(result.compensation["mode"], CompensationMode.MANUAL)
+            self.assertIn(
+                "remote branch rollback is manual", result.compensation["reason"]
+            )
+            with self.assertRaisesRegex(
+                ConnectorError,
+                "automatic remote compensation is unavailable",
+            ):
+                connector.compensate(action, result)
+
     @unittest.skipUnless(os.name == "posix", "Git hook test requires POSIX")
     def test_commit_disables_repository_hooks_and_binds_exact_diff(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

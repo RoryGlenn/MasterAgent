@@ -35,7 +35,8 @@ Compensation is connector-specific:
   commit refs use compare-and-swap plus a mixed index reset, and an exact unchanged
   new branch may be removed. Concurrent worktree content is preserved and causes
   compensation to refuse or report a conflict. No separately approved destructive
-  worktree-restore action is exposed.
+  worktree-restore action is exposed. A remote push reports manual recovery because
+  automatically rewriting or deleting a published ref could destroy concurrent work.
 
 A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
 
