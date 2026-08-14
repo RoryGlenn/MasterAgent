@@ -367,6 +367,48 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             self.assertEqual((repository / "README.md").read_text(), "old\n")
             self.assertEqual(_git(repository, "status", "--porcelain"), "")
 
+    def test_isolated_worktree_snapshot_hashes_racy_same_size_edit(self) -> None:
+        """A private index must not turn a same-stat edit falsely clean."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            readme = repository / "README.md"
+            racy_timestamp_ns = 946_684_800_000_000_000
+            os.utime(readme, ns=(racy_timestamp_ns, racy_timestamp_ns))
+            _git(repository, "update-index", "--refresh")
+            cached_metadata = readme.stat()
+            readme.write_text("new\n", encoding="utf-8")
+            os.utime(
+                readme,
+                ns=(cached_metadata.st_atime_ns, cached_metadata.st_mtime_ns),
+            )
+            connector = GitWorkspaceConnector(workspace_root=root)
+            head = _git(repository, "rev-parse", "HEAD")
+
+            with connector._sandbox.isolated_worktree_snapshot(
+                repository,
+                head=head,
+            ) as snapshot:
+                diff = connector._sandbox.run(
+                    snapshot.git_dir,
+                    (
+                        "-c",
+                        "core.trustctime=false",
+                        "-c",
+                        "core.checkStat=minimal",
+                        "diff",
+                        "--no-textconv",
+                        "--binary",
+                        "--no-ext-diff",
+                        "--ignore-submodules=all",
+                    ),
+                    index_file=snapshot.index_file,
+                    worktree=repository,
+                )
+
+            self.assertIn(b"+new", diff.stdout_bytes)
+
     def test_standalone_restore_is_disabled_after_precheck_edit(self) -> None:
         """A human edit after approval cannot reach a destructive reset path."""
 
