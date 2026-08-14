@@ -97,11 +97,12 @@ The most specific matching rule wins. Uncovered capabilities fail closed. Dual a
 Canonical resources are validated before execution. A governed projection,
 including a matching local-generation target, cannot be updated without an
 authorized canonical change in the same plan when the registry says the field
-is outbound-only. Each allowed capability has reviewed parameter selectors;
-the registry hashes the actual immutable canonical and projection values and
-requires an exact match through the dependency graph. Caller-supplied binding
+is outbound-only. Each allowed capability has a reviewed scalar parameter
+selector; the registry hashes the actual immutable canonical and projection
+values and requires an exact match through the dependency graph. Caller-supplied binding
 digests do not grant authority, and missing capability verifiers fail during
-configuration loading.
+configuration loading. Composite outputs without a typed field-addressed schema
+are denied for exact governed targets.
 
 ### Connector registry
 

@@ -232,47 +232,6 @@ class SourceOfTruthTests(unittest.TestCase):
                 ResourceRef("outlook", "draft", "weekly-status-draft"),
                 {"body": "divergent Outlook narrative"},
             ),
-            (
-                "powerpoint.presentation.generate",
-                ResourceRef("powerpoint", "presentation", "weekly-status"),
-                {
-                    "title": "Weekly status",
-                    "slides": [
-                        {
-                            "title": "Narrative",
-                            "bullets": ["divergent PowerPoint narrative"],
-                        }
-                    ],
-                },
-            ),
-            (
-                "powerpoint.presentation.generate",
-                ResourceRef("powerpoint", "presentation", "weekly-status"),
-                {
-                    "title": "Weekly status",
-                    "sections": ["canonical narrative"],
-                    "slides": [
-                        {
-                            "title": "Narrative",
-                            "bullets": ["rendered divergent narrative"],
-                        }
-                    ],
-                },
-            ),
-            (
-                "powerpoint.presentation.generate",
-                ResourceRef("powerpoint", "presentation", "weekly-status"),
-                {
-                    "title": "Weekly status",
-                    "slides": [
-                        {
-                            "title": "Narrative",
-                            "bullets": ["rendered divergent narrative"] * 12
-                            + ["canonical narrative"],
-                        }
-                    ],
-                },
-            ),
         )
         for index, (capability, target, parameters) in enumerate(projection_cases):
             with self.subTest(capability=capability):
@@ -303,7 +262,7 @@ class SourceOfTruthTests(unittest.TestCase):
                 self.assertFalse(valid)
                 self.assertIn("matching field-value", reason)
 
-    def test_powerpoint_requires_values_from_both_canonical_rules(self) -> None:
+    def test_governed_powerpoint_is_denied_until_fields_are_typed(self) -> None:
         registry = SourceOfTruthRegistry.from_toml(
             ROOT / "config/sources_of_truth.toml"
         )
@@ -317,60 +276,72 @@ class SourceOfTruthTests(unittest.TestCase):
             idempotency_key="canonical:ppt:confluence",
             justification="update canonical narrative",
         )
-        for index, jira_parameters in enumerate(
-            (
-                {"fields": {"status": {"name": "In Progress"}}},
-                {"transition_id": "31", "target_status": "In Progress"},
-            )
-        ):
-            capability = (
-                "jira.issue.update"
-                if "fields" in jira_parameters
-                else "jira.issue.transition"
-            )
-            with self.subTest(capability=capability):
-                jira = AgentAction(
-                    capability=capability,
-                    target=ResourceRef("jira", "issue", "PROJECT-SPRINT", "2"),
-                    parameters=jira_parameters,
-                    risk=RiskLevel.REVERSIBLE_WRITE,
-                    authority_source=AuthoritySource.DIRECT_USER,
-                    requires_approval=True,
-                    idempotency_key=f"canonical:ppt:jira:{index}",
-                    justification="update canonical work-item status",
-                )
-                powerpoint = AgentAction(
-                    capability="powerpoint.presentation.generate",
-                    target=ResourceRef(
-                        "powerpoint",
-                        "presentation",
-                        "weekly-status",
-                    ),
-                    parameters={
-                        "title": "Weekly status",
-                        "slides": [
-                            {
-                                "title": "In Progress",
-                                "bullets": ["On track"],
-                            }
-                        ],
-                    },
-                    risk=RiskLevel.LOCAL_GENERATION,
-                    authority_source=AuthoritySource.DIRECT_USER,
-                    requires_approval=False,
-                    idempotency_key=f"projection:ppt:matching:{index}",
-                    justification="project exact canonical values",
-                    dependencies=(confluence.action_id, jira.action_id),
-                )
-                plan = ChangePlan(
-                    goal="generate a bound PowerPoint",
-                    actions=(confluence, jira, powerpoint),
-                    created_by="test",
-                )
+        powerpoint = AgentAction(
+            capability="powerpoint.presentation.generate",
+            target=ResourceRef("powerpoint", "presentation", "weekly-status"),
+            parameters={
+                "title": "PROJECT BLOCKED",
+                "subtitle": "Executive status: unrecoverable",
+                "slides": [
+                    {
+                        "title": "In Progress",
+                        "bullets": ["On track", "FABRICATED EXECUTIVE CLAIM"],
+                    }
+                ],
+            },
+            risk=RiskLevel.LOCAL_GENERATION,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="projection:ppt:blocked",
+            justification="attempt an untyped composite projection",
+            dependencies=(confluence.action_id,),
+        )
+        plan = ChangePlan(
+            goal="reject untyped PowerPoint projection",
+            actions=(confluence, powerpoint),
+            created_by="test",
+        )
 
-                valid, reason = registry.validate(plan, powerpoint)
+        valid, reason = registry.validate(plan, powerpoint)
 
-                self.assertTrue(valid, reason)
+        self.assertFalse(valid)
+        self.assertIn("capability is not approved", reason)
+
+    def test_non_string_body_values_cannot_launder_rendered_text(self) -> None:
+        registry = SourceOfTruthRegistry.from_toml(
+            ROOT / "config/sources_of_truth.toml"
+        )
+        canonical = AgentAction(
+            capability="confluence.page.update",
+            target=ResourceRef("confluence", "page", "project-status", "1"),
+            parameters={"body": {"a": 1, "b": 2}},
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="canonical:mapping-body",
+            justification="attempt a non-text canonical value",
+        )
+        projection = AgentAction(
+            capability="teams.message.draft",
+            target=ResourceRef("teams", "message", "weekly-status-draft"),
+            parameters={"body": {"b": 2, "a": 1}},
+            risk=RiskLevel.LOCAL_GENERATION,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="projection:mapping-body",
+            justification="attempt a differently rendered mapping",
+            dependencies=(canonical.action_id,),
+        )
+        plan = ChangePlan(
+            goal="reject non-text canonical values",
+            actions=(canonical, projection),
+            created_by="test",
+        )
+
+        valid, reason = registry.validate(plan, projection)
+
+        self.assertFalse(valid)
+        self.assertIn("exactly one verifiable", reason)
 
     def test_capability_without_a_parameter_verifier_is_rejected(self) -> None:
         with TemporaryDirectory() as directory:

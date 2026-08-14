@@ -35,9 +35,6 @@ _SUPPORTED_PARAMETER_SELECTORS: dict[str, frozenset[str]] = {
     "jira.issue.update": frozenset({"fields.status", "fields.status.name"}),
     "jira.issue.transition": frozenset({"target_status"}),
     "outlook.email.draft": frozenset({"body"}),
-    "powerpoint.presentation.generate": frozenset(
-        {"sections[]", "slides[].title", "slides[].bullets[]"}
-    ),
     "teams.message.draft": frozenset({"body"}),
 }
 _SELECTOR_SEGMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[\])?")
@@ -114,12 +111,12 @@ class SourceOfTruthRegistry:
                 action,
                 _selectors_for(rule.projection_extractors, action.capability),
             )
-            if not projection_digests:
+            if len(projection_digests) != 1:
                 return (
                     False,
                     (
-                        f"{rule.field} projection does not expose a verifiable "
-                        "governed value"
+                        f"{rule.field} projection must expose exactly one "
+                        "verifiable governed value"
                     ),
                 )
             canonical_writes = {
@@ -148,7 +145,7 @@ class SourceOfTruthRegistry:
             matching_ancestors = {
                 action_id
                 for action_id, digests in canonical_writes.items()
-                if not digests.isdisjoint(projection_digests)
+                if digests == projection_digests
             }
             if matching_ancestors.isdisjoint(ancestors):
                 return (
@@ -245,56 +242,16 @@ def _parameter_digests(
     """Derive field digests from frozen action values, never asserted hashes."""
 
     values: list[Any] = []
-    selected = (
-        _powerpoint_values(action.parameters, selectors)
-        if action.capability == "powerpoint.presentation.generate"
-        else tuple(
-            (selector, value)
-            for selector in selectors
-            for value in _select_values(action.parameters, selector)
-        )
+    selected = tuple(
+        (selector, value)
+        for selector in selectors
+        for value in _select_values(action.parameters, selector)
     )
     for selector, value in selected:
         normalized = _normalize_value(action.capability, selector, value)
         if normalized is not None:
             values.append(normalized)
     return frozenset(_digest_value(value) for value in values)
-
-
-def _powerpoint_values(
-    parameters: Mapping[str, Any],
-    selectors: tuple[str, ...],
-) -> tuple[tuple[str, Any], ...]:
-    """Extract only text that the PowerPoint connector actually renders."""
-
-    allowed = frozenset(selectors)
-    raw_slides = parameters.get("slides")
-    if raw_slides is None:
-        sections = parameters.get("sections", ())
-        if not isinstance(sections, Sequence) or isinstance(sections, (str, bytes)):
-            return ()
-        if len(sections) > 40 or "sections[]" not in allowed:
-            return ()
-        return tuple(("sections[]", section) for section in sections)
-    if not isinstance(raw_slides, Sequence) or isinstance(
-        raw_slides,
-        (str, bytes),
-    ):
-        return ()
-    if len(raw_slides) > 40:
-        return ()
-    selected: list[tuple[str, Any]] = []
-    for raw_slide in raw_slides:
-        if not isinstance(raw_slide, Mapping):
-            return ()
-        if "slides[].title" in allowed:
-            selected.append(("slides[].title", raw_slide.get("title", "Untitled")))
-        bullets = raw_slide.get("bullets", ())
-        if not isinstance(bullets, Sequence) or isinstance(bullets, (str, bytes)):
-            return ()
-        if "slides[].bullets[]" in allowed:
-            selected.extend(("slides[].bullets[]", bullet) for bullet in bullets[:12])
-    return tuple(selected)
 
 
 def _select_values(parameters: Mapping[str, Any], selector: str) -> tuple[Any, ...]:
@@ -324,21 +281,16 @@ def _select_values(parameters: Mapping[str, Any], selector: str) -> tuple[Any, .
 def _normalize_value(capability: str, selector: str, value: Any) -> Any | None:
     """Mirror the connector's representation of a governed scalar value."""
 
-    if capability == "powerpoint.presentation.generate":
-        if selector in {"sections[]", "slides[].title"}:
-            rendered = str(value).strip() or "Untitled"
-            return rendered[:160]
-        if selector == "slides[].bullets[]":
-            return str(value)[:800]
-    if capability == "jira.issue.update" and selector == "fields.status":
-        if isinstance(value, Mapping):
-            return None
-        rendered = str(value).strip()
-        return rendered or None
-    if isinstance(value, str):
-        rendered = value.strip()
-        return rendered or None
-    return value
+    if (
+        capability == "jira.issue.update"
+        and selector == "fields.status"
+        and isinstance(value, Mapping)
+    ):
+        return None
+    if not isinstance(value, str):
+        return None
+    rendered = value.strip()
+    return rendered or None
 
 
 def _digest_value(value: Any) -> str:

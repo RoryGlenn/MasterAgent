@@ -97,10 +97,12 @@ The packaged rules currently verify these mappings:
 | project status narrative | `confluence.page.update` | `body` |
 | project status narrative | `teams.message.draft` | `body` |
 | project status narrative | `outlook.email.draft` | `body` |
-| project status narrative | `powerpoint.presentation.generate` | rendered slide titles and first 12 bullets, or rendered `sections` fallback |
-| work-item status | `jira.issue.update` | `fields.status` or `fields.status.name` |
-| work-item status | `jira.issue.transition` | `target_status` |
-| work-item status | `powerpoint.presentation.generate` | rendered slide titles and first 12 bullets, or rendered `sections` fallback |
+
+The exact `powerpoint:weekly-status` target is governed but deliberately has no
+allowed projection capability. Generic slides do not provide a unique typed
+location for each canonical field, so that target fails closed until the
+PowerPoint connector accepts and renders a complete field-addressed schema.
+PowerPoint previews under other resource IDs remain available as local output.
 
 `source_bindings` values supplied in an action are not authorization evidence
 and cannot influence this comparison. Governed local-generation targets are
