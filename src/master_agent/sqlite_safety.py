@@ -14,6 +14,8 @@ from threading import RLock
 
 from master_agent.errors import ConfigurationError
 
+_SQLITE_CONNECT_LOCK = RLock()
+
 
 @dataclass(frozen=True, slots=True)
 class _FileIdentity:
@@ -57,6 +59,8 @@ class PinnedSQLiteDatabase:
         self._parent = self._path.parent
         self._lock = RLock()
         self._created = False
+        self._active_context = False
+        self._poisoned = False
 
         parent_descriptor = _open_trusted_parent(self._parent, create=True)
         try:
@@ -69,43 +73,42 @@ class PinnedSQLiteDatabase:
             try:
                 database_stat = os.fstat(database_descriptor)
                 self._database_identity = _validated_database_identity(database_stat)
-            finally:
+            except BaseException:
                 os.close(database_descriptor)
+                raise
         finally:
             os.close(parent_descriptor)
 
+        connection: sqlite3.Connection | None = None
         try:
             self._validate_path_identity()
-        except Exception:
-            if self._created:
-                self._remove_created_file()
-            raise
-        try:
-            connection = sqlite3.connect(
-                self._path.as_uri() + "?mode=rw",
-                uri=True,
-                timeout=30.0,
-                check_same_thread=False,
+            connection, sqlite_descriptor = _connect_verified_database(
+                self._path,
+                self._database_identity,
+                database_descriptor,
             )
-        except sqlite3.Error:
-            if self._created:
-                self._remove_created_file()
-            raise
-        try:
             # Post-validation happens before schema creation, migration, or any
             # other SQL write can occur through this handle.
             self._validate_path_identity()
             connection.execute("PRAGMA busy_timeout = 30000")
-        except Exception:
-            connection.close()
+        except BaseException:
+            if connection is not None:
+                _close_sqlite_connection(connection)
+            try:
+                os.close(database_descriptor)
+            except OSError:
+                pass
             if self._created:
                 self._remove_created_file()
             raise
+        self._database_descriptor = database_descriptor
+        self._sqlite_descriptor = sqlite_descriptor
         self._connection = connection
         self._finalizer = weakref.finalize(
             self,
-            _close_connection,
+            _close_resources,
             connection,
+            database_descriptor,
             self._lock,
         )
 
@@ -120,15 +123,30 @@ class PinnedSQLiteDatabase:
         """Yield the pinned connection after revalidating its public path."""
 
         with self._lock:
-            if not self._finalizer.alive:
+            if self._poisoned or not self._finalizer.alive:
                 raise RuntimeError("SQLite state database is closed")
-            self._validate_path_identity()
+            if self._active_context:
+                raise RuntimeError("nested SQLite state database contexts are unsafe")
+            self._active_context = True
             try:
-                yield self._connection
-                self._connection.commit()
-            except Exception:
-                self._connection.rollback()
-                raise
+                self._validate_path_identity()
+                self._validate_sqlite_descriptor()
+                try:
+                    yield self._connection
+                except BaseException as error:
+                    self._rollback_or_poison(error)
+                    raise
+                try:
+                    # Revalidate after the caller's SQL and before the one
+                    # commit point owned by this context manager.
+                    self._validate_path_identity()
+                    self._validate_sqlite_descriptor()
+                    self._connection.commit()
+                except BaseException as error:
+                    self._rollback_or_poison(error)
+                    raise
+            finally:
+                self._active_context = False
 
     def close(self, *, remove_created: bool = False) -> None:
         """Close the handle and optionally remove its securely-created file."""
@@ -138,8 +156,51 @@ class PinnedSQLiteDatabase:
             if remove_created and self._created:
                 self._remove_created_file()
 
+    def _rollback_or_poison(self, original_error: BaseException) -> None:
+        """Rollback a failed context, permanently closing on rollback failure."""
+
+        try:
+            self._connection.rollback()
+        except BaseException as rollback_error:  # noqa: BLE001
+            self._poisoned = True
+            self._finalizer()
+            original_error.add_note(
+                "SQLite rollback failed; the state database connection was closed "
+                f"({type(rollback_error).__name__})"
+            )
+
+    def _validate_sqlite_descriptor(self) -> None:
+        """Verify SQLite still owns the descriptor proven at construction."""
+
+        try:
+            trusted_value = os.fstat(self._database_descriptor)
+            sqlite_value = os.fstat(self._sqlite_descriptor)
+        except OSError as error:
+            self._poisoned = True
+            self._finalizer()
+            raise RuntimeError("SQLite state database descriptor was lost") from error
+        try:
+            _validated_database_identity(trusted_value)
+            _validated_database_identity(sqlite_value)
+        except ConfigurationError:
+            self._poisoned = True
+            self._finalizer()
+            raise
+        if not _same_regular_file(
+            trusted_value, self._database_identity
+        ) or not _same_regular_file(sqlite_value, self._database_identity):
+            self._poisoned = True
+            self._finalizer()
+            raise RuntimeError("SQLite state database descriptor identity changed")
+
     def _validate_path_identity(self) -> None:
         """Verify the parent and database path still name the pinned objects."""
+
+        with _SQLITE_CONNECT_LOCK:
+            self._validate_path_identity_locked()
+
+    def _validate_path_identity_locked(self) -> None:
+        """Validate a path while no sibling state-db fd can be opened."""
 
         parent_descriptor = _open_trusted_parent(self._parent, create=False)
         try:
@@ -210,6 +271,102 @@ def path_entry_exists(path: Path) -> bool:
     return True
 
 
+def _connect_verified_database(
+    path: Path,
+    identity: _FileIdentity,
+    trusted_descriptor: int,
+) -> tuple[sqlite3.Connection, int]:
+    """Connect and prove SQLite opened exactly the securely-pinned inode."""
+
+    with _SQLITE_CONNECT_LOCK:
+        before = _snapshot_live_descriptors()
+        trusted_stat = before.get(trusted_descriptor)
+        if trusted_stat is None or not _same_regular_file(trusted_stat, identity):
+            raise ConfigurationError("trusted SQLite database descriptor was lost")
+        connection: sqlite3.Connection | None = None
+        try:
+            # Do not execute SQL until the descriptor opened by sqlite3.connect
+            # has been identified and matched to the independently pinned file.
+            connection = sqlite3.connect(
+                path.as_uri() + "?mode=rw",
+                uri=True,
+                timeout=30.0,
+                check_same_thread=False,
+            )
+            after = _snapshot_live_descriptors()
+            matching = [
+                descriptor
+                for descriptor, value in after.items()
+                if _descriptor_is_new(descriptor, value, before)
+                and _same_regular_file(value, identity)
+            ]
+            if len(matching) != 1:
+                raise ConfigurationError(
+                    "SQLite connection did not open exactly one pinned database "
+                    "descriptor"
+                )
+            return connection, matching[0]
+        except BaseException:
+            if connection is not None:
+                _close_sqlite_connection(connection)
+            raise
+
+
+def _snapshot_live_descriptors() -> dict[int, os.stat_result]:
+    """Snapshot currently-live descriptors without retaining the scan handle."""
+
+    descriptor_root = (
+        Path("/proc/self/fd") if Path("/proc/self/fd").is_dir() else Path("/dev/fd")
+    )
+    if not descriptor_root.is_dir():
+        raise ConfigurationError("live file-descriptor inspection is unavailable")
+    try:
+        entries = os.listdir(descriptor_root)
+    except OSError as error:
+        raise ConfigurationError(
+            "live file descriptors could not be inspected"
+        ) from error
+    snapshot: dict[int, os.stat_result] = {}
+    for entry in entries:
+        try:
+            descriptor = int(entry)
+            value = os.fstat(descriptor)
+        except (OSError, ValueError):
+            # The directory-enumeration descriptor is closed by os.listdir
+            # before this loop, and concurrent unrelated closes fail closed if
+            # they affect the pinned descriptor proof.
+            continue
+        snapshot[descriptor] = value
+    return snapshot
+
+
+def _descriptor_is_new(
+    descriptor: int,
+    value: os.stat_result,
+    before: dict[int, os.stat_result],
+) -> bool:
+    """Return whether a descriptor number or its underlying object is new."""
+
+    previous = before.get(descriptor)
+    if previous is None:
+        return True
+    return (
+        previous.st_dev != value.st_dev
+        or previous.st_ino != value.st_ino
+        or stat.S_IFMT(previous.st_mode) != stat.S_IFMT(value.st_mode)
+    )
+
+
+def _same_regular_file(value: os.stat_result, identity: _FileIdentity) -> bool:
+    """Return whether a descriptor is a regular file with the pinned inode."""
+
+    return (
+        stat.S_ISREG(value.st_mode)
+        and value.st_dev == identity.device
+        and value.st_ino == identity.inode
+    )
+
+
 def _open_trusted_parent(path: Path, *, create: bool) -> int:
     """Open a current-user-owned directory that other accounts cannot modify."""
 
@@ -249,6 +406,13 @@ def _open_trusted_parent(path: Path, *, create: bool) -> int:
 def _open_database_file(parent_descriptor: int, name: str) -> tuple[int, bool]:
     """Create or open a database through the already-validated parent handle."""
 
+    with _SQLITE_CONNECT_LOCK:
+        return _open_database_file_locked(parent_descriptor, name)
+
+
+def _open_database_file_locked(parent_descriptor: int, name: str) -> tuple[int, bool]:
+    """Open one state DB while descriptor snapshots are excluded."""
+
     flags = os.O_RDWR | _no_follow_flag()
     created = False
     try:
@@ -274,6 +438,10 @@ def _open_database_file(parent_descriptor: int, name: str) -> tuple[int, bool]:
         value = os.fstat(descriptor)
         if not stat.S_ISREG(value.st_mode):
             raise ConfigurationError("SQLite state database must be a regular file")
+        if value.st_nlink != 1:
+            raise ConfigurationError(
+                "SQLite state database must have exactly one hard link"
+            )
         if value.st_uid != os.getuid():
             raise ConfigurationError(
                 "SQLite state database must be owned by the current account"
@@ -313,6 +481,10 @@ def _validated_database_identity(value: os.stat_result) -> _FileIdentity:
 
     if not stat.S_ISREG(value.st_mode):
         raise ConfigurationError("SQLite state database must be a regular file")
+    if value.st_nlink != 1:
+        raise ConfigurationError(
+            "SQLite state database must have exactly one hard link"
+        )
     if value.st_uid != os.getuid():
         raise ConfigurationError(
             "SQLite state database must be owned by the current account"
@@ -340,8 +512,27 @@ def _directory_flag() -> int:
     return value
 
 
-def _close_connection(connection: sqlite3.Connection, lock: RLock) -> None:
-    """Close a connection under the same lock used for every operation."""
+def _close_resources(
+    connection: sqlite3.Connection,
+    database_descriptor: int,
+    lock: RLock,
+) -> None:
+    """Close SQLite and its independently retained trusted descriptor."""
 
     with lock:
+        _close_sqlite_connection(connection)
+        try:
+            os.close(database_descriptor)
+        except OSError:
+            pass
+
+
+def _close_sqlite_connection(connection: sqlite3.Connection) -> None:
+    """Close SQLite without allowing cleanup failure to strand trusted fds."""
+
+    try:
         connection.close()
+    except BaseException as close_error:  # noqa: BLE001
+        # Cleanup runs while propagating a more important construction,
+        # transaction, or finalization failure.
+        _ = close_error

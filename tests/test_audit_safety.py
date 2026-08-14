@@ -9,8 +9,10 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from uuid import uuid4
 
+from master_agent import sqlite_safety
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.connectors.mock import MockConnector
@@ -289,6 +291,43 @@ class AuditSafetyTests(unittest.TestCase):
             self.assertEqual(_audit_event_count(database), 0)
             self.assertEqual(_audit_event_count(displaced), 0)
             audit.close()
+
+    def test_constructor_swap_and_restore_cannot_redirect_schema_creation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            attacker = root / "attacker.sqlite3"
+            attacker.write_bytes(b"")
+            attacker.chmod(0o600)
+            real_connect = sqlite_safety.sqlite3.connect
+
+            def connect_while_redirected(
+                *args: object,
+                **kwargs: object,
+            ) -> sqlite3.Connection:
+                database.rename(displaced)
+                attacker.rename(database)
+                try:
+                    return real_connect(*args, **kwargs)
+                finally:
+                    database.rename(attacker)
+                    displaced.rename(database)
+
+            with (
+                patch.object(
+                    sqlite_safety.sqlite3,
+                    "connect",
+                    side_effect=connect_while_redirected,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "exactly one pinned"),
+            ):
+                AuditLog(database)
+
+            self.assertEqual(attacker.read_bytes(), b"")
+            self.assertFalse(database.exists())
 
 
 def _audit_event_count(database: Path) -> int:

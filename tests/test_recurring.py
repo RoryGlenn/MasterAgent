@@ -11,7 +11,9 @@ import unittest
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
+from master_agent import sqlite_safety
 from master_agent.errors import ConfigurationError
 from master_agent.recurring import (
     ClaimStatus,
@@ -413,6 +415,49 @@ class RecurringWorkflowTests(unittest.TestCase):
             self.assertEqual(_recurring_run_count(database), 1)
             self.assertEqual(_recurring_run_count(displaced), 1)
             store.close()
+
+    def test_constructor_swap_and_restore_cannot_redirect_schema_or_claim(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "state.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            attacker = root / "attacker.sqlite3"
+            attacker.write_bytes(b"")
+            attacker.chmod(0o600)
+            store = RecurringStateStore(database)
+            scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
+            real_connect = sqlite_safety.sqlite3.connect
+
+            def connect_while_redirected(
+                *args: object,
+                **kwargs: object,
+            ) -> sqlite3.Connection:
+                database.rename(displaced)
+                attacker.rename(database)
+                try:
+                    return real_connect(*args, **kwargs)
+                finally:
+                    database.rename(attacker)
+                    displaced.rename(database)
+
+            with (
+                patch.object(
+                    sqlite_safety.sqlite3,
+                    "connect",
+                    side_effect=connect_while_redirected,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "exactly one pinned"),
+            ):
+                store.claim(
+                    name="must-not-be-redirected",
+                    scheduled_at=scheduled,
+                    started_at=scheduled,
+                )
+
+            self.assertEqual(attacker.read_bytes(), b"")
+            self.assertFalse(database.exists())
 
     def test_scope_and_recipient_allowlists_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

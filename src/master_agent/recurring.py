@@ -352,7 +352,6 @@ class RecurringStateStore:
                         str(ClaimStatus.RECOVERABLE),
                     ),
                 )
-            connection.commit()
             return claim_token if cursor.rowcount == 1 else None
 
     def renew(
@@ -383,7 +382,6 @@ class RecurringStateStore:
                     str(claim_token),
                 ),
             )
-            connection.commit()
         return cursor.rowcount == 1
 
     def expire_claims(self, *, now: datetime | None = None) -> int:
@@ -409,7 +407,6 @@ class RecurringStateStore:
                     current.isoformat(),
                 ),
             )
-            connection.commit()
         return cursor.rowcount
 
     def mark_recoverable(self, *, name: str, scheduled_at: datetime) -> bool:
@@ -433,7 +430,6 @@ class RecurringStateStore:
                     str(ClaimStatus.EXPIRED),
                 ),
             )
-            connection.commit()
         return cursor.rowcount == 1
 
     def complete(
@@ -479,12 +475,10 @@ class RecurringStateStore:
                 ),
             )
             if cursor.rowcount != 1:
-                connection.rollback()
                 raise ConfigurationError(
                     f"recurring occurrence is not actively claimed: "
                     f"{name} at {scheduled_at.isoformat()}"
                 )
-            connection.commit()
 
     def fail(
         self,
@@ -570,7 +564,6 @@ class RecurringStateStore:
                     "recurring state contains duplicate scheduled occurrences; "
                     "review and repair it before upgrading"
                 ) from error
-            connection.commit()
 
     def _ensure_initialized(self) -> None:
         """Create scheduler state only when state is read or written."""
