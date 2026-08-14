@@ -530,6 +530,10 @@ def _validate_base_url(base_url: str, *, system: str) -> None:
         raise ConfigurationError(
             f"connector {system} base URL must not contain credentials"
         )
+    if "?" in base_url or "#" in base_url:
+        raise ConfigurationError(
+            f"connector {system} base URL must not contain a query or fragment"
+        )
     if parsed.scheme != "https":
         raise ConfigurationError(
             f"connector {system} must use HTTPS; terminate TLS before this client"

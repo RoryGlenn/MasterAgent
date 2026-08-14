@@ -388,7 +388,7 @@ class PluginExecutionBinding:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionContext:
-    """Reviewed, secret-free connector and plugin context for live execution."""
+    """Reviewed connector identities and metadata-only plugin inventory binding."""
 
     integrations_sha256: str
     connectors: tuple[ConnectorExecutionBinding, ...] = ()

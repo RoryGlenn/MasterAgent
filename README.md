@@ -2,7 +2,7 @@
 
 **Version 1.0.0 — complete governed enterprise-agent runtime**
 
-Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, local Git workspaces, and opt-in connector plugins.
+Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
 
 It separates AI planning from authorization and execution:
 
@@ -63,7 +63,7 @@ Supported domains:
 | OneNote | notebooks, sections, pages | generated HTML/proposals | delegated page create/update with rollback |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
 | Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, push, restore |
-| Plugins | capability-specific | capability-specific | explicit opt-in only; still governed by catalog and policy |
+| Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
 ## Core safety properties
 
@@ -78,7 +78,7 @@ Supported domains:
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
 - **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, and explicit workspace roots.
 - **Evidence discipline:** full content is persisted only under an explicit retention rule; durable audit records normally store digests and metadata.
-- **Plugin isolation:** discovery does not import plugin code; live loading requires an exact operator lock and imports from a verified private artifact snapshot.
+- **Plugin isolation:** discovery, locking, and plan binding do not import plugin code; all CLI plugin execution fails closed pending a sealed isolated worker.
 
 ## Requirements
 
@@ -243,8 +243,8 @@ A write requires all of these:
 
 1. the capability is enabled in `config/capabilities.toml`;
 2. governance permits it in `config/governance.toml`;
-3. the plan binds the current integrations, resolved origin/CA, and plugin
-   identities and uses an exact approval;
+3. the plan binds the current integrations and resolved origin/CA identities
+   and uses an exact approval;
 4. `--enable-writes` is supplied;
 5. the connector and its granular write flag are enabled in `config/integrations.toml`;
 6. valid credentials and expected versions are present.
@@ -324,8 +324,8 @@ Write an exact operator-reviewed lock without importing plugin code:
 master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
-Bind the selected identity before approval, then supply the same lock during
-live apply:
+Plugin inventory can be bound to a plan fingerprint for review without
+importing plugin code:
 
 ```bash
 master-agent bind-context plan.json \
@@ -335,15 +335,10 @@ master-agent bind-context plan.json \
   --output bound-plan.json
 ```
 
-```bash
-master-agent run bound-plan.json \
-  --connector-mode live \
-  --apply \
-  --plugin servicenow \
-  --plugin-lock /trusted/config/connector-plugins.json
-```
-
-Plugin capabilities must still exist in the catalog and pass governance, approval, source-of-truth, and connector-overlap checks. See [`docs/plugin-development.md`](docs/plugin-development.md).
+`run --apply --plugin ...` is intentionally rejected before plugin import,
+even when the lock and approvals are valid. A future activation path requires
+an isolated worker that verifies the complete dependency closure before any
+plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md).
 
 ## Configuration map
 
@@ -392,5 +387,5 @@ Plugin capabilities must still exist in the catalog and pass governance, approva
 - approval derived solely from retrieved content;
 - automatic use of new recipients discovered in content;
 - uncontrolled bidirectional synchronization;
-- automatic plugin loading;
+- in-process plugin loading;
 - enabling a schedule merely because `--force` was supplied.

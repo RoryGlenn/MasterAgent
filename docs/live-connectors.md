@@ -43,4 +43,7 @@ A provider acceptance response proves submission, not human delivery or readersh
 
 ## Plugins
 
-Connector plugins are Python entry points. Discovery reads entry-point metadata only. Loading imports only names explicitly passed to `--plugin` during `run --apply`. The returned connector enters the same capability registry and cannot overlap an existing capability for the same system.
+Connector plugins are Python entry points. Discovery, locking, and plan binding
+read metadata and artifact bytes without importing entry modules. CLI execution
+is disabled: `run --apply --plugin` fails closed before import until an isolated
+worker can verify the complete dependency closure.

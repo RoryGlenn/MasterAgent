@@ -12,7 +12,7 @@
 | OneNote | Microsoft Graph delegated | notebooks, sections, pages, page content | HTML/proposal | page create/update | re-read content; delete created page; restore prior HTML | disabled |
 | PowerPoint | local `python-pptx` | — | `.pptx` generation | upload through SharePoint only | local file digest; SharePoint version verification after upload | available locally |
 | Git workspace | local Git identity | repository preconditions | branch and patch plan | apply patch, create branch/commit, push | exact HEAD/ref checks; restore worktree/delete exact new branch where safe | requires explicit workspace root |
-| Connector plugin | Python entry point | plugin-defined | plugin-defined | plugin-defined | plugin contract plus registry/policy | never auto-loaded |
+| Connector plugin | metadata-only entry-point inventory | — | — | disabled | future isolated-worker contract | never executed |
 
 ## Hard exclusions
 

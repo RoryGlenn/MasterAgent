@@ -23,7 +23,7 @@ A connector provides:
 
 A reversible connector additionally implements `compensate` and `verify_compensation`.
 
-## Activation
+## Inventory and approval binding
 
 Discovery is metadata-only. Persist the inventory as an operator-controlled
 lock after reviewing the distribution name, version, entry point, and artifact
@@ -44,25 +44,18 @@ master-agent bind-context plan.json \
   --output bound-plan.json
 ```
 
-Loading occurs only during live apply, only for exact names in the approved
-plan, and only when the current installed artifact still matches the lock:
+The CLI does not currently activate connector plugins. Every attempted
+`run --apply --plugin ...` fails before importing the entry module or invoking
+its factory, including attempts with valid locks and exact-plan approvals.
 
-```bash
-master-agent run bound-plan.json \
-  --apply \
-  --connector-mode live \
-  --integrations /trusted/config/integrations.toml \
-  --plugin servicenow \
-  --plugin-lock /trusted/config/connector-plugins.json
-```
-
-The loader imports from a private snapshot of the locked distribution and
-removes ambient working-directory import paths. Editable plugin installs and
-entry modules not owned by the locked distribution fail closed.
+Locking only the plugin distribution cannot authenticate transitive or
+already-cached dependency code in the host interpreter. Production activation
+therefore remains disabled until an isolated worker can verify a complete
+locked dependency closure and expose only the typed connector protocol.
 
 ## Required governance work
 
-Before using a plugin capability:
+Before a future isolated worker can use a plugin capability:
 
 1. add it to `capabilities.toml` with the correct risk and authentication;
 2. add an accountable governance rule;
@@ -71,4 +64,6 @@ Before using a plugin capability:
 5. ensure it does not overlap an existing capability for the same system;
 6. pin and review the plugin package.
 
-Plugins do not bypass Master Agent policy. Unknown names, invalid factories, overlapping capabilities, uncatalogued actions, or missing governance fail closed.
+Discovery and binding remain useful review groundwork, but do not grant
+execution authority. Do not describe a plugin as runnable through Master Agent
+until the isolated worker boundary is implemented and validated.

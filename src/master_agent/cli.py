@@ -28,7 +28,11 @@ from master_agent.connectors.factory import (
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
 from master_agent.discovery import DiscoveryStatus, discover_integrations
-from master_agent.errors import MasterAgentError, StructuredDataTypeError
+from master_agent.errors import (
+    ConfigurationError,
+    MasterAgentError,
+    StructuredDataTypeError,
+)
 from master_agent.execution_context import (
     build_execution_context,
     enforce_execution_context,
@@ -43,7 +47,6 @@ from master_agent.planners.static import build_weekly_status_plan
 from master_agent.plugins import (
     PluginLock,
     discover_connector_plugins,
-    load_connector_plugins,
     resolve_locked_plugin_descriptors,
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
@@ -634,7 +637,10 @@ def _approve(
         raise ValueError(f"approval references unknown action IDs: {unknown}")
     issued_at = datetime.now(UTC)
     authenticator = HmacApprovalAuthenticator.from_toml(
-        approval_authorities,
+        resolve_config_source(
+            approval_authorities,
+            "approval-authorities.toml",
+        ),
         environ=os.environ,
     )
     approval = authenticator.issue(
@@ -675,6 +681,13 @@ def _run(
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
+    if apply and plugin_names:
+        raise ConfigurationError(
+            "in-process connector plugin execution is disabled pending an "
+            "isolated worker with a locked dependency closure"
+        )
+    if apply and plugin_lock_path is not None:
+        raise ValueError("--plugin-lock requires at least one --plugin")
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
     if approvals and approval_authorities is None:
@@ -683,15 +696,15 @@ def _run(
         )
     approval_authenticator = (
         HmacApprovalAuthenticator.from_toml(
-            approval_authorities,
+            resolve_config_source(
+                approval_authorities,
+                "approval-authorities.toml",
+            ),
             environ=os.environ,
         )
         if approval_authorities is not None
         else None
     )
-    if apply and plugin_names and connector_mode != "live":
-        raise ValueError("connector plugins may only be loaded in live mode")
-    plugin_lock: PluginLock | None = None
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
@@ -704,21 +717,11 @@ def _run(
         integration_config = IntegrationConfig.from_toml(
             resolve_config_source(integrations_path, "integrations.toml")
         )
-        plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
-        plugin_descriptors = (
-            resolve_locked_plugin_descriptors(
-                enabled_names=plugin_names,
-                trusted_lock=plugin_lock,
-            )
-            if plugin_lock is not None
-            else ()
-        )
         enforce_execution_context(
             plan,
             build_execution_context(
                 integration_config,
                 environ=execution_environ,
-                plugin_descriptors=plugin_descriptors,
             ),
         )
         connectors = build_live_registry(
@@ -735,39 +738,18 @@ def _run(
         )
         if "identity" not in connectors.systems():
             connectors.register(IdentityMapConnector(identities))
-    if apply and plugin_names:
-        loaded = load_connector_plugins(
-            connectors,
-            enabled_names=plugin_names,
-            trusted_lock=plugin_lock,
-        )
-        for item in loaded:
-            print(
-                f"loaded plugin {item.descriptor.name}: " + ", ".join(item.capabilities)
-            )
-
     if apply and connector_mode == "live":
         # Re-read identities immediately before execution. This catches an
-        # integrations, environment-origin, CA, lock, or installed-artifact
-        # change that occurs after client construction or plugin import.
+        # integrations, environment-origin, or CA change that occurs after
+        # client construction.
         current_integrations = IntegrationConfig.from_toml(
             resolve_config_source(integrations_path, "integrations.toml")
-        )
-        current_plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
-        current_plugin_descriptors = (
-            resolve_locked_plugin_descriptors(
-                enabled_names=plugin_names,
-                trusted_lock=current_plugin_lock,
-            )
-            if current_plugin_lock is not None
-            else ()
         )
         enforce_execution_context(
             plan,
             build_execution_context(
                 current_integrations,
                 environ=os.environ,
-                plugin_descriptors=current_plugin_descriptors,
             ),
         )
 

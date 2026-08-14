@@ -387,6 +387,10 @@ class SafeHttpClient:
             raise ConfigurationError("connector HTTP clients require an HTTPS base URL")
         if parsed.username or parsed.password:
             raise ConfigurationError("connector base URL must not include credentials")
+        if "?" in base_url or "#" in base_url:
+            raise ConfigurationError(
+                "connector base URL must not include a query or fragment"
+            )
         self._origin = _origin(parsed)
         self._headers = {
             "Accept": "application/json",

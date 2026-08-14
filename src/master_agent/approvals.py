@@ -14,11 +14,11 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
-from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import Approval, ChangePlan
 
@@ -66,7 +66,7 @@ class HmacApprovalAuthenticator:
     @classmethod
     def from_toml(
         cls,
-        path: Path,
+        path: ConfigSource,
         *,
         environ: Mapping[str, str] | None = None,
     ) -> HmacApprovalAuthenticator:

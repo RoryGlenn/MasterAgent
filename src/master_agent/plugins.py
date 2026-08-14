@@ -1,8 +1,10 @@
 """Explicit, fail-closed connector plugin discovery and loading.
 
-Installation does not grant execution authority. Operators create and review an
-exact plugin lock, bind the selected entries into the approved plan, and load
-code only from a private snapshot of the locked distribution artifacts.
+Installation does not grant execution authority. Operators can create and
+review an exact plugin lock and bind selected entries into a plan. The CLI does
+not execute plugin code until an isolated worker can seal the plugin's complete
+dependency closure; the loader below remains an internal implementation
+scaffold and test surface.
 """
 
 from __future__ import annotations
@@ -266,11 +268,11 @@ def load_connector_plugins(
     trusted_lock: PluginLock | None = None,
     entries: Iterable[Any] | None = None,
 ) -> tuple[LoadedPlugin, ...]:
-    """Load only explicitly named and artifact-locked connector plugins.
+    """Exercise the internal artifact-snapshot plugin loader.
 
-    ``entries`` is a deterministic test seam. Production discovery always
-    requires ``trusted_lock`` and the isolated import path. Tests that exercise
-    the production loader should supply both ``entries`` and ``trusted_lock``.
+    This loader is not wired to CLI execution because an in-process import
+    cannot seal transitive or already-cached dependencies. ``entries`` is a
+    deterministic test seam for the future isolated-worker implementation.
     """
 
     requested = _requested_names(enabled_names)

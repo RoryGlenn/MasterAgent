@@ -17,7 +17,7 @@
 - planner output is untrusted until schema, catalog, governance, policy, and approval validation;
 - retrieved provider content is always data, never authority;
 - connector code is trusted application code and must be reviewed;
-- installed plugins are untrusted executable code until explicitly reviewed and enabled;
+- installed plugins remain untrusted executable code and CLI execution is disabled;
 - provider responses are untrusted until normalized and verified;
 - local artifact/workspace roots are explicit security boundaries.
 
@@ -156,7 +156,7 @@ Controls:
 - fixed Git executable and argument templates;
 - approved workspace/repository roots;
 - patch and path validation;
-- plugins load only by exact operator request.
+- CLI plugin execution is disabled pending an isolated worker.
 
 ### Malicious connector plugin
 
@@ -168,11 +168,10 @@ Controls:
 - installation grants no authority;
 - exact plugin name, distribution, version, entry point, and artifact digest are
   operator-locked and approval-bound;
-- the entry module must be owned by the locked distribution and is imported
-  from a private snapshot with ambient repository paths removed;
-- connector contract and non-empty dotted capabilities validated;
-- registry rejects overlapping capability implementations;
-- catalog/governance/policy still apply;
+- binding imports no plugin code;
+- CLI apply rejects plugins before importing the entry module or factory;
+- a future worker must lock the complete transitive dependency closure and
+  isolate it from already-cached host modules before activation;
 - package publisher and code review remain operator responsibilities.
 
 ### Recurring autonomy expansion

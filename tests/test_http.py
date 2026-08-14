@@ -5,7 +5,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 from urllib.request import ProxyHandler
 
-from master_agent.errors import AuthenticationError, ConnectorHttpError
+from master_agent.errors import (
+    AuthenticationError,
+    ConfigurationError,
+    ConnectorHttpError,
+)
 from master_agent.http import (
     HttpResponse,
     SafeHttpClient,
@@ -29,6 +33,17 @@ class SafeHttpClientTests(unittest.TestCase):
         value, _ = client.request_json("GET", "items", query={"limit": 10})
         self.assertEqual(value, {"value": 1})
         self.assertIn("limit=10", transport.requests[0].url)
+
+    def test_base_url_query_and_fragment_are_rejected(self) -> None:
+        for suffix in ("?", "#", "?access_token=secret", "#access_token=secret"):
+            with (
+                self.subTest(suffix=suffix),
+                self.assertRaisesRegex(
+                    ConfigurationError,
+                    "query or fragment",
+                ),
+            ):
+                SafeHttpClient(base_url=f"https://example.test/api{suffix}")
 
     def test_cross_origin_absolute_url_is_rejected_before_transport(self) -> None:
         transport = ScriptedTransport()

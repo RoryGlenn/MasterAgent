@@ -58,8 +58,7 @@ Before production:
 - use an approved secret manager;
 - define incident response and token revocation;
 - define evidence retention/legal hold;
-- restrict plugin installation and entry-point names;
-- pin package hashes;
+- keep plugin execution disabled; inventory and pin artifacts only for review;
 - review every enabled capability and connector gate;
 - preserve a tested rollback procedure;
 - monitor provider throttling and authentication failures.

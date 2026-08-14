@@ -81,6 +81,25 @@ auth_mode = "none"
             with self.assertRaisesRegex(ConfigurationError, "must use HTTPS"):
                 connector.resolve({})
 
+    def test_base_url_query_and_fragment_are_rejected(self) -> None:
+        for suffix in ("?", "#", "?access_token=secret", "#access_token=secret"):
+            with self.subTest(suffix=suffix), TemporaryDirectory() as directory:
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.jira]\n"
+                    "enabled = true\n"
+                    'deployment = "data_center"\n'
+                    f'base_url = "https://jira.example.test{suffix}"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+                connector = IntegrationConfig.from_toml(path).connector("jira")
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    "query or fragment",
+                ):
+                    connector.resolve({})
+
     def test_missing_config_file_raises_domain_error(self) -> None:
         with self.assertRaises(ConfigurationError):
             IntegrationConfig.from_toml(Path("/definitely/missing.toml"))

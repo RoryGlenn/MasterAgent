@@ -100,7 +100,9 @@ Canonical resources are validated before execution. A projection cannot be updat
 
 Connectors register a system name and explicit capability set. Multiple connectors may serve one system only when their capability sets do not overlap. This allows, for example, live Outlook reads and local Outlook draft generation to coexist safely.
 
-Plugin connectors are discovered without import and loaded only by exact name during an apply. They enter the same registry and cannot bypass overlap, catalog, governance, policy, approval, or audit checks.
+Plugin connectors are discovered, locked, and bound to plans without import.
+They are not loaded during apply: the CLI fails closed until a separate worker
+can seal the plugin and transitive dependency closure before execution.
 
 ### Orchestrator
 

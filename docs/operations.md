@@ -3,8 +3,9 @@
 ## Normal run lifecycle
 
 1. Generate or receive a plan.
-2. For live execution, bind the trusted integrations bundle, resolved
-   destinations/CA identities, and selected locked plugins into the plan.
+2. For live execution, bind the trusted integrations bundle and resolved
+   destinations/CA identities into the plan. Plugin identities may be bound
+   for review, but plugin execution remains disabled.
 3. Inspect the bound plan and fingerprint.
 4. Create exact action approvals with an explicit trusted approval-authority
    key ring and the fingerprint printed by `master-agent inspect`.
@@ -55,5 +56,5 @@ Track:
 - evidence nearing expiry;
 - audit-chain verification;
 - recurring lateness and duplicate-run prevention;
-- plugin inventory changes;
+- plugin inventory changes, while keeping plugin execution disabled;
 - capability/governance configuration changes.
