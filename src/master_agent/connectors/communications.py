@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import graph_client, graph_user_root
@@ -403,7 +404,7 @@ def _recipients(value: Any, *, required: bool = False) -> list[dict[str, Any]]:
         values: list[str] = []
     elif isinstance(value, str):
         values = [part.strip() for part in value.split(",") if part.strip()]
-    elif isinstance(value, list):
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         values = [str(part).strip() for part in value if str(part).strip()]
     else:
         raise ConnectorError("recipient fields must be strings or lists")

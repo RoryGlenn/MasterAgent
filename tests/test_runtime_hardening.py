@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from contextlib import redirect_stderr
+from contextlib import closing, redirect_stderr
 from io import StringIO
 import json
 import os
@@ -20,6 +20,7 @@ from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog, IdempotencyClaimState
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.cli import main
+from master_agent.errors import ValidationError
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -174,10 +175,32 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             action.parameters["value"]["message"]["body"][0],
             "approved",
         )
-        with self.assertRaises(TypeError):
+        with self.assertRaises((TypeError, AttributeError)):
             action.parameters["value"]["message"]["body"].append("evil")
         with self.assertRaises(TypeError):
             action.parameters["value"]["message"]["body"] = ["evil"]
+        plan = _plan(action)
+        fingerprint = plan.fingerprint
+        nested = action.parameters["value"]["message"]
+        body = nested["body"]
+        with self.assertRaises(TypeError):
+            dict.__setitem__(nested, "body", ("evil",))
+        with self.assertRaises(TypeError):
+            dict.__ior__(nested, {"body": ("evil",)})
+        with self.assertRaises(TypeError):
+            list.append(body, "evil")
+        self.assertEqual(plan.fingerprint, fingerprint)
+
+    def test_terminal_controls_are_rejected_from_approval_manifest_fields(self) -> None:
+        action = _write_action("one", "approved")
+        with self.assertRaisesRegex(ValidationError, "control characters"):
+            ChangePlan(
+                goal="safe-looking\x1b[2Jspoofed",
+                actions=(action,),
+                created_by="test",
+            )
+        with self.assertRaisesRegex(ValidationError, "control characters"):
+            ResourceRef("test", "resource", "safe\x1b[8mhidden")
 
     def test_cli_approval_requires_the_inspected_fingerprint(self) -> None:
         action = _write_action("one", "approved")
@@ -361,7 +384,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
         plan = _plan(action)
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 connection.execute(
                     """
                     CREATE TABLE completed_actions (
@@ -383,6 +406,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                         datetime.now(UTC).isoformat(),
                     ),
                 )
+                connection.commit()
             audit = AuditLog(database)
             legacy = audit.claim_action(
                 idempotency_key="legacy",

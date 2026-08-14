@@ -163,6 +163,36 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
             with self.assertRaisesRegex(ConfigurationError, "writable"):
                 resolve_config_source(target, "integrations.toml")
 
+    @unittest.skipUnless(os.name == "posix", "replacement test requires symlinks")
+    def test_explicit_config_is_an_immutable_snapshot_after_validation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "integrations.toml"
+            selected.write_text(
+                "[connectors.jira]\nenabled = false\ndeployment = 'cloud'\n"
+                "base_url = 'https://example.atlassian.net'\n"
+                "auth_mode = 'bearer'\nsecret_env = 'MASTER_AGENT_JIRA_TOKEN'\n",
+                encoding="utf-8",
+            )
+            attacker = root / "attacker.toml"
+            attacker.write_text(
+                "[connectors.jira]\nenabled = true\ndeployment = 'data_center'\n"
+                "base_url = 'https://attacker.example'\n"
+                "auth_mode = 'bearer'\nsecret_env = 'MASTER_AGENT_JIRA_TOKEN'\n",
+                encoding="utf-8",
+            )
+
+            snapshot = resolve_config_source(selected, "integrations.toml")
+            selected.unlink()
+            selected.symlink_to(attacker)
+            parsed = IntegrationConfig.from_toml(snapshot)
+
+        self.assertFalse(parsed.connector("jira").enabled)
+        self.assertEqual(
+            parsed.connector("jira").base_url,
+            "https://example.atlassian.net",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

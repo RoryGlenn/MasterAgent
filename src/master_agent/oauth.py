@@ -401,15 +401,53 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
     selected = path.expanduser()
     resolved = selected if selected.is_absolute() else Path.cwd() / selected
     resolved.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    resolved = resolved.parent.resolve(strict=True) / resolved.name
+    parent = resolved.parent.resolve(strict=True)
+    resolved = parent / resolved.name
+    parent_before = parent.lstat()
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        existing = resolved.lstat()
-    except FileNotFoundError:
-        existing = None
-    if existing is not None and stat.S_ISLNK(existing.st_mode):
-        raise AuthenticationError("token file target must not be a symlink")
-    if existing is not None and not stat.S_ISREG(existing.st_mode):
-        raise AuthenticationError("token file target must be a regular file")
+        directory_fd = os.open(parent, directory_flags)
+    except OSError as error:
+        raise AuthenticationError("token directory could not be opened safely") from error
+
+    parent_open = os.fstat(directory_fd)
+    try:
+        _validate_token_directory(parent_open, expected=parent_before)
+        try:
+            existing = os.stat(
+                resolved.name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and stat.S_ISLNK(existing.st_mode):
+            raise AuthenticationError("token file target must not be a symlink")
+        if existing is not None and not stat.S_ISREG(existing.st_mode):
+            raise AuthenticationError("token file target must be a regular file")
+
+        return _write_token_at(
+            directory_fd=directory_fd,
+            parent=parent,
+            parent_metadata=parent_open,
+            resolved=resolved,
+            token=token,
+        )
+    finally:
+        os.close(directory_fd)
+
+
+def _write_token_at(
+    *,
+    directory_fd: int,
+    parent: Path,
+    parent_metadata: os.stat_result,
+    resolved: Path,
+    token: AccessToken,
+) -> Path:
+    """Write one token using only operations relative to a pinned directory."""
+
     payload = {
         "access_token": token.value,
         "expires_at": token.expires_at.isoformat(),
@@ -418,30 +456,92 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
         "source": token.source,
     }
     encoded = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-    temporary = resolved.parent / f".{resolved.name}.{secrets.token_hex(16)}.tmp"
+    temporary = f".{resolved.name}.{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor: int | None = None
+    installed = False
     try:
-        descriptor = os.open(temporary, flags, 0o600)
+        descriptor = os.open(temporary, flags, 0o600, dir_fd=directory_fd)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             descriptor = None
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, resolved)
-        os.chmod(resolved, stat.S_IRUSR | stat.S_IWUSR, follow_symlinks=False)
-        _fsync_directory(resolved.parent)
+        if not _directory_path_matches(parent, parent_metadata):
+            raise AuthenticationError("token directory changed during write")
+        os.replace(
+            temporary,
+            resolved.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        installed = True
+        target_fd = os.open(
+            resolved.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+        try:
+            target = os.fstat(target_fd)
+            if not stat.S_ISREG(target.st_mode):
+                raise AuthenticationError("token file target must be a regular file")
+            if stat.S_IMODE(target.st_mode) != 0o600:
+                raise AuthenticationError("token file permissions are not restricted")
+        finally:
+            os.close(target_fd)
+        os.fsync(directory_fd)
+        if not _directory_path_matches(parent, parent_metadata):
+            raise AuthenticationError("token directory changed during write")
     except OSError as error:
         raise AuthenticationError("token file could not be written safely") from error
     finally:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            temporary.unlink()
+            os.unlink(temporary, dir_fd=directory_fd)
         except FileNotFoundError:
             pass
+        if installed and not _directory_path_matches(parent, parent_metadata):
+            try:
+                os.unlink(resolved.name, dir_fd=directory_fd)
+                os.fsync(directory_fd)
+            except FileNotFoundError:
+                pass
     return resolved
+
+
+def _validate_token_directory(
+    observed: os.stat_result,
+    *,
+    expected: os.stat_result,
+) -> None:
+    """Require a stable, current-user-owned, non-writable token directory."""
+
+    if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
+        raise AuthenticationError("token directory changed while opening")
+    if not stat.S_ISDIR(observed.st_mode):
+        raise AuthenticationError("token directory must be a regular directory")
+    if os.name == "posix":
+        if observed.st_uid != os.geteuid():
+            raise AuthenticationError("token directory must be owned by current user")
+        if stat.S_IMODE(observed.st_mode) & (stat.S_IWGRP | stat.S_IWOTH):
+            raise AuthenticationError(
+                "token directory must not be group- or other-writable"
+            )
+
+
+def _directory_path_matches(path: Path, expected: os.stat_result) -> bool:
+    """Return whether a directory path still names the pinned directory."""
+
+    try:
+        observed = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISDIR(observed.st_mode) and (
+        observed.st_dev,
+        observed.st_ino,
+    ) == (expected.st_dev, expected.st_ino)
 
 
 def inspect_jwt_claims(value: str) -> dict[str, Any]:

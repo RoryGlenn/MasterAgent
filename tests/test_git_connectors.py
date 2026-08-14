@@ -252,6 +252,83 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             self.assertEqual(human_file.read_text(encoding="utf-8"), "keep me\n")
             self.assertEqual((repository / "README.md").read_text(), "new\n")
 
+    def test_local_core_worktree_cannot_escape_workspace_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace_root = root / "approved"
+            repository = _repository(workspace_root / "repo")
+            head = _git(repository, "rev-parse", "HEAD")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "README.md").write_text("human outside content\n")
+            _git(repository, "config", "core.worktree", str(outside))
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/escape",
+                    "base": "main",
+                },
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "core.worktree"):
+                GitWorkspaceConnector(workspace_root=workspace_root).execute(action)
+
+            self.assertEqual(
+                (outside / "README.md").read_text(),
+                "human outside content\n",
+            )
+
+    def test_compensation_preserves_edit_injected_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+            result = connector.execute(action)
+            original_git = connector._git
+            injected = False
+
+            def racing_git(workspace: Path, *arguments: str):
+                nonlocal injected
+                if arguments == ("switch", "main") and not injected:
+                    injected = True
+                    (workspace / "README.md").write_text(
+                        "human concurrent work\n",
+                        encoding="utf-8",
+                    )
+                return original_git(workspace, *arguments)
+
+            connector._git = racing_git  # type: ignore[method-assign]
+            with self.assertRaisesRegex(VersionConflictError, "worktree changed"):
+                connector.compensate(action, result)
+
+            self.assertEqual(
+                (repository / "README.md").read_text(),
+                "human concurrent work\n",
+            )
+            self.assertIn(
+                "agent/change",
+                _git(repository, "branch", "--list", "agent/change"),
+            )
+
 
 class GitBranchPushConnectorTests(unittest.TestCase):
     """Validate new-branch-only publication and remote deletion rollback."""

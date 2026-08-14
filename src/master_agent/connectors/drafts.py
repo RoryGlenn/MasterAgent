@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.message import EmailMessage
 import difflib
@@ -9,7 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.errors import ConnectorError
 from master_agent.models import (
@@ -417,12 +418,14 @@ class PowerPointDraftConnector(_LocalDraftConnector):
         slides_value = action.parameters.get("slides")
         if slides_value is None:
             sections = action.parameters.get("sections", [])
-            if not isinstance(sections, list):
+            if not isinstance(sections, Sequence) or isinstance(sections, (str, bytes)):
                 raise ConnectorError("slides or sections must be a list")
             slides_value = [
                 {"title": str(section), "bullets": []} for section in sections
             ]
-        if not isinstance(slides_value, list):
+        if not isinstance(slides_value, Sequence) or isinstance(
+            slides_value, (str, bytes)
+        ):
             raise ConnectorError("slides must be a list")
         if len(slides_value) > 40:
             raise ConnectorError("PowerPoint generation is limited to 40 slides")
@@ -442,7 +445,7 @@ class PowerPointDraftConnector(_LocalDraftConnector):
                 raise ConnectorError("each slide must be an object")
             slide_title = str(raw_slide.get("title", "Untitled")).strip() or "Untitled"
             bullets = raw_slide.get("bullets", [])
-            if not isinstance(bullets, list):
+            if not isinstance(bullets, Sequence) or isinstance(bullets, (str, bytes)):
                 raise ConnectorError("slide bullets must be a list")
             slide = presentation.slides.add_slide(presentation.slide_layouts[1])
             slide.shapes.title.text = slide_title[:160]
@@ -641,7 +644,7 @@ def _string_list(value: Any, name: str, *, required: bool = False) -> tuple[str,
         result: tuple[str, ...] = ()
     elif isinstance(value, str):
         result = tuple(item.strip() for item in value.split(",") if item.strip())
-    elif isinstance(value, list):
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         result = tuple(str(item).strip() for item in value if str(item).strip())
     else:
         raise ConnectorError(f"parameter must be a string list: {name}")

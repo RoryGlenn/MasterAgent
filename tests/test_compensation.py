@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from master_agent.compensation import build_compensation_plan
+from master_agent.errors import ValidationError
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -86,6 +87,64 @@ class CompensationPlanTests(unittest.TestCase):
         self.assertEqual(reverse.target.resource_id, "provider-42")
         self.assertTrue(reverse.requires_approval)
         self.assertEqual(reverse.authority_source, AuthoritySource.DIRECT_USER)
+
+    def test_mixed_compensation_modes_fail_instead_of_returning_partial_plan(self) -> None:
+        planned = _action("planned")
+        in_process = _action("in-process")
+        original = ChangePlan(
+            goal="Update two resources.",
+            actions=(planned, in_process),
+            created_by="test",
+        )
+        report = RunReport(
+            run_id=uuid4(),
+            plan_id=original.plan_id,
+            plan_fingerprint=original.fingerprint,
+            dry_run=False,
+            actions=(
+                _report(planned, CompensationMode.PLAN),
+                _report(in_process, CompensationMode.IN_PROCESS),
+            ),
+        )
+
+        with self.assertRaisesRegex(ValidationError, "complete separately approvable"):
+            build_compensation_plan(original, report, created_by="operator")
+
+
+def _action(resource_id: str) -> AgentAction:
+    return AgentAction(
+        capability="example.resource.update",
+        target=ResourceRef("example", "resource", resource_id),
+        parameters={"value": "new"},
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=True,
+        idempotency_key=f"example:update:{resource_id}",
+        justification="Update test resource.",
+    )
+
+
+def _report(action: AgentAction, mode: CompensationMode) -> ActionReport:
+    descriptor = CompensationDescriptor(
+        kind="restore_previous_value",
+        mode=mode,
+        capability=("example.resource.restore" if mode is CompensationMode.PLAN else None),
+        parameters={"value": "old"},
+        reason=("requires originating connector" if mode is not CompensationMode.PLAN else None),
+    )
+    return ActionReport(
+        action_id=action.action_id,
+        capability=action.capability,
+        state=ActionState.VERIFIED,
+        message="verified",
+        result=ExecutionResult(
+            action_id=action.action_id,
+            state=ActionState.SUCCEEDED,
+            before=None,
+            after=None,
+            compensation=descriptor.to_dict(),
+        ),
+    )
 
 
 if __name__ == "__main__":

@@ -1,9 +1,12 @@
 """Source-of-truth tests."""
 
+import hashlib
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from master_agent.canonical import SourceOfTruthRegistry
+from master_agent.errors import ConfigurationError
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -30,7 +33,10 @@ class SourceOfTruthTests(unittest.TestCase):
                 resource_type="message",
                 resource_id="weekly-status-draft",
             ),
-            parameters={"body": "changed status"},
+            parameters={
+                "body": "changed status",
+                "source_bindings": {"project_status_narrative": "a" * 64},
+            },
             risk=RiskLevel.REVERSIBLE_WRITE,
             authority_source=AuthoritySource.DIRECT_USER,
             requires_approval=True,
@@ -46,6 +52,7 @@ class SourceOfTruthTests(unittest.TestCase):
         registry = SourceOfTruthRegistry.from_toml(
             ROOT / "config/sources_of_truth.toml"
         )
+        digest = hashlib.sha256(b"canonical").hexdigest()
         canonical = AgentAction(
             capability="confluence.page.update",
             target=ResourceRef(
@@ -54,7 +61,10 @@ class SourceOfTruthTests(unittest.TestCase):
                 "project-status",
                 expected_version="1",
             ),
-            parameters={"body": "canonical"},
+            parameters={
+                "body": "canonical",
+                "source_bindings": {"project_status_narrative": digest},
+            },
             risk=RiskLevel.REVERSIBLE_WRITE,
             authority_source=AuthoritySource.DIRECT_USER,
             requires_approval=True,
@@ -64,7 +74,10 @@ class SourceOfTruthTests(unittest.TestCase):
         unordered = AgentAction(
             capability="teams.message.update",
             target=ResourceRef("teams", "message", "weekly-status-draft"),
-            parameters={"body": "projection"},
+            parameters={
+                "body": "projection",
+                "source_bindings": {"project_status_narrative": digest},
+            },
             risk=RiskLevel.REVERSIBLE_WRITE,
             authority_source=AuthoritySource.DIRECT_USER,
             requires_approval=True,
@@ -98,6 +111,64 @@ class SourceOfTruthTests(unittest.TestCase):
         )
         valid, _ = registry.validate(ordered_plan, ordered)
         self.assertTrue(valid)
+
+    def test_unrelated_canonical_field_cannot_authorize_projection(self) -> None:
+        registry = SourceOfTruthRegistry.from_toml(
+            ROOT / "config/sources_of_truth.toml"
+        )
+        projection_digest = "a" * 64
+        canonical = AgentAction(
+            capability="confluence.page.update",
+            target=ResourceRef("confluence", "page", "project-status", "1"),
+            parameters={
+                "body": "unrelated title update",
+                "source_bindings": {"page_title": projection_digest},
+            },
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="canonical:unrelated",
+            justification="update a different field",
+        )
+        projection = AgentAction(
+            capability="teams.message.update",
+            target=ResourceRef("teams", "message", "weekly-status-draft"),
+            parameters={
+                "body": "fabricated status",
+                "source_bindings": {
+                    "project_status_narrative": projection_digest,
+                },
+            },
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="projection:fabricated",
+            justification="project an unrelated write",
+            dependencies=(canonical.action_id,),
+        )
+        plan = ChangePlan(
+            goal="reject field laundering",
+            actions=(canonical, projection),
+            created_by="test",
+        )
+
+        valid, reason = registry.validate(plan, projection)
+
+        self.assertFalse(valid)
+        self.assertIn("field-bound", reason)
+
+    def test_unknown_source_direction_is_rejected_at_load(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "sources.toml"
+            path.write_text(
+                "[[rules]]\nfield='status'\ncanonical_system='jira'\n"
+                "canonical_resource_id='X'\nprojections=['teams:X']\n"
+                "direction='bidirectional'\ncanonical_capabilities=['jira.issue.update']\n"
+                "projection_capabilities=['teams.message.update']\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "direction"):
+                SourceOfTruthRegistry.from_toml(path)
 
 
 if __name__ == "__main__":

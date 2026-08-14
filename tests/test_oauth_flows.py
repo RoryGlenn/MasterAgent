@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -151,6 +152,36 @@ class OAuthFlowTests(unittest.TestCase):
             with self.assertRaises(AuthenticationError):
                 RestrictedTokenFileProvider(path).get_token()
             self.assertEqual(victim.read_text(encoding="utf-8"), "do-not-overwrite\n")
+
+    @unittest.skipUnless(os.name == "posix", "directory race test requires POSIX")
+    def test_token_write_rejects_parent_directory_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "tokens"
+            parent.mkdir()
+            original = root / "original-tokens"
+            attacker = root / "attacker"
+            attacker.mkdir()
+            token = AccessToken(
+                value="delegated-token",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                scopes=("User.Read",),
+                source="test",
+            )
+
+            def swap_parent(_size: int) -> str:
+                parent.rename(original)
+                parent.symlink_to(attacker, target_is_directory=True)
+                return "fixed-race-name"
+
+            with patch(
+                "master_agent.oauth.secrets.token_hex",
+                side_effect=swap_parent,
+            ), self.assertRaisesRegex(AuthenticationError, "directory changed"):
+                write_token_file(parent / "graph-token.json", token)
+
+            self.assertFalse((attacker / "graph-token.json").exists())
+            self.assertFalse((original / "graph-token.json").exists())
 
 
 if __name__ == "__main__":

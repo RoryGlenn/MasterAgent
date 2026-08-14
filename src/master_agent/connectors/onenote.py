@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import hashlib
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import (
@@ -331,7 +332,11 @@ class OneNoteWriteConnector:
         before = self._read_page(root, page_id, include_content=True)
         enforce_expected_version(action, before.get("version"))
         commands = action.parameters.get("commands")
-        if not isinstance(commands, list) or not commands:
+        if (
+            not isinstance(commands, Sequence)
+            or isinstance(commands, (str, bytes))
+            or not commands
+        ):
             raise ConnectorError("OneNote update commands must be a non-empty list")
         normalized: list[dict[str, str]] = []
         for item in commands:

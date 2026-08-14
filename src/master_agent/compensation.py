@@ -26,8 +26,9 @@ def build_compensation_plan(
 ) -> ChangePlan:
     """Create a reverse-ordered plan from connector compensation metadata.
 
-    Manual-only compensation records are intentionally omitted and reported by
-    the caller from the original run result.
+    The function fails closed if any reported reversible effect cannot be
+    represented in the returned plan. This prevents an operator from mistaking
+    a silently partial rollback plan for complete compensation.
     """
 
     original_by_id = {action.action_id: action for action in original.actions}
@@ -36,6 +37,12 @@ def build_compensation_plan(
     previous: UUID | None = None
     for item in reversed(report.actions):
         if item.result is None:
+            continue
+        source = original_by_id.get(item.action_id)
+        if source is None:
+            unavailable.append(f"{item.action_id}: original action is unavailable")
+            continue
+        if source.risk is not RiskLevel.REVERSIBLE_WRITE:
             continue
         compensation = item.result.compensation
         if not isinstance(compensation, Mapping):
@@ -46,6 +53,7 @@ def build_compensation_plan(
                 else None
             )
         if not isinstance(compensation, Mapping):
+            unavailable.append(f"{item.action_id}: compensation descriptor is missing")
             continue
         descriptor = CompensationDescriptor.from_dict(compensation)
         if descriptor.mode is not CompensationMode.PLAN:
@@ -54,9 +62,6 @@ def build_compensation_plan(
             )
             continue
         capability = descriptor.capability or ""
-        source = original_by_id.get(item.action_id)
-        if source is None:
-            continue
         dependencies = (previous,) if previous is not None else ()
         action = AgentAction(
             capability=capability,
@@ -84,11 +89,14 @@ def build_compensation_plan(
         compensation_actions.append(action)
         previous = action.action_id
 
+    if unavailable:
+        raise ValidationError(
+            "run cannot produce a complete separately approvable compensation plan: "
+            + "; ".join(unavailable)
+        )
     if not compensation_actions:
-        detail = f": {'; '.join(unavailable)}" if unavailable else ""
         raise ValidationError(
             "run contains no separately approvable compensation operations"
-            + detail
         )
     return ChangePlan(
         goal=f"Compensate reversible effects of plan {original.plan_id}.",

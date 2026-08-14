@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from collections.abc import Sequence
@@ -106,6 +107,27 @@ class GitSandbox:
                 raise ConnectorError(
                     f"repository contains prohibited executable Git configuration: {normalized}"
                 )
+        expected_worktree = repository.resolve()
+        observed_worktree = Path(
+            self.run(repository, ("rev-parse", "--show-toplevel")).stdout.strip()
+        ).resolve()
+        if observed_worktree != expected_worktree:
+            raise ConnectorError("Git worktree is outside the approved repository")
+        observed_git_dir = Path(
+            self.run(repository, ("rev-parse", "--absolute-git-dir")).stdout.strip()
+        ).resolve()
+        git_entry = expected_worktree / ".git"
+        try:
+            git_metadata = git_entry.lstat()
+        except FileNotFoundError as error:
+            raise ConnectorError("Git metadata is unavailable") from error
+        if not stat.S_ISDIR(git_metadata.st_mode):
+            raise ConnectorError("Git metadata must be a local non-symlink directory")
+        expected_git_dir = git_entry.resolve()
+        if observed_git_dir != expected_git_dir:
+            raise ConnectorError("Git metadata is outside the approved repository")
+        if self.run(repository, ("rev-parse", "--is-bare-repository")).stdout.strip() != "false":
+            raise ConnectorError("bare Git repositories are not approved workspaces")
 
     def reject_path_filters(self, repository: Path, paths: Sequence[str]) -> None:
         """Reject repository attributes that can invoke clean filter drivers."""
@@ -177,6 +199,10 @@ _DANGEROUS_EXACT_KEYS = frozenset(
         "core.editor",
         "core.pager",
         "core.attributesfile",
+        "core.worktree",
+        "core.gitproxy",
+        "core.alternaterefscommand",
+        "extensions.worktreeconfig",
         "diff.external",
         "commit.gpgsign",
         "tag.gpgsign",

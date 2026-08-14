@@ -200,24 +200,56 @@ class GitWorkspaceConnector(CompensatingConnector):
             "head": self._head(workspace),
             "branch": self._current_branch(workspace),
         }
-        self._git(workspace, "reset", "--hard", previous_head)
-        if previous_branch and self._current_branch(workspace) != previous_branch:
-            _branch(previous_branch, allow_protected=True)
-            self._git(workspace, "switch", previous_branch)
-        created_branch = (
-            str((result.after or {}).get("branch", "")).strip()
-            if action.capability == "repository.branch.create"
-            else ""
-        )
-        if created_branch and created_branch != previous_branch:
-            _branch(created_branch)
-            self._git(workspace, "branch", "-D", created_branch)
+        expected_status = str(before.get("worktree_status_sha256", "")).strip()
+        created_branch = ""
+        if action.capability == "repository.branch.create":
+            created_branch = self._compensate_branch_creation(
+                workspace,
+                result=result,
+                previous_branch=previous_branch,
+                previous_head=previous_head,
+                expected_status=expected_status,
+            )
+        elif action.capability == "repository.patch.apply":
+            payload = self._patch_payload(action)
+            self._git_bytes(
+                workspace,
+                ("apply", "--reverse", "--check", "--whitespace=error-all", "-"),
+                payload,
+            )
+            self._git_bytes(
+                workspace,
+                ("apply", "--reverse", "--whitespace=error-all", "-"),
+                payload,
+            )
+        elif action.capability == "repository.commit.create":
+            current_branch = self._current_branch(workspace)
+            if not current_branch:
+                raise ConnectorError("detached-HEAD commits require manual compensation")
+            _branch(current_branch, allow_protected=True)
+            self._git(
+                workspace,
+                "update-ref",
+                f"refs/heads/{current_branch}",
+                previous_head,
+                current["head"],
+            )
+            # Reset only the index to the compare-and-swapped ref. The worktree,
+            # including any concurrent human edits, is deliberately preserved.
+            self._git(workspace, "reset", "--mixed", "HEAD")
+        else:  # pragma: no cover - all compensatable capabilities are enumerated.
+            raise ConnectorError("automatic Git compensation is unavailable")
+
+        observed_status = self._status_digest(workspace)
+        if expected_status and observed_status != expected_status:
+            raise VersionConflictError(
+                "Git worktree changed during compensation; human content was preserved"
+            )
         observed = {
             "head": self._head(workspace),
             "branch": self._current_branch(workspace),
-            "worktree_clean": not bool(
-                self._git(workspace, "status", "--porcelain").stdout.strip()
-            ),
+            "worktree_status_sha256": observed_status,
+            "worktree_clean": not bool(self._git(workspace, "status", "--porcelain").stdout.strip()),
             "deleted_branch": created_branch or None,
         }
         return ExecutionResult(
@@ -239,10 +271,15 @@ class GitWorkspaceConnector(CompensatingConnector):
 
         prior = original.before or {}
         observed = compensation.after or {}
+        expected_status = str(prior.get("worktree_status_sha256", "")).strip()
         verified = bool(
             observed.get("head") == prior.get("head")
             and observed.get("branch") == prior.get("branch")
-            and observed.get("worktree_clean")
+            and (
+                observed.get("worktree_status_sha256") == expected_status
+                if expected_status
+                else observed.get("worktree_clean")
+            )
         )
         return VerificationResult(
             action_id=action.action_id,
@@ -254,6 +291,77 @@ class GitWorkspaceConnector(CompensatingConnector):
                 else "local Git rollback did not restore the prior state"
             ),
         )
+
+    def _compensate_branch_creation(
+        self,
+        workspace: Path,
+        *,
+        result: ExecutionResult,
+        previous_branch: str,
+        previous_head: str,
+        expected_status: str,
+    ) -> str:
+        """Switch back and delete only the exact unchanged branch ref."""
+
+        created_branch = str((result.after or {}).get("branch", "")).strip()
+        created_head = str((result.after or {}).get("head", "")).strip()
+        if not created_branch or not created_head or not previous_branch:
+            raise ConnectorError("branch compensation metadata is incomplete")
+        _branch(created_branch)
+        _branch(previous_branch, allow_protected=True)
+        if self._current_branch(workspace) != created_branch:
+            raise VersionConflictError("created branch is no longer checked out")
+        if self._head(workspace) != created_head:
+            raise VersionConflictError("created branch advanced after creation")
+        previous_ref = self._git(
+            workspace,
+            "rev-parse",
+            f"refs/heads/{previous_branch}",
+        ).stdout.strip()
+        if previous_ref != previous_head:
+            raise VersionConflictError("previous branch advanced after branch creation")
+        self._git(workspace, "switch", previous_branch)
+        if expected_status and self._status_digest(workspace) != expected_status:
+            raise VersionConflictError(
+                "Git worktree changed during compensation; created branch was retained"
+            )
+        self._git(
+            workspace,
+            "update-ref",
+            "-d",
+            f"refs/heads/{created_branch}",
+            created_head,
+        )
+        return created_branch
+
+    def _patch_payload(self, action: AgentAction) -> bytes:
+        """Read and revalidate the exact approval-bound patch bytes."""
+
+        patch_text = str(action.parameters.get("patch_text", ""))
+        patch_path = str(action.parameters.get("patch_path", "")).strip()
+        if bool(patch_text) == bool(patch_path):
+            raise ConnectorError("exactly one of patch_text or patch_path is required")
+        if patch_path:
+            root_value = str(action.parameters.get("patch_root", "")).strip()
+            if not root_value:
+                raise ConnectorError("patch_path requires an explicit patch_root")
+            root = Path(root_value).expanduser().resolve()
+            path = Path(patch_path).expanduser().resolve()
+            try:
+                path.relative_to(root)
+            except ValueError as error:
+                raise ConnectorError("patch_path is outside patch_root") from error
+            if not path.is_file():
+                raise ConnectorError("patch_path is not a file")
+            payload = path.read_bytes()
+        else:
+            payload = patch_text.encode("utf-8")
+        if not payload or len(payload) > 5 * 1024 * 1024:
+            raise ConnectorError("patch is empty or exceeds 5 MiB")
+        expected_patch_digest = _sha256_parameter(action.parameters, "patch_sha256")
+        if hashlib.sha256(payload).hexdigest() != expected_patch_digest:
+            raise VersionConflictError("approved patch content digest does not match")
+        return payload
 
     def _create_branch(self, action: AgentAction, workspace: Path) -> ExecutionResult:
         branch = _branch(_required(action.parameters, "branch"))
@@ -272,6 +380,7 @@ class GitWorkspaceConnector(CompensatingConnector):
         before = {
             "branch": self._current_branch(workspace),
             "head": self._head(workspace),
+            "worktree_status_sha256": self._status_digest(workspace),
         }
         self._git(workspace, "switch", "-c", branch, base)
         post_status = self._status_digest(workspace)
@@ -307,35 +416,12 @@ class GitWorkspaceConnector(CompensatingConnector):
                 f"repository HEAD changed: expected {expected_head}, observed {current_head}"
             )
         self._require_clean(workspace)
-        patch_text = str(action.parameters.get("patch_text", ""))
-        patch_path = str(action.parameters.get("patch_path", "")).strip()
-        if bool(patch_text) == bool(patch_path):
-            raise ConnectorError("exactly one of patch_text or patch_path is required")
-        if patch_path:
-            root_value = str(action.parameters.get("patch_root", "")).strip()
-            if not root_value:
-                raise ConnectorError("patch_path requires an explicit patch_root")
-            root = Path(root_value).expanduser().resolve()
-            path = Path(patch_path).expanduser().resolve()
-            try:
-                path.relative_to(root)
-            except ValueError as error:
-                raise ConnectorError("patch_path is outside patch_root") from error
-            if not path.is_file():
-                raise ConnectorError("patch_path is not a file")
-            payload = path.read_bytes()
-        else:
-            payload = patch_text.encode("utf-8")
-        if not payload or len(payload) > 5 * 1024 * 1024:
-            raise ConnectorError("patch is empty or exceeds 5 MiB")
-        expected_patch_digest = _sha256_parameter(action.parameters, "patch_sha256")
-        observed_patch_digest = hashlib.sha256(payload).hexdigest()
-        if observed_patch_digest != expected_patch_digest:
-            raise VersionConflictError("approved patch content digest does not match")
+        payload = self._patch_payload(action)
         before = {
             "head": current_head,
             "branch": self._current_branch(workspace),
             "diff_sha256": self._diff_digest(workspace),
+            "worktree_status_sha256": self._status_digest(workspace),
         }
         self._git_bytes(
             workspace,
@@ -389,7 +475,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             )
         message = _required(action.parameters, "message")
         paths = action.parameters.get("paths")
-        if not isinstance(paths, list) or not paths:
+        if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or not paths:
             raise ConnectorError("commit paths must be a non-empty list")
         normalized = tuple(_relative_path(str(item)) for item in paths)
         if len(normalized) != len(set(normalized)):
@@ -407,6 +493,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             "head": current_head,
             "branch": self._current_branch(workspace),
             "diff_sha256": self._diff_digest(workspace),
+            "worktree_status_sha256": self._status_digest(workspace),
         }
         self._git(workspace, "add", "--", *normalized)
         try:

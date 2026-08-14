@@ -8,7 +8,8 @@ from enum import StrEnum
 import hashlib
 import json
 import math
-from typing import Any, Mapping, Never
+from collections.abc import Iterator
+from typing import Any, Mapping
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
@@ -100,6 +101,7 @@ class ResourceRef:
         ):
             if not value.strip():
                 raise ValidationError(f"{name} must not be empty")
+            _reject_control_characters(value, name)
 
     @property
     def uri(self) -> str:
@@ -157,6 +159,7 @@ class AgentAction:
             raise ValidationError(
                 "capability must be a non-empty domain-specific dotted name"
             )
+        _reject_control_characters(self.capability, "capability")
         if not self.idempotency_key.strip():
             raise ValidationError("idempotency_key must not be empty")
         if not self.justification.strip():
@@ -265,6 +268,7 @@ class ChangePlan:
             raise ValidationError("compensate_on_failure must be a boolean")
         if not self.goal.strip():
             raise ValidationError("goal must not be empty")
+        _reject_control_characters(self.goal, "goal")
         if not self.created_by.strip():
             raise ValidationError("created_by must not be empty")
         if self.workflow_id is not None and not self.workflow_id.strip():
@@ -669,9 +673,9 @@ def _freeze_json(value: Any, *, path: str) -> Any:
             if not isinstance(key, str):
                 raise ValidationError(f"{path} keys must be strings")
             frozen[key] = _freeze_json(item, path=f"{path}.{key}")
-        return _FrozenDict(frozen)
+        return _FrozenMapping(frozen)
     if isinstance(value, (tuple, list)):
-        return _FrozenList(
+        return tuple(
             _freeze_json(item, path=f"{path}[{index}]")
             for index, item in enumerate(value)
         )
@@ -686,45 +690,39 @@ def _freeze_json(value: Any, *, path: str) -> Any:
     )
 
 
-class _FrozenDict(dict[str, Any]):
-    """A JSON-serializable dictionary that rejects ordinary mutation."""
+@dataclass(frozen=True, slots=True)
+class _FrozenMapping(Mapping[str, Any]):
+    """A mapping that is not a mutable-dictionary subclass."""
 
-    def _immutable(self, *_args: Any, **_kwargs: Any) -> Never:
-        raise TypeError("approved action parameters are immutable")
+    _items: tuple[tuple[str, Any], ...]
 
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable
-    setdefault = _immutable
-    update = _immutable
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "_items", tuple(values.items()))
 
-    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenDict":
+    def __getitem__(self, key: str) -> Any:
+        for candidate, value in self._items:
+            if candidate == key:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (key for key, _value in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Mapping) and dict(self.items()) == dict(other.items())
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenMapping":
         return self
 
 
-class _FrozenList(list[Any]):
-    """A JSON-serializable list that rejects ordinary mutation."""
+def _reject_control_characters(value: str, name: str) -> None:
+    """Reject terminal-control bytes from fields rendered during approval."""
 
-    def _immutable(self, *_args: Any, **_kwargs: Any) -> Never:
-        raise TypeError("approved action parameters are immutable")
-
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    __iadd__ = _immutable
-    __imul__ = _immutable
-    append = _immutable
-    clear = _immutable
-    extend = _immutable
-    insert = _immutable
-    pop = _immutable
-    remove = _immutable
-    reverse = _immutable
-    sort = _immutable
-
-    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenList":
-        return self
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+        raise ValidationError(f"{name} must not contain control characters")
 
 
 def _validate_acyclic(actions: tuple[AgentAction, ...]) -> None:
