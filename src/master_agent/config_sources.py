@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import BinaryIO, Literal, overload
+from typing import IO, BinaryIO, Literal, overload
 
 from master_agent.errors import ConfigurationError
 
@@ -24,10 +24,11 @@ _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class ConfigSnapshot:
-    """Immutable bytes captured from one explicitly trusted configuration file.
+    """Immutable bytes captured from one trusted configuration source.
 
-    Returning a snapshot instead of the checked path closes the check/use race
-    between source validation and the individual TOML loaders.
+    Returning a snapshot instead of a reopenable path or package resource closes
+    the check/use race between source validation, approval hashing, and the
+    individual TOML loaders.
     """
 
     display_path: Path
@@ -73,8 +74,8 @@ _DEFAULT_CONFIG_FILES = frozenset(
 def resolve_config_source(
     explicit: Path | None,
     filename: str,
-) -> ConfigSource:
-    """Resolve a configuration source without copying secrets or files.
+) -> ConfigSnapshot:
+    """Resolve a configuration source into one bounded immutable snapshot.
 
     Resolution order is an explicit, permission-checked command-line path and
     then the package's safe fallback configuration.  The current working
@@ -89,8 +90,9 @@ def resolve_config_source(
 
     Returns
     -------
-    ConfigSource
-        A filesystem path or importlib resource supporting binary reads.
+    ConfigSnapshot
+        A bounded snapshot whose bytes remain identical across every parser and
+        approval-hash read.
 
     Raises
     ------
@@ -109,7 +111,18 @@ def resolve_config_source(
         raise ConfigurationError(
             f"packaged default configuration is unavailable: {filename}"
         )
-    return packaged
+    try:
+        with packaged.open("rb") as handle:
+            payload = _read_stream_bounded(
+                handle,
+                _MAX_CONFIG_BYTES,
+                object_name="packaged default configuration",
+            )
+    except OSError as error:
+        raise ConfigurationError(
+            f"packaged default configuration could not be read: {filename}"
+        ) from error
+    return ConfigSnapshot(display_path=Path(str(packaged)), payload=payload)
 
 
 def _trusted_explicit_file(path: Path) -> ConfigSnapshot:
@@ -220,7 +233,7 @@ def _read_bounded(descriptor: int, limit: int) -> bytes:
 
     chunks: list[bytes] = []
     remaining = limit + 1
-    while remaining:
+    while remaining > 0:
         chunk = os.read(descriptor, min(remaining, 64 * 1024))
         if not chunk:
             break
@@ -229,4 +242,26 @@ def _read_bounded(descriptor: int, limit: int) -> bytes:
     payload = b"".join(chunks)
     if len(payload) > limit:
         raise ConfigurationError("explicit configuration exceeds the 4 MiB limit")
+    return payload
+
+
+def _read_stream_bounded(
+    stream: IO[bytes],
+    limit: int,
+    *,
+    object_name: str,
+) -> bytes:
+    """Read one binary stream without allowing an unbounded package resource."""
+
+    chunks: list[bytes] = []
+    remaining = limit + 1
+    while remaining > 0:
+        chunk = stream.read(min(remaining, 64 * 1024))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    payload = b"".join(chunks)
+    if len(payload) > limit:
+        raise ConfigurationError(f"{object_name} exceeds the 4 MiB limit")
     return payload
