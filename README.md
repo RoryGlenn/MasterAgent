@@ -42,11 +42,11 @@ The implementation is complete, but a particular company deployment is not activ
 
 ## Capability surface
 
-The catalog contains **71 typed capabilities**:
+The catalog contains **70 typed capabilities**:
 
 - 39 read-only capabilities;
 - 10 local-generation capabilities;
-- 17 reversible-write capabilities;
+- 16 reversible-write capabilities;
 - 4 external-communication capabilities;
 - 1 high-impact capability, `bitbucket.pull_request.merge`, deliberately disabled.
 
@@ -62,7 +62,7 @@ Supported domains:
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with restore compensation |
 | OneNote | notebooks, sections, pages | generated HTML/proposals | delegated page create/update with rollback |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
-| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, push, restore |
+| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, and push; verified in-process compensation only |
 | Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
 ## Core safety properties
@@ -76,7 +76,7 @@ Supported domains:
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
-- **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, and explicit workspace roots.
+- **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, no standalone destructive worktree restore, and explicit workspace roots.
 - **Evidence discipline:** full content is persisted only under an explicit retention rule; durable audit records normally store digests and metadata.
 - **Plugin isolation:** discovery, locking, and plan binding do not import plugin code; all CLI plugin execution fails closed pending a sealed isolated worker.
 

@@ -6,11 +6,11 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- a 71-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
+- a 70-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
 - Phase 3 complete local draft packages containing Jira and Confluence proposals, Outlook `.eml`, Teams draft, PowerPoint, repository patch, summary, and integrity manifest;
 - approved Jira field updates, comments, transitions, version checks, and compensation;
 - approved Confluence page creation/update and compensation for Cloud and Data Center contracts;
-- controlled Git workspace patch, branch, commit, push, restore, and exact-ref rollback;
+- controlled Git workspace patch, branch, commit, push, and content-preserving in-process rollback;
 - Bitbucket branch publishing and pull-request creation with decline/delete-ref compensation where safe;
 - SharePoint bounded file upload with previous-version restoration;
 - delegated OneNote notebook/section/page reads plus page create/update and rollback;
@@ -38,6 +38,7 @@
 - plugin discovery never imports plugin code, and plugins are loaded only by exact operator-supplied name during apply;
 - provider mutation connectors require runtime, generic, and granular provider gates;
 - PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
+- standalone Git worktree restore is not exposed because a status precheck followed by `reset --hard` cannot preserve edits made between check and use.
 
 ## 0.3.0 — Read-only communication context
 

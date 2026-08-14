@@ -312,14 +312,6 @@ authentication = "local"
 risk = "local_generation"
 description = "Generate a reviewable unified diff without changing a repository."
 
-[capabilities."repository.worktree.restore"]
-enabled = true
-authentication = "local_git"
-risk = "reversible_write"
-reversible = true
-requires_expected_version = true
-description = "Restore a local worktree to an explicitly approved commit."
-
 [capabilities."sharepoint.drive.children"]
 enabled = true
 authentication = "microsoft_graph"

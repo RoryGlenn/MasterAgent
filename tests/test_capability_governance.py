@@ -48,6 +48,17 @@ class CapabilityGovernanceTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("disabled", reason)
 
+    def test_standalone_git_restore_has_no_execution_or_governance_route(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+
+        self.assertNotIn("repository.worktree.restore", catalog.definitions)
+        rule = governance.rule_for("repository.worktree.restore")
+        self.assertIsNotNone(rule)
+        assert rule is not None
+        self.assertFalse(rule.enabled)
+        self.assertEqual(rule.pattern, "*")
+
     def test_version_and_classification_contracts_fail_closed(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
         governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")

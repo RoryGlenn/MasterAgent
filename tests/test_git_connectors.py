@@ -13,7 +13,7 @@ from master_agent.connectors.git_remote import GitBranchPushConnector
 from master_agent.connectors.git_sandbox import validate_remote_url
 from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.errors import ConnectorError, VersionConflictError
-from master_agent.models import RiskLevel
+from master_agent.models import CompensationMode, RiskLevel
 from tests.helpers import action_for
 
 
@@ -91,6 +91,78 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             )
             self.assertEqual((repository / "README.md").read_text(), "old\n")
             self.assertEqual(_git(repository, "status", "--porcelain"), "")
+
+    def test_standalone_restore_is_disabled_after_precheck_edit(self) -> None:
+        """A human edit after approval cannot reach a destructive reset path."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            approved_status = hashlib.sha256(
+                _git(repository, "status", "--porcelain=v1").encode("utf-8")
+            ).hexdigest()
+            action = action_for(
+                "repository.worktree.restore",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "commit": approved_head,
+                    "expected_worktree_status_sha256": approved_status,
+                },
+            )
+
+            # Inject the edit after capturing the exact HEAD and worktree status
+            # that the removed check-then-reset implementation trusted.
+            (repository / "README.md").write_text(
+                "human concurrent work\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "unsupported Git capability"):
+                connector.execute(action)
+
+            self.assertNotIn(action.capability, connector.capabilities)
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), approved_head)
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "human concurrent work\n",
+            )
+
+    def test_local_git_rollback_is_advertised_as_in_process_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+
+            result = connector.execute(action)
+            compensation = result.compensation
+            self.assertIsNotNone(compensation)
+            assert compensation is not None
+
+            self.assertEqual(
+                compensation["mode"],
+                CompensationMode.IN_PROCESS,
+            )
+            self.assertIsNone(compensation["capability"])
 
     @unittest.skipUnless(os.name == "posix", "Git hook test requires POSIX")
     def test_commit_disables_repository_hooks_and_binds_exact_diff(self) -> None:

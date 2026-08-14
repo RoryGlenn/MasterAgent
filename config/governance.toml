@@ -181,15 +181,6 @@ environments = ["development", "non_production", "production"]
 enabled = true
 
 [[rules]]
-pattern = "*.restore"
-owner = "platform-owner"
-authentication = "provider_specific"
-data_classifications = ["public", "internal", "confidential"]
-approval_tier = "single"
-environments = ["development", "non_production", "production"]
-enabled = true
-
-[[rules]]
 pattern = "*.compensate"
 owner = "platform-owner"
 authentication = "provider_specific"

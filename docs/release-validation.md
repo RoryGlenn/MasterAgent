@@ -12,7 +12,7 @@ approval service, or external audit-sink adapter is bundled.
 - Python bytecode compilation passes for `src/` and `tests/`.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
-- All 71 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
+- All 70 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
 - Local Markdown links, source-tree hygiene, and the credential-free v1 demonstration manifest pass validation.
 - The generated PowerPoint opens as a three-slide presentation and passes rendered overflow testing.
 - The source archive is extracted and tested independently before release.

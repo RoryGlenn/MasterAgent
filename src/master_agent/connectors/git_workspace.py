@@ -20,6 +20,7 @@ from master_agent.models import (
     ActionState,
     AgentAction,
     CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -43,7 +44,6 @@ class GitWorkspaceConnector(CompensatingConnector):
             "repository.patch.apply",
             "repository.commit.create",
             "repository.branch.push",
-            "repository.worktree.restore",
         }
     )
 
@@ -91,10 +91,8 @@ class GitWorkspaceConnector(CompensatingConnector):
             result = self._apply_patch(action, workspace)
         elif action.capability == "repository.commit.create":
             result = self._create_commit(action, workspace)
-        elif action.capability == "repository.branch.push":
-            result = self._push_branch(action, workspace)
         else:
-            result = self._restore(action, workspace)
+            result = self._push_branch(action, workspace)
         if result.after is not None:
             self._last[action.target.resource_id] = deepcopy(dict(result.after))
         return result
@@ -181,8 +179,6 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise ConnectorError(
                 "automatic remote compensation is unavailable; use bitbucket.branch.push"
             )
-        if action.capability == "repository.worktree.restore":
-            raise ConnectorError("restore actions are not recursively compensatable")
         if not self.verify(action, result).verified:
             raise VersionConflictError(
                 "Git state changed after execution; automatic compensation is refused"
@@ -392,13 +388,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             "base": base,
             "base_hash": base_hash,
             "worktree_status_sha256": post_status,
-            "compensation": {
-                "capability": "repository.worktree.restore",
-                "commit": before["head"],
-                "branch": before["branch"],
-                "expected_version": base_hash,
-                "expected_worktree_status_sha256": post_status,
-            },
+            "compensation": _in_process_compensation("restore_local_branch_state"),
         }
         return ExecutionResult(
             action_id=action.action_id,
@@ -449,13 +439,7 @@ class GitWorkspaceConnector(CompensatingConnector):
                 ).stdout.splitlines()
                 if line
             ),
-            "compensation": {
-                "capability": "repository.worktree.restore",
-                "commit": current_head,
-                "branch": self._current_branch(workspace),
-                "expected_version": current_head,
-                "expected_worktree_status_sha256": post_status,
-            },
+            "compensation": _in_process_compensation("reverse_approved_local_patch"),
         }
         return ExecutionResult(
             action_id=action.action_id,
@@ -550,13 +534,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             "paths": tuple(staged),
             "diff_sha256": observed_diff_digest,
             "worktree_status_sha256": post_status,
-            "compensation": {
-                "capability": "repository.worktree.restore",
-                "commit": current_head,
-                "branch": self._current_branch(workspace),
-                "expected_version": commit,
-                "expected_worktree_status_sha256": post_status,
-            },
+            "compensation": _in_process_compensation("restore_local_commit_ref"),
         }
         return ExecutionResult(
             action_id=action.action_id,
@@ -617,45 +595,6 @@ class GitWorkspaceConnector(CompensatingConnector):
             connector_reference=f"git:{remote}/{branch}",
             message="approved branch pushed without force",
             compensation=_compensation_descriptor(after),
-        )
-
-    def _restore(self, action: AgentAction, workspace: Path) -> ExecutionResult:
-        commit = _required(action.parameters, "commit")
-        branch = str(action.parameters.get("branch", "")).strip()
-        current = {
-            "head": self._head(workspace),
-            "branch": self._current_branch(workspace),
-        }
-        if (
-            action.target.expected_version
-            and action.target.expected_version != current["head"]
-        ):
-            raise VersionConflictError(
-                f"repository HEAD changed: expected {action.target.expected_version}, observed {current['head']}"
-            )
-        expected_status = str(
-            action.parameters.get("expected_worktree_status_sha256", "")
-        ).strip()
-        if expected_status and expected_status != self._status_digest(workspace):
-            raise VersionConflictError(
-                "repository worktree changed after approval; restore is prohibited"
-            )
-        self._git(workspace, "rev-parse", "--verify", f"{commit}^{{commit}}")
-        self._git(workspace, "reset", "--hard", commit)
-        if branch:
-            _branch(branch, allow_protected=True)
-            self._git(workspace, "switch", branch)
-        after = {
-            "head": self._head(workspace),
-            "branch": self._current_branch(workspace),
-        }
-        return ExecutionResult(
-            action_id=action.action_id,
-            state=ActionState.SUCCEEDED,
-            before=current,
-            after=after,
-            connector_reference=str(workspace),
-            message="local worktree restored to approved commit",
         )
 
     def _workspace(self, action: AgentAction) -> Path:
@@ -766,6 +705,19 @@ def _compensation_descriptor(after: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise ConnectorError("Git result omitted typed compensation metadata")
     return CompensationDescriptor.from_dict(raw).to_dict()
+
+
+def _in_process_compensation(kind: str) -> dict[str, Any]:
+    """Describe rollback that is safe only inside the verified connector flow."""
+
+    return CompensationDescriptor(
+        kind=kind,
+        mode=CompensationMode.IN_PROCESS,
+        reason=(
+            "local Git rollback is available only through verified in-process "
+            "compensation; destructive standalone worktree restore is disabled"
+        ),
+    ).to_dict()
 
 
 def _required(parameters: Mapping[str, Any], key: str) -> str:

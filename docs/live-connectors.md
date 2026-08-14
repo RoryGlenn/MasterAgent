@@ -31,7 +31,11 @@ Compensation is connector-specific:
 - Bitbucket declines the exact PR and may delete only the exact unchanged branch created by the workflow;
 - SharePoint restores the captured prior version or removes the exact newly created item when the connector has sufficient evidence;
 - OneNote removes the exact new page or restores retained prior HTML;
-- Git restores the captured branch/commit/worktree state under strict preconditions.
+- Git compensates only inside the verified connector flow: patches are reversed,
+  commit refs use compare-and-swap plus a mixed index reset, and an exact unchanged
+  new branch may be removed. Concurrent worktree content is preserved and causes
+  compensation to refuse or report a conflict. No separately approved destructive
+  worktree-restore action is exposed.
 
 A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
 
