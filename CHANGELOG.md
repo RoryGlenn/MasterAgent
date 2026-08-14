@@ -13,12 +13,12 @@
 - controlled Git workspace patch, branch, commit, push, and content-preserving in-process rollback;
 - Bitbucket branch publishing and pull-request creation with decline/delete-ref compensation where safe;
 - SharePoint bounded file upload with previous-version restoration;
-- delegated OneNote notebook/section/page reads plus page create/update and rollback;
+- delegated OneNote notebook/section/page reads; page writes remain disabled until exact DOM-aware post-state verification is available;
 - exact-plan Outlook send with provider-draft content verification;
 - exact-plan Teams chat/channel message send and channel reply with provider re-read verification;
 - compensation-plan generation bound to the original immutable plan and run report;
 - disabled-by-default recurring workflows with timezone-aware scheduling, durable occurrence state, lock directories, scope/recipient/source allowlists, and local/draft-only delivery modes;
-- explicit connector plugin discovery and opt-in loading through the `master_agent.connectors` entry-point group;
+- metadata-only connector plugin discovery, locking, and plan binding through the `master_agent.connectors` entry-point group; in-process apply remains disabled pending an isolated dependency-closure worker;
 - command-level and factory-gate tests proving broad runtime flags cannot bypass provider-specific gates.
 
 ### Changed
@@ -35,7 +35,7 @@
 - retrieved content cannot authorize mutations or external communication;
 - dual approvals require distinct approvers;
 - communication approvals bind to exact recipients/destinations and exact content;
-- plugin discovery never imports plugin code, and plugins are loaded only by exact operator-supplied name during apply;
+- plugin discovery never imports plugin code, and CLI plugin apply fails closed before import;
 - provider mutation connectors require runtime, generic, and granular provider gates;
 - PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
 - standalone Git worktree restore is not exposed because a status precheck followed by `reset --hard` cannot preserve edits made between check and use.
