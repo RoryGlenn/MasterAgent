@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import unittest
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
-from master_agent.errors import ConnectorError
+from master_agent.errors import PreEffectError
 from master_agent.models import (
     ActionState,
     AgentAction,
-    Approval,
     AuthoritySource,
     ChangePlan,
     ExecutionResult,
@@ -25,7 +25,6 @@ from master_agent.models import (
 from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +45,7 @@ class _CompensatingTestConnector:
 
     def execute(self, action: AgentAction) -> ExecutionResult:
         if action.target.resource_id == "fail":
-            raise ConnectorError("injected failure")
+            raise PreEffectError("injected failure")
         before = {"value": self.state.get(action.target.resource_id)}
         value = str(action.parameters["value"])
         self.state[action.target.resource_id] = value
@@ -127,17 +126,27 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 compensate_on_failure=True,
             )
             now = datetime.now(UTC)
-            approval = Approval(
-                plan_fingerprint=plan.fingerprint,
+            authenticator = HmacApprovalAuthenticator(
+                {
+                    "rory": ApprovalAuthority(
+                        key_id="rory",
+                        subject="rory",
+                        secret=b"rory-test-approval-secret-32-bytes!!",
+                    )
+                }
+            )
+            approval = authenticator.issue(
+                plan=plan,
                 approved_action_ids=(first.action_id, second.action_id),
-                approved_by="rory",
+                key_id="rory",
                 issued_at=now - timedelta(seconds=1),
                 expires_at=now + timedelta(minutes=5),
             )
             audit = AuditLog(root / "audit.sqlite3")
             orchestrator = WorkflowOrchestrator(
                 policy=PolicyEngine(
-                    PolicyConfig.from_toml(ROOT / "config/policy.toml")
+                    PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+                    approval_authenticator=authenticator,
                 ),
                 sources=SourceOfTruthRegistry.from_toml(sources_path),
                 connectors=registry,

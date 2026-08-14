@@ -2,18 +2,35 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
+import json
+import os
+import stat
+import tomllib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from fnmatch import fnmatchcase
-import json
 from pathlib import Path
-import tomllib
-from typing import Any, Mapping
+from typing import Any, Self
 
 from master_agent.config_sources import ConfigSource
-from master_agent.errors import ConfigurationError
+from master_agent.directory_safety import PinnedDirectory
+from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.evidence import content_digest
+
+_SECURITY_CATEGORIES = frozenset(
+    {
+        "authority_claim",
+        "credential_request",
+        "external_action_request",
+        "instruction_override",
+    }
+)
+_SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+_RETENTION_FLOCK_NAME = ".master-agent-retention.flock"
 
 
 class PersistenceMode(StrEnum):
@@ -45,6 +62,34 @@ class RetentionConfig:
 
     default: RetentionRule
     rules: tuple[RetentionRule, ...]
+
+    def __post_init__(self) -> None:
+        seen: set[str] = set()
+        for rule in self.rules:
+            if rule.pattern in seen:
+                raise ConfigurationError(
+                    f"duplicate retention rule pattern: {rule.pattern}"
+                )
+            seen.add(rule.pattern)
+        restriction = {
+            PersistenceMode.EXPLICIT_CONTENT: 0,
+            PersistenceMode.METADATA_ONLY: 1,
+            PersistenceMode.PROHIBITED: 2,
+        }
+        for candidate in self.rules:
+            for blocker in self.rules:
+                if blocker is candidate:
+                    continue
+                if (
+                    restriction[blocker.persistence]
+                    <= restriction[candidate.persistence]
+                ):
+                    continue
+                if _pattern_definitely_covers(blocker.pattern, candidate.pattern):
+                    raise ConfigurationError(
+                        f"retention rule {candidate.pattern} is shadowed by "
+                        f"more restrictive rule {blocker.pattern}"
+                    )
 
     @classmethod
     def from_toml(cls, path: ConfigSource) -> RetentionConfig:
@@ -84,12 +129,32 @@ class RetentionConfig:
         return cls(default=default, rules=rules)
 
     def decide(self, evidence_type: str) -> RetentionRule:
-        """Return the first rule matching ``evidence_type``."""
+        """Return the most restrictive rule matching ``evidence_type``.
 
-        for rule in self.rules:
-            if fnmatchcase(evidence_type, rule.pattern):
-                return rule
-        return self.default
+        Retention is a confidentiality boundary, so configuration order cannot
+        weaken it.  A prohibited match overrides every other match and a
+        metadata-only match overrides explicit-content persistence.  Ties use
+        the shortest TTL and then the most specific pattern.
+        """
+
+        matches = [
+            rule for rule in self.rules if fnmatchcase(evidence_type, rule.pattern)
+        ]
+        if not matches:
+            return self.default
+        restriction = {
+            PersistenceMode.EXPLICIT_CONTENT: 0,
+            PersistenceMode.METADATA_ONLY: 1,
+            PersistenceMode.PROHIBITED: 2,
+        }
+        return max(
+            matches,
+            key=lambda rule: (
+                restriction[rule.persistence],
+                -rule.ttl_hours,
+                _pattern_specificity(rule.pattern),
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +200,246 @@ class RetentionPurgeResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class RetentionRepairResult:
+    """Result of detecting and optionally quarantining orphaned evidence."""
+
+    scanned_files: int
+    orphaned_files: tuple[str, ...]
+    quarantined_files: tuple[str, ...]
+    errors: tuple[str, ...]
+    dry_run: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the repair result."""
+
+        return {
+            "scanned_files": self.scanned_files,
+            "orphaned_files": list(self.orphaned_files),
+            "quarantined_files": list(self.quarantined_files),
+            "errors": list(self.errors),
+            "dry_run": self.dry_run,
+        }
+
+
+class RetainedJSONReservation:
+    """Create-only retained JSON names held across an external operation.
+
+    The persistent retention lock is acquired and both final names are proven
+    absent before an effect. This prevents a stale destination or a cooperating
+    concurrent writer from turning a successful effect into a false-failure.
+    Commit creates both final names once, keeps their exact descriptors through
+    write/readback, and removes only transaction-owned files on failure.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        evidence_type: str,
+        config: RetentionConfig,
+        include_content: bool,
+        now: datetime | None = None,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        self._rule = _permitted_rule(
+            config,
+            evidence_type=evidence_type,
+            include_content=include_content,
+        )
+        self._evidence_type = evidence_type
+        self._include_content = include_content
+        self._created_at = _aware_utc(now)
+        self._pinned = (
+            parent_directory.duplicate()
+            if parent_directory is not None
+            else PinnedDirectory.open(path.parent)
+        )
+        self._parent_descriptor = self._pinned.fileno()
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        if (
+            Path(os.path.realpath(absolute.parent)) != self._pinned.path
+            or absolute.name in {"", ".", ".."}
+            or Path(absolute.name).name != absolute.name
+        ):
+            self._pinned.close()
+            raise ConfigurationError(
+                "retained evidence must be an immediate child of its pinned parent"
+            )
+        self._path = self._pinned.path / absolute.name
+        self._sidecar = self._path.with_suffix(self._path.suffix + ".retention.json")
+        if self._sidecar.name == self._path.name:
+            self._pinned.close()
+            raise ConfigurationError("retained evidence names must be distinct")
+        self._lock_descriptor = -1
+        self._lock_identity: tuple[int, int] | None = None
+        self._files: list[tuple[str, int, tuple[int, int]]] = []
+        self._committed = False
+        self._closed = False
+        try:
+            self._lock_descriptor, self._lock_identity = _open_retention_lock(
+                self._parent_descriptor
+            )
+            fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            _validate_restricted_file_at(
+                self._parent_descriptor,
+                _RETENTION_FLOCK_NAME,
+                self._lock_identity,
+            )
+            self._pinned.validate()
+            _require_retained_names_absent(
+                self._parent_descriptor,
+                (self._path.name, self._sidecar.name),
+            )
+            self._validate()
+        except BaseException:
+            self._rollback_and_close()
+            raise
+
+    @property
+    def path(self) -> Path:
+        """Return the canonical reserved evidence path."""
+
+        return self._path
+
+    @property
+    def sidecar(self) -> Path:
+        """Return the canonical reserved retention-sidecar path."""
+
+        return self._sidecar
+
+    def commit(self, payload: Mapping[str, Any]) -> tuple[Path, Path]:
+        """Write, verify, and durably commit the reserved result pair."""
+
+        if self._closed or self._committed:
+            raise ConfigurationError("retained evidence reservation is not active")
+        output = dict(payload) if self._include_content else _metadata_only(payload)
+        citations = output.get("citations", [])
+        citation_ids = tuple(
+            str(item.get("citation_id"))
+            for item in citations
+            if isinstance(item, Mapping) and item.get("citation_id")
+        )
+        _, manifest = _build_manifest(
+            self._path,
+            evidence_type=self._evidence_type,
+            rule=self._rule,
+            created=self._created_at,
+            content_included=self._include_content,
+            digest=content_digest(output),
+            citation_ids=citation_ids,
+        )
+        content_by_name = {
+            self._path.name: (
+                json.dumps(output, indent=2, ensure_ascii=False, default=str) + "\n"
+            ).encode("utf-8"),
+            self._sidecar.name: (
+                json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+            ).encode("utf-8"),
+        }
+        try:
+            self._validate()
+            _require_retained_names_absent(
+                self._parent_descriptor,
+                (self._path.name, self._sidecar.name),
+            )
+            for target in (self._path, self._sidecar):
+                descriptor, identity = _open_new_restricted_file_at(
+                    self._parent_descriptor,
+                    target.name,
+                )
+                self._files.append((target.name, descriptor, identity))
+            for name, descriptor, _ in self._files:
+                _write_restricted_descriptor(descriptor, content_by_name[name])
+            self._validate()
+            for name, descriptor, _ in self._files:
+                if _read_restricted_descriptor(descriptor) != content_by_name[name]:
+                    raise ConfigurationError("retained evidence content changed")
+            os.fsync(self._parent_descriptor)
+            self._validate()
+            self._committed = True
+            return self._path, self._sidecar
+        except BaseException as error:
+            try:
+                self._rollback_and_close()
+            except ConfigurationError as rollback_error:
+                raise rollback_error from error
+            if isinstance(error, ConfigurationError):
+                raise
+            if not isinstance(error, Exception):
+                raise
+            raise ConfigurationError(
+                f"retained evidence commit failed: {type(error).__name__}"
+            ) from error
+
+    def close(self) -> None:
+        """Release the reservation, rolling back only uncommitted owned files."""
+
+        self._rollback_and_close()
+
+    def __enter__(self) -> Self:
+        """Return this active reservation."""
+
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _validate(self) -> None:
+        self._pinned.validate()
+        if self._lock_identity is None:
+            raise ConfigurationError("retention reservation lock is missing")
+        _validate_restricted_file_at(
+            self._parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            self._lock_identity,
+        )
+        for name, _, identity in self._files:
+            _validate_restricted_file_at(
+                self._parent_descriptor,
+                name,
+                identity,
+            )
+
+    def _rollback_and_close(self) -> None:
+        if self._closed:
+            return
+        rollback_errors: list[str] = []
+        if not self._committed:
+            for name, _, identity in reversed(self._files):
+                try:
+                    _unlink_restricted_file_at(
+                        self._parent_descriptor,
+                        name,
+                        identity,
+                    )
+                except (OSError, ConfigurationError) as error:
+                    rollback_errors.append(type(error).__name__)
+            try:
+                os.fsync(self._parent_descriptor)
+            except OSError as error:
+                rollback_errors.append(type(error).__name__)
+        for _, descriptor, _ in reversed(self._files):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self._files.clear()
+        if self._lock_descriptor >= 0:
+            try:
+                fcntl.flock(self._lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(self._lock_descriptor)
+                self._lock_descriptor = -1
+        self._pinned.close()
+        self._closed = True
+        if rollback_errors:
+            raise ConfigurationError(
+                "retained evidence reservation rollback was incomplete: "
+                + ", ".join(rollback_errors)
+            )
+
+
 def write_retained_json(
     path: Path,
     payload: Mapping[str, Any],
@@ -143,6 +448,7 @@ def write_retained_json(
     config: RetentionConfig,
     include_content: bool,
     now: datetime | None = None,
+    parent_directory: PinnedDirectory | None = None,
 ) -> tuple[Path, Path]:
     """Write a restricted JSON evidence file and expiration sidecar.
 
@@ -157,19 +463,13 @@ def write_retained_json(
     )
     created = _aware_utc(now)
     output = dict(payload) if include_content else _metadata_only(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-    _restrict(path)
     citations = output.get("citations", [])
     citation_ids = tuple(
         str(item.get("citation_id"))
         for item in citations
         if isinstance(item, Mapping) and item.get("citation_id")
     )
-    return path, _write_manifest(
+    sidecar, manifest = _build_manifest(
         path,
         evidence_type=evidence_type,
         rule=rule,
@@ -178,6 +478,18 @@ def write_retained_json(
         digest=content_digest(output),
         citation_ids=citation_ids,
     )
+    _atomic_write_files(
+        {
+            path: (
+                json.dumps(output, indent=2, ensure_ascii=False, default=str) + "\n"
+            ).encode("utf-8"),
+            sidecar: (
+                json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+            ).encode("utf-8"),
+        },
+        parent_directory=parent_directory,
+    )
+    return path, sidecar
 
 
 def write_retained_text(
@@ -188,6 +500,7 @@ def write_retained_text(
     config: RetentionConfig,
     citation_ids: tuple[str, ...] = (),
     now: datetime | None = None,
+    parent_directory: PinnedDirectory | None = None,
 ) -> tuple[Path, Path]:
     """Write restricted text when an explicit-content rule permits it."""
 
@@ -197,10 +510,7 @@ def write_retained_text(
         include_content=True,
     )
     created = _aware_utc(now)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    _restrict(path)
-    return path, _write_manifest(
+    sidecar, manifest = _build_manifest(
         path,
         evidence_type=evidence_type,
         rule=rule,
@@ -209,9 +519,41 @@ def write_retained_text(
         digest=content_digest(content),
         citation_ids=citation_ids,
     )
+    _atomic_write_files(
+        {
+            path: content.encode("utf-8"),
+            sidecar: (
+                json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+            ).encode("utf-8"),
+        },
+        parent_directory=parent_directory,
+    )
+    return path, sidecar
 
 
 def purge_expired_evidence(
+    root: Path,
+    *,
+    now: datetime | None = None,
+    dry_run: bool = True,
+    max_manifests: int = 10_000,
+) -> RetentionPurgeResult:
+    """Preview expiration cleanup; destructive traversal is disabled."""
+
+    if not dry_run:
+        raise ConfigurationError(
+            "destructive evidence pruning is disabled until recursive traversal "
+            "and deletion are descriptor-bound"
+        )
+    return _purge_expired_evidence_locked(
+        root,
+        now=now,
+        dry_run=True,
+        max_manifests=max_manifests,
+    )
+
+
+def _purge_expired_evidence_locked(
     root: Path,
     *,
     now: datetime | None = None,
@@ -236,9 +578,11 @@ def purge_expired_evidence(
 
     for sidecar in manifests:
         try:
+            if sidecar.is_symlink():
+                raise OSError("retention sidecar must not be a symbolic link")
             raw = json.loads(sidecar.read_text(encoding="utf-8"))
             if not isinstance(raw, Mapping):
-                raise ValueError("retention sidecar must be a JSON object")
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
             expires_at = datetime.fromisoformat(str(raw["expires_at"]))
             expires_at = _aware_utc(expires_at)
             if expires_at > current:
@@ -247,17 +591,24 @@ def purge_expired_evidence(
             evidence_name = str(raw.get("evidence_path", ""))
             if not evidence_name or Path(evidence_name).name != evidence_name:
                 raise ValueError("retention evidence_path must be a sibling filename")
-            evidence = (sidecar.parent / evidence_name).resolve()
+            evidence_path = sidecar.parent / evidence_name
+            if evidence_path.is_symlink() or not evidence_path.is_file():
+                raise ValueError("retention evidence file is missing or unsafe")
+            evidence = evidence_path.resolve()
             if evidence.parent != sidecar.parent.resolve():
-                raise ValueError("retention evidence path escapes its sidecar directory")
+                raise ValueError(
+                    "retention evidence path escapes its sidecar directory"
+                )
             if resolved_root not in (sidecar.resolve(), *sidecar.resolve().parents):
                 raise ValueError("retention sidecar escapes selected root")
+            _verify_retained_content(evidence_path, raw)
             for candidate in (evidence, sidecar.resolve()):
                 if candidate.exists():
                     removed.append(str(candidate))
                     if not dry_run:
                         candidate.unlink()
-        except Exception as error:  # Corrupt sidecars must not stop other cleanup.
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            # Corrupt sidecars must not stop cleanup of independent records.
             errors.append(f"{sidecar}: {type(error).__name__}: {error}")
 
     return RetentionPurgeResult(
@@ -267,6 +618,130 @@ def purge_expired_evidence(
         errors=tuple(errors),
         dry_run=dry_run,
     )
+
+
+def repair_orphaned_evidence(
+    root: Path,
+    *,
+    dry_run: bool = True,
+    max_files: int = 10_000,
+) -> RetentionRepairResult:
+    """Preview orphan repair; destructive traversal is disabled."""
+
+    if not dry_run:
+        raise ConfigurationError(
+            "destructive evidence repair is disabled until recursive traversal "
+            "and quarantine are descriptor-bound"
+        )
+    return _repair_orphaned_evidence_locked(
+        root,
+        dry_run=True,
+        max_files=max_files,
+    )
+
+
+def _repair_orphaned_evidence_locked(
+    root: Path,
+    *,
+    dry_run: bool = True,
+    max_files: int = 10_000,
+) -> RetentionRepairResult:
+    """Detect and quarantine unpaired evidence in a dedicated evidence root.
+
+    An evidence file without its retention sidecar, or a sidecar without its
+    named sibling, is not treated as valid retained evidence. Applied repairs
+    move such files into a same-filesystem ``.retention-quarantine`` directory
+    so the operation remains recoverable.
+    """
+
+    if max_files <= 0:
+        raise ValueError("max_files must be positive")
+    resolved_root = root.resolve()
+    quarantine = resolved_root / ".retention-quarantine"
+    files = [
+        path
+        for path in sorted(root.rglob("*"))
+        if (path.is_file() or path.is_symlink())
+        and path.name != _RETENTION_FLOCK_NAME
+        and quarantine not in (path.resolve(), *path.resolve().parents)
+    ][:max_files]
+    paired_evidence: set[Path] = set()
+    orphans: set[Path] = set()
+    errors: list[str] = []
+
+    for sidecar in (path for path in files if path.name.endswith(".retention.json")):
+        try:
+            if sidecar.is_symlink():
+                raise OSError("retention sidecar must not be a symbolic link")
+            raw = json.loads(sidecar.read_text(encoding="utf-8"))
+            if not isinstance(raw, Mapping):
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
+            evidence_name = str(raw.get("evidence_path", ""))
+            if not evidence_name or Path(evidence_name).name != evidence_name:
+                raise ValueError("retention evidence_path must be a sibling filename")
+            evidence = sidecar.parent / evidence_name
+            if evidence.is_symlink() or not evidence.is_file():
+                orphans.add(sidecar)
+            else:
+                try:
+                    _verify_retained_content(evidence, raw)
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    orphans.add(sidecar)
+                    orphans.add(evidence)
+                    errors.append(f"{sidecar}: content digest mismatch")
+                else:
+                    paired_evidence.add(evidence.resolve())
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            orphans.add(sidecar)
+            errors.append(f"{sidecar}: {type(error).__name__}")
+
+    for evidence in (
+        path for path in files if not path.name.endswith(".retention.json")
+    ):
+        if evidence.is_symlink() or evidence.resolve() not in paired_evidence:
+            orphans.add(evidence)
+
+    quarantined: list[str] = []
+    if not dry_run and orphans:
+        quarantine.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _reject_symlink(quarantine)
+        for orphan in sorted(orphans):
+            try:
+                relative = orphan.resolve().relative_to(resolved_root)
+                destination = quarantine / relative
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                _reject_symlink(destination.parent)
+                if destination.exists() or destination.is_symlink():
+                    raise FileExistsError("quarantine destination already exists")
+                os.replace(orphan, destination)
+                quarantined.append(str(destination))
+            except (OSError, ValueError) as error:
+                errors.append(f"{orphan}: quarantine failed: {type(error).__name__}")
+        _fsync_directory(quarantine)
+
+    return RetentionRepairResult(
+        scanned_files=len(files),
+        orphaned_files=tuple(str(path) for path in sorted(orphans)),
+        quarantined_files=tuple(quarantined),
+        errors=tuple(errors),
+        dry_run=dry_run,
+    )
+
+
+def _verify_retained_content(path: Path, manifest: Mapping[str, Any]) -> None:
+    """Require retained bytes to match the digest recorded by their sidecar."""
+
+    expected = manifest.get("content_digest")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ValueError("retention content digest is invalid")
+    text = path.read_text(encoding="utf-8")
+    value: Any = json.loads(text) if path.suffix.casefold() == ".json" else text
+    if content_digest(value) != expected:
+        raise ValueError("retention content digest does not match evidence")
 
 
 def _permitted_rule(
@@ -287,7 +762,7 @@ def _permitted_rule(
     return rule
 
 
-def _write_manifest(
+def _build_manifest(
     path: Path,
     *,
     evidence_type: str,
@@ -296,7 +771,7 @@ def _write_manifest(
     content_included: bool,
     digest: str,
     citation_ids: tuple[str, ...],
-) -> Path:
+) -> tuple[Path, RetentionManifest]:
     manifest = RetentionManifest(
         evidence_path=path.name,
         evidence_type=evidence_type,
@@ -308,28 +783,228 @@ def _write_manifest(
         citation_ids=tuple(dict.fromkeys(citation_ids)),
     )
     sidecar = path.with_suffix(path.suffix + ".retention.json")
-    sidecar.write_text(
-        json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    _restrict(sidecar)
-    return sidecar
+    return sidecar, manifest
 
 
 def _metadata_only(payload: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = {
-        "schema",
-        "system",
-        "deployment",
-        "returned",
-        "total",
-        "citation_ids",
-        "citations",
-        "evidence",
-        "retention",
-        "security",
-    }
-    return {key: value for key, value in payload.items() if key in allowed}
+    """Project a payload onto a fixed, content-free metadata schema.
+
+    Top-level allowlisting is insufficient because retrieved content can be
+    nested beneath otherwise legitimate fields such as ``evidence`` or
+    ``security``.  Keep only scalar structural facts, digests, citation
+    identifiers, and prompt-injection finding categories.  In particular,
+    finding excerpts and arbitrary nested values are never retained.
+    """
+
+    output: dict[str, Any] = {}
+    for key in ("schema", "system", "deployment"):
+        if (digest := _identifier_digest(payload.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    for key in ("returned", "total"):
+        if (value := _nonnegative_integer(payload.get(key))) is not None:
+            output[key] = value
+
+    citations = payload.get("citations")
+    if isinstance(citations, (list, tuple)):
+        projected_citations = [
+            projected
+            for item in citations
+            if isinstance(item, Mapping)
+            if (projected := _project_citation(item))
+        ]
+        output["citations"] = projected_citations
+        output["citation_ids"] = [
+            str(item["citation_id"])
+            for item in projected_citations
+            if "citation_id" in item
+        ]
+
+    evidence = payload.get("evidence")
+    projected_evidence = _project_evidence(
+        evidence if isinstance(evidence, Mapping) else {},
+        payload_digest=content_digest(payload),
+    )
+    output["evidence"] = projected_evidence
+
+    retention = payload.get("retention")
+    if isinstance(retention, Mapping):
+        projected_retention = _project_retention(retention)
+        if projected_retention:
+            output["retention"] = projected_retention
+
+    security = payload.get("security")
+    if isinstance(security, Mapping):
+        projected_security = _project_security(security)
+        if projected_security:
+            output["security"] = projected_security
+    return output
+
+
+def _project_citation(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return content-free citation identity and provenance metadata."""
+
+    output: dict[str, Any] = {}
+    if (citation_id := _derived_citation_id(value)) is not None:
+        output["citation_id"] = citation_id
+    for key in ("system", "resource_type"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    if (resource_digest := _identifier_digest(value.get("resource_id"))) is not None:
+        output["resource_id_digest"] = resource_digest
+    if (retrieved_at := _timestamp(value.get("retrieved_at"))) is not None:
+        output["retrieved_at"] = retrieved_at
+    for key in ("version", "etag"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    return output
+
+
+def _project_evidence(
+    value: Mapping[str, Any],
+    *,
+    payload_digest: str,
+) -> dict[str, Any]:
+    """Return validated evidence facts and derived opaque identifiers."""
+
+    output: dict[str, Any] = {"content_digest": payload_digest}
+    if (retrieved_at := _timestamp(value.get("retrieved_at"))) is not None:
+        output["retrieved_at"] = retrieved_at
+    for key in ("version", "etag"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    for key in ("count", "returned", "total"):
+        if (count := _nonnegative_integer(value.get(key))) is not None:
+            output[key] = count
+    return output
+
+
+def _project_retention(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return semantically valid retention metadata."""
+
+    output: dict[str, Any] = {}
+    persistence = value.get("persistence")
+    if isinstance(persistence, str):
+        try:
+            output["persistence"] = str(PersistenceMode(persistence))
+        except ValueError:
+            pass
+    for key in ("created_at", "expires_at"):
+        if (timestamp := _timestamp(value.get(key))) is not None:
+            output[key] = timestamp
+    content_included = value.get("content_included")
+    if isinstance(content_included, bool):
+        output["content_included"] = content_included
+    return output
+
+
+def _project_security(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return finding classifications without retrieved-content excerpts."""
+
+    output: dict[str, Any] = {}
+    content_is_untrusted = value.get("content_is_untrusted")
+    if isinstance(content_is_untrusted, bool):
+        output["content_is_untrusted"] = content_is_untrusted
+    findings = value.get("prompt_injection_findings")
+    if isinstance(findings, (list, tuple)):
+        projected_findings = [
+            projected
+            for item in findings
+            if isinstance(item, Mapping)
+            if (projected := _project_security_finding(item))
+        ]
+        output["prompt_injection_findings"] = projected_findings
+    return output
+
+
+def _project_security_finding(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one finding without its source location or excerpt content."""
+
+    output: dict[str, Any] = {}
+    if (path_digest := _identifier_digest(value.get("path"))) is not None:
+        output["path_digest"] = path_digest
+    category = value.get("category")
+    if isinstance(category, str) and category in _SECURITY_CATEGORIES:
+        output["category"] = category
+    severity = value.get("severity")
+    if isinstance(severity, str) and severity in _SECURITY_SEVERITIES:
+        output["severity"] = severity
+    return output
+
+
+def _derived_citation_id(value: Mapping[str, Any]) -> str | None:
+    """Derive a citation ID from its complete provider resource identity."""
+
+    parts = tuple(
+        _identifier_text(value.get(key))
+        for key in ("system", "resource_type", "resource_id")
+    )
+    if any(part is None for part in parts):
+        return None
+    identity = "\0".join(str(part) for part in parts).encode("utf-8")
+    return "CIT-" + hashlib.sha256(identity).hexdigest()[:12].upper()
+
+
+def _identifier_digest(value: Any) -> str | None:
+    """Derive a bounded digest for an opaque provider identifier."""
+
+    rendered = _identifier_text(value)
+    if rendered is None:
+        return None
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _identifier_text(value: Any) -> str | None:
+    """Return a bounded identifier only for local hashing or derivation."""
+
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    rendered = str(value)
+    if not rendered or len(rendered) > 2_048:
+        return None
+    return rendered
+
+
+def _nonnegative_integer(value: Any) -> int | None:
+    """Return a non-negative count without accepting booleans as integers."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _timestamp(value: Any) -> str | None:
+    """Return a timezone-aware ISO timestamp normalized to UTC."""
+
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _pattern_specificity(pattern: str) -> tuple[int, int, int]:
+    """Return deterministic precedence within one persistence mode."""
+
+    wildcards = pattern.count("*") + pattern.count("?")
+    return (len(pattern) - wildcards, -wildcards, len(pattern))
+
+
+def _pattern_definitely_covers(broad: str, narrow: str) -> bool:
+    """Recognize simple glob containment used to reject unreachable allows."""
+
+    if broad == "*":
+        return True
+    if "?" in broad or "[" in broad:
+        return False
+    if broad.endswith("*") and "*" not in broad[:-1]:
+        broad_prefix = broad[:-1]
+        narrow_prefix = narrow.split("*", 1)[0].split("?", 1)[0]
+        return narrow_prefix.startswith(broad_prefix)
+    return broad == narrow
 
 
 def _aware_utc(value: datetime | None) -> datetime:
@@ -339,8 +1014,336 @@ def _aware_utc(value: datetime | None) -> datetime:
     return current.astimezone(UTC)
 
 
-def _restrict(path: Path) -> None:
+def _atomic_write_files(
+    files: Mapping[Path, bytes],
+    *,
+    parent_directory: PinnedDirectory | None = None,
+) -> None:
+    """Commit same-directory retained files with rollback on partial failure."""
+
+    if not files:
+        raise ValueError("at least one retained file is required")
+    targets = tuple(files)
+    parent = targets[0].parent
+    if any(target.parent != parent for target in targets):
+        raise ConfigurationError("retained evidence and sidecar must be siblings")
+    if parent_directory is not None:
+        _atomic_write_files_at(files, parent_directory)
+        return
+    with PinnedDirectory.open(parent) as pinned:
+        canonical_files = {
+            pinned.path / target.name: content for target, content in files.items()
+        }
+        _atomic_write_files_at(canonical_files, pinned)
+
+
+def _atomic_write_files_at(
+    files: Mapping[Path, bytes],
+    parent_directory: PinnedDirectory,
+) -> None:
+    """Create retained siblings once under one persistent transaction lock."""
+
+    targets = tuple(files)
+    content_by_name = {target.name: content for target, content in files.items()}
+    if any(
+        Path(os.path.realpath(target.parent)) != parent_directory.path
+        or target.name in {"", ".", ".."}
+        or Path(target.name).name != target.name
+        for target in targets
+    ) or len(content_by_name) != len(targets):
+        raise ConfigurationError(
+            "retained evidence must be an immediate child of its pinned parent"
+        )
+    pinned = parent_directory.duplicate()
+    parent_descriptor = pinned.fileno()
+    lock_descriptor = -1
+    lock_identity: tuple[int, int] | None = None
+    created: list[tuple[str, int, tuple[int, int]]] = []
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        lock_descriptor, lock_identity = _open_retention_lock(parent_descriptor)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            lock_identity,
+        )
+        pinned.validate()
+        for target, content in files.items():
+            descriptor, identity = _open_new_restricted_file_at(
+                parent_descriptor,
+                target.name,
+            )
+            created.append((target.name, descriptor, identity))
+            _write_restricted_descriptor(descriptor, content)
+        for target_name, descriptor, identity in created:
+            _validate_restricted_file_at(
+                parent_descriptor,
+                target_name,
+                identity,
+            )
+            if _read_restricted_descriptor(descriptor) != content_by_name[target_name]:
+                raise ConfigurationError("retained evidence content changed")
+        os.fsync(parent_descriptor)
+        pinned.validate()
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            lock_identity,
+        )
+        for target_name, _, identity in created:
+            _validate_restricted_file_at(
+                parent_descriptor,
+                target_name,
+                identity,
+            )
+    except BaseException as error:
+        rollback_errors: list[str] = []
+        for target_name, _, identity in reversed(created):
+            try:
+                _unlink_restricted_file_at(
+                    parent_descriptor,
+                    target_name,
+                    identity,
+                )
+            except (OSError, ConfigurationError) as rollback_error:
+                rollback_errors.append(type(rollback_error).__name__)
+        try:
+            os.fsync(parent_descriptor)
+        except OSError as rollback_error:
+            rollback_errors.append(type(rollback_error).__name__)
+        if rollback_errors:
+            raise ConfigurationError(
+                "retained evidence commit failed and rollback was incomplete: "
+                + ", ".join(rollback_errors)
+            ) from error
+        if isinstance(error, ConfigurationError):
+            raise
+        if not isinstance(error, Exception):
+            raise
+        raise ConfigurationError(
+            f"retained evidence commit failed: {type(error).__name__}"
+        ) from error
+    finally:
+        for _, descriptor, _ in reversed(created):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if lock_descriptor >= 0:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_descriptor)
+        pinned.close()
+
+
+def _require_retained_names_absent(
+    parent_descriptor: int,
+    names: tuple[str, ...],
+) -> None:
+    """Reject any preexisting final retained-output name without following it."""
+
+    for name in names:
+        try:
+            os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        raise ConfigurationError(
+            f"retained evidence destination already exists: {name}"
+        )
+
+
+def _open_retention_lock(
+    parent_descriptor: int,
+) -> tuple[int, tuple[int, int]]:
+    """Open or create the content-free persistent retention lock."""
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    created = False
+    try:
+        descriptor = os.open(_RETENTION_FLOCK_NAME, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(
+                _RETENTION_FLOCK_NAME,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            created = True
+        except FileExistsError:
+            descriptor = os.open(
+                _RETENTION_FLOCK_NAME,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+    except OSError as error:
+        raise ConfigurationError("retention transaction lock is unsafe") from error
+    try:
+        if created:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            os.fsync(parent_descriptor)
+        identity = _restricted_file_identity(
+            os.fstat(descriptor),
+            _RETENTION_FLOCK_NAME,
+        )
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            identity,
+        )
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_new_restricted_file_at(
+    parent_descriptor: int,
+    name: str,
+) -> tuple[int, tuple[int, int]]:
+    """Create one final retained name without replacing an existing entry."""
+
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+    except FileExistsError as error:
+        raise ConfigurationError(
+            f"retained evidence destination already exists: {name}"
+        ) from error
+    except OSError as error:
+        raise ConfigurationError(
+            f"retained evidence destination is unsafe: {name}"
+        ) from error
+    identity: tuple[int, int] | None = None
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+        ):
+            raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+        identity = metadata.st_dev, metadata.st_ino
+        os.fchmod(descriptor, 0o600)
+        if _restricted_file_identity(os.fstat(descriptor), name) != identity:
+            raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+        return descriptor, identity
+    except BaseException:
+        if identity is not None:
+            try:
+                _unlink_restricted_file_at(
+                    parent_descriptor,
+                    name,
+                    identity,
+                )
+            except (OSError, ConfigurationError):
+                pass
+        os.close(descriptor)
+        raise
+
+
+def _write_restricted_descriptor(
+    descriptor: int,
+    content: bytes,
+) -> None:
+    """Write and fsync exact retained bytes through the created descriptor."""
+
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError("short retained evidence write")
+        remaining = remaining[written:]
+    os.fsync(descriptor)
+
+
+def _read_restricted_descriptor(descriptor: int) -> bytes:
+    """Read back all retained bytes through the created descriptor."""
+
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while chunk := os.read(descriptor, 1024 * 1024):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_restricted_file_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Require one public name to remain the exact restricted inode."""
+
+    current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if _restricted_file_identity(current, name) != expected_identity:
+        raise ConfigurationError("retained evidence file identity changed")
+
+
+def _unlink_restricted_file_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Unlink only the exact regular inode owned by this transaction."""
+
+    try:
+        current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.getuid()
+        or current.st_nlink != 1
+        or (current.st_dev, current.st_ino) != expected_identity
+    ):
+        raise ConfigurationError("retained evidence file identity changed")
+    os.unlink(name, dir_fd=parent_descriptor)
+
+
+def _restricted_file_identity(
+    metadata: os.stat_result,
+    name: str,
+) -> tuple[int, int]:
+    """Validate one private retained file and return its stable identity."""
+
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _reject_symlink(path: Path) -> None:
+    """Reject a symlink at a retention transaction boundary."""
+
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError as error:
+        raise ConfigurationError(
+            f"retention transaction path does not exist: {path}"
+        ) from error
+    if stat.S_ISLNK(mode):
+        raise ConfigurationError(f"retention transaction path is a symlink: {path}")
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory entry changes for a completed transaction."""
+
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

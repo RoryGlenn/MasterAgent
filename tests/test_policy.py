@@ -1,19 +1,18 @@
 """Policy-engine tests."""
 
+import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import unittest
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.models import (
     AgentAction,
-    Approval,
     AuthoritySource,
     ChangePlan,
     ResourceRef,
     RiskLevel,
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,8 +21,18 @@ class PolicyEngineTests(unittest.TestCase):
     """Verify approval and trust boundaries."""
 
     def setUp(self) -> None:
+        self.authenticator = HmacApprovalAuthenticator(
+            {
+                "rory": ApprovalAuthority(
+                    key_id="rory",
+                    subject="Rory",
+                    secret=b"rory-test-approval-secret-32-bytes!!",
+                )
+            }
+        )
         self.engine = PolicyEngine(
-            PolicyConfig.from_toml(ROOT / "config/policy.toml")
+            PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+            approval_authenticator=self.authenticator,
         )
 
     def test_read_is_auto_permitted(self) -> None:
@@ -45,10 +54,10 @@ class PolicyEngineTests(unittest.TestCase):
         self.assertTrue(denied.approval_required)
 
         now = datetime.now(UTC)
-        approval = Approval(
-            plan_fingerprint=plan.fingerprint,
+        approval = self.authenticator.issue(
+            plan=plan,
             approved_action_ids=(action.action_id,),
-            approved_by="Rory",
+            key_id="rory",
             issued_at=now - timedelta(seconds=1),
             expires_at=now + timedelta(minutes=5),
         )
@@ -63,10 +72,10 @@ class PolicyEngineTests(unittest.TestCase):
         )
         original = _plan(action)
         now = datetime.now(UTC)
-        approval = Approval(
-            plan_fingerprint=original.fingerprint,
+        approval = self.authenticator.issue(
+            plan=original,
             approved_action_ids=(action.action_id,),
-            approved_by="Rory",
+            key_id="rory",
             issued_at=now - timedelta(seconds=1),
             expires_at=now + timedelta(minutes=5),
         )

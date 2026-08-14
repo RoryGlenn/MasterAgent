@@ -99,6 +99,69 @@ environments = ["development", "non_production", "production"]
 enabled = true
 
 [[rules]]
+pattern = "onenote.page.create"
+owner = "system-owner"
+authentication = "delegated"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "onenote.page.update"
+owner = "system-owner"
+authentication = "delegated"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "bitbucket.branch.push"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.branch.create"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.branch.push"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.commit.create"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.patch.apply"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
 pattern = "*.create"
 owner = "system-owner"
 authentication = "provider_specific"
@@ -173,15 +236,6 @@ enabled = true
 
 [[rules]]
 pattern = "*.apply"
-owner = "platform-owner"
-authentication = "provider_specific"
-data_classifications = ["public", "internal", "confidential"]
-approval_tier = "single"
-environments = ["development", "non_production", "production"]
-enabled = true
-
-[[rules]]
-pattern = "*.restore"
 owner = "platform-owner"
 authentication = "provider_specific"
 data_classifications = ["public", "internal", "confidential"]

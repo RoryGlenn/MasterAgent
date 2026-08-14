@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from fnmatch import fnmatch
-import tomllib
-from typing import Iterable
 
+from master_agent.approvals import ApprovalAuthenticator
 from master_agent.config_sources import ConfigSource
 from master_agent.models import (
     AgentAction,
@@ -72,8 +73,14 @@ class PolicyDecision:
 class PolicyEngine:
     """Evaluate whether actions may reach connectors."""
 
-    def __init__(self, config: PolicyConfig) -> None:
+    def __init__(
+        self,
+        config: PolicyConfig,
+        *,
+        approval_authenticator: ApprovalAuthenticator | None = None,
+    ) -> None:
         self._config = config
+        self._approval_authenticator = approval_authenticator
 
     def evaluate(
         self,
@@ -81,7 +88,7 @@ class PolicyEngine:
         action: AgentAction,
         approvals: Iterable[Approval] = (),
         now: datetime | None = None,
-        minimum_distinct_approvers: int = 1,
+        minimum_distinct_approvers: int = 0,
     ) -> PolicyDecision:
         """Evaluate one action against risk, authority, and approvals.
 
@@ -139,13 +146,22 @@ class PolicyEngine:
         approval_required = (
             action.requires_approval
             or action.risk in self._config.require_approval_risks
+            or minimum_distinct_approvers > 0
         )
         if approval_required:
-            covered_by = {
-                approval.approved_by.casefold(): approval
-                for approval in approvals
-                if approval.covers(plan=plan, action=action, now=current_time)
-            }
+            covered_by: dict[str, Approval] = {}
+            if self._approval_authenticator is not None:
+                for approval in approvals:
+                    subject = self._approval_authenticator.authenticated_subject(
+                        approval
+                    )
+                    if subject is None or not approval.covers(
+                        plan=plan,
+                        action=action,
+                        now=current_time,
+                    ):
+                        continue
+                    covered_by[subject.casefold()] = approval
             required = max(1, minimum_distinct_approvers)
             if len(covered_by) < required:
                 return PolicyDecision(
@@ -159,9 +175,7 @@ class PolicyEngine:
             return PolicyDecision(
                 permitted=True,
                 approval_required=True,
-                reason=(
-                    f"{len(covered_by)} valid immutable-plan approval(s) supplied"
-                ),
+                reason=(f"{len(covered_by)} valid immutable-plan approval(s) supplied"),
             )
 
         if action.risk in self._config.auto_permit_risks:

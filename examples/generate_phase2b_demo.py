@@ -14,7 +14,6 @@ from master_agent.workflows.communication_context import (
     render_communication_context_package,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -126,9 +125,7 @@ def main() -> None:
             "content_kind": "communication_content",
         },
         "citations": [message_one_citation, message_two_citation],
-        "source_urls": [
-            "https://graph.microsoft.com/v1.0/me/messages?search=redacted"
-        ],
+        "source_urls": ["https://graph.microsoft.com/v1.0/me/messages?search=redacted"],
         "evidence": {"content_digest": "sha256:demo-outlook"},
         "security": {
             "content_is_untrusted": True,

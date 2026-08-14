@@ -40,7 +40,10 @@ class TeamsConnectorTests(unittest.TestCase):
                             "id": "message-1",
                             "createdDateTime": "2026-08-13T14:59:00Z",
                             "from": {"user": {"id": "user-don", "displayName": "Don"}},
-                            "body": {"contentType": "html", "content": "<p>CI is green.</p>"},
+                            "body": {
+                                "contentType": "html",
+                                "content": "<p>CI is green.</p>",
+                            },
                         },
                     }
                 ]
@@ -136,7 +139,10 @@ class TeamsConnectorTests(unittest.TestCase):
                     {
                         "id": "message-3",
                         "createdDateTime": "2026-08-13T15:00:00Z",
-                        "body": {"contentType": "text", "content": "See attached status."},
+                        "body": {
+                            "contentType": "text",
+                            "content": "See attached status.",
+                        },
                         "attachments": [
                             {
                                 "id": "attachment-1",
@@ -144,7 +150,7 @@ class TeamsConnectorTests(unittest.TestCase):
                                 "contentType": "reference",
                                 "contentUrl": "https://tenant.sharepoint.com/status.docx?token=temp",
                                 "thumbnailUrl": "https://tenant.sharepoint.com/thumb?token=temp",
-                                "content": "{\"providerType\":\"oneDriveBusiness\"}",
+                                "content": '{"providerType":"oneDriveBusiness"}',
                             }
                         ],
                     }
@@ -222,7 +228,9 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(result.after["messages"][0]["reply_to_id"], "root-message")
         self.assertEqual(result.after["parent_message_id"], "root-message")
 
-    def test_application_mode_requires_explicit_identity_for_user_collections(self) -> None:
+    def test_application_mode_requires_explicit_identity_for_user_collections(
+        self,
+    ) -> None:
         transport = ScriptedTransport()
         connector = TeamsConnector(
             resolved_config(

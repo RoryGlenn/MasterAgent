@@ -7,10 +7,10 @@ canonical_system = "confluence"
 canonical_resource_id = "project-status"
 projections = ["powerpoint:weekly-status", "teams:weekly-status-draft", "outlook:weekly-status-draft"]
 direction = "outbound_only"
+canonical_extractors = { "confluence.page.update" = ["body"] }
+projection_extractors = { "teams.message.draft" = ["body"], "outlook.email.draft" = ["body"] }
 
-[[rules]]
-field = "work_item_status"
-canonical_system = "jira"
-canonical_resource_id = "PROJECT-SPRINT"
-projections = ["powerpoint:weekly-status"]
-direction = "outbound_only"
+# The exact powerpoint:weekly-status target intentionally remains governed but
+# has no allowed projection capability. Generic slide content cannot identify
+# which rendered text belongs to which canonical field, so it fails closed until
+# the connector accepts a typed, field-addressed projection schema.

@@ -3,31 +3,83 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping, Sequence
+from typing import Any
 from urllib.parse import urlparse
 
 from master_agent.models import AgentAction
 
-
-_COLLECTION_SPECS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
-    "issues": ("issue", ("key", "id"), ("summary", "key"), ("web_url",), ("updated_at", "version")),
+_COLLECTION_SPECS: dict[
+    str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]
+] = {
+    "issues": (
+        "issue",
+        ("key", "id"),
+        ("summary", "key"),
+        ("web_url",),
+        ("updated_at", "version"),
+    ),
     "pages": ("page", ("id",), ("title",), ("web_url",), ("version", "updated_at")),
-    "pull_requests": ("pull_request", ("id",), ("title",), ("web_url", "source_urls"), ("version", "updated_at")),
-    "repositories": ("repository", ("slug", "id", "name"), ("name", "slug"), ("web_url",), ("updated_at",)),
+    "pull_requests": (
+        "pull_request",
+        ("id",),
+        ("title",),
+        ("web_url", "source_urls"),
+        ("version", "updated_at"),
+    ),
+    "repositories": (
+        "repository",
+        ("slug", "id", "name"),
+        ("name", "slug"),
+        ("web_url",),
+        ("updated_at",),
+    ),
     "sites": ("site", ("id",), ("display_name", "name"), ("web_url",), ("updated_at",)),
     "drives": ("drive", ("id",), ("name",), ("web_url",), ("updated_at",)),
     "items": ("drive_item", ("id",), ("name",), ("web_url",), ("etag", "updated_at")),
-    "users": ("identity", ("id", "user_principal_name", "mail"), ("display_name", "mail"), (), ()),
-    "chats": ("chat", ("id",), ("topic", "chat_type", "id"), ("web_url",), ("updated_at",)),
+    "users": (
+        "identity",
+        ("id", "user_principal_name", "mail"),
+        ("display_name", "mail"),
+        (),
+        (),
+    ),
+    "chats": (
+        "chat",
+        ("id",),
+        ("topic", "chat_type", "id"),
+        ("web_url",),
+        ("updated_at",),
+    ),
     "teams": ("team", ("id",), ("display_name", "id"), ("web_url",), ("updated_at",)),
-    "channels": ("channel", ("id",), ("display_name", "id"), ("web_url",), ("updated_at",)),
-    "messages": ("message", ("id",), ("subject", "body_excerpt", "id"), ("web_url",), ("etag", "updated_at")),
-    "attachments": ("attachment", ("id",), ("name", "id"), ("web_url",), ("updated_at", "size")),
+    "channels": (
+        "channel",
+        ("id",),
+        ("display_name", "id"),
+        ("web_url",),
+        ("updated_at",),
+    ),
+    "messages": (
+        "message",
+        ("id",),
+        ("subject", "body_excerpt", "id"),
+        ("web_url",),
+        ("etag", "updated_at"),
+    ),
+    "attachments": (
+        "attachment",
+        ("id",),
+        ("name", "id"),
+        ("web_url",),
+        ("updated_at", "size"),
+    ),
     "folders": ("mail_folder", ("id",), ("display_name", "id"), ("web_url",), ()),
     "people": ("person", ("key", "id"), ("display_name", "key"), (), ()),
 }
 
-_SINGULAR_SPECS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
+_SINGULAR_SPECS: dict[
+    str, tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]
+] = {
     "issue": _COLLECTION_SPECS["issues"],
     "page": _COLLECTION_SPECS["pages"],
     "pull_request": _COLLECTION_SPECS["pull_requests"],
@@ -71,9 +123,7 @@ def enrich_resource_citations(
     existing = payload.get("citations")
     citations: list[dict[str, Any]] = []
     if isinstance(existing, list):
-        citations.extend(
-            dict(item) for item in existing if isinstance(item, Mapping)
-        )
+        citations.extend(dict(item) for item in existing if isinstance(item, Mapping))
 
     known = {str(item.get("citation_id")) for item in citations}
     system = str(payload.get("system") or action.target.system)
@@ -143,7 +193,7 @@ def make_resource_citation(
 ) -> dict[str, Any]:
     """Build one query-free, credential-safe resource citation."""
 
-    identity = f"{system}\0{resource_type}\0{resource_id}".encode("utf-8")
+    identity = f"{system}\0{resource_type}\0{resource_id}".encode()
     citation_id = "CIT-" + hashlib.sha256(identity).hexdigest()[:12].upper()
     safe_url = _safe_url(url)
     rendered_title = _first_text((title, resource_id))[:300]
@@ -162,7 +212,7 @@ def make_resource_citation(
     }
 
 
-def citation_index(payloads: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def citation_index(payloads: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Collect and de-duplicate citations from normalized evidence payloads."""
 
     by_id: dict[str, dict[str, Any]] = {}
@@ -183,7 +233,9 @@ def _citation_from_record(
     *,
     system: str,
     record: Mapping[str, Any],
-    spec: tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    spec: tuple[
+        str, tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]
+    ],
     fallback_url: str,
 ) -> dict[str, Any] | None:
     resource_type, id_keys, title_keys, url_keys, version_keys = spec

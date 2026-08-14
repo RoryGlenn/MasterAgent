@@ -1,8 +1,8 @@
 # Master Agent
 
-**Version 1.0.0 — complete governed enterprise-agent runtime**
+**Version 1.0.0 — governed enterprise-agent runtime**
 
-Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, local Git workspaces, and opt-in connector plugins.
+Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
 
 It separates AI planning from authorization and execution:
 
@@ -34,19 +34,24 @@ All planned software phases are implemented:
 | 1 — governed runtime | Immutable plans, approvals, policy, source-of-truth validation, audit, idempotency, verification, and prompt-injection controls |
 | 2 — read-only context | Jira, Confluence, Bitbucket, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
 | 3 — draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests |
-| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, SharePoint files, OneNote pages, and controlled local/remote Git operations with compensation |
+| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, and byte-verified SharePoint files; local/remote Git and unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
-| 6 — narrow recurring autonomy | Registered, allowlisted, local-output recurring workflows with durable scheduling state and overlap locks |
+| 6 — recurring workflow registration | Status and plan-generation surfaces; recurring execution is disabled pending exact target/config and runtime-path binding |
 
-The implementation is complete, but a particular company deployment is not activated until its administrators approve applications, scopes, retention, data handling, Conditional Access, secrets, connector URLs, and production governance. Packaged defaults keep all live connectors, writes, sends, and schedules disabled.
+The implemented runtime surfaces remain fail closed until a particular company
+deployment approves applications, scopes, retention, data handling, Conditional
+Access, secrets, connector URLs, and production governance. Packaged defaults
+keep all live connectors, writes, sends, and schedules disabled. Non-manifest
+weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **71 typed capabilities**:
+The catalog contains **70 typed capabilities**:
 
 - 39 read-only capabilities;
 - 10 local-generation capabilities;
-- 17 reversible-write capabilities;
+- 16 reversible-write definitions, including 2 disabled OneNote writes and 5
+  disabled local-Git mutations;
 - 4 external-communication capabilities;
 - 1 high-impact capability, `bitbucket.pull_request.merge`, deliberately disabled.
 
@@ -56,14 +61,14 @@ Supported domains:
 |---|---|---|---|
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
-| Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | new agent branch push, PR creation/decline compensation |
+| Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
-| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with restore compensation |
-| OneNote | notebooks, sections, pages | generated HTML/proposals | delegated page create/update with rollback |
+| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
+| OneNote | notebooks, sections, pages | generated HTML/proposals | disabled pending exact target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
-| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, push, restore |
-| Plugins | capability-specific | capability-specific | explicit opt-in only; still governed by catalog and policy |
+| Git workspace | repository state | branch/patch plan | mutation disabled until all Git metadata transactions are descriptor-bound |
+| Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
 ## Core safety properties
 
@@ -71,21 +76,22 @@ Supported domains:
 - **Three independent live gates:** runtime flag, provider-specific TOML flag, and capability/governance permission.
 - **Immutable approvals:** approvals bind to a SHA-256 plan fingerprint and exact action IDs; any mutation invalidates them.
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
-- **Version preconditions:** Jira, Confluence, SharePoint, OneNote, and Git operations stop on stale state.
+- **Version preconditions:** Jira, Confluence, and SharePoint operations stop on stale state.
 - **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
-- **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, and explicit workspace roots.
+- **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, no standalone destructive worktree restore, and explicit workspace roots.
 - **Evidence discipline:** full content is persisted only under an explicit retention rule; durable audit records normally store digests and metadata.
-- **Plugin isolation:** discovery does not import plugin code; a plugin is loaded only by exact name during `--apply`.
+- **Plugin isolation:** discovery, locking, and plan binding do not import plugin code; all CLI plugin execution fails closed pending a sealed isolated worker.
 
 ## Requirements
 
 - Python 3.12 or newer.
 - Ubuntu 24.04 LTS or macOS for the provided setup commands.
 - `python-pptx`, installed automatically.
-- Git for repository workflows.
+- Git only for repository inspection and quarantined internal mutation tests;
+  no local Git mutation capability is routable.
 - Organization-approved HTTPS API endpoints and credentials for live use.
 
 ## Install from the complete source ZIP
@@ -121,25 +127,29 @@ master-agent plugins
 
 Configuration resolution is:
 
-1. an explicit CLI path;
-2. a project-local `config/` file;
-3. wheel-packaged safe defaults.
+1. an explicit, permission-checked CLI path;
+2. wheel-packaged safe defaults.
+
+The current working directory is never an implicit configuration source;
+repository-local files must be selected explicitly.
 
 ## Quick safe demonstration
 
 Generate the complete Phase 3 review package without credentials or provider writes:
 
 ```bash
+mkdir -p .master-agent/draft-package-001
+chmod 700 .master-agent .master-agent/draft-package-001
 master-agent draft-package \
   --workflow config/draft-package.toml \
-  --output-dir .master-agent/draft-package \
+  --output-dir .master-agent/draft-package-001 \
   --database .master-agent/audit.sqlite3
 ```
 
 The package contains:
 
 ```text
-.master-agent/draft-package/
+.master-agent/draft-package-001/
 ├── change-package.pptx
 ├── confluence-update-draft.json
 ├── confluence-update-draft.md
@@ -202,23 +212,81 @@ Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI do
 
 ## Exact-plan approvals
 
-Inspect a proposed plan:
+Before approving an applied plan, bind the complete runtime manifest into it.
+The manifest covers integrations and flow-enforced credential identities, resolved
+destinations and CA bundles, policy/source/capability/governance/identity and
+retention snapshots, connector gates, filesystem roots, audit database, and
+retained-result destination:
+
+Every runtime directory must already exist, be owned by the current account,
+and be non-writable by group or world. The binding records the exact directory
+identity; neither binding nor apply creates these security boundaries. For
+example:
 
 ```bash
-master-agent inspect change-plan.json
+mkdir -m 700 /absolute/state/audit /absolute/state/results /absolute/state/drafts
+mkdir -m 700 /absolute/path/to/approved/workspaces
+```
+
+Draft artifacts and retained result/evidence files are create-only. Use fresh
+filenames or a fresh private output directory for each applied run; the runtime
+will not overwrite a prior or concurrently created file.
+`draft-package` additionally requires its dedicated output directory to be
+empty before it reads workflow configuration.
+
+```bash
+master-agent bind-context change-plan.json \
+  --connector-mode live \
+  --enable-writes \
+  --integrations /trusted/config/integrations.toml \
+  --policy /trusted/config/policy.toml \
+  --sources-of-truth /trusted/config/sources_of_truth.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --identities /trusted/config/identities.toml \
+  --approval-authorities /trusted/config/approval-authorities.toml \
+  --retention /trusted/config/retention.toml \
+  --database /absolute/state/audit.sqlite3 \
+  --draft-output-dir /absolute/state/drafts \
+  --result-json /absolute/state/run-report.json \
+  --workspace-root /absolute/path/to/approved/workspaces \
+  --output bound-change-plan.json
+```
+
+Every corresponding `run --apply` argument must match. Basic usernames and
+Entra client-credential tenant/client IDs are derived and bound automatically;
+their password, API-token, or client-secret bytes are never fingerprinted, so
+ordinary rotation remains possible for the same flow-enforced identity. Opaque
+bearer, delegated, token-file, and application-environment tokens are rejected
+for live applied execution: a configured identity label is not attestation.
+Those flows require a provider-verified principal or a trusted credential-broker
+adapter, neither of which is currently implemented.
+
+Inspect the bound plan and its new fingerprint:
+
+```bash
+master-agent inspect bound-change-plan.json
 ```
 
 Create an approval bound to selected action UUIDs:
 
 ```bash
-master-agent approve change-plan.json \
+export MASTER_AGENT_APPROVAL_KEY_RORY='at-least-32-random-secret-bytes'
+master-agent approve bound-change-plan.json \
   --actions ACTION_UUID_1,ACTION_UUID_2 \
-  --approver rory@example.com \
+  --key-id rory \
+  --approval-authorities /trusted/config/approval-authorities.toml \
+  --expected-fingerprint FINGERPRINT_PRINTED_BY_INSPECT \
   --ttl-minutes 30 \
   --output approval-rory.json
 ```
 
-A dual-approval capability requires a second approval from a different identity.
+Approval JSON is not authority by itself. The signature is verified against the
+explicit operator-controlled key ring, which binds each key ID to one identity.
+Unsigned, tampered, unknown-key, or identity-edited artifacts cannot authorize an
+apply. Keep the key ring outside repositories being operated on; use
+`config/approval-authorities.example` only as a schema example. A
+dual-approval capability requires a second valid key bound to a different identity.
 
 ## Execute approved reversible writes
 
@@ -226,36 +294,41 @@ A write requires all of these:
 
 1. the capability is enabled in `config/capabilities.toml`;
 2. governance permits it in `config/governance.toml`;
-3. the plan uses a permitted authority source and exact approval;
+3. the plan binds the complete runtime manifest and uses an exact approval;
 4. `--enable-writes` is supplied;
 5. the connector and its granular write flag are enabled in `config/integrations.toml`;
 6. valid credentials and expected versions are present.
 
 ```bash
-master-agent run change-plan.json \
+master-agent run bound-change-plan.json \
   --connector-mode live \
   --apply \
   --enable-writes \
-  --integrations config/integrations.toml \
-  --capabilities config/capabilities.toml \
-  --governance config/governance.toml \
+  --integrations /trusted/config/integrations.toml \
+  --policy /trusted/config/policy.toml \
+  --sources-of-truth /trusted/config/sources_of_truth.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --identities /trusted/config/identities.toml \
   --approval approval-rory.json \
-  --database .master-agent/audit.sqlite3 \
-  --result-json .master-agent/run-report.json \
-  --retention config/retention.toml
+  --approval-authorities /trusted/config/approval-authorities.toml \
+  --database /absolute/state/audit.sqlite3 \
+  --draft-output-dir /absolute/state/drafts \
+  --workspace-root /absolute/path/to/approved/workspaces \
+  --result-json /absolute/state/run-report.json \
+  --retention /trusted/config/retention.toml
 ```
 
-For local Git actions, also provide an approved workspace boundary:
-
-```bash
---workspace-root /absolute/path/to/approved/workspaces
-```
+Local Git patch, branch, commit, and push capabilities are catalog-disabled,
+governance-prohibited, and absent from the live registry until every Git
+metadata transaction is descriptor-bound. `--workspace-root` remains
+manifest-bound but does not enable repository mutation.
 
 Build a separately reviewable compensation plan from a completed run:
 
 ```bash
 master-agent compensation-plan \
-  --plan change-plan.json \
+  --plan bound-change-plan.json \
   --report .master-agent/run-report.json \
   --created-by operator@example.com \
   --output compensation-plan.json
@@ -266,7 +339,7 @@ master-agent compensation-plan \
 External communication additionally requires `--enable-communications` and the granular `outlook_send_enabled` or `teams_send_enabled` provider flag:
 
 ```bash
-master-agent run communication-plan.json \
+master-agent run bound-communication-plan.json \
   --connector-mode live \
   --apply \
   --enable-communications \
@@ -287,34 +360,44 @@ master-agent recurring-status \
   --recurring config/recurring.toml
 ```
 
-After editing and approving the workflow's allowlists, enable one workflow and invoke it from a scheduler such as systemd:
+`recurring-status`, `weekly-status-plan`, and `communication-context-plan` remain
+available for offline review. `recurring-run`, `weekly-status`, and
+`communication-context` execution fail before configuration, credentials,
+connectors, or audit state are opened. Exact registered targets and every
+runtime/config identity must first be covered by the same immutable execution
+manifest.
 
 ```bash
-master-agent recurring-run weekly_status \
-  --recurring config/recurring.toml \
-  --connector-mode live
+master-agent weekly-status-plan --output weekly-plan.json
+master-agent communication-context-plan --output communication-plan.json
 ```
 
-`--force` ignores the due-time calculation but **does not enable a disabled workflow**. Recurring workflows cannot expand their capability, recipient, or canonical-source allowlists at runtime.
+`evidence-prune` is preview-only. `--apply` and destructive orphan quarantine
+are disabled until recursive traversal and deletion are descriptor-bound.
 
 ## Connector plugins
 
-List installed connector entry points without importing their code:
+Write an exact operator-reviewed lock without importing plugin code:
 
 ```bash
-master-agent plugins
+master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
-Explicitly load one reviewed plugin during a live apply:
+Plugin inventory can be bound to a plan fingerprint for review without
+importing plugin code:
 
 ```bash
-master-agent run plan.json \
-  --connector-mode live \
-  --apply \
-  --plugin servicenow
+master-agent bind-context plan.json \
+  --integrations config/integrations.toml \
+  --plugin servicenow \
+  --plugin-lock /trusted/config/connector-plugins.json \
+  --output bound-plan.json
 ```
 
-Plugin capabilities must still exist in the catalog and pass governance, approval, source-of-truth, and connector-overlap checks. See [`docs/plugin-development.md`](docs/plugin-development.md).
+`run --apply --plugin ...` is intentionally rejected before plugin import,
+even when the lock and approvals are valid. A future activation path requires
+an isolated worker that verifies the complete dependency closure before any
+plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md).
 
 ## Configuration map
 
@@ -363,5 +446,5 @@ Plugin capabilities must still exist in the catalog and pass governance, approva
 - approval derived solely from retrieved content;
 - automatic use of new recipients discovered in content;
 - uncontrolled bidirectional synchronization;
-- automatic plugin loading;
+- in-process plugin loading;
 - enabling a schedule merely because `--force` was supplied.

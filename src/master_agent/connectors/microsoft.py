@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePosixPath
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import graph_client, graph_paged_values
@@ -19,7 +20,6 @@ from master_agent.connectors.utils import (
 from master_agent.errors import ConnectorError
 from master_agent.http import (
     HttpTransport,
-    SafeHttpClient,
     download_public_https,
 )
 from master_agent.models import AgentAction
@@ -265,11 +265,7 @@ class SharePointConnector(ReadOnlyConnector):
                 "sites": sites,
                 "source_urls": [
                     reference,
-                    *[
-                        str(site["web_url"])
-                        for site in sites
-                        if site.get("web_url")
-                    ],
+                    *[str(site["web_url"]) for site in sites if site.get("web_url")],
                 ],
             },
             connector_reference=reference,
@@ -353,9 +349,7 @@ class SharePointConnector(ReadOnlyConnector):
         if not item_id or item_id == "root":
             path = f"drives/{drive_id}/root/children"
         else:
-            path = (
-                f"drives/{drive_id}/items/{quote_segment(item_id)}/children"
-            )
+            path = f"drives/{drive_id}/items/{quote_segment(item_id)}/children"
         items, reference = self._paged_values(
             path,
             query={"$top": min(limit, 200)},
@@ -372,11 +366,7 @@ class SharePointConnector(ReadOnlyConnector):
                 "items": items,
                 "source_urls": [
                     reference,
-                    *[
-                        str(item["web_url"])
-                        for item in items
-                        if item.get("web_url")
-                    ],
+                    *[str(item["web_url"]) for item in items if item.get("web_url")],
                 ],
             },
             connector_reference=reference,
@@ -446,9 +436,7 @@ class SharePointConnector(ReadOnlyConnector):
         try:
             content = response.body.decode("utf-8-sig")
         except UnicodeDecodeError as error:
-            raise ConnectorError(
-                "SharePoint text file is not valid UTF-8"
-            ) from error
+            raise ConnectorError("SharePoint text file is not valid UTF-8") from error
         return RetrievedPayload(
             data={
                 "schema": "master-agent/sharepoint-text-file@1",
@@ -476,7 +464,9 @@ class SharePointConnector(ReadOnlyConnector):
             f"drives/{drive_id}/items/{item_id}",
         )
         if not isinstance(data, Mapping):
-            raise ConnectorError("Microsoft Graph drive item response must be an object")
+            raise ConnectorError(
+                "Microsoft Graph drive item response must be an object"
+            )
         metadata = _normalize_drive_item(data)
         if include_download_url:
             metadata["download_url"] = data.get("@microsoft.graph.downloadUrl")
@@ -517,7 +507,6 @@ class SharePointConnector(ReadOnlyConnector):
             if not mapped or not next_url:
                 break
         return values[:limit], reference
-
 
 
 def _normalize_user(user: Mapping[str, Any]) -> dict[str, Any]:

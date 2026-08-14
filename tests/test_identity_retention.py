@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import json
+import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.errors import ConfigurationError
@@ -17,7 +17,6 @@ from master_agent.retention import (
     write_retained_json,
 )
 from tests.helpers import read_action
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,26 +112,28 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(evidence.exists())
             self.assertTrue(sidecar.exists())
 
-            applied = purge_expired_evidence(
-                root,
-                now=created + timedelta(hours=73),
-                dry_run=False,
-            )
-            self.assertEqual(applied.errors, ())
-            self.assertFalse(evidence.exists())
-            self.assertFalse(sidecar.exists())
+            with self.assertRaisesRegex(ConfigurationError, "pruning is disabled"):
+                purge_expired_evidence(
+                    root,
+                    now=created + timedelta(hours=73),
+                    dry_run=False,
+                )
+            self.assertTrue(evidence.exists())
+            self.assertTrue(sidecar.exists())
 
     def test_metadata_only_rule_rejects_content_persistence(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config/retention.toml")
-        with TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ConfigurationError, "does not permit"):
-                write_retained_json(
-                    Path(directory) / "identity.json",
-                    {"schema": "master-agent/identity@1", "identity": {"id": "u1"}},
-                    evidence_type="microsoft.identity.metadata",
-                    config=config,
-                    include_content=True,
-                )
+        with (
+            TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "does not permit"),
+        ):
+            write_retained_json(
+                Path(directory) / "identity.json",
+                {"schema": "master-agent/identity@1", "identity": {"id": "u1"}},
+                evidence_type="microsoft.identity.metadata",
+                config=config,
+                include_content=True,
+            )
 
     def test_corrupt_sidecar_cannot_delete_outside_selected_root(self) -> None:
         now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
@@ -152,7 +153,7 @@ class RetentionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = purge_expired_evidence(root, now=now, dry_run=False)
+            result = purge_expired_evidence(root, now=now, dry_run=True)
 
             self.assertTrue(result.errors)
             self.assertTrue(outside.exists())

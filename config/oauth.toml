@@ -28,10 +28,9 @@ client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
 scopes = [
   "User.Read",
   "Sites.ReadWrite.All",
-  "Notes.ReadWrite",
 ]
 identity_mode = "delegated"
-purpose = "Phase 4 approved SharePoint and OneNote writes"
+purpose = "Phase 4 approved SharePoint writes"
 
 [profiles.microsoft_communications]
 enabled = false

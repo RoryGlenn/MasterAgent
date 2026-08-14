@@ -1,0 +1,7 @@
+# TOML syntax. Copy this file to a trusted operator-controlled location outside
+# repositories being inspected or modified. Secrets stay in the environment.
+
+[authorities.rory]
+subject = "rory@example.com"
+secret_env = "MASTER_AGENT_APPROVAL_KEY_RORY"
+enabled = true

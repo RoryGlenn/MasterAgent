@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
 from master_agent.connectors.git_remote import GitBranchPushConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.onenote import OneNoteWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
+from master_agent.errors import ConnectorError
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -124,6 +126,7 @@ class Phase4ConnectorTests(unittest.TestCase):
                 item,
                 {"id": "item-1", "name": "status.pptx", "size": 3, "eTag": "e1"},
             )
+            transport.add_bytes("GET", item + "/content", b"old")
             transport.add_json(
                 "GET",
                 item + "/versions",
@@ -148,7 +151,8 @@ class Phase4ConnectorTests(unittest.TestCase):
                 "eTag": "e3",
             }
             transport.add_json("GET", item, changed)
-            transport.add_json("GET", item, changed)
+            transport.add_bytes("GET", item + "/content", b"new-content")
+            transport.add_bytes("GET", item + "/content", b"new-content")
             transport.add_json("GET", item, changed)
             transport.add_bytes(
                 "POST",
@@ -157,9 +161,15 @@ class Phase4ConnectorTests(unittest.TestCase):
                 status=204,
             )
             transport.add_json("GET", item, restored)
+            transport.add_bytes("GET", item + "/content", b"old")
+            transport.add_bytes("GET", item + "/content", b"old")
 
             connector = SharePointWriteConnector(
-                resolved_config("microsoft", base_url="https://graph.microsoft.com/v1.0"),
+                resolved_config(
+                    "microsoft",
+                    base_url="https://graph.microsoft.com/v1.0",
+                    max_pages=12,
+                ),
                 artifact_root=root,
                 transport=transport,
             )
@@ -169,7 +179,11 @@ class Phase4ConnectorTests(unittest.TestCase):
                 resource_type="drive_item",
                 resource_id="item-1",
                 expected_version="e1",
-                parameters={"drive_id": "drive-1", "local_path": str(artifact)},
+                parameters={
+                    "drive_id": "drive-1",
+                    "local_path": str(artifact),
+                    "local_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                },
             )
             result = connector.execute(action)
             self.assertTrue(connector.verify(action, result).verified)
@@ -185,13 +199,16 @@ class Phase4ConnectorTests(unittest.TestCase):
         created = {
             "id": 12,
             "title": "Agent change",
+            "description": "",
             "state": "OPEN",
             "updated_on": "v1",
             "source": {"branch": {"name": "agent/change"}},
             "destination": {"branch": {"name": "main"}},
+            "close_source_branch": False,
         }
         declined = {**created, "state": "DECLINED", "updated_on": "v2"}
         transport.add_json("POST", collection, {"id": 12}, status=201)
+        transport.add_json("GET", item, created)
         transport.add_json("GET", item, created)
         transport.add_json("GET", item, created)
         transport.add_json("POST", item + "/decline", declined, status=200)
@@ -220,74 +237,74 @@ class Phase4ConnectorTests(unittest.TestCase):
             connector.verify_compensation(action, result, compensation).verified
         )
 
-    def test_onenote_create_can_be_deleted_on_rollback(self) -> None:
+    def test_onenote_write_surface_is_disabled(self) -> None:
         transport = ScriptedTransport()
-        transport.add_json(
-            "POST",
-            "/v1.0/me/onenote/sections/section-1/pages",
-            {"id": "page-1"},
-            status=201,
-        )
-        metadata = {
-            "id": "page-1",
-            "title": "Status",
-            "lastModifiedDateTime": "v1",
-        }
-        content = b"<html><body><h1>Status</h1><div>Ready</div></body></html>"
-        for _ in range(2):
-            transport.add_json(
-                "GET", "/v1.0/me/onenote/pages/page-1", metadata
+        with self.assertRaisesRegex(ConnectorError, "OneNote writes are disabled"):
+            OneNoteWriteConnector(
+                resolved_config(
+                    "microsoft",
+                    base_url="https://graph.microsoft.com/v1.0",
+                    extra={"identity_mode": "delegated"},
+                ),
+                transport=transport,
             )
-            transport.add_bytes(
-                "GET", "/v1.0/me/onenote/pages/page-1/content", content
-            )
-        transport.add_bytes(
-            "DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204
-        )
-        transport.add_json(
-            "GET", "/v1.0/me/onenote/pages/page-1", {"error": "not found"}, status=404
-        )
-        connector = OneNoteWriteConnector(
-            resolved_config(
-                "microsoft",
-                base_url="https://graph.microsoft.com/v1.0",
-                extra={"identity_mode": "delegated"},
-            ),
-            transport=transport,
-        )
-        action = write_action(
-            "onenote.page.create",
-            system="onenote",
-            resource_type="section",
-            resource_id="section-1",
-            parameters={
-                "section_id": "section-1",
-                "html": "<html><head><title>Status</title></head><body><div>Ready</div></body></html>",
-            },
-        )
-        result = connector.execute(action)
-        self.assertTrue(connector.verify(action, result).verified)
-        compensation = connector.compensate(action, result)
-        self.assertTrue(
-            connector.verify_compensation(action, result, compensation).verified
-        )
+        self.assertEqual(transport.requests, [])
 
     def test_git_connector_pushes_and_rolls_back_only_new_agent_branch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             remote = root / "remote.git"
             repository = root / "repo"
-            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
-            subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.test"], check=True)
-            subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "init", str(repository)], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "config",
+                    "user.email",
+                    "test@example.test",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.name", "Test"],
+                check=True,
+            )
             (repository / "README.md").write_text("hello\n", encoding="utf-8")
-            subprocess.run(["git", "-C", str(repository), "add", "README.md"], check=True)
-            subprocess.run(["git", "-C", str(repository), "commit", "-m", "initial"], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "checkout", "-b", "agent/test"], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "add", "README.md"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "checkout", "-b", "agent/test"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "remote", "add", "origin", str(remote)],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
 
-            connector = GitBranchPushConnector(repository_root=root)
+            connector = GitBranchPushConnector(
+                repository_root=root,
+                allow_file_remotes=True,
+            )
             action = write_action(
                 "bitbucket.branch.push",
                 system="bitbucket",
@@ -297,7 +314,9 @@ class Phase4ConnectorTests(unittest.TestCase):
                     "repository_path": str(repository),
                     "branch": "agent/test",
                     "remote": "origin",
+                    "remote_url": str(remote),
                 },
+                expected_version=head,
             )
             result = connector.execute(action)
             self.assertTrue(connector.verify(action, result).verified)

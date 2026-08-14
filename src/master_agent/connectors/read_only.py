@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.citations import enrich_resource_citations
 from master_agent.errors import ConnectorError
 from master_agent.evidence import content_digest
+from master_agent.http import http_action_budget
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -112,7 +114,16 @@ class ReadOnlyConnector(ABC):
             )
 
     def _retrieve(self, action: AgentAction) -> tuple[dict[str, Any], str]:
-        fetched = self._fetch(action)
+        config = getattr(self, "_config", None)
+        max_requests = int(getattr(config, "max_pages", 10))
+        max_response_bytes = int(
+            getattr(config, "max_response_bytes", 10 * 1024 * 1024)
+        )
+        with http_action_budget(
+            max_requests=max_requests,
+            max_response_bytes=max_response_bytes,
+        ):
+            fetched = self._fetch(action)
         normalized = deepcopy(dict(fetched.data))
         if fetched.citations:
             normalized["citations"] = [
@@ -132,8 +143,7 @@ class ReadOnlyConnector(ABC):
             "connector_reference": fetched.connector_reference,
         }
         normalized["citations"] = [
-            {**dict(citation), "retrieved_at": retrieved_at}
-            for citation in citations
+            {**dict(citation), "retrieved_at": retrieved_at} for citation in citations
         ]
         normalized["security"] = {
             "content_is_untrusted": True,
@@ -163,8 +173,6 @@ def _result_digest(value: Mapping[str, Any] | None) -> str | None:
         if isinstance(digest, str):
             return digest
     stripped = {
-        key: item
-        for key, item in value.items()
-        if key not in {"evidence", "security"}
+        key: item for key, item in value.items() if key not in {"evidence", "security"}
     }
     return content_digest(stripped)

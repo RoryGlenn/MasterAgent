@@ -1,10 +1,10 @@
 goal: Prepare the weekly project status package without publishing or sending.
 plan ID: afe5fc87-949a-4663-8cb2-bfbe2aaff56d
-fingerprint: 3ab0e872a9429b2697fb7b2ebdb48ea1a1b34d33b99c4040adfb333fbe91b048
+fingerprint: 0adfad8d864c8776196cd80de02e68a4dec5d27798e132394b49916520e489cf
 actions:
   05ea66fe-6ae2-4956-85d2-c744079315fd  read_only                jira.issue.search                      jira:PROJECT-SPRINT deps=-
   d965f77c-897b-4401-8ed0-72740912bb69  read_only                bitbucket.pull_request.search          bitbucket:open-prs deps=-
   4d364f13-17e4-47d5-9e10-5014a7b26105  read_only                confluence.page.read                   confluence:project-status deps=-
-  fd25e85c-7f7f-4491-a2ff-9efee3f4ca07  local_generation         powerpoint.presentation.generate       powerpoint:weekly-status deps=05ea66fe-6ae2-4956-85d2-c744079315fd,d965f77c-897b-4401-8ed0-72740912bb69,4d364f13-17e4-47d5-9e10-5014a7b26105
-  d08a2340-c76c-4f9f-84f5-d7269ea3b4fc  local_generation         teams.message.draft                    teams:weekly-status-draft deps=05ea66fe-6ae2-4956-85d2-c744079315fd,d965f77c-897b-4401-8ed0-72740912bb69,4d364f13-17e4-47d5-9e10-5014a7b26105
-  e8974c33-0ca4-4de2-9ace-992124a05978  local_generation         outlook.email.draft                    outlook:weekly-status-draft deps=fd25e85c-7f7f-4491-a2ff-9efee3f4ca07
+  fd25e85c-7f7f-4491-a2ff-9efee3f4ca07  local_generation         powerpoint.presentation.generate       powerpoint:weekly-status-preview deps=05ea66fe-6ae2-4956-85d2-c744079315fd,d965f77c-897b-4401-8ed0-72740912bb69,4d364f13-17e4-47d5-9e10-5014a7b26105
+  d08a2340-c76c-4f9f-84f5-d7269ea3b4fc  local_generation         teams.message.draft                    teams:weekly-status-preview-draft deps=05ea66fe-6ae2-4956-85d2-c744079315fd,d965f77c-897b-4401-8ed0-72740912bb69,4d364f13-17e4-47d5-9e10-5014a7b26105
+  e8974c33-0ca4-4de2-9ace-992124a05978  local_generation         outlook.email.draft                    outlook:weekly-status-preview-draft deps=fd25e85c-7f7f-4491-a2ff-9efee3f4ca07

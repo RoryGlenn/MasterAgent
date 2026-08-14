@@ -1,8 +1,8 @@
 """Configuration and environment-discovery tests."""
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.auth import AuthMode
 from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
@@ -123,9 +123,14 @@ class DiscoveryTests(unittest.TestCase):
             {"microsoft", "sharepoint", "outlook", "teams"},
         )
         self.assertTrue(
-            all(record.status is DiscoveryStatus.MISSING_ENVIRONMENT for record in records)
+            all(
+                record.status is DiscoveryStatus.MISSING_ENVIRONMENT
+                for record in records
+            )
         )
-        self.assertTrue(all(record.missing_environment == ("GRAPH_TOKEN",) for record in records))
+        self.assertTrue(
+            all(record.missing_environment == ("GRAPH_TOKEN",) for record in records)
+        )
 
 
 if __name__ == "__main__":

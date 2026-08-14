@@ -2,9 +2,9 @@
 
 import hashlib
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from uuid import uuid4
 
 from pptx import Presentation
@@ -19,7 +19,6 @@ from master_agent.workflows.weekly_status import (
     render_weekly_status_package,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -27,15 +26,15 @@ class WeeklyStatusWorkflowTests(unittest.TestCase):
     """Verify plans remain read-only and packages retain evidence."""
 
     def test_repository_workflow_config_builds_three_read_actions(self) -> None:
-        settings = WeeklyStatusSettings.from_toml(
-            ROOT / "config/weekly-status.toml"
-        )
+        settings = WeeklyStatusSettings.from_toml(ROOT / "config/weekly-status.toml")
         plan = build_weekly_status_read_plan(
             settings,
             bitbucket_deployment=DeploymentType.CLOUD,
         )
         self.assertEqual(len(plan.actions), 3)
-        self.assertTrue(all(action.risk is RiskLevel.READ_ONLY for action in plan.actions))
+        self.assertTrue(
+            all(action.risk is RiskLevel.READ_ONLY for action in plan.actions)
+        )
         bitbucket = next(
             action
             for action in plan.actions
@@ -45,9 +44,7 @@ class WeeklyStatusWorkflowTests(unittest.TestCase):
         self.assertNotIn("project", bitbucket.parameters)
 
     def test_data_center_plan_uses_project_key(self) -> None:
-        settings = WeeklyStatusSettings.from_toml(
-            ROOT / "config/weekly-status.toml"
-        )
+        settings = WeeklyStatusSettings.from_toml(ROOT / "config/weekly-status.toml")
         plan = build_weekly_status_read_plan(
             settings,
             bitbucket_deployment=DeploymentType.DATA_CENTER,
@@ -61,9 +58,7 @@ class WeeklyStatusWorkflowTests(unittest.TestCase):
         self.assertNotIn("workspace", bitbucket.parameters)
 
     def test_renderer_writes_evidence_markdown_powerpoint_and_manifest(self) -> None:
-        settings = WeeklyStatusSettings.from_toml(
-            ROOT / "config/weekly-status.toml"
-        )
+        settings = WeeklyStatusSettings.from_toml(ROOT / "config/weekly-status.toml")
         report = _report()
         with TemporaryDirectory() as directory:
             output = Path(directory)
@@ -91,9 +86,7 @@ class WeeklyStatusWorkflowTests(unittest.TestCase):
             presentation = Presentation(artifacts.powerpoint)
             self.assertEqual(len(presentation.slides), 6)
 
-            manifest = json.loads(
-                artifacts.manifest_json.read_text(encoding="utf-8")
-            )
+            manifest = json.loads(artifacts.manifest_json.read_text(encoding="utf-8"))
             self.assertTrue(manifest["successful"])
             self.assertEqual(len(manifest["security_findings"]), 1)
             self.assertEqual(len(manifest["citations"]), 3)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
@@ -25,7 +25,6 @@ from master_agent.workflows.draft_package import (
     render_draft_package,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -33,12 +32,12 @@ class DraftPackageTests(unittest.TestCase):
     """Verify that Phase 3 generates artifacts and never publishes."""
 
     def test_full_draft_package_generates_six_local_artifacts(self) -> None:
-        settings = DraftPackageSettings.from_toml(
-            ROOT / "config/draft-package.toml"
-        )
+        settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
         plan = build_draft_package_plan(settings)
         self.assertEqual(len(plan.actions), 6)
-        self.assertTrue(all(str(item.risk) == "local_generation" for item in plan.actions))
+        self.assertTrue(
+            all(str(item.risk) == "local_generation" for item in plan.actions)
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -75,9 +74,7 @@ class DraftPackageTests(unittest.TestCase):
             )
 
     def test_repository_patch_rejects_parent_path(self) -> None:
-        settings = DraftPackageSettings.from_toml(
-            ROOT / "config/draft-package.toml"
-        )
+        settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
         plan = build_draft_package_plan(settings)
         patch = plan.actions[-1]
         from dataclasses import replace
@@ -86,9 +83,11 @@ class DraftPackageTests(unittest.TestCase):
             patch,
             parameters={**patch.parameters, "relative_path": "../secret.txt"},
         )
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(Exception, "inside the repository"):
-                RepositoryDraftConnector(Path(directory)).execute(unsafe)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(Exception, "inside the repository"),
+        ):
+            RepositoryDraftConnector(Path(directory)).execute(unsafe)
 
 
 if __name__ == "__main__":

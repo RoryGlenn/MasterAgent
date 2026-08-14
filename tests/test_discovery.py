@@ -1,8 +1,8 @@
 """Environment and connectivity discovery tests."""
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.config import IntegrationConfig
 from master_agent.discovery import (
@@ -22,20 +22,20 @@ class DiscoveryTests(unittest.TestCase):
 [connectors.jira]
 enabled = true
 deployment = "cloud"
-base_url_env = "JIRA_URL"
+base_url_env = "MASTER_AGENT_JIRA_BASE_URL"
 auth_mode = "bearer"
-secret_env = "JIRA_TOKEN"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
 """
         )
         records = discover_integrations(
             config,
-            environ={"JIRA_TOKEN": "do-not-print-this"},
+            environ={"MASTER_AGENT_JIRA_TOKEN": "do-not-print-this"},
             systems={"jira"},
         )
         self.assertEqual(records[0].status, DiscoveryStatus.MISSING_ENVIRONMENT)
         rendered = str(records[0].to_dict())
         self.assertNotIn("do-not-print-this", rendered)
-        self.assertIn("JIRA_URL", rendered)
+        self.assertIn("MASTER_AGENT_JIRA_BASE_URL", rendered)
 
     def test_ready_connector_exposes_capabilities_without_network_probe(self) -> None:
         config = _config(
@@ -43,7 +43,7 @@ secret_env = "JIRA_TOKEN"
 [connectors.jira]
 enabled = true
 deployment = "cloud"
-base_url = "https://jira.example.test"
+base_url = "https://example.atlassian.net"
 auth_mode = "none"
 """
         )
@@ -62,7 +62,7 @@ auth_mode = "none"
 [connectors.jira]
 enabled = true
 deployment = "cloud"
-base_url = "https://jira.example.test"
+base_url = "https://example.atlassian.net"
 auth_mode = "none"
 """
         )
@@ -105,7 +105,9 @@ def _config(content: str) -> IntegrationConfig:
     path.write_text(content.strip(), encoding="utf-8")
     config = IntegrationConfig.from_toml(path)
     # Keep the temporary directory alive for the duration of the returned object.
-    setattr(config, "_test_directory", directory) if hasattr(config, "__dict__") else None
+    setattr(config, "_test_directory", directory) if hasattr(
+        config, "__dict__"
+    ) else None
     directory.cleanup()
     return config
 

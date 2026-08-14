@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
+import json
+import os
+import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-import os
 from pathlib import Path
 from types import MappingProxyType
-import tomllib
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from master_agent.auth import AuthMode, ResolvedAuth
@@ -20,7 +24,9 @@ from master_agent.oauth import (
     EnvironmentTokenProvider,
     InMemoryTokenCache,
     RestrictedTokenFileProvider,
+    TokenProvider,
 )
+from master_agent.trust_store import CaBundleSnapshot, capture_ca_bundle
 
 
 class DeploymentType(StrEnum):
@@ -66,6 +72,35 @@ class ConnectorConfig:
             raise ConfigurationError("max_response_bytes must be positive")
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
 
+    @property
+    def identity(self) -> str:
+        """Return a stable, secret-free identity for approval/audit binding."""
+
+        payload = {
+            "system": self.system,
+            "enabled": self.enabled,
+            "deployment": str(self.deployment),
+            "base_url": self.base_url,
+            "base_url_env": self.base_url_env,
+            "auth_mode": str(self.auth_mode),
+            "username_env": self.username_env,
+            "secret_env": self.secret_env,
+            "ca_bundle_env": self.ca_bundle_env,
+            "timeout_seconds": self.timeout_seconds,
+            "max_pages": self.max_pages,
+            "max_items": self.max_items,
+            "max_response_bytes": self.max_response_bytes,
+            "extra": dict(self.extra),
+        }
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     def required_environment_variables(self) -> tuple[str, ...]:
         """Return environment variables required by the connector.
 
@@ -81,7 +116,10 @@ class ConnectorConfig:
         if self.auth_mode is AuthMode.BASIC and self.username_env:
             names.append(self.username_env)
         oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
-        if self.auth_mode is AuthMode.OAUTH_APPLICATION and oauth_flow == "client_credentials":
+        if (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
             for key in ("tenant_id_env", "client_id_env", "client_secret_env"):
                 value = self.extra.get(key)
                 if isinstance(value, str) and value.strip():
@@ -118,20 +156,29 @@ class ConnectorConfig:
         oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
         if self.auth_mode is AuthMode.BASIC and not self.username_env:
             errors.append("username_env is required for Basic authentication")
-        if self.auth_mode is AuthMode.OAUTH_APPLICATION and oauth_flow == "client_credentials":
+        if (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
             for key in ("tenant_id_env", "client_id_env", "client_secret_env"):
                 value = self.extra.get(key)
                 if not isinstance(value, str) or not value.strip():
-                    errors.append(f"{key} is required for client_credentials authentication")
+                    errors.append(
+                        f"{key} is required for client_credentials authentication"
+                    )
             scopes = self.extra.get("scopes", [])
-            if not isinstance(scopes, list) or not all(isinstance(item, str) and item.strip() for item in scopes):
-                errors.append("scopes must be a non-empty string list for OAuth")
-            elif not scopes:
+            if (
+                not isinstance(scopes, list)
+                or not all(isinstance(item, str) and item.strip() for item in scopes)
+                or not scopes
+            ):
                 errors.append("scopes must be a non-empty string list for OAuth")
         elif self.auth_mode is AuthMode.OAUTH_DELEGATED and oauth_flow == "token_file":
             value = self.extra.get("token_file_env")
             if not isinstance(value, str) or not value.strip():
-                errors.append("token_file_env is required for token_file authentication")
+                errors.append(
+                    "token_file_env is required for token_file authentication"
+                )
         elif self.auth_mode is not AuthMode.NONE and not self.secret_env:
             errors.append("secret_env is required for authenticated connectors")
         errors.extend(
@@ -144,6 +191,11 @@ class ConnectorConfig:
         if base_url:
             try:
                 _validate_base_url(base_url, system=self.system)
+                _validate_provider_origin(
+                    base_url,
+                    system=self.system,
+                    deployment=self.deployment,
+                )
             except ConfigurationError as error:
                 errors.append(str(error))
         return tuple(dict.fromkeys(errors))
@@ -156,7 +208,119 @@ class ConnectorConfig:
 
         source = environ if environ is not None else os.environ
         return tuple(
-            name for name in self.required_environment_variables() if not source.get(name)
+            name
+            for name in self.required_environment_variables()
+            if not source.get(name)
+        )
+
+    def resolve_execution_target(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> tuple[str, Path | None]:
+        """Resolve and validate the secret-free destination used by a connector.
+
+        Unlike :meth:`resolve`, this method deliberately does not require or
+        access authentication values. It is used while an operator binds the
+        exact live destination and trust store to a plan before approval.
+        """
+
+        if not self.enabled:
+            raise ConfigurationError(f"connector is disabled: {self.system}")
+        source = environ if environ is not None else os.environ
+        base_url = source.get(self.base_url_env, "") if self.base_url_env else ""
+        base_url = base_url.strip() or (self.base_url or "").strip()
+        if not base_url:
+            raise ConfigurationError(f"connector {self.system} requires a base URL")
+        _validate_base_url(base_url, system=self.system)
+        _validate_provider_origin(
+            base_url,
+            system=self.system,
+            deployment=self.deployment,
+        )
+
+        ca_bundle: Path | None = None
+        if self.ca_bundle_env and source.get(self.ca_bundle_env):
+            selected = Path(source[self.ca_bundle_env]).expanduser()
+            try:
+                ca_bundle = selected.resolve(strict=True)
+            except OSError as error:
+                raise ConfigurationError(
+                    f"connector {self.system} CA bundle does not exist: {selected}"
+                ) from error
+            if not ca_bundle.is_file():
+                raise ConfigurationError(
+                    f"connector {self.system} CA bundle does not exist: {selected}"
+                )
+        return base_url.rstrip("/"), ca_bundle
+
+    def capture_execution_target(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> ResolvedExecutionTarget:
+        """Capture the destination and immutable CA bytes used by live TLS."""
+
+        base_url, ca_bundle = self.resolve_execution_target(environ)
+        return ResolvedExecutionTarget(
+            system=self.system,
+            config_identity=self.identity,
+            base_url=base_url,
+            ca_bundle=(capture_ca_bundle(ca_bundle) if ca_bundle is not None else None),
+        )
+
+    def credential_identity(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> str | None:
+        """Return a flow-enforced credential principal for plan approval.
+
+        Basic authentication binds the username the provider authenticates, and
+        Entra client credentials bind the tenant/client pair used to acquire the
+        token. Opaque bearer, delegated, token-file, and application-environment
+        tokens do not expose an independently trustworthy principal. A declared
+        label is not attestation, so live applied execution rejects those modes.
+        """
+
+        if self.auth_mode is AuthMode.NONE:
+            return None
+        source = environ if environ is not None else os.environ
+        if self.auth_mode is AuthMode.BASIC:
+            if not self.username_env:
+                raise ConfigurationError(
+                    f"connector {self.system} requires a Basic-auth username"
+                )
+            username = source.get(self.username_env, "").strip()
+            if not username:
+                raise ConfigurationError(
+                    f"connector {self.system} credential identity requires "
+                    f"environment variable {self.username_env}"
+                )
+            return f"basic:{username}"
+
+        oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
+        if (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
+            tenant_id = _environment_value(source, self.extra, "tenant_id_env")
+            client_id = _environment_value(source, self.extra, "client_id_env")
+            return f"entra-application:tenant={tenant_id};client={client_id}"
+
+        raise ConfigurationError(self.principal_attestation_error() or "")
+
+    def principal_attestation_error(self) -> str | None:
+        """Return why this flow cannot bind a trusted applied-run principal."""
+
+        oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
+        if self.auth_mode in {AuthMode.NONE, AuthMode.BASIC} or (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
+            return None
+        return (
+            f"connector {self.system} uses opaque {self.auth_mode.value}/"
+            f"{oauth_flow} credentials; live applied execution requires a "
+            "provider-verified principal or trusted credential-broker "
+            "attestation, and no such adapter is implemented"
         )
 
     def resolve(
@@ -164,6 +328,7 @@ class ConnectorConfig:
         environ: Mapping[str, str] | None = None,
         *,
         auth_transport: HttpTransport | None = None,
+        execution_target: ResolvedExecutionTarget | None = None,
     ) -> ResolvedConnectorConfig:
         """Resolve environment references into an in-memory connector config.
 
@@ -193,13 +358,13 @@ class ConnectorConfig:
                 + "; ".join(errors)
             )
 
-        base_url = (source.get(self.base_url_env, "") if self.base_url_env else "")
-        base_url = base_url.strip() or (self.base_url or "").strip()
-        if not base_url:
+        target = execution_target or self.capture_execution_target(source)
+        if target.system != self.system or target.config_identity != self.identity:
             raise ConfigurationError(
-                f"connector {self.system} requires a base URL"
+                f"connector {self.system} execution target does not match its config"
             )
-        _validate_base_url(base_url, system=self.system)
+        base_url = target.base_url
+        ca_bundle = target.ca_bundle
 
         username = source.get(self.username_env) if self.username_env else None
         secret = source.get(self.secret_env) if self.secret_env else None
@@ -209,8 +374,11 @@ class ConnectorConfig:
             )
 
         oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
-        token_provider = None
-        if self.auth_mode is AuthMode.OAUTH_APPLICATION and oauth_flow == "client_credentials":
+        token_provider: TokenProvider | None = None
+        if (
+            self.auth_mode is AuthMode.OAUTH_APPLICATION
+            and oauth_flow == "client_credentials"
+        ):
             tenant_id = _environment_value(source, self.extra, "tenant_id_env")
             client_id = _environment_value(source, self.extra, "client_id_env")
             client_secret = _environment_value(source, self.extra, "client_secret_env")
@@ -223,6 +391,7 @@ class ConnectorConfig:
                     scopes=scopes,
                     transport=auth_transport,
                     timeout_seconds=self.timeout_seconds,
+                    ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
                 )
             )
             secret = None
@@ -230,7 +399,11 @@ class ConnectorConfig:
             token_path = Path(_environment_value(source, self.extra, "token_file_env"))
             token_provider = RestrictedTokenFileProvider(token_path)
             secret = None
-        elif self.auth_mode in {AuthMode.BEARER, AuthMode.OAUTH_DELEGATED, AuthMode.OAUTH_APPLICATION}:
+        elif self.auth_mode in {
+            AuthMode.BEARER,
+            AuthMode.OAUTH_DELEGATED,
+            AuthMode.OAUTH_APPLICATION,
+        }:
             if not self.secret_env:
                 raise ConfigurationError(
                     f"connector {self.system} requires a token environment reference"
@@ -248,20 +421,10 @@ class ConnectorConfig:
                 f"connector {self.system} requires an authentication secret"
             )
 
-        ca_bundle = (
-            Path(source[self.ca_bundle_env]).expanduser()
-            if self.ca_bundle_env and source.get(self.ca_bundle_env)
-            else None
-        )
-        if ca_bundle is not None and not ca_bundle.is_file():
-            raise ConfigurationError(
-                f"connector {self.system} CA bundle does not exist: {ca_bundle}"
-            )
-
         return ResolvedConnectorConfig(
             system=self.system,
             deployment=self.deployment,
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             auth=ResolvedAuth(
                 mode=self.auth_mode,
                 username=username,
@@ -272,9 +435,22 @@ class ConnectorConfig:
             max_pages=self.max_pages,
             max_items=self.max_items,
             max_response_bytes=self.max_response_bytes,
-            ca_bundle=ca_bundle,
+            ca_bundle=(ca_bundle.path if ca_bundle is not None else None),
+            ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
+            ca_bundle_sha256=(ca_bundle.sha256 if ca_bundle is not None else None),
             extra=self.extra,
+            config_identity=self.identity,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedExecutionTarget:
+    """One captured connector destination before credentials are resolved."""
+
+    system: str
+    config_identity: str
+    base_url: str
+    ca_bundle: CaBundleSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,9 +466,28 @@ class ResolvedConnectorConfig:
     max_items: int = 200
     max_response_bytes: int = 10 * 1024 * 1024
     ca_bundle: Path | None = None
+    ca_bundle_data: bytes | None = field(default=None, repr=False)
+    ca_bundle_sha256: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+    config_identity: str | None = None
 
     def __post_init__(self) -> None:
+        if self.ca_bundle is not None and self.ca_bundle_data is None:
+            snapshot = capture_ca_bundle(self.ca_bundle)
+            object.__setattr__(self, "ca_bundle", snapshot.path)
+            object.__setattr__(self, "ca_bundle_data", snapshot.data)
+            object.__setattr__(self, "ca_bundle_sha256", snapshot.sha256)
+        elif self.ca_bundle_data is not None:
+            digest = hashlib.sha256(self.ca_bundle_data).hexdigest()
+            if self.ca_bundle_sha256 is not None and self.ca_bundle_sha256 != digest:
+                raise ConfigurationError(
+                    "resolved connector CA data does not match its digest"
+                )
+            object.__setattr__(self, "ca_bundle_sha256", digest)
+        elif self.ca_bundle_sha256 is not None:
+            raise ConfigurationError(
+                "resolved connector CA digest requires captured data"
+            )
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
 
 
@@ -301,6 +496,7 @@ class IntegrationConfig:
     """Collection of connector configurations."""
 
     connectors: Mapping[str, ConnectorConfig]
+    source_sha256: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -326,7 +522,8 @@ class IntegrationConfig:
 
         try:
             with path.open("rb") as handle:
-                raw = tomllib.load(handle)
+                payload = handle.read()
+            raw = tomllib.loads(payload.decode("utf-8"))
         except FileNotFoundError as error:
             raise ConfigurationError(
                 f"integration configuration not found: {path}"
@@ -338,11 +535,12 @@ class IntegrationConfig:
         parsed: dict[str, ConnectorConfig] = {}
         for system, value in raw_connectors.items():
             if not isinstance(value, Mapping):
-                raise ConfigurationError(
-                    f"connector config must be a table: {system}"
-                )
+                raise ConfigurationError(f"connector config must be a table: {system}")
             parsed[str(system)] = _parse_connector(str(system), value)
-        return cls(connectors=parsed)
+        return cls(
+            connectors=parsed,
+            source_sha256=hashlib.sha256(payload).hexdigest(),
+        )
 
     def connector(self, system: str) -> ConnectorConfig:
         """Return one configured connector.
@@ -381,7 +579,9 @@ def _parse_connector(
     system: str,
     raw: Mapping[str, Any],
 ) -> ConnectorConfig:
-    extra = {key: value for key, value in raw.items() if key not in _KNOWN_CONNECTOR_KEYS}
+    extra = {
+        key: value for key, value in raw.items() if key not in _KNOWN_CONNECTOR_KEYS
+    }
     try:
         deployment = DeploymentType(str(raw.get("deployment", "cloud")))
         auth_mode = AuthMode(str(raw.get("auth_mode", "none")))
@@ -390,7 +590,7 @@ def _parse_connector(
             f"invalid deployment or auth mode for connector {system}"
         ) from error
 
-    return ConnectorConfig(
+    connector = ConnectorConfig(
         system=system,
         enabled=_strict_bool(raw.get("enabled", False), f"connector {system} enabled"),
         deployment=deployment,
@@ -406,6 +606,8 @@ def _parse_connector(
         max_response_bytes=int(raw.get("max_response_bytes", 10 * 1024 * 1024)),
         extra=extra,
     )
+    _validate_environment_references(connector)
+    return connector
 
 
 def _environment_value(
@@ -418,9 +620,7 @@ def _environment_value(
         raise ConfigurationError(f"missing environment reference: {key}")
     value = source.get(variable.strip(), "").strip()
     if not value:
-        raise ConfigurationError(
-            f"environment variable {variable.strip()} is missing"
-        )
+        raise ConfigurationError(f"environment variable {variable.strip()} is missing")
     return value
 
 
@@ -434,17 +634,134 @@ def _optional_string(value: Any) -> str | None:
 def _validate_base_url(base_url: str, *, system: str) -> None:
     parsed = urlparse(base_url)
     if parsed.scheme not in {"https", "http"} or not parsed.hostname:
-        raise ConfigurationError(
-            f"connector {system} has an invalid base URL"
-        )
+        raise ConfigurationError(f"connector {system} has an invalid base URL")
     if parsed.username or parsed.password:
         raise ConfigurationError(
             f"connector {system} base URL must not contain credentials"
+        )
+    if "?" in base_url or "#" in base_url:
+        raise ConfigurationError(
+            f"connector {system} base URL must not contain a query or fragment"
         )
     if parsed.scheme != "https":
         raise ConfigurationError(
             f"connector {system} must use HTTPS; terminate TLS before this client"
         )
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ConfigurationError(
+            f"connector {system} base URL must not use a private or reserved address"
+        )
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
+        ".local"
+    ):
+        raise ConfigurationError(
+            f"connector {system} base URL must not use a local hostname"
+        )
+
+
+def _validate_provider_origin(
+    base_url: str,
+    *,
+    system: str,
+    deployment: DeploymentType,
+) -> None:
+    """Constrain cloud credentials to the provider's owned API domains."""
+
+    if deployment is not DeploymentType.CLOUD:
+        return
+    hostname = (urlparse(base_url).hostname or "").lower().rstrip(".")
+    valid = True
+    if system in {"jira", "confluence"}:
+        valid = hostname.endswith(".atlassian.net") and hostname != "atlassian.net"
+    elif system == "bitbucket":
+        valid = hostname == "api.bitbucket.org"
+    elif system == "microsoft":
+        valid = hostname in {
+            "graph.microsoft.com",
+            "graph.microsoft.us",
+            "dod-graph.microsoft.us",
+            "microsoftgraph.chinacloudapi.cn",
+        }
+    if not valid:
+        raise ConfigurationError(
+            f"connector {system} cloud base URL is outside approved provider origins"
+        )
+
+
+_ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
+    "jira": {
+        "base_url_env": frozenset({"MASTER_AGENT_JIRA_BASE_URL"}),
+        "username_env": frozenset({"MASTER_AGENT_JIRA_USERNAME"}),
+        "secret_env": frozenset({"MASTER_AGENT_JIRA_TOKEN"}),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
+    },
+    "confluence": {
+        "base_url_env": frozenset({"MASTER_AGENT_CONFLUENCE_BASE_URL"}),
+        "username_env": frozenset({"MASTER_AGENT_CONFLUENCE_USERNAME"}),
+        "secret_env": frozenset({"MASTER_AGENT_CONFLUENCE_TOKEN"}),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
+    },
+    "bitbucket": {
+        "base_url_env": frozenset({"MASTER_AGENT_BITBUCKET_BASE_URL"}),
+        "username_env": frozenset({"MASTER_AGENT_BITBUCKET_USERNAME"}),
+        "secret_env": frozenset({"MASTER_AGENT_BITBUCKET_TOKEN"}),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
+        "repository_root_env": frozenset({"MASTER_AGENT_REPOSITORY_ROOT"}),
+    },
+    "microsoft": {
+        "base_url_env": frozenset({"MASTER_AGENT_GRAPH_BASE_URL"}),
+        "secret_env": frozenset({"MASTER_AGENT_GRAPH_ACCESS_TOKEN"}),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
+        "token_file_env": frozenset({"MASTER_AGENT_GRAPH_TOKEN_FILE"}),
+        "token_expires_at_env": frozenset(
+            {"MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT"}
+        ),
+        "tenant_id_env": frozenset({"MASTER_AGENT_ENTRA_TENANT_ID"}),
+        "client_id_env": frozenset(
+            {"MASTER_AGENT_ENTRA_APP_CLIENT_ID", "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"}
+        ),
+        "client_secret_env": frozenset({"MASTER_AGENT_ENTRA_APP_CLIENT_SECRET"}),
+    },
+}
+
+
+def _validate_environment_references(config: ConnectorConfig) -> None:
+    """Reject configuration that can select unrelated process secrets."""
+
+    allowed = _ALLOWED_ENVIRONMENT_REFERENCES.get(config.system)
+    references: dict[str, str | None] = {
+        "base_url_env": config.base_url_env,
+        "username_env": config.username_env,
+        "secret_env": config.secret_env,
+        "ca_bundle_env": config.ca_bundle_env,
+    }
+    for key in (
+        "repository_root_env",
+        "token_file_env",
+        "token_expires_at_env",
+        "tenant_id_env",
+        "client_id_env",
+        "client_secret_env",
+    ):
+        value = config.extra.get(key)
+        references[key] = str(value).strip() if isinstance(value, str) else None
+    configured = {key: value for key, value in references.items() if value}
+    if not configured:
+        return
+    if allowed is None:
+        raise ConfigurationError(
+            f"connector {config.system} cannot reference process environment credentials"
+        )
+    for key, value in configured.items():
+        if value not in allowed.get(key, frozenset()):
+            raise ConfigurationError(
+                f"connector {config.system} has an unapproved {key} reference"
+            )
 
 
 def _strict_bool(value: Any, name: str) -> bool:

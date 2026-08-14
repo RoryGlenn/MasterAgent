@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+import re
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from master_agent.models import ExecutionResult
-
 
 _SENSITIVE_KEYS = {
     "authorization",
@@ -19,6 +20,22 @@ _SENSITIVE_KEYS = {
     "secret",
     "password",
     "client_secret",
+}
+
+_KNOWN_ERROR_CODES = {
+    "ApprovalRequiredError": "approval_required",
+    "AuthenticationError": "authentication_failed",
+    "AuthorizationError": "authorization_failed",
+    "ConfigurationError": "configuration_failed",
+    "ConnectorError": "connector_failed",
+    "ConnectorHttpError": "connector_http_failed",
+    "HttpRequestError": "http_request_failed",
+    "PolicyDeniedError": "policy_denied",
+    "RateLimitError": "rate_limited",
+    "ResourceNotFoundError": "resource_not_found",
+    "ValidationError": "validation_failed",
+    "VerificationError": "verification_failed",
+    "VersionConflictError": "version_conflict",
 }
 
 
@@ -46,9 +63,6 @@ def content_digest(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-
-
-
 def result_audit_summary(result: ExecutionResult) -> dict[str, Any]:
     """Build a low-content audit summary for a connector result.
 
@@ -60,9 +74,28 @@ def result_audit_summary(result: ExecutionResult) -> dict[str, Any]:
         "action_id": str(result.action_id),
         "state": str(result.state),
         "connector_reference": _reference_summary(result.connector_reference),
-        "message": result.message,
+        **audit_message_metadata(result.message, default_code="connector_result"),
         "before": _mapping_summary(result.before),
         "after": _mapping_summary(result.after),
+    }
+
+
+def audit_message_metadata(
+    message: str,
+    *,
+    default_code: str,
+) -> dict[str, Any]:
+    """Return a stable reason code and digest without persisting free-form text."""
+
+    prefix = message.split(":", 1)[0].strip()
+    reason_code = _KNOWN_ERROR_CODES.get(prefix, default_code)
+    if message.casefold().startswith("verification failed"):
+        reason_code = "verification_failed"
+    reason_code = re.sub(r"[^a-z0-9_]+", "_", reason_code.casefold()).strip("_")
+    return {
+        "reason_code": reason_code or "unspecified",
+        "message_digest": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+        "message_length": len(message),
     }
 
 
@@ -103,7 +136,7 @@ def redact_secrets(value: Any) -> Any:
 def _mapping_summary(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if value is None:
         return None
-    keys = sorted(str(key) for key in value.keys())
+    keys = sorted(str(key) for key in value)
     summary: dict[str, Any] = {
         "digest": content_digest(redact_secrets(value)),
         "keys": keys[:50],

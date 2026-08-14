@@ -2,26 +2,41 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from email.message import Message
+import http.client
+import ipaddress
 import json
-from pathlib import Path
+import re
+import socket
 import ssl
 import time
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
+from email.message import Message
+from http.client import HTTPMessage
+from pathlib import Path
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import ParseResult, urlencode, urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from master_agent.errors import (
     AuthenticationError,
     AuthorizationError,
+    ConfigurationError,
     ConnectorError,
     ConnectorHttpError,
-    ConfigurationError,
     RateLimitError,
     ResourceNotFoundError,
 )
+from master_agent.trust_store import capture_ca_bundle
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +55,7 @@ class HttpResponse:
             return json.loads(self.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ConnectorHttpError(
-                f"response from {self.url} was not valid JSON"
+                f"response from {_safe_url(self.url)} was not valid JSON"
             ) from error
 
     def text(self, encoding: str = "utf-8") -> str:
@@ -50,8 +65,131 @@ class HttpResponse:
             return self.body.decode(encoding)
         except UnicodeDecodeError as error:
             raise ConnectorHttpError(
-                f"response from {self.url} was not valid {encoding} text"
+                f"response from {_safe_url(self.url)} was not valid {encoding} text"
             ) from error
+
+
+@dataclass(slots=True)
+class HttpActionBudget:
+    """One shared request/response budget for a connector action."""
+
+    max_requests: int
+    max_response_bytes: int
+    requests_used: int = 0
+    response_bytes_used: int = 0
+
+    @property
+    def remaining_response_bytes(self) -> int:
+        """Return bytes still available to every nested request."""
+
+        return self.max_response_bytes - self.response_bytes_used
+
+    def reserve_request(self) -> None:
+        """Reserve one network attempt, including retries."""
+
+        if self.requests_used >= self.max_requests:
+            raise ConnectorHttpError(
+                "connector action exceeded its global request/page budget"
+            )
+        self.requests_used += 1
+
+    def record_response(self, size: int) -> None:
+        """Account for response bytes and reject aggregate overages."""
+
+        if size < 0 or size > self.remaining_response_bytes:
+            raise ConnectorHttpError(
+                "connector action exceeded its global response-byte budget"
+            )
+        self.response_bytes_used += size
+
+
+_ACTION_BUDGET: ContextVar[HttpActionBudget | None] = ContextVar(
+    "master_agent_http_action_budget",
+    default=None,
+)
+
+
+@contextmanager
+def http_action_budget(
+    *,
+    max_requests: int,
+    max_response_bytes: int,
+) -> Iterator[HttpActionBudget]:
+    """Apply one budget across pagination, enrichment, downloads, and retries."""
+
+    if max_requests <= 0 or max_response_bytes <= 0:
+        raise ConfigurationError("HTTP action budgets must be positive")
+    existing = _ACTION_BUDGET.get()
+    if existing is not None:
+        yield existing
+        return
+    budget = HttpActionBudget(
+        max_requests=max_requests,
+        max_response_bytes=max_response_bytes,
+    )
+    token = _ACTION_BUDGET.set(budget)
+    try:
+        yield budget
+    finally:
+        _ACTION_BUDGET.reset(token)
+
+
+@contextmanager
+def activate_http_action_budget(
+    budget: HttpActionBudget | None,
+) -> Iterator[HttpActionBudget | None]:
+    """Activate a retained budget for another phase of the same action.
+
+    The orchestrator retains one mutable budget from execution through
+    verification and any later compensation. Nested connector helpers reuse
+    that same object, so entering another phase cannot reset page, request, or
+    response-byte counters.
+    """
+
+    if budget is None:
+        yield None
+        return
+    existing = _ACTION_BUDGET.get()
+    if existing is budget:
+        yield budget
+        return
+    if existing is not None:
+        raise ConfigurationError("cannot replace an active HTTP action budget")
+    token = _ACTION_BUDGET.set(budget)
+    try:
+        yield budget
+    finally:
+        _ACTION_BUDGET.reset(token)
+
+
+def connector_http_action_budget(connector: object) -> HttpActionBudget | None:
+    """Create the production lifecycle budget for one configured connector.
+
+    Local-only connectors have no resolved integration configuration and do
+    not receive an HTTP budget. Every live read or write connector stores its
+    validated ``ResolvedConnectorConfig`` as ``_config``.
+    """
+
+    config = getattr(connector, "_config", None)
+    if config is None:
+        return None
+    max_requests = getattr(config, "max_pages", None)
+    max_response_bytes = getattr(config, "max_response_bytes", None)
+    if (
+        not isinstance(max_requests, int)
+        or isinstance(max_requests, bool)
+        or max_requests <= 0
+        or not isinstance(max_response_bytes, int)
+        or isinstance(max_response_bytes, bool)
+        or max_response_bytes <= 0
+    ):
+        raise ConfigurationError(
+            "live connector HTTP action budgets must be positive integers"
+        )
+    return HttpActionBudget(
+        max_requests=max_requests,
+        max_response_bytes=max_response_bytes,
+    )
 
 
 class HttpTransport(Protocol):
@@ -79,7 +217,7 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
         fp: Any,
         code: int,
         msg: str,
-        headers: Message,
+        headers: HTTPMessage,
         newurl: str,
     ) -> Request | None:
         old_origin = _origin(urlparse(req.full_url))
@@ -91,15 +229,102 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect TLS to an already-vetted address while preserving SNI."""
+
+    _context: ssl.SSLContext
+    _tunnel_host: str | None
+    source_address: tuple[str, int] | None
+
+    def connect(self) -> None:
+        """Resolve once, vet every candidate, and connect only by sockaddr."""
+
+        if self._tunnel_host is not None:
+            raise ConnectorHttpError("HTTP proxy tunneling is disabled")
+        raw_socket, approved_address = _connect_public_address(
+            self.host,
+            self.port,
+            timeout=self.timeout,
+            source_address=self.source_address,
+        )
+        try:
+            wrapped = self._context.wrap_socket(
+                raw_socket,
+                server_hostname=self.host,
+            )
+        except Exception:
+            raw_socket.close()
+            raise
+        try:
+            peer_address = ipaddress.ip_address(wrapped.getpeername()[0])
+        except (OSError, ValueError) as error:
+            wrapped.close()
+            raise ConnectorHttpError(
+                "TLS peer address could not be verified"
+            ) from error
+        if peer_address != approved_address:
+            wrapped.close()
+            raise ConnectorHttpError("TLS peer did not match the vetted destination")
+        self.sock = wrapped
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    """urllib handler that uses a DNS-pinned HTTPS connection."""
+
+    _context: ssl.SSLContext
+
+    def https_open(self, req: Request) -> Any:
+        """Open one request through the pinned connection implementation."""
+
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=self._context,
+        )
+
+
+def _create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
+    """Create TLS trust from immutable captured data, never from a live path."""
+
+    if ca_bundle_data is None:
+        return ssl.create_default_context()
+    try:
+        try:
+            certificate_data: str | bytes = ca_bundle_data.decode("ascii")
+        except UnicodeDecodeError:
+            # ``ssl`` accepts binary DER certificates as bytes and PEM as text.
+            certificate_data = ca_bundle_data
+        return ssl.create_default_context(cadata=certificate_data)
+    except (ValueError, ssl.SSLError) as error:
+        raise ConfigurationError(
+            "connector CA bundle is not valid certificate data"
+        ) from error
+
+
 class UrllibTransport:
     """Standard-library HTTP transport with same-origin redirects."""
 
-    def __init__(self, *, ca_bundle: Path | None = None) -> None:
-        context = ssl.create_default_context(
-            cafile=str(ca_bundle) if ca_bundle is not None else None
+    def __init__(
+        self,
+        *,
+        ca_bundle: Path | None = None,
+        ca_bundle_data: bytes | None = None,
+    ) -> None:
+        if ca_bundle is not None and ca_bundle_data is not None:
+            raise ConfigurationError(
+                "CA bundle path and captured data are mutually exclusive"
+            )
+        captured_data = (
+            capture_ca_bundle(ca_bundle).data
+            if ca_bundle is not None
+            else ca_bundle_data
         )
+        context = _create_ssl_context(captured_data)
         self._opener = build_opener(
-            HTTPSHandler(context=context),
+            # Never inherit HTTP(S)_PROXY, macOS System Configuration proxies,
+            # or credentials embedded in ambient proxy settings.
+            ProxyHandler({}),
+            _PinnedHTTPSHandler(context=context),
             _SameOriginRedirectHandler(),
         )
 
@@ -115,6 +340,7 @@ class UrllibTransport:
     ) -> HttpResponse:
         """Perform one bounded HTTP request."""
 
+        _require_public_https_destination(url)
         request = Request(
             url=url,
             data=body,
@@ -141,9 +367,8 @@ class UrllibTransport:
         except ConnectorHttpError:
             raise
         except URLError as error:
-            reason = getattr(error, "reason", error)
             raise ConnectorHttpError(
-                f"network request failed for {_safe_url(url)}: {reason}"
+                f"network request failed for {_safe_url(url)}"
             ) from error
         except TimeoutError as error:
             raise ConnectorHttpError(
@@ -185,6 +410,7 @@ class SafeHttpClient:
         max_response_bytes: int = 10 * 1024 * 1024,
         retry_attempts: int = 2,
         ca_bundle: Path | None = None,
+        ca_bundle_data: bytes | None = None,
         allowed_methods: frozenset[str] = frozenset({"GET", "HEAD"}),
     ) -> None:
         self._base_url = base_url.rstrip("/") + "/"
@@ -193,6 +419,10 @@ class SafeHttpClient:
             raise ConfigurationError("connector HTTP clients require an HTTPS base URL")
         if parsed.username or parsed.password:
             raise ConfigurationError("connector base URL must not include credentials")
+        if "?" in base_url or "#" in base_url:
+            raise ConfigurationError(
+                "connector base URL must not include a query or fragment"
+            )
         self._origin = _origin(parsed)
         self._headers = {
             "Accept": "application/json",
@@ -200,13 +430,18 @@ class SafeHttpClient:
             **dict(default_headers or {}),
         }
         self._header_provider = header_provider
-        self._transport = transport or UrllibTransport(ca_bundle=ca_bundle)
+        if ca_bundle is not None and ca_bundle_data is not None:
+            raise ConfigurationError(
+                "CA bundle path and captured data are mutually exclusive"
+            )
+        self._transport = transport or UrllibTransport(
+            ca_bundle=ca_bundle,
+            ca_bundle_data=ca_bundle_data,
+        )
         self._timeout_seconds = timeout_seconds
         self._max_response_bytes = max_response_bytes
         self._retry_attempts = max(0, retry_attempts)
-        self._allowed_methods = frozenset(
-            method.upper() for method in allowed_methods
-        )
+        self._allowed_methods = frozenset(method.upper() for method in allowed_methods)
         if not self._allowed_methods:
             raise ConfigurationError("allowed_methods must not be empty")
 
@@ -267,7 +502,6 @@ class SafeHttpClient:
         )
         return response.json(), response
 
-
     def request_form(
         self,
         method: str,
@@ -317,9 +551,7 @@ class SafeHttpClient:
             )
         url = self.resolve_url(path_or_url, query=query)
         dynamic_headers = (
-            dict(self._header_provider())
-            if self._header_provider is not None
-            else {}
+            dict(self._header_provider()) if self._header_provider is not None else {}
         )
         request_headers = {
             **self._headers,
@@ -348,14 +580,32 @@ class SafeHttpClient:
 
         attempts = self._retry_attempts + 1
         for attempt in range(attempts):
+            budget = _ACTION_BUDGET.get()
+            if budget is not None:
+                budget.reserve_request()
+                remaining = budget.remaining_response_bytes
+                if remaining <= 0:
+                    raise ConnectorHttpError(
+                        "connector action exceeded its global response-byte budget"
+                    )
+                request_max_bytes = min(effective_max_bytes, remaining)
+            else:
+                request_max_bytes = effective_max_bytes
             response = self._transport.request(
                 method=normalized_method,
                 url=url,
                 headers=request_headers,
                 body=request_body,
                 timeout_seconds=self._timeout_seconds,
-                max_response_bytes=effective_max_bytes,
+                max_response_bytes=request_max_bytes,
             )
+            if _origin(urlparse(response.url)) != self._origin:
+                raise ConnectorHttpError(
+                    "connector transport returned a response outside its configured origin"
+                )
+            if budget is not None:
+                budget.record_response(len(response.body))
+            response = replace(response, url=_safe_url(response.url))
             if 200 <= response.status < 300 or response.status in accepted_statuses:
                 return response
             can_retry = (
@@ -431,9 +681,7 @@ def download_public_https(
         hostname == suffix.lstrip(".") or hostname.endswith(suffix)
         for suffix in normalized_suffixes
     ):
-        raise ConnectorHttpError(
-            f"download host is not allowlisted: {hostname}"
-        )
+        raise ConnectorHttpError(f"download host is not allowlisted: {hostname}")
     client = SafeHttpClient(
         base_url=f"https://{parsed.netloc}",
         default_headers={"Accept": "*/*"},
@@ -447,6 +695,8 @@ def download_public_https(
 
 def _read_bounded(stream: Any, max_bytes: int) -> bytes:
     payload = stream.read(max_bytes + 1)
+    if not isinstance(payload, bytes):
+        raise ConnectorHttpError("HTTP transport returned a non-bytes response")
     if len(payload) > max_bytes:
         raise ConnectorHttpError(
             f"response exceeded configured limit of {max_bytes} bytes"
@@ -490,16 +740,17 @@ def _retry_delay_seconds(response: HttpResponse, attempt: int) -> float:
             return min(max(float(retry_after), 0.0), 5.0)
         except ValueError:
             pass
-    return min(0.25 * (2**attempt), 2.0)
+    return min(0.25 * (2.0**attempt), 2.0)
 
 
 def _http_error(response: HttpResponse) -> ConnectorError:
-    request_id = (
+    raw_request_id = (
         response.headers.get("x-request-id")
         or response.headers.get("request-id")
         or response.headers.get("x-arequestid")
         or response.headers.get("x-b3-traceid")
     )
+    request_id = _safe_diagnostic_identifier(raw_request_id)
     suffix = f" request_id={request_id}" if request_id else ""
     message = f"HTTP {response.status} from {_safe_url(response.url)}{suffix}"
     if response.status == 401:
@@ -527,6 +778,103 @@ def _http_error(response: HttpResponse) -> ConnectorError:
 def _safe_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed._replace(query="", fragment="").geturl()
+
+
+_DIAGNOSTIC_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def _safe_diagnostic_identifier(value: str | None) -> str | None:
+    """Return a bounded opaque identifier, never arbitrary provider text."""
+
+    if value is None:
+        return None
+    rendered = value.strip()
+    return rendered if _DIAGNOSTIC_IDENTIFIER_RE.fullmatch(rendered) else None
+
+
+def _require_public_https_destination(url: str) -> None:
+    """Reject private/reserved destinations immediately before I/O."""
+
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not hostname:
+        raise ConnectorHttpError("network destination must be public HTTPS")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
+        ".local"
+    ):
+        raise ConnectorHttpError("private or local network destination rejected")
+    try:
+        literal = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not literal.is_global:
+            raise ConnectorHttpError("private or reserved network destination rejected")
+        return
+    _public_address_records(hostname, parsed.port or 443, diagnostic_url=url)
+
+
+def _public_address_records(
+    hostname: str,
+    port: int,
+    *,
+    diagnostic_url: str | None = None,
+) -> tuple[tuple[Any, ...], ...]:
+    """Resolve and return only a wholly public set of socket addresses."""
+
+    try:
+        records = tuple(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+    except OSError as error:
+        target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
+        raise ConnectorHttpError(
+            f"network destination could not be resolved for {target}"
+        ) from error
+    if not records:
+        target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
+        raise ConnectorHttpError(
+            f"network destination could not be resolved for {target}"
+        )
+    for record in records:
+        try:
+            address = ipaddress.ip_address(record[4][0])
+        except (IndexError, ValueError) as error:
+            raise ConnectorHttpError(
+                "network resolver returned an invalid address"
+            ) from error
+        if not address.is_global:
+            raise ConnectorHttpError("private or reserved network destination rejected")
+    return records
+
+
+def _connect_public_address(
+    hostname: str,
+    port: int,
+    *,
+    timeout: object,
+    source_address: tuple[str, int] | None,
+) -> tuple[socket.socket, ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Connect directly to a vetted resolver result without resolving again."""
+
+    records = _public_address_records(hostname.rstrip("."), port)
+    last_error: OSError | None = None
+    for family, socktype, protocol, _, sockaddr in records:
+        candidate = socket.socket(family, socktype, protocol)
+        try:
+            if timeout is None:
+                candidate.settimeout(None)
+            elif isinstance(timeout, (int, float)):
+                candidate.settimeout(float(timeout))
+            if source_address is not None:
+                candidate.bind(source_address)
+            candidate.connect(sockaddr)
+            approved_address = ipaddress.ip_address(sockaddr[0])
+            return candidate, approved_address
+        except OSError as error:
+            last_error = error
+            candidate.close()
+    raise ConnectorHttpError(
+        "network request could not connect to a vetted public destination"
+    ) from last_error
 
 
 def _looks_like_ip(hostname: str) -> bool:

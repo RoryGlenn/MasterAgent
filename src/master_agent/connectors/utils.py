@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
 from master_agent.errors import ConnectorError, VersionConflictError
@@ -88,11 +89,18 @@ def quote_segment(value: str) -> str:
 
 
 def safe_graph_resource_id(value: str) -> str:
-    """Validate a Microsoft Graph resource identifier used in a path."""
+    """Encode exactly one Microsoft Graph resource identifier path segment."""
 
-    if not value or any(token in value for token in ("..", "?", "#", "\\")):
+    rendered = value.strip()
+    if (
+        not rendered
+        or rendered in {".", ".."}
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F for character in rendered
+        )
+    ):
         raise ConnectorError("unsafe Microsoft Graph resource identifier")
-    return value.lstrip("/")
+    return quote_segment(rendered)
 
 
 def absolute_web_url(base_url: str, candidate: str | None) -> str | None:

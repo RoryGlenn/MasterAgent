@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
+import fcntl
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Sequence
+import tempfile
+from collections.abc import Sequence
+from contextlib import ExitStack
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
+from master_agent.approvals import HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.citations import find_citations
+from master_agent.compensation import build_compensation_plan
 from master_agent.config import IntegrationConfig
-from master_agent.config_sources import resolve_config_source
+from master_agent.config_sources import ConfigSource, resolve_config_source
+from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
@@ -24,7 +31,19 @@ from master_agent.connectors.factory import (
 )
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.discovery import DiscoveryStatus, discover_integrations
+from master_agent.errors import (
+    ConfigurationError,
+    MasterAgentError,
+    StructuredDataTypeError,
+)
+from master_agent.execution_context import (
+    build_execution_context,
+    build_runtime_execution_binding,
+    capture_runtime_execution_paths,
+    enforce_execution_context,
+)
 from master_agent.governance import GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import Approval, ChangePlan
@@ -32,39 +51,57 @@ from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.plugins import (
+    PluginLock,
+    discover_connector_plugins,
+    resolve_locked_plugin_descriptors,
+)
 from master_agent.policy import PolicyConfig, PolicyEngine
-from master_agent.plugins import discover_connector_plugins, load_connector_plugins
 from master_agent.readiness import assess_readiness
 from master_agent.recurring import (
     RecurringConfig,
-    RecurringRunResult,
     RecurringRunner,
+    RecurringRunResult,
     RegisteredWorkflow,
     WorkflowKind,
     validate_plan_scope,
 )
 from master_agent.registry import ConnectorRegistry
 from master_agent.retention import (
+    RetainedJSONReservation,
     RetentionConfig,
     purge_expired_evidence,
     write_retained_json,
 )
 from master_agent.security import PromptInjectionGuard
-from master_agent.compensation import build_compensation_plan
-from master_agent.workflows.draft_package import (
-    DraftPackageSettings,
-    build_draft_package_plan,
-    render_draft_package,
-)
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
     build_communication_context_plan,
     render_communication_context_package,
 )
+from master_agent.workflows.draft_package import (
+    DraftPackageSettings,
+    build_draft_package_plan,
+    render_draft_package,
+)
 from master_agent.workflows.weekly_status import (
     WeeklyStatusSettings,
     build_weekly_status_read_plan,
     render_weekly_status_package,
+)
+
+_DISABLED_LOCAL_GIT_MUTATIONS = frozenset(
+    {
+        "bitbucket.branch.push",
+        "repository.branch.create",
+        "repository.branch.push",
+        "repository.commit.create",
+        "repository.patch.apply",
+    }
+)
+
+_DISABLED_NON_MANIFEST_EXECUTIONS = frozenset(
+    {"communication-context", "recurring-run", "weekly-status"}
 )
 
 
@@ -78,11 +115,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _sample_plan(args.output)
         if args.command == "inspect":
             return _inspect(args.plan)
+        if args.command == "bind-context":
+            return _bind_context(
+                plan_path=args.plan,
+                integrations_path=args.integrations,
+                plugin_names=args.plugin,
+                plugin_lock_path=args.plugin_lock,
+                connector_mode=args.connector_mode,
+                approval_authorities=args.approval_authorities,
+                database=args.database,
+                result_json=args.result_json,
+                retention_path=args.retention,
+                evidence_type=args.evidence_type,
+                identities_path=args.identities,
+                include_writes=args.enable_writes,
+                include_communications=args.enable_communications,
+                workspace_root=args.workspace_root,
+                draft_output_dir=args.draft_output_dir,
+                policy_path=args.policy,
+                sources_of_truth_path=args.sources_of_truth,
+                capabilities_path=args.capabilities,
+                governance_path=args.governance,
+                output=args.output,
+            )
         if args.command == "approve":
             return _approve(
                 plan_path=args.plan,
                 actions=args.actions,
-                approver=args.approver,
+                key_id=args.key_id,
+                expected_fingerprint=args.expected_fingerprint,
+                approval_authorities=args.approval_authorities,
                 output=args.output,
                 ttl_minutes=args.ttl_minutes,
             )
@@ -91,6 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plan_path=args.plan,
                 apply=args.apply,
                 approval_paths=args.approval,
+                approval_authorities=args.approval_authorities,
                 database=args.database,
                 connector_mode=args.connector_mode,
                 integrations_path=args.integrations,
@@ -104,7 +167,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 draft_output_dir=args.draft_output_dir,
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
+                policy_path=args.policy,
+                sources_of_truth_path=args.sources_of_truth,
                 plugin_names=args.plugin,
+                plugin_lock_path=args.plugin_lock,
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
@@ -114,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
                 oauth_path=args.oauth,
+                identities_path=args.identities,
                 output=args.output,
             )
         if args.command == "oauth-device-code":
@@ -210,7 +277,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "audit-verify":
             return _audit_verify(args.database)
         parser.error("unknown command")
-    except Exception as error:
+    except (
+        KeyError,
+        MasterAgentError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"error: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
 
@@ -232,13 +306,61 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="inspect a plan")
     inspect.add_argument("plan", type=Path)
 
+    bind_context = subparsers.add_parser(
+        "bind-context",
+        help="bind the complete reviewed apply-time runtime into a plan",
+    )
+    bind_context.add_argument("plan", type=Path)
+    bind_context.add_argument("--integrations", type=Path, default=None)
+    bind_context.add_argument(
+        "--connector-mode",
+        choices=("mock", "live"),
+        default="live",
+    )
+    bind_context.add_argument("--approval-authorities", type=Path)
+    bind_context.add_argument(
+        "--database",
+        type=Path,
+        default=Path(".master-agent/audit.sqlite3"),
+    )
+    bind_context.add_argument("--result-json", type=Path)
+    bind_context.add_argument("--retention", type=Path, default=None)
+    bind_context.add_argument("--evidence-type", default="run-result/full")
+    bind_context.add_argument("--identities", type=Path, default=None)
+    bind_context.add_argument("--enable-writes", action="store_true")
+    bind_context.add_argument("--enable-communications", action="store_true")
+    bind_context.add_argument("--workspace-root", type=Path)
+    bind_context.add_argument(
+        "--draft-output-dir",
+        type=Path,
+        default=Path(".master-agent/drafts"),
+    )
+    bind_context.add_argument("--policy", type=Path, default=None)
+    bind_context.add_argument("--sources-of-truth", type=Path, default=None)
+    bind_context.add_argument("--capabilities", type=Path, default=None)
+    bind_context.add_argument("--governance", type=Path, default=None)
+    bind_context.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        help="exact connector entry-point name to bind",
+    )
+    bind_context.add_argument(
+        "--plugin-lock",
+        type=Path,
+        help="explicit operator-reviewed plugin lock produced by 'plugins --output'",
+    )
+    bind_context.add_argument("--output", type=Path, required=True)
+
     approve = subparsers.add_parser(
         "approve",
         help="create an approval bound to an exact plan and action IDs",
     )
     approve.add_argument("plan", type=Path)
     approve.add_argument("--actions", required=True)
-    approve.add_argument("--approver", required=True)
+    approve.add_argument("--key-id", required=True)
+    approve.add_argument("--expected-fingerprint", required=True)
+    approve.add_argument("--approval-authorities", type=Path, required=True)
     approve.add_argument("--output", type=Path, required=True)
     approve.add_argument("--ttl-minutes", type=int, default=30)
 
@@ -253,6 +375,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--integrations", type=Path, default=None)
     run.add_argument("--identities", type=Path, default=None)
     run.add_argument("--approval", type=Path, action="append", default=[])
+    run.add_argument(
+        "--approval-authorities",
+        type=Path,
+        help="explicit trusted approval-authority key ring",
+    )
     run.add_argument(
         "--database",
         type=Path,
@@ -288,11 +415,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--capabilities", type=Path, default=None)
     run.add_argument("--governance", type=Path, default=None)
+    run.add_argument("--policy", type=Path, default=None)
+    run.add_argument("--sources-of-truth", type=Path, default=None)
     run.add_argument(
         "--plugin",
         action="append",
         default=[],
         help="explicit connector entry-point name to load during --apply",
+    )
+    run.add_argument(
+        "--plugin-lock",
+        type=Path,
+        help="explicit operator-reviewed lock for every selected connector plugin",
     )
 
     plugins = subparsers.add_parser(
@@ -309,6 +443,7 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--capabilities", type=Path, default=None)
     readiness.add_argument("--governance", type=Path, default=None)
     readiness.add_argument("--oauth", type=Path, default=None)
+    readiness.add_argument("--identities", type=Path, default=None)
     readiness.add_argument("--output", type=Path)
 
     oauth_device = subparsers.add_parser(
@@ -353,7 +488,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     recurring_run = subparsers.add_parser(
         "recurring-run",
-        help="run one registered narrow workflow",
+        help="disabled pending exact recurring target and runtime binding",
     )
     recurring_run.add_argument("name")
     recurring_run.add_argument("--recurring", type=Path, default=None)
@@ -387,7 +522,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     weekly = subparsers.add_parser(
         "weekly-status",
-        help="collect live evidence and render a local status package",
+        help="disabled pending manifest-bound descriptor-safe rendering",
     )
     weekly.add_argument("--integrations", type=Path, default=None)
     weekly.add_argument("--workflow", type=Path, default=None)
@@ -423,7 +558,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     prune = subparsers.add_parser(
         "evidence-prune",
-        help="preview or delete expired retained evidence",
+        help="preview expired evidence; destructive apply is disabled",
     )
     prune.add_argument("--root", type=Path, default=Path(".master-agent"))
     prune.add_argument("--apply", action="store_true")
@@ -450,7 +585,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     communication = subparsers.add_parser(
         "communication-context",
-        help="collect Outlook and Teams context and render retained local evidence",
+        help="disabled pending manifest-bound descriptor-safe rendering",
     )
     communication.add_argument("--integrations", type=Path, default=None)
     communication.add_argument("--workflow", type=Path, default=None)
@@ -494,6 +629,11 @@ def _inspect(path: Path) -> int:
     print(f"goal: {plan.goal}")
     print(f"plan ID: {plan.plan_id}")
     print(f"fingerprint: {plan.fingerprint}")
+    if plan.execution_context is None:
+        print("execution context: unbound")
+    else:
+        print("execution context:")
+        print(json.dumps(plan.execution_context.to_dict(), indent=2, ensure_ascii=True))
     print("actions:")
     for action in plan.actions:
         dependencies = ",".join(str(item) for item in action.dependencies) or "-"
@@ -501,6 +641,80 @@ def _inspect(path: Path) -> int:
             f"  {action.action_id}  {action.risk:<24} "
             f"{action.capability:<38} {action.target.uri} deps={dependencies}"
         )
+        print(json.dumps(action.to_dict(), indent=4, ensure_ascii=True))
+    return 0
+
+
+def _bind_context(
+    *,
+    plan_path: Path,
+    integrations_path: Path | None,
+    plugin_names: list[str],
+    plugin_lock_path: Path | None,
+    connector_mode: str,
+    approval_authorities: Path | None,
+    database: Path,
+    result_json: Path | None,
+    retention_path: Path | None,
+    evidence_type: str,
+    identities_path: Path | None,
+    include_writes: bool,
+    include_communications: bool,
+    workspace_root: Path | None,
+    draft_output_dir: Path,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+    output: Path,
+) -> int:
+    """Write a plan whose fingerprint covers the complete applied runtime."""
+
+    plan = _load_plan(plan_path)
+    integrations_source = resolve_config_source(integrations_path, "integrations.toml")
+    integrations = IntegrationConfig.from_toml(integrations_source)
+    configuration_sources = _execution_configuration_sources(
+        approval_authorities=approval_authorities,
+        retention_path=retention_path,
+        identities_path=identities_path,
+        policy_path=policy_path,
+        sources_of_truth_path=sources_of_truth_path,
+        capabilities_path=capabilities_path,
+        governance_path=governance_path,
+    )
+    plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
+    descriptors = (
+        resolve_locked_plugin_descriptors(
+            enabled_names=plugin_names,
+            trusted_lock=plugin_lock,
+        )
+        if plugin_lock is not None
+        else ()
+    )
+    context = build_execution_context(
+        integrations,
+        environ=os.environ,
+        plugin_descriptors=descriptors,
+        runtime=build_runtime_execution_binding(
+            integrations,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            audit_database=database,
+            artifact_root=draft_output_dir,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            evidence_type=evidence_type,
+            configuration_sources=configuration_sources,
+            environ=os.environ,
+        ),
+        include_connectors=connector_mode == "live",
+    )
+    bound = replace(plan, execution_context=context)
+    _write_json(output, bound.to_dict(), restricted=True)
+    print(f"wrote {output}")
+    print(f"execution context fingerprint: {context.fingerprint}")
+    print(f"plan fingerprint: {bound.fingerprint}")
     return 0
 
 
@@ -508,22 +722,36 @@ def _approve(
     *,
     plan_path: Path,
     actions: str,
-    approver: str,
+    key_id: str,
+    expected_fingerprint: str,
+    approval_authorities: Path,
     output: Path,
     ttl_minutes: int,
 ) -> int:
     if ttl_minutes <= 0:
         raise ValueError("ttl-minutes must be positive")
     plan = _load_plan(plan_path)
+    if expected_fingerprint != plan.fingerprint:
+        raise ValueError(
+            "plan fingerprint does not match --expected-fingerprint; inspect "
+            "the current file before approving"
+        )
     requested = tuple(UUID(item.strip()) for item in actions.split(",") if item.strip())
     unknown = set(requested) - {action.action_id for action in plan.actions}
     if unknown:
         raise ValueError(f"approval references unknown action IDs: {unknown}")
     issued_at = datetime.now(UTC)
-    approval = Approval(
-        plan_fingerprint=plan.fingerprint,
+    authenticator = HmacApprovalAuthenticator.from_toml(
+        resolve_config_source(
+            approval_authorities,
+            "approval-authorities.toml",
+        ),
+        environ=os.environ,
+    )
+    approval = authenticator.issue(
+        plan=plan,
         approved_action_ids=requested,
-        approved_by=approver,
+        key_id=key_id,
         issued_at=issued_at,
         expires_at=issued_at + timedelta(minutes=ttl_minutes),
     )
@@ -539,6 +767,7 @@ def _run(
     plan_path: Path,
     apply: bool,
     approval_paths: list[Path],
+    approval_authorities: Path | None,
     database: Path,
     connector_mode: str,
     integrations_path: Path | None,
@@ -552,73 +781,293 @@ def _run(
     draft_output_dir: Path,
     capabilities_path: Path | None,
     governance_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
     plugin_names: list[str],
+    plugin_lock_path: Path | None,
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
+    if apply and plugin_names:
+        raise ConfigurationError(
+            "in-process connector plugin execution is disabled pending an "
+            "isolated worker with a locked dependency closure"
+        )
+    if apply and plugin_lock_path is not None:
+        raise ValueError("--plugin-lock requires at least one --plugin")
+    if not apply and result_json is not None:
+        raise ValueError(
+            "--result-json requires --apply and an approval-bound runtime manifest"
+        )
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
+    if approvals and approval_authorities is None:
+        raise ValueError(
+            "--approval-authorities is required when approval artifacts are supplied"
+        )
+    configuration_sources = _execution_configuration_sources(
+        approval_authorities=approval_authorities,
+        retention_path=retention_path,
+        identities_path=identities_path,
+        policy_path=policy_path,
+        sources_of_truth_path=sources_of_truth_path,
+        capabilities_path=capabilities_path,
+        governance_path=governance_path,
+    )
+    approval_authenticator: HmacApprovalAuthenticator | None = None
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
         connectors = ConnectorRegistry()
-    elif connector_mode == "mock":
-        connectors = _mock_registry()
-        register_draft_connectors(connectors, draft_output_dir)
-    else:
-        integration_config = IntegrationConfig.from_toml(
-            resolve_config_source(integrations_path, "integrations.toml")
+        if approval_authorities is not None:
+            approval_authenticator = HmacApprovalAuthenticator.from_toml(
+                configuration_sources["approval_authorities"],
+                environ=os.environ,
+            )
+        # Policy preview is intentionally non-persistent. This prevents an
+        # unbound review command from selecting an arbitrary audit/evidence
+        # destination while preserving credential-free plan inspection.
+        with tempfile.TemporaryDirectory(prefix="master-agent-dry-run-") as directory:
+            ephemeral_audit = AuditLog(Path(directory) / "audit.sqlite3")
+            try:
+                report = _orchestrator(
+                    connectors,
+                    Path(directory) / "audit.sqlite3",
+                    capabilities_path=capabilities_path,
+                    governance_path=governance_path,
+                    policy_source=configuration_sources["policy"],
+                    sources_of_truth_source=configuration_sources["sources_of_truth"],
+                    capabilities_source=configuration_sources["capabilities"],
+                    governance_source=configuration_sources["governance"],
+                    approval_authenticator=approval_authenticator,
+                    audit=ephemeral_audit,
+                ).run(
+                    plan,
+                    approvals=approvals,
+                    dry_run=True,
+                )
+            finally:
+                ephemeral_audit.close()
+        _print_report(report)
+        return 0 if report.successful else 2
+
+    with ExitStack() as runtime_resources:
+        execution_environ = dict(os.environ)
+        integrations_source = resolve_config_source(
+            integrations_path, "integrations.toml"
         )
-        connectors = build_live_registry(
+        integration_config = IntegrationConfig.from_toml(integrations_source)
+        approved_context = plan.execution_context
+        if approved_context is None or approved_context.runtime is None:
+            raise ConfigurationError(
+                "applied execution requires an approval-bound runtime path identity"
+            )
+        approved_path_bindings = (
+            *approved_context.runtime.runtime_paths,
+            *approved_context.runtime.publication_roots,
+        )
+        captured_paths = capture_runtime_execution_paths(
             integration_config,
-            environ=os.environ,
+            connector_mode=connector_mode,
             include_writes=include_writes,
-            include_communications=include_communications,
-            workspace_root=workspace_root,
+            audit_database=database,
             artifact_root=draft_output_dir,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            environ=execution_environ,
+            approved_bindings=approved_path_bindings,
         )
-        register_draft_connectors(connectors, draft_output_dir)
-        identities = IdentityRegistry.from_toml(
-            resolve_config_source(identities_path, "identities.toml")
+        for captured in captured_paths:
+            runtime_resources.callback(captured.close)
+        observed_context = build_execution_context(
+            integration_config,
+            environ=execution_environ,
+            runtime=build_runtime_execution_binding(
+                integration_config,
+                connector_mode=connector_mode,
+                include_writes=include_writes,
+                include_communications=include_communications,
+                audit_database=database,
+                artifact_root=draft_output_dir,
+                workspace_root=workspace_root,
+                result_json=result_json,
+                evidence_type=evidence_type,
+                configuration_sources=configuration_sources,
+                environ=execution_environ,
+                captured_paths=captured_paths,
+            ),
+            include_connectors=connector_mode == "live",
         )
-        if "identity" not in connectors.systems():
-            connectors.register(IdentityMapConnector(identities))
-    if apply and plugin_names:
-        loaded = load_connector_plugins(
-            connectors,
-            enabled_names=plugin_names,
+        enforce_execution_context(
+            plan,
+            observed_context,
         )
-        for item in loaded:
-            print(
-                f"loaded plugin {item.descriptor.name}: "
-                + ", ".join(item.capabilities)
+        disabled_git_actions = sorted(
+            {
+                action.capability
+                for action in plan.actions
+                if action.capability in _DISABLED_LOCAL_GIT_MUTATIONS
+            }
+        )
+        if disabled_git_actions:
+            raise ConfigurationError(
+                "local Git mutation capabilities are disabled until all Git "
+                "metadata transactions are descriptor-bound: "
+                + ", ".join(disabled_git_actions)
+            )
+        approved_runtime = observed_context.runtime
+        if approved_runtime is None:
+            raise ConfigurationError(
+                "applied execution context is missing its runtime path binding"
+            )
+        # The equality gate above proves these canonical paths are the exact
+        # approved values. Never pass the original CLI spellings downstream:
+        # they may contain a symlinked ancestor that can be rebound after this
+        # check while still resolving to the approved path during comparison.
+        database = Path(approved_runtime.audit_database)
+        draft_output_dir = Path(approved_runtime.artifact_root)
+        workspace_root = (
+            Path(approved_runtime.workspace_root)
+            if approved_runtime.workspace_root is not None
+            else None
+        )
+        result_json = (
+            Path(approved_runtime.result_json)
+            if approved_runtime.result_json is not None
+            else None
+        )
+        if approved_runtime.evidence_type is not None:
+            evidence_type = approved_runtime.evidence_type
+
+        pinned_paths = {
+            captured.binding.name: runtime_resources.enter_context(
+                captured.open_target()
+            )
+            for captured in captured_paths
+        }
+        for captured in captured_paths:
+            captured.validate()
+        for pinned in pinned_paths.values():
+            pinned.validate()
+        audit_parent = pinned_paths["audit.parent"]
+        artifact_directory = pinned_paths["artifact.root"]
+        result_parent = pinned_paths.get("result.parent")
+        result_reservation: RetainedJSONReservation | None = None
+        if result_json is not None:
+            if result_parent is None:  # pragma: no cover - manifest invariant.
+                raise ConfigurationError("applied result path has no pinned parent")
+            retention = RetentionConfig.from_toml(configuration_sources["retention"])
+            result_reservation = runtime_resources.enter_context(
+                RetainedJSONReservation(
+                    result_json,
+                    evidence_type=evidence_type,
+                    config=retention,
+                    include_content=True,
+                    parent_directory=result_parent,
+                )
             )
 
-    report = _orchestrator(
-        connectors,
-        database,
-        capabilities_path=capabilities_path,
-        governance_path=governance_path,
-    ).run(
-        plan,
-        approvals=approvals,
-        dry_run=not apply,
-    )
-    _print_report(report)
-    if result_json is not None:
-        retention = RetentionConfig.from_toml(
-            resolve_config_source(retention_path, "retention.toml")
+        if approval_authorities is not None:
+            approval_authenticator = HmacApprovalAuthenticator.from_toml(
+                configuration_sources["approval_authorities"],
+                environ=execution_environ,
+            )
+        if connector_mode == "mock":
+            connectors = _mock_registry()
+            register_draft_connectors(connectors, artifact_directory)
+        else:
+            connectors = build_live_registry(
+                integration_config,
+                environ=execution_environ,
+                include_writes=include_writes,
+                include_communications=include_communications,
+                workspace_root=workspace_root,
+                artifact_root=draft_output_dir,
+                artifact_directory=artifact_directory,
+                approved_execution_context=plan.execution_context,
+            )
+            register_draft_connectors(connectors, artifact_directory)
+            identities = IdentityRegistry.from_toml(configuration_sources["identities"])
+            if "identity" not in connectors.systems():
+                connectors.register(IdentityMapConnector(identities))
+        for connector in connectors.connectors():
+            if isinstance(connector, ClosableConnector):
+                runtime_resources.callback(connector.close)
+
+        # Re-capture every path-backed policy input and non-secret environment
+        # identity after connector construction. Connector clients use the
+        # first immutable snapshots; this second gate prevents a concurrent
+        # change from creating ambiguity about which reviewed runtime executed.
+        current_configuration_sources = _execution_configuration_sources(
+            approval_authorities=approval_authorities,
+            retention_path=retention_path,
+            identities_path=identities_path,
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
         )
-        evidence, sidecar = write_retained_json(
-            result_json,
-            report.to_dict(),
-            evidence_type=evidence_type,
-            config=retention,
-            include_content=True,
+        current_integrations = IntegrationConfig.from_toml(
+            resolve_config_source(integrations_path, "integrations.toml")
         )
-        print(f"full result written to {evidence}")
-        print(f"retention sidecar written to {sidecar}")
-    return 0 if report.successful else 2
+        current_environ = dict(os.environ)
+        enforce_execution_context(
+            plan,
+            build_execution_context(
+                current_integrations,
+                environ=current_environ,
+                runtime=build_runtime_execution_binding(
+                    current_integrations,
+                    connector_mode=connector_mode,
+                    include_writes=include_writes,
+                    include_communications=include_communications,
+                    audit_database=database,
+                    artifact_root=draft_output_dir,
+                    workspace_root=workspace_root,
+                    result_json=result_json,
+                    evidence_type=evidence_type,
+                    configuration_sources=current_configuration_sources,
+                    environ=current_environ,
+                    captured_paths=captured_paths,
+                ),
+                include_connectors=connector_mode == "live",
+            ),
+        )
+        for captured in captured_paths:
+            captured.validate()
+        for pinned in pinned_paths.values():
+            pinned.validate()
+
+        applied_audit = AuditLog(database, parent_directory=audit_parent)
+        try:
+            report = _orchestrator(
+                connectors,
+                database,
+                capabilities_path=capabilities_path,
+                governance_path=governance_path,
+                policy_source=configuration_sources["policy"],
+                sources_of_truth_source=configuration_sources["sources_of_truth"],
+                capabilities_source=configuration_sources["capabilities"],
+                governance_source=configuration_sources["governance"],
+                approval_authenticator=approval_authenticator,
+                audit=applied_audit,
+            ).run(
+                plan,
+                approvals=approvals,
+                dry_run=False,
+            )
+        finally:
+            applied_audit.close()
+
+        if result_json is not None:
+            if result_reservation is None:  # pragma: no cover - branch invariant.
+                raise ConfigurationError("applied result path was not reserved")
+            evidence, sidecar = result_reservation.commit(report.to_dict())
+        _print_report(report)
+        if result_json is not None:
+            print(f"full result written to {evidence}")
+            print(f"retention sidecar written to {sidecar}")
+        return 0 if report.successful else 2
 
 
 def _plugins(*, output: Path | None) -> int:
@@ -631,16 +1080,25 @@ def _plugins(*, output: Path | None) -> int:
     if not plugins:
         print("no connector plugins installed")
     if output is not None:
-        _write_json(
-            output,
-            {
-                "schema": "master-agent/plugins@1",
-                "plugins": [item.to_dict() for item in plugins],
-            },
-            restricted=True,
-        )
+        _write_json(output, PluginLock(plugins=plugins).to_dict(), restricted=True)
         print(f"wrote {output}")
     return 0
+
+
+def _load_plugin_lock(
+    plugin_names: Sequence[str],
+    plugin_lock_path: Path | None,
+) -> PluginLock | None:
+    selected = tuple(name.strip() for name in plugin_names if name.strip())
+    if not selected:
+        if plugin_lock_path is not None:
+            raise ValueError("--plugin-lock requires at least one --plugin")
+        return None
+    if plugin_lock_path is None:
+        raise ValueError("--plugin-lock is required when --plugin is supplied")
+    return PluginLock.from_json(
+        resolve_config_source(plugin_lock_path, "plugin-lock.json")
+    )
 
 
 def _readiness(
@@ -649,6 +1107,7 @@ def _readiness(
     capabilities_path: Path | None,
     governance_path: Path | None,
     oauth_path: Path | None,
+    identities_path: Path | None,
     output: Path | None,
 ) -> int:
     """Assess Phase 0/2C configuration without performing network requests."""
@@ -665,6 +1124,9 @@ def _readiness(
         ),
         oauth_profiles=OAuthProfiles.from_toml(
             resolve_config_source(oauth_path, "oauth.toml")
+        ),
+        identities=IdentityRegistry.from_toml(
+            resolve_config_source(identities_path, "identities.toml")
         ),
         environ=os.environ,
     )
@@ -691,9 +1153,7 @@ def _oauth_device_code(
 ) -> int:
     """Run an explicitly selected delegated Entra device-code flow."""
 
-    profiles = OAuthProfiles.from_toml(
-        resolve_config_source(oauth_path, "oauth.toml")
-    )
+    profiles = OAuthProfiles.from_toml(resolve_config_source(oauth_path, "oauth.toml"))
     profile = profiles.profile(profile_name)
     if profile.flow is not OAuthFlow.ENTRA_DEVICE_CODE:
         raise ValueError("selected OAuth profile is not an Entra device-code flow")
@@ -723,17 +1183,41 @@ def _draft_package(
 ) -> int:
     """Generate all Phase 3 artifacts locally without provider writes."""
 
-    settings = DraftPackageSettings.from_toml(
-        resolve_config_source(workflow_path, "draft-package.toml")
-    )
-    plan = build_draft_package_plan(settings)
-    registry = build_draft_registry(output_dir)
-    report = _orchestrator(registry, database).run(plan, dry_run=False)
-    _print_report(report)
-    artifacts = render_draft_package(report, output_dir=output_dir)
-    print(f"summary: {artifacts.summary_markdown}")
-    print(f"manifest: {artifacts.manifest_json}")
-    return 0 if report.successful else 2
+    with ExitStack() as resources:
+        output_directory = resources.enter_context(PinnedDirectory.open(output_dir))
+        database_parent = resources.enter_context(
+            PinnedDirectory.open(database.expanduser().absolute().parent)
+        )
+        if output_directory.identity == database_parent.identity:
+            raise ConfigurationError(
+                "draft artifact and audit database directories must be distinct"
+            )
+        fcntl.flock(output_directory.fileno(), fcntl.LOCK_EX)
+        if os.listdir(output_directory.fileno()):
+            raise ConfigurationError(
+                "draft artifact directory must be empty; use a fresh directory"
+            )
+        canonical_database = database_parent.path / database.name
+        settings = DraftPackageSettings.from_toml(
+            resolve_config_source(workflow_path, "draft-package.toml")
+        )
+        plan = build_draft_package_plan(settings)
+        registry = build_draft_registry(output_directory)
+        for connector in registry.connectors():
+            if isinstance(connector, ClosableConnector):
+                resources.callback(connector.close)
+        audit = AuditLog(canonical_database, parent_directory=database_parent)
+        resources.callback(audit.close)
+        report = _orchestrator(
+            registry,
+            canonical_database,
+            audit=audit,
+        ).run(plan, dry_run=False)
+        artifacts = render_draft_package(report, output_dir=output_directory)
+        _print_report(report)
+        print(f"summary: {artifacts.summary_markdown}")
+        print(f"manifest: {artifacts.manifest_json}")
+        return 0 if report.successful else 2
 
 
 def _compensation_plan(
@@ -748,9 +1232,12 @@ def _compensation_plan(
     original = _load_plan(plan_path)
     raw = json.loads(report_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError("run report must be a JSON object")
+        raise StructuredDataTypeError("run report must be a JSON object")
     report = RunReport.from_dict(raw)
-    if report.plan_id != original.plan_id or report.plan_fingerprint != original.fingerprint:
+    if (
+        report.plan_id != original.plan_id
+        or report.plan_fingerprint != original.fingerprint
+    ):
         raise ValueError("run report does not belong to the supplied immutable plan")
     plan = build_compensation_plan(original, report, created_by=created_by)
     _write_json(output, plan.to_dict(), restricted=True)
@@ -771,8 +1258,7 @@ def _recurring_status(
     )
     runner = RecurringRunner(config)
     records = [
-        runner.due_status(workflow).to_dict()
-        for workflow in config.workflows.values()
+        runner.due_status(workflow).to_dict() for workflow in config.workflows.values()
     ]
     for record in records:
         print(
@@ -798,6 +1284,8 @@ def _recurring_run(
 ) -> int:
     """Execute one immutable, registered, local-output recurring workflow."""
 
+    _reject_non_manifest_execution("recurring-run")
+
     config = RecurringConfig.from_toml(
         resolve_config_source(recurring_path, "recurring.toml")
     )
@@ -822,11 +1310,13 @@ def _execute_registered_workflow(
 ) -> tuple[bool, dict[str, object]]:
     """Execute one allowlisted built-in recurring workflow implementation."""
 
+    _reject_non_manifest_execution("recurring-run")
+
     if workflow.kind is WorkflowKind.WEEKLY_STATUS_PACKAGE:
         integrations = IntegrationConfig.from_toml(workflow.integration_config)
-        settings = WeeklyStatusSettings.from_toml(workflow.workflow_config)
+        weekly_settings = WeeklyStatusSettings.from_toml(workflow.workflow_config)
         plan = build_weekly_status_read_plan(
-            settings,
+            weekly_settings,
             bitbucket_deployment=integrations.connector("bitbucket").deployment,
         )
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
@@ -847,7 +1337,7 @@ def _execute_registered_workflow(
         report = _orchestrator(registry, database).run(plan, dry_run=False)
         artifacts = render_weekly_status_package(
             report,
-            settings,
+            weekly_settings,
             output_dir=workflow.output_dir,
         )
         return report.successful, {
@@ -865,10 +1355,12 @@ def _execute_registered_workflow(
                 "communication context workflow requires identity and retention config"
             )
         integrations = IntegrationConfig.from_toml(workflow.integration_config)
-        settings = CommunicationContextSettings.from_toml(workflow.workflow_config)
+        context_settings = CommunicationContextSettings.from_toml(
+            workflow.workflow_config
+        )
         identities = IdentityRegistry.from_toml(workflow.identity_config)
         retention = RetentionConfig.from_toml(workflow.retention_config)
-        plan = build_communication_context_plan(settings, identities)
+        plan = build_communication_context_plan(context_settings, identities)
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
         if connector_mode == "mock":
             registry = _mock_read_registry(plan)
@@ -883,9 +1375,9 @@ def _execute_registered_workflow(
             _require_systems(registry, {"identity", "outlook", "teams"}, workflow.name)
         database = workflow.output_dir / "audit.sqlite3"
         report = _orchestrator(registry, database).run(plan, dry_run=False)
-        artifacts = render_communication_context_package(
+        context_artifacts = render_communication_context_package(
             report,
-            settings,
+            context_settings,
             output_dir=workflow.output_dir,
             retention=retention,
         )
@@ -894,11 +1386,10 @@ def _execute_registered_workflow(
             "kind": str(workflow.kind),
             "successful": report.successful,
             "output_dir": str(workflow.output_dir),
-            "manifest": str(artifacts.manifest_json),
+            "manifest": str(context_artifacts.manifest_json),
         }
 
     raise ValueError(f"unsupported recurring workflow kind: {workflow.kind}")
-
 
 
 def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
@@ -972,6 +1463,7 @@ def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
         )
     return registry
 
+
 def _discover(
     *,
     integrations_path: Path | None,
@@ -1036,6 +1528,7 @@ def _weekly_status(
     output_dir: Path,
     database: Path,
 ) -> int:
+    _reject_non_manifest_execution("weekly-status")
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -1099,7 +1592,7 @@ def _retain_evidence(
 ) -> int:
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("retained evidence input must be a JSON object")
+        raise StructuredDataTypeError("retained evidence input must be a JSON object")
     config = RetentionConfig.from_toml(
         resolve_config_source(retention_path, "retention.toml")
     )
@@ -1184,6 +1677,7 @@ def _communication_context(
     output_dir: Path,
     database: Path,
 ) -> int:
+    _reject_non_manifest_execution("communication-context")
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -1203,7 +1697,9 @@ def _communication_context(
         systems={"outlook", "teams"},
     )
     registry.register(IdentityMapConnector(identities))
-    _require_systems(registry, {"identity", "outlook", "teams"}, "communication-context")
+    _require_systems(
+        registry, {"identity", "outlook", "teams"}, "communication-context"
+    )
     report = _orchestrator(registry, database).run(plan, dry_run=False)
     _print_report(report)
     artifacts = render_communication_context_package(
@@ -1220,8 +1716,25 @@ def _communication_context(
     return 0 if report.successful else 2
 
 
+def _reject_non_manifest_execution(command: str) -> None:
+    """Fail closed for workflows that bypass the bound execution manifest."""
+
+    if command not in _DISABLED_NON_MANIFEST_EXECUTIONS:
+        raise ValueError(f"unknown disabled execution command: {command}")
+    raise ConfigurationError(
+        f"{command} execution is disabled until its inputs, provider identity, "
+        "targets, audit database, and output package are bound to one immutable "
+        "execution manifest and descriptor-pinned for the full run"
+    )
+
+
 def _scan(*, text: str | None, file: Path | None) -> int:
-    content = text if text is not None else file.read_text(encoding="utf-8")
+    if text is not None:
+        content = text
+    elif file is not None:
+        content = file.read_text(encoding="utf-8")
+    else:
+        raise ValueError("scan requires either text or a file")
     findings = PromptInjectionGuard().scan(content)
     if not findings:
         print("no heuristic findings; content remains untrusted data")
@@ -1232,7 +1745,7 @@ def _scan(*, text: str | None, file: Path | None) -> int:
 
 
 def _audit_verify(database: Path) -> int:
-    valid, message = AuditLog(database).verify_chain()
+    valid, message = AuditLog.verify_existing(database)
     print(message)
     return 0 if valid else 4
 
@@ -1280,29 +1793,71 @@ def _mock_registry() -> ConnectorRegistry:
     return registry
 
 
+def _execution_configuration_sources(
+    *,
+    approval_authorities: Path | None,
+    retention_path: Path | None,
+    identities_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+) -> dict[str, ConfigSource]:
+    """Capture the exact policy/configuration snapshots used by one run."""
+
+    sources: dict[str, ConfigSource] = {
+        "policy": resolve_config_source(policy_path, "policy.toml"),
+        "sources_of_truth": resolve_config_source(
+            sources_of_truth_path, "sources_of_truth.toml"
+        ),
+        "capabilities": resolve_config_source(capabilities_path, "capabilities.toml"),
+        "governance": resolve_config_source(governance_path, "governance.toml"),
+        "identities": resolve_config_source(identities_path, "identities.toml"),
+        "retention": resolve_config_source(retention_path, "retention.toml"),
+    }
+    if approval_authorities is not None:
+        sources["approval_authorities"] = resolve_config_source(
+            approval_authorities,
+            "approval-authorities.toml",
+        )
+    return sources
+
+
 def _orchestrator(
     connectors: ConnectorRegistry,
     database: Path,
     *,
     capabilities_path: Path | None = None,
     governance_path: Path | None = None,
+    policy_source: ConfigSource | None = None,
+    sources_of_truth_source: ConfigSource | None = None,
+    capabilities_source: ConfigSource | None = None,
+    governance_source: ConfigSource | None = None,
+    approval_authenticator: HmacApprovalAuthenticator | None = None,
+    audit: AuditLog | None = None,
 ) -> WorkflowOrchestrator:
     """Build the governed runtime from repository or packaged defaults."""
 
     return WorkflowOrchestrator(
         policy=PolicyEngine(
-            PolicyConfig.from_toml(resolve_config_source(None, "policy.toml"))
+            PolicyConfig.from_toml(
+                policy_source or resolve_config_source(None, "policy.toml")
+            ),
+            approval_authenticator=approval_authenticator,
         ),
         sources=SourceOfTruthRegistry.from_toml(
-            resolve_config_source(None, "sources_of_truth.toml")
+            sources_of_truth_source
+            or resolve_config_source(None, "sources_of_truth.toml")
         ),
         connectors=connectors,
-        audit=AuditLog(database),
+        audit=audit if audit is not None else AuditLog(database),
         capabilities=CapabilityCatalog.from_toml(
-            resolve_config_source(capabilities_path, "capabilities.toml")
+            capabilities_source
+            or resolve_config_source(capabilities_path, "capabilities.toml")
         ),
         governance=GovernanceProfile.from_toml(
-            resolve_config_source(governance_path, "governance.toml")
+            governance_source
+            or resolve_config_source(governance_path, "governance.toml")
         ),
     )
 
@@ -1351,7 +1906,7 @@ def _print_report(report: RunReport) -> None:
     print(f"mode: {'dry-run' if report.dry_run else 'apply'}")
     for item in report.actions:
         print(
-            f"{item.state:<20} {str(item.action_id):<36} "
+            f"{item.state:<20} {item.action_id!s:<36} "
             f"{item.capability} — {item.message}"
         )
     print(f"successful: {report.successful}")

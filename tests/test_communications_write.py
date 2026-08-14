@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import unittest
 
-from master_agent.connectors.communications import OutlookSendConnector, TeamsSendConnector
+from master_agent.connectors.communications import (
+    OutlookSendConnector,
+    TeamsSendConnector,
+)
 from master_agent.errors import ConnectorError
 from master_agent.models import RiskLevel
 from tests.fakes import ScriptedTransport
@@ -25,9 +28,7 @@ class OutlookSendConnectorTests(unittest.TestCase):
             {
                 "subject": "Release status",
                 "body": {"contentType": "Text", "content": "Release is ready."},
-                "toRecipients": [
-                    {"emailAddress": {"address": "don@example.com"}}
-                ],
+                "toRecipients": [{"emailAddress": {"address": "don@example.com"}}],
                 "ccRecipients": [],
                 "bccRecipients": [],
             },
@@ -62,7 +63,9 @@ class OutlookSendConnectorTests(unittest.TestCase):
         self.assertTrue(verification.verified)
         self.assertTrue(result.after["non_reversible"])
         self.assertEqual(result.after["provider_status"], 202)
-        self.assertEqual([item.method for item in transport.requests], ["POST", "GET", "POST"])
+        self.assertEqual(
+            [item.method for item in transport.requests], ["POST", "GET", "POST"]
+        )
 
     def test_provider_draft_mismatch_blocks_send(self) -> None:
         transport = ScriptedTransport()
@@ -73,9 +76,7 @@ class OutlookSendConnectorTests(unittest.TestCase):
             {
                 "subject": "Changed by provider",
                 "body": {"contentType": "Text", "content": "Release is ready."},
-                "toRecipients": [
-                    {"emailAddress": {"address": "don@example.com"}}
-                ],
+                "toRecipients": [{"emailAddress": {"address": "don@example.com"}}],
                 "ccRecipients": [],
                 "bccRecipients": [],
             },

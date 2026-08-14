@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
 from master_agent.http import HttpResponse
 
@@ -84,7 +85,10 @@ class QueueTransport:
         """Fail when the connector did not issue all expected requests."""
 
         if self.expected:
-            raise AssertionError(f"{len(self.expected)} expected requests were not made")
+            raise AssertionError(
+                f"{len(self.expected)} expected requests were not made"
+            )
+
 
 @dataclass(slots=True)
 class RecordedRequest:
@@ -228,4 +232,3 @@ class ScriptedTransport:
             body=selected.body,
             url=url,
         )
-

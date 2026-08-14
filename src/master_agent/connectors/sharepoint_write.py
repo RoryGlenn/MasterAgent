@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
+import os
+import stat
+from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import graph_client
-from master_agent.connectors.utils import enforce_expected_version, quote_segment, string_parameter
-from master_agent.errors import ConnectorError
+from master_agent.connectors.utils import (
+    enforce_expected_version,
+    quote_segment,
+    string_parameter,
+)
+from master_agent.directory_safety import PinnedDirectory, pin_directory
+from master_agent.errors import ConfigurationError, ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -46,12 +56,27 @@ class SharePointWriteConnector:
         self,
         config: ResolvedConnectorConfig,
         *,
-        artifact_root: Path,
+        artifact_root: Path | PinnedDirectory,
         transport: HttpTransport | None = None,
     ) -> None:
-        root = artifact_root.expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        self._artifact_root = root
+        if config.max_pages < 12:
+            raise ConnectorError(
+                "SharePoint exact upload and rollback verification requires a "
+                "request budget of at least 12"
+            )
+        try:
+            configured_max_upload = int(config.extra.get("max_upload_bytes", 1_000_000))
+        except (TypeError, ValueError) as error:
+            raise ConnectorError(
+                "SharePoint max_upload_bytes must be an integer"
+            ) from error
+        lifecycle_byte_limit = config.max_response_bytes // 6
+        if configured_max_upload <= 0 or lifecycle_byte_limit <= 0:
+            raise ConnectorError(
+                "SharePoint upload and response limits must be positive"
+            )
+        self._artifact_directory = pin_directory(artifact_root)
+        self._artifact_root = self._artifact_directory.path
         self._config = config
         self._client = graph_client(
             config,
@@ -59,9 +84,7 @@ class SharePointWriteConnector:
             allowed_methods=frozenset({"GET", "PUT", "POST"}),
         )
         self._last: dict[str, dict[str, Any]] = {}
-        self._max_upload_bytes = int(
-            config.extra.get("max_upload_bytes", 10 * 1024 * 1024)
-        )
+        self._max_upload_bytes = min(configured_max_upload, lifecycle_byte_limit)
 
     @property
     def system(self) -> str:
@@ -75,14 +98,24 @@ class SharePointWriteConnector:
 
         return self._CAPABILITIES
 
+    def close(self) -> None:
+        """Release the connector-owned artifact-directory pin."""
+
+        self._artifact_directory.close()
+
     def execute(self, action: AgentAction) -> ExecutionResult:
         """Replace one existing file after an exact eTag precondition check."""
 
         self._validate(action)
         drive_id = string_parameter(action.parameters, "drive_id", required=True)
         item_id = action.target.resource_id
-        local_path = self._local_path(action.parameters)
-        content = local_path.read_bytes()
+        local_path, content = self._local_artifact(action.parameters)
+        approved_digest = str(action.parameters.get("local_sha256", "")).strip().lower()
+        observed_digest = hashlib.sha256(content).hexdigest()
+        if len(approved_digest) != 64 or approved_digest != observed_digest:
+            raise ConnectorError(
+                "SharePoint local artifact does not match approved local_sha256"
+            )
         if len(content) > self._max_upload_bytes:
             raise ConnectorError(
                 "SharePoint upload exceeds configured maximum of "
@@ -92,6 +125,19 @@ class SharePointWriteConnector:
         item_path = self._item_path(drive_id, item_id)
         before = self._read_metadata(item_path)
         enforce_expected_version(action, before.get("etag"))
+        before_size = _integer_size(before.get("size"))
+        before_content = self._read_content_evidence(item_path, before_size)
+        if before_content.get("size") != before_size or not before_content.get(
+            "sha256"
+        ):
+            raise ConnectorError(
+                "SharePoint prior provider bytes could not be verified exactly"
+            )
+        retained_before = {
+            **before,
+            "content_size": before_size,
+            "content_sha256": before_content["sha256"],
+        }
         versions = self._read_versions(item_path)
         if not versions:
             raise ConnectorError(
@@ -111,14 +157,25 @@ class SharePointWriteConnector:
             safe_to_retry=False,
         )
         after = self._read_metadata(item_path)
-        if int(after.get("size") or -1) != len(content):
-            raise ConnectorError("SharePoint provider did not report the uploaded size")
+        provider_content = self._read_content_evidence(item_path, len(content))
+        if not _uploaded_item_matches(
+            after,
+            item_id=item_id,
+            expected_size=len(content),
+            expected_sha256=observed_digest,
+            content_evidence=provider_content,
+            prior_etag=before.get("etag"),
+        ):
+            raise ConnectorError(
+                "SharePoint provider poststate did not match the approved bytes"
+            )
         normalized = {
             **after,
             "drive_id": drive_id,
             "item_id": item_id,
             "uploaded_size": len(content),
-            "uploaded_sha256": hashlib.sha256(content).hexdigest(),
+            "uploaded_sha256": observed_digest,
+            "provider_sha256": provider_content["sha256"],
             "source_name": local_path.name,
             "prior_version_id": prior_version_id,
         }
@@ -126,16 +183,19 @@ class SharePointWriteConnector:
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
-            before=before,
+            before=retained_before,
             after=normalized,
             connector_reference=str(after.get("web_url") or response.url),
             message="SharePoint DriveItem replaced with an approved artifact",
-            compensation={
-                "kind": "restore_drive_item_version",
-                "drive_id": drive_id,
-                "item_id": item_id,
-                "version_id": prior_version_id,
-            },
+            compensation=CompensationDescriptor(
+                kind="restore_drive_item_version",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=item_id,
+                reason=(
+                    "provider-version restore is available only through the "
+                    "originating connector run"
+                ),
+            ).to_dict(),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -149,28 +209,30 @@ class SharePointWriteConnector:
         action: AgentAction,
         result: ExecutionResult,
     ) -> VerificationResult:
-        """Independently verify item identity, size, and changed eTag."""
+        """Independently download and hash the approval-bound provider bytes."""
 
-        after = result.after or {}
-        drive_id = str(after.get("drive_id", ""))
-        item_id = str(after.get("item_id", action.target.resource_id))
-        observed = self._read_metadata(self._item_path(drive_id, item_id))
-        before = result.before or {}
-        expected_size = int(after.get("uploaded_size") or -1)
+        drive_id = string_parameter(action.parameters, "drive_id", required=True)
+        item_id = action.target.resource_id
+        expected_sha256 = str(action.parameters.get("local_sha256", "")).lower()
+        expected_size = _integer_size((result.after or {}).get("uploaded_size"))
+        observed = self._read_content_evidence(
+            self._item_path(drive_id, item_id),
+            expected_size,
+        )
         verified = bool(
-            observed.get("id") == item_id
-            and int(observed.get("size") or -2) == expected_size
-            and observed.get("etag")
-            and observed.get("etag") != before.get("etag")
+            len(expected_sha256) == 64
+            and expected_size >= 0
+            and observed.get("size") == expected_size
+            and observed.get("sha256") == expected_sha256
         )
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
             observed=observed,
             message=(
-                "verified SharePoint replacement by independent metadata re-read"
+                "verified SharePoint replacement by independent exact-byte digest"
                 if verified
-                else "SharePoint metadata did not match the approved replacement"
+                else "SharePoint provider bytes did not match the approved replacement"
             ),
         )
 
@@ -189,6 +251,10 @@ class SharePointWriteConnector:
             raise ConnectorError("SharePoint rollback metadata is incomplete")
         item_path = self._item_path(drive_id, item_id)
         current = self._read_metadata(item_path)
+        if current.get("etag") != after.get("etag"):
+            raise VersionConflictError(
+                "SharePoint item changed after upload; version restore is refused"
+            )
         response = self._client.request_bytes(
             "POST",
             f"{item_path}/versions/{quote_segment(version_id)}/restoreVersion",
@@ -196,6 +262,21 @@ class SharePointWriteConnector:
             accepted_statuses=frozenset({200, 202, 204}),
         )
         restored = self._read_metadata(item_path)
+        original_before = result.before or {}
+        prior_size = _integer_size(original_before.get("content_size"))
+        prior_sha256 = str(original_before.get("content_sha256", ""))
+        restored_content = self._read_content_evidence(item_path, prior_size)
+        if not _restored_item_matches(
+            restored,
+            item_id=item_id,
+            expected_size=prior_size,
+            expected_sha256=prior_sha256,
+            content_evidence=restored_content,
+            uploaded_etag=after.get("etag"),
+        ):
+            raise ConnectorError(
+                "SharePoint restored provider version did not match prior bytes"
+            )
         compensation = ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -205,6 +286,8 @@ class SharePointWriteConnector:
                 "drive_id": drive_id,
                 "item_id": item_id,
                 "restored_version_id": version_id,
+                "restored_size": prior_size,
+                "restored_sha256": restored_content["sha256"],
             },
             connector_reference=str(restored.get("web_url") or response.url),
             message="restored the prior SharePoint DriveItem version",
@@ -218,44 +301,87 @@ class SharePointWriteConnector:
         original: ExecutionResult,
         compensation: ExecutionResult,
     ) -> VerificationResult:
-        """Verify the restored item differs from the uploaded version."""
+        """Independently download and hash the retained pre-write bytes."""
 
-        after = compensation.after or {}
-        drive_id = str(after.get("drive_id", ""))
-        item_id = str(after.get("item_id", action.target.resource_id))
-        observed = self._read_metadata(self._item_path(drive_id, item_id))
-        uploaded = original.after or {}
+        drive_id = string_parameter(action.parameters, "drive_id", required=True)
+        item_id = action.target.resource_id
         before = original.before or {}
+        expected_size = _integer_size(before.get("content_size"))
+        expected_sha256 = str(before.get("content_sha256", ""))
+        observed = self._read_content_evidence(
+            self._item_path(drive_id, item_id),
+            expected_size,
+        )
         verified = bool(
-            observed.get("id") == item_id
-            and observed.get("etag")
-            and observed.get("etag") != uploaded.get("etag")
-            and (
-                before.get("size") is None
-                or int(observed.get("size") or -1) == int(before.get("size") or -2)
-            )
+            len(expected_sha256) == 64
+            and observed.get("size") == expected_size
+            and observed.get("sha256") == expected_sha256
         )
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
             observed=observed,
             message=(
-                "verified restored SharePoint provider version"
+                "verified restored SharePoint bytes by independent digest"
                 if verified
-                else "restored SharePoint state did not match the prior version"
+                else "restored SharePoint bytes did not match the prior version"
             ),
         )
 
-    def _local_path(self, parameters: Mapping[str, Any]) -> Path:
+    def _local_artifact(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> tuple[Path, bytes]:
         value = string_parameter(parameters, "local_path", required=True)
-        path = Path(value).expanduser().resolve()
+        selected = Path(value).expanduser()
+        if not selected.is_absolute():
+            selected = Path.cwd() / selected
+        # Canonicalize only the parent so macOS's /var -> /private/var alias is
+        # normalized without following or accepting a symlinked final file.
+        path = Path(os.path.realpath(os.fspath(selected.parent))) / selected.name
         try:
-            path.relative_to(self._artifact_root)
+            relative = path.relative_to(self._artifact_root)
         except ValueError as error:
-            raise ConnectorError("local_path is outside the approved artifact root") from error
-        if not path.is_file():
+            raise ConnectorError(
+                "local_path is outside the approved artifact root"
+            ) from error
+        if not relative.parts or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
             raise ConnectorError("SharePoint local_path is not a file")
-        return path
+        try:
+            parent = (
+                self._artifact_directory.duplicate()
+                if len(relative.parts) == 1
+                else self._artifact_directory.pin_child(relative.parent)
+            )
+            try:
+                descriptor = os.open(
+                    relative.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent.fileno(),
+                )
+                try:
+                    metadata = os.fstat(descriptor)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise ConnectorError("SharePoint local_path is not a file")
+                    chunks: list[bytes] = []
+                    remaining = self._max_upload_bytes + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    parent.validate()
+                    self._artifact_directory.validate()
+                    return path, b"".join(chunks)
+                finally:
+                    os.close(descriptor)
+            finally:
+                parent.close()
+        except (ConfigurationError, OSError) as error:
+            raise ConnectorError("SharePoint local artifact path changed") from error
 
     def _read_metadata(self, item_path: str) -> dict[str, Any]:
         data, response = self._client.request_json("GET", item_path)
@@ -275,8 +401,30 @@ class SharePointWriteConnector:
     def _read_versions(self, item_path: str) -> list[Mapping[str, Any]]:
         data, _ = self._client.request_json("GET", f"{item_path}/versions")
         if not isinstance(data, Mapping) or not isinstance(data.get("value"), list):
-            raise ConnectorError("SharePoint versions response must contain a value list")
+            raise ConnectorError(
+                "SharePoint versions response must contain a value list"
+            )
         return [item for item in data["value"] if isinstance(item, Mapping)]
+
+    def _read_content_evidence(
+        self,
+        item_path: str,
+        expected_size: int,
+    ) -> dict[str, object]:
+        """Download bounded provider bytes and return non-content evidence."""
+
+        if expected_size < 0 or expected_size > self._max_upload_bytes:
+            raise ConnectorError("SharePoint expected content size is outside limits")
+        response = self._client.request_bytes(
+            "GET",
+            f"{item_path}/content",
+            max_response_bytes=max(expected_size, 1),
+        )
+        return {
+            "size": len(response.body),
+            "sha256": hashlib.sha256(response.body).hexdigest(),
+            "reference": response.url,
+        }
 
     def _validate(self, action: AgentAction) -> None:
         if action.target.system != self.system:
@@ -286,12 +434,61 @@ class SharePointWriteConnector:
                 f"unsupported SharePoint write capability: {action.capability}"
             )
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
-            raise ConnectorError("SharePoint replacement must use reversible_write risk")
+            raise ConnectorError(
+                "SharePoint replacement must use reversible_write risk"
+            )
         if not action.requires_approval:
             raise ConnectorError("SharePoint replacement requires explicit approval")
 
     @staticmethod
     def _item_path(drive_id: str, item_id: str) -> str:
-        return (
-            f"drives/{quote_segment(drive_id)}/items/{quote_segment(item_id)}"
-        )
+        return f"drives/{quote_segment(drive_id)}/items/{quote_segment(item_id)}"
+
+
+def _uploaded_item_matches(
+    metadata: Mapping[str, Any],
+    *,
+    item_id: str,
+    expected_size: int,
+    expected_sha256: str,
+    content_evidence: Mapping[str, object],
+    prior_etag: object,
+) -> bool:
+    """Match provider identity, version metadata, and exact remote bytes."""
+
+    return bool(
+        metadata.get("id") == item_id
+        and _integer_size(metadata.get("size")) == expected_size
+        and metadata.get("etag")
+        and metadata.get("etag") != prior_etag
+        and content_evidence.get("size") == expected_size
+        and content_evidence.get("sha256") == expected_sha256
+    )
+
+
+def _restored_item_matches(
+    metadata: Mapping[str, Any],
+    *,
+    item_id: str,
+    expected_size: int,
+    expected_sha256: str,
+    content_evidence: Mapping[str, object],
+    uploaded_etag: object,
+) -> bool:
+    """Require the restored item to equal the retained pre-write bytes."""
+
+    return bool(
+        len(expected_sha256) == 64
+        and metadata.get("id") == item_id
+        and _integer_size(metadata.get("size")) == expected_size
+        and metadata.get("etag")
+        and metadata.get("etag") != uploaded_etag
+        and content_evidence.get("size") == expected_size
+        and content_evidence.get("sha256") == expected_sha256
+    )
+
+
+def _integer_size(value: object) -> int:
+    """Return an exact non-boolean integer size or a fail-closed sentinel."""
+
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1

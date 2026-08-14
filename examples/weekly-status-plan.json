@@ -65,7 +65,7 @@
       "target": {
         "system": "powerpoint",
         "resource_type": "presentation",
-        "resource_id": "weekly-status",
+        "resource_id": "weekly-status-preview",
         "expected_version": null
       },
       "parameters": {
@@ -100,7 +100,7 @@
       "target": {
         "system": "teams",
         "resource_type": "message_draft",
-        "resource_id": "weekly-status-draft",
+        "resource_id": "weekly-status-preview-draft",
         "expected_version": null
       },
       "parameters": {
@@ -125,7 +125,7 @@
       "target": {
         "system": "outlook",
         "resource_type": "email_draft",
-        "resource_id": "weekly-status-draft",
+        "resource_id": "weekly-status-preview-draft",
         "expected_version": null
       },
       "parameters": {

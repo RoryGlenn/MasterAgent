@@ -29,9 +29,7 @@ class ConnectorRegistryTests(unittest.TestCase):
         registry.register(MockConnector("teams", capabilities={"teams.chat.list"}))
 
         with self.assertRaisesRegex(ConnectorError, "already registered"):
-            registry.register(
-                MockConnector("teams", capabilities={"teams.chat.list"})
-            )
+            registry.register(MockConnector("teams", capabilities={"teams.chat.list"}))
 
     def test_wildcard_connector_is_fallback_for_unknown_capability(self) -> None:
         registry = ConnectorRegistry()

@@ -75,7 +75,7 @@ def build_weekly_status_plan() -> ChangePlan:
         target=ResourceRef(
             system="powerpoint",
             resource_type="presentation",
-            resource_id="weekly-status",
+            resource_id="weekly-status-preview",
         ),
         parameters={
             "title": "Weekly Project Status",
@@ -101,7 +101,7 @@ def build_weekly_status_plan() -> ChangePlan:
         target=ResourceRef(
             system="teams",
             resource_type="message_draft",
-            resource_id="weekly-status-draft",
+            resource_id="weekly-status-preview-draft",
         ),
         parameters={
             "recipient_type": "team",
@@ -125,7 +125,7 @@ def build_weekly_status_plan() -> ChangePlan:
         target=ResourceRef(
             system="outlook",
             resource_type="email_draft",
-            resource_id="weekly-status-draft",
+            resource_id="weekly-status-preview-draft",
         ),
         parameters={
             "to": ["stakeholders@example.invalid"],

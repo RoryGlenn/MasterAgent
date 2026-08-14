@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
@@ -44,7 +45,7 @@ class ConfluenceConnector(ReadOnlyConnector):
             transport=transport,
             timeout_seconds=config.timeout_seconds,
             max_response_bytes=config.max_response_bytes,
-            ca_bundle=config.ca_bundle,
+            ca_bundle_data=config.ca_bundle_data,
         )
 
     def probe(self) -> Mapping[str, Any]:
@@ -80,9 +81,7 @@ class ConfluenceConnector(ReadOnlyConnector):
             return self._search_pages(action)
         if action.capability == "confluence.page.read":
             return self._read_page_action(action)
-        raise ConnectorError(
-            f"unsupported Confluence capability: {action.capability}"
-        )
+        raise ConnectorError(f"unsupported Confluence capability: {action.capability}")
 
     def _search_pages(self, action: AgentAction) -> RetrievedPayload:
         cql = string_parameter(action.parameters, "cql", required=True)
@@ -146,9 +145,7 @@ class ConfluenceConnector(ReadOnlyConnector):
 
         source_urls = [reference]
         source_urls.extend(
-            str(page["web_url"])
-            for page in pages
-            if page.get("web_url")
+            str(page["web_url"]) for page in pages if page.get("web_url")
         )
         return RetrievedPayload(
             data={
@@ -195,9 +192,7 @@ class ConfluenceConnector(ReadOnlyConnector):
             data, response = self._client.request_json(
                 "GET",
                 f"rest/api/content/{encoded}",
-                query={
-                    "expand": "body.storage,version,space,history.lastUpdated"
-                },
+                query={"expand": "body.storage,version,space,history.lastUpdated"},
             )
             if not isinstance(data, Mapping):
                 raise ConnectorError("Confluence page response must be an object")

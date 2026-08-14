@@ -3,13 +3,17 @@
 ## Normal run lifecycle
 
 1. Generate or receive a plan.
-2. Inspect the plan and fingerprint.
-3. Create exact action approvals.
-4. Run policy-only dry run.
-5. Apply using only required connector classes.
-6. Review per-action state and verification.
-7. Verify the audit chain.
-8. Retain full evidence only when policy requires it.
+2. For live execution, bind the trusted integrations bundle and resolved
+   destinations/CA identities into the plan. Plugin identities may be bound
+   for review, but plugin execution remains disabled.
+3. Inspect the bound plan and fingerprint.
+4. Create exact action approvals with an explicit trusted approval-authority
+   key ring and the fingerprint printed by `master-agent inspect`.
+5. Run policy-only dry run.
+6. Apply using only required connector classes.
+7. Review per-action state and verification.
+8. Verify the audit chain.
+9. Retain full evidence only when policy requires it.
 
 ## Action states
 
@@ -38,8 +42,9 @@
 - Access tokens should be short-lived.
 - Token-file mode rejects group/world-readable files and expired tokens.
 - Approval TTLs should be minutes, not days.
-- Evidence cleanup should run independently of workflow execution.
-- Recurring locks left after a crash require operator investigation before removal.
+- Evidence expiry and orphan checks are preview-only. Destructive pruning and
+  quarantine are disabled pending descriptor-relative recursive maintenance.
+- Recurring execution is disabled; do not install or repair scheduler locks.
 
 ## Monitoring
 
@@ -51,6 +56,6 @@ Track:
 - provider throttling and retry exhaustion;
 - evidence nearing expiry;
 - audit-chain verification;
-- recurring lateness and duplicate-run prevention;
-- plugin inventory changes;
+- recurring registration and due-state drift;
+- plugin inventory changes, while keeping plugin execution disabled;
 - capability/governance configuration changes.

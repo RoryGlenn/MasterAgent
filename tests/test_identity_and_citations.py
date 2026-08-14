@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.citations import (
     enrich_resource_citations,
@@ -92,7 +92,9 @@ aliases = ["Alex"]
         self.assertTrue(verification.verified)
         self.assertEqual(result.after["person"]["key"], "rory")
         self.assertTrue(result.after["person"]["citation_id"].startswith("CIT-"))
-        self.assertEqual(result.after["retention"]["evidence_type"], "identity.mapping.metadata")
+        self.assertEqual(
+            result.after["retention"]["evidence_type"], "identity.mapping.metadata"
+        )
 
 
 class CitationTests(unittest.TestCase):

@@ -1,0 +1,28 @@
+# Runtime state and credentials
+.master-agent/
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Python environments, caches, and build output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Platform/editor metadata
+.DS_Store
+.idea/
+.vscode/

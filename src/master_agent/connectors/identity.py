@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
 from master_agent.connectors.utils import integer_parameter, string_parameter

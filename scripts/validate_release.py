@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import re
 import sys
+import tarfile
 import tomllib
-from typing import Iterable
-
+import zipfile
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import BinaryIO
 
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _FORBIDDEN_NAMES = {
@@ -20,7 +22,7 @@ _FORBIDDEN_NAMES = {
     "audit.sqlite3",
     "recurring.sqlite3",
 }
-_FORBIDDEN_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".pyc"}
+_FORBIDDEN_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".pyc", ".sqlite3"}
 _IGNORED_DIRS = {
     ".git",
     ".master-agent",
@@ -88,6 +90,73 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_demo(root, checks, errors)
     _validate_file_hygiene(root, checks, errors)
 
+    return ValidationReport(tuple(checks), tuple(errors))
+
+
+def validate_archive(path: Path) -> ValidationReport:
+    """Validate one built wheel or source archive without extracting it."""
+
+    checks: list[str] = []
+    errors: list[str] = []
+    if not path.is_file():
+        return ValidationReport((), (f"release archive not found: {path}",))
+    names: list[str] = []
+    try:
+        if path.suffix == ".whl":
+            with zipfile.ZipFile(path) as archive:
+                bad_member = archive.testzip()
+                if bad_member is not None:
+                    errors.append(f"wheel integrity check failed: {bad_member}")
+                for item in archive.infolist():
+                    if item.is_dir():
+                        continue
+                    names.append(item.filename)
+                    with archive.open(item) as handle:
+                        _consume_stream(handle)
+        elif path.name.endswith((".tar.gz", ".tar.bz2", ".tar.xz", ".tgz")):
+            with tarfile.open(path, mode="r:*") as archive:
+                for item in archive.getmembers():
+                    if item.issym() or item.islnk():
+                        errors.append(
+                            f"release archive contains link entry: {item.name}"
+                        )
+                        continue
+                    if not item.isfile():
+                        continue
+                    names.append(item.name)
+                    handle = archive.extractfile(item)
+                    if handle is not None:
+                        with handle:
+                            _consume_stream(handle)
+        else:
+            errors.append(f"unsupported release archive type: {path.name}")
+    except (OSError, tarfile.TarError, zipfile.BadZipFile) as error:
+        errors.append(f"release archive could not be read: {path}: {error}")
+
+    for name in names:
+        _validate_archive_member(name, errors)
+    if path.suffix == ".whl":
+        required_suffixes = (
+            "master_agent/__init__.py",
+            "master_agent/defaults/capabilities.toml",
+            ".dist-info/METADATA",
+        )
+    else:
+        required_suffixes = (
+            "/.ai/MASTER_AGENT.md",
+            "/.env.example",
+            "/config/capabilities.toml",
+            "/scripts/validate_release.py",
+            "/tests/test_release_metadata.py",
+            "/src/master_agent/__init__.py",
+        )
+    for required in required_suffixes:
+        if not any(name.endswith(required) for name in names):
+            errors.append(f"release archive is missing required file: {required}")
+    if not errors:
+        checks.append(
+            f"validated release archive {path.name} ({len(names)} files, no links)"
+        )
     return ValidationReport(tuple(checks), tuple(errors))
 
 
@@ -177,10 +246,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 71:
-        errors.append(f"expected 71 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 70:
+        errors.append(f"expected 70 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 71 typed capabilities")
+        checks.append("capability catalog contains 70 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")
@@ -213,7 +282,6 @@ def _validate_markdown_links(
                 count += 1
     if not any(item.startswith("broken Markdown") for item in errors):
         checks.append(f"validated {count} local Markdown links")
-
 
 
 def _validate_demo(
@@ -263,6 +331,8 @@ def _validate_demo(
     if verified == len(entries):
         checks.append(f"validated {verified} v1 demonstration artifacts")
 
+    _validate_demo_readiness(root, demo_root, checks, errors)
+
     draft_manifest_path = demo_root / "draft-package/manifest.json"
     draft_manifest = json.loads(draft_manifest_path.read_text(encoding="utf-8"))
     if draft_manifest.get("published") is not False:
@@ -272,9 +342,26 @@ def _validate_demo(
         path = draft_manifest_path.parent / relative
         if not path.is_file() or sha256_file(path) != str(entry["sha256"]):
             errors.append(f"draft package artifact mismatch: {relative}")
+    _validate_demo_powerpoint(demo_root, checks, errors)
+
+
+def _validate_demo_powerpoint(
+    demo_root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Validate the packaged demonstration deck with an installed reader."""
+
     try:
         from pptx import Presentation
+        from pptx.exc import PackageNotFoundError
+    except ImportError:
+        errors.append(
+            "v1 demonstration PowerPoint validation requires the python-pptx dependency"
+        )
+        return
 
+    try:
         deck = Presentation(demo_root / "draft-package/change-package.pptx")
         if len(deck.slides) != 3:
             errors.append(
@@ -282,8 +369,64 @@ def _validate_demo(
             )
         else:
             checks.append("v1 demonstration PowerPoint opens with 3 slides")
-    except Exception as error:
+    except (KeyError, OSError, PackageNotFoundError, TypeError, ValueError) as error:
         errors.append(f"v1 demonstration PowerPoint failed to open: {error}")
+
+
+def _validate_demo_readiness(
+    root: Path,
+    demo_root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Cross-check demo readiness claims against the shipped capability catalog."""
+
+    readiness_path = demo_root / "readiness.json"
+    catalog_path = root / "config/capabilities.toml"
+    try:
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+        with catalog_path.open("rb") as handle:
+            catalog = tomllib.load(handle)
+    except (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        tomllib.TOMLDecodeError,
+    ) as error:
+        errors.append(f"v1 demonstration readiness could not be validated: {error}")
+        return
+
+    if not isinstance(readiness, dict):
+        errors.append("v1 demonstration readiness must be an object")
+        return
+    raw_checks = readiness.get("checks")
+    if not isinstance(raw_checks, list):
+        errors.append("v1 demonstration readiness checks must be a list")
+        return
+    coverage = next(
+        (
+            item
+            for item in raw_checks
+            if isinstance(item, dict) and item.get("name") == "governance_coverage"
+        ),
+        None,
+    )
+    capabilities = catalog.get("capabilities")
+    if coverage is None or not isinstance(capabilities, dict):
+        errors.append("v1 demonstration readiness lacks governance coverage metadata")
+        return
+    observed = coverage.get("covered_capabilities")
+    expected = len(capabilities)
+    if not isinstance(observed, int) or isinstance(observed, bool):
+        errors.append("v1 demonstration covered_capabilities must be an integer")
+    elif observed != expected:
+        errors.append(
+            "v1 demonstration readiness capability count does not match the "
+            f"catalog ({observed} != {expected})"
+        )
+    else:
+        checks.append(f"v1 demonstration readiness covers all {expected} capabilities")
+
 
 def _validate_file_hygiene(
     root: Path,
@@ -291,8 +434,15 @@ def _validate_file_hygiene(
     errors: list[str],
 ) -> None:
     file_count = 0
+    runtime_directory = root / ".master-agent"
+    if runtime_directory.exists():
+        errors.append(
+            f"forbidden runtime directory in source tree: {runtime_directory}"
+        )
     for path in root.rglob("*"):
-        if any(part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts):
+        if any(
+            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+        ):
             continue
         if path.is_symlink():
             errors.append(f"source release must not contain symlink: {path}")
@@ -300,15 +450,57 @@ def _validate_file_hygiene(
         if not path.is_file():
             continue
         file_count += 1
-        if path.name in _FORBIDDEN_NAMES or path.suffix.lower() in _FORBIDDEN_SUFFIXES:
+        forbidden_environment = (
+            path.name.startswith(".env") and path.name != ".env.example"
+        )
+        if (
+            path.name in _FORBIDDEN_NAMES
+            or path.suffix.lower() in _FORBIDDEN_SUFFIXES
+            or forbidden_environment
+        ):
             errors.append(f"forbidden runtime/secret file in source tree: {path}")
-    if not any("forbidden runtime/secret" in item or "symlink" in item for item in errors):
+    if not any(
+        "forbidden runtime" in item
+        or "forbidden runtime/secret" in item
+        or "symlink" in item
+        for item in errors
+    ):
         checks.append(f"source-tree hygiene passed for {file_count} files")
+
+
+def _validate_archive_member(name: str, errors: list[str]) -> None:
+    """Reject unsafe paths and runtime/secret files in a built archive."""
+
+    relative = PurePosixPath(name)
+    if relative.is_absolute() or ".." in relative.parts:
+        errors.append(f"unsafe path in release archive: {name}")
+        return
+    if ".master-agent" in relative.parts:
+        errors.append(f"forbidden runtime directory in release archive: {name}")
+    filename = relative.name
+    suffix = Path(filename).suffix.lower()
+    forbidden_environment = filename.startswith(".env") and filename != ".env.example"
+    if (
+        filename in _FORBIDDEN_NAMES
+        or filename == ".DS_Store"
+        or suffix in _FORBIDDEN_SUFFIXES
+        or forbidden_environment
+    ):
+        errors.append(f"forbidden runtime/secret file in release archive: {name}")
+
+
+def _consume_stream(handle: BinaryIO) -> None:
+    """Read an archive member fully so integrity errors are observed."""
+
+    while handle.read(1024 * 1024):
+        pass
 
 
 def _iter_files(root: Path, *, suffixes: set[str]) -> Iterable[Path]:
     for path in root.rglob("*"):
-        if any(part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts):
+        if any(
+            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+        ):
             continue
         if path.is_file() and path.suffix.lower() in suffixes:
             yield path
@@ -317,6 +509,13 @@ def _iter_files(root: Path, *, suffixes: set[str]) -> Iterable[Path]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--archive",
+        action="append",
+        type=Path,
+        default=[],
+        help="also validate a built wheel or source archive",
+    )
     parser.add_argument("--output", type=Path)
     return parser
 
@@ -326,17 +525,27 @@ def main() -> int:
 
     args = _build_parser().parse_args()
     report = validate_project(args.root)
-    for check in report.checks:
+    checks = list(report.checks)
+    errors = list(report.errors)
+    for archive in args.archive:
+        archive_report = validate_archive(archive)
+        checks.extend(archive_report.checks)
+        errors.extend(archive_report.errors)
+    for check in checks:
         print(f"PASS {check}")
-    for error in report.errors:
+    for error in errors:
         print(f"FAIL {error}", file=sys.stderr)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
-            json.dumps(report.to_dict(), indent=2) + "\n",
+            json.dumps(
+                ValidationReport(tuple(checks), tuple(errors)).to_dict(),
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
-    return 0 if report.valid else 1
+    return 0 if not errors else 1
 
 
 if __name__ == "__main__":

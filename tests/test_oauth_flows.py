@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
 from master_agent.errors import AuthenticationError
 from master_agent.oauth import (
@@ -103,7 +104,9 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(challenges, ["ABCD-EFGH"])
         self.assertEqual(sleeps, [1])
         self.assertEqual(token.scopes, ("User.Read", "Mail.Read"))
-        self.assertEqual([item.method for item in transport.requests], ["POST", "POST", "POST"])
+        self.assertEqual(
+            [item.method for item in transport.requests], ["POST", "POST", "POST"]
+        )
 
     def test_restricted_token_file_round_trip_and_permission_enforcement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +126,65 @@ class OAuthFlowTests(unittest.TestCase):
                 path.chmod(0o644)
                 with self.assertRaises(AuthenticationError):
                     RestrictedTokenFileProvider(path).get_token()
+
+    @unittest.skipUnless(os.name == "posix", "symlink safety requires POSIX")
+    def test_token_write_does_not_follow_predictable_or_target_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            victim = root / "victim.txt"
+            victim.write_text("do-not-overwrite\n", encoding="utf-8")
+            path = root / "graph-token.json"
+            old_predictable_temp = path.with_suffix(path.suffix + ".tmp")
+            old_predictable_temp.symlink_to(victim)
+            token = AccessToken(
+                value="delegated-token",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                scopes=("User.Read",),
+                source="test",
+            )
+
+            write_token_file(path, token)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do-not-overwrite\n")
+            path.unlink()
+            path.symlink_to(victim)
+            with self.assertRaisesRegex(AuthenticationError, "symlink"):
+                write_token_file(path, token)
+            with self.assertRaises(AuthenticationError):
+                RestrictedTokenFileProvider(path).get_token()
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do-not-overwrite\n")
+
+    @unittest.skipUnless(os.name == "posix", "directory race test requires POSIX")
+    def test_token_write_rejects_parent_directory_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "tokens"
+            parent.mkdir()
+            original = root / "original-tokens"
+            attacker = root / "attacker"
+            attacker.mkdir()
+            token = AccessToken(
+                value="delegated-token",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                scopes=("User.Read",),
+                source="test",
+            )
+
+            def swap_parent(_size: int) -> str:
+                parent.rename(original)
+                parent.symlink_to(attacker, target_is_directory=True)
+                return "fixed-race-name"
+
+            with (
+                patch(
+                    "master_agent.oauth.secrets.token_hex",
+                    side_effect=swap_parent,
+                ),
+                self.assertRaisesRegex(AuthenticationError, "directory changed"),
+            ):
+                write_token_file(parent / "graph-token.json", token)
+
+            self.assertFalse((attacker / "graph-token.json").exists())
+            self.assertFalse((original / "graph-token.json").exists())
 
 
 if __name__ == "__main__":

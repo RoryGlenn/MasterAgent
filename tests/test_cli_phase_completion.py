@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
 
 from master_agent.cli import main
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +37,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "drafts"
+            output.mkdir(mode=0o700)
             stdout = StringIO()
             stderr = StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -72,9 +72,20 @@ class PhaseCompletionCliTests(unittest.TestCase):
             self.assertEqual(status, 0, stderr.getvalue())
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertGreaterEqual(len(payload["workflows"]), 2)
-            self.assertTrue(
-                all(not item["enabled"] for item in payload["workflows"])
-            )
+            self.assertTrue(all(not item["enabled"] for item in payload["workflows"]))
+
+    def test_evidence_prune_apply_is_disabled_before_traversal(self) -> None:
+        """Destructive recursive maintenance must remain non-routable."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "does-not-exist"
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                status = main(["evidence-prune", "--root", str(missing), "--apply"])
+
+            self.assertEqual(status, 1)
+            self.assertIn("pruning is disabled", stderr.getvalue())
+            self.assertFalse(missing.exists())
 
 
 if __name__ == "__main__":

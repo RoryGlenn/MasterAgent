@@ -1,3 +1,5 @@
+# Registration/status data only. recurring-run is disabled until exact
+# target/config/source and runtime-path bindings share one execution manifest.
 [scheduler]
 state_database = ".master-agent/recurring.sqlite3"
 lock_dir = ".master-agent/recurring-locks"

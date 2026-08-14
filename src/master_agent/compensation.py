@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from master_agent.errors import ValidationError
@@ -10,6 +11,8 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    CompensationDescriptor,
+    CompensationMode,
     ResourceRef,
     RiskLevel,
 )
@@ -24,55 +27,52 @@ def build_compensation_plan(
 ) -> ChangePlan:
     """Create a reverse-ordered plan from connector compensation metadata.
 
-    Manual-only compensation records are intentionally omitted and reported by
-    the caller from the original run result.
+    The function fails closed if any reported reversible effect cannot be
+    represented in the returned plan. This prevents an operator from mistaking
+    a silently partial rollback plan for complete compensation.
     """
 
     original_by_id = {action.action_id: action for action in original.actions}
     compensation_actions: list[AgentAction] = []
+    unavailable: list[str] = []
     previous: UUID | None = None
     for item in reversed(report.actions):
         if item.result is None:
+            continue
+        source = original_by_id.get(item.action_id)
+        if source is None:
+            unavailable.append(f"{item.action_id}: original action is unavailable")
+            continue
+        if source.risk is not RiskLevel.REVERSIBLE_WRITE:
             continue
         compensation = item.result.compensation
         if not isinstance(compensation, Mapping):
             after = item.result.after
             compensation = (
-                after.get("compensation")
-                if isinstance(after, Mapping)
-                else None
+                after.get("compensation") if isinstance(after, Mapping) else None
             )
         if not isinstance(compensation, Mapping):
+            unavailable.append(f"{item.action_id}: compensation descriptor is missing")
             continue
-        capability = str(compensation.get("capability", "")).strip()
-        if not capability:
+        descriptor = CompensationDescriptor.from_dict(compensation)
+        if descriptor.mode is not CompensationMode.PLAN:
+            unavailable.append(
+                f"{item.action_id}: {descriptor.reason or descriptor.mode}"
+            )
             continue
-        source = original_by_id.get(item.action_id)
-        if source is None:
-            continue
-        expected = compensation.get("expected_version")
-        excluded = {
-            "capability",
-            "expected_version",
-            "kind",
-            "automatic_delete_disabled",
-            "automatic_remote_branch_delete_disabled",
-        }
-        parameters = {
-            str(key): value
-            for key, value in compensation.items()
-            if key not in excluded and value is not None
-        }
+        capability = descriptor.capability or ""
         dependencies = (previous,) if previous is not None else ()
         action = AgentAction(
             capability=capability,
             target=ResourceRef(
                 system=source.target.system,
                 resource_type=source.target.resource_type,
-                resource_id=source.target.resource_id,
-                expected_version=str(expected) if expected is not None else None,
+                resource_id=(
+                    descriptor.target_resource_id or source.target.resource_id
+                ),
+                expected_version=descriptor.expected_version,
             ),
-            parameters=parameters,
+            parameters=descriptor.parameters,
             risk=RiskLevel.REVERSIBLE_WRITE,
             authority_source=AuthoritySource.DIRECT_USER,
             requires_approval=True,
@@ -88,8 +88,15 @@ def build_compensation_plan(
         compensation_actions.append(action)
         previous = action.action_id
 
+    if unavailable:
+        raise ValidationError(
+            "run cannot produce a complete separately approvable compensation plan: "
+            + "; ".join(unavailable)
+        )
     if not compensation_actions:
-        raise ValidationError("run contains no automatic compensation operations")
+        raise ValidationError(
+            "run contains no separately approvable compensation operations"
+        )
     return ChangePlan(
         goal=f"Compensate reversible effects of plan {original.plan_id}.",
         actions=tuple(compensation_actions),

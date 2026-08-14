@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
-from master_agent.connectors.communications import OutlookSendConnector, TeamsSendConnector
+from master_agent.connectors.communications import (
+    OutlookSendConnector,
+    TeamsSendConnector,
+)
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.confluence_write import ConfluenceWriteConnector
 from master_agent.connectors.drafts import (
@@ -28,13 +31,15 @@ from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
-from master_agent.connectors.microsoft import MicrosoftIdentityConnector, SharePointConnector
+from master_agent.connectors.microsoft import (
+    MicrosoftIdentityConnector,
+    SharePointConnector,
+)
 from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.errors import ConfigurationError
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +51,9 @@ class ConnectorFactoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root / "integrations.toml"
-            config_path.write_text(_integration_text(enable_mutations=False), encoding="utf-8")
+            config_path.write_text(
+                _integration_text(enable_mutations=False), encoding="utf-8"
+            )
             config = IntegrationConfig.from_toml(config_path)
 
             read_only = build_live_connectors(
@@ -66,7 +73,9 @@ class ConnectorFactoryTests(unittest.TestCase):
             self.assertNotIn("teams.chat.message.send", capabilities)
             self.assertNotIn("bitbucket.branch.push", capabilities)
 
-            config_path.write_text(_integration_text(enable_mutations=True), encoding="utf-8")
+            config_path.write_text(
+                _integration_text(enable_mutations=True), encoding="utf-8"
+            )
             config = IntegrationConfig.from_toml(config_path)
             caller_did_not_enable = build_live_connectors(
                 config,
@@ -91,14 +100,40 @@ class ConnectorFactoryTests(unittest.TestCase):
                 "jira.issue.update",
                 "confluence.page.update",
                 "bitbucket.pull_request.create",
-                "bitbucket.branch.push",
                 "sharepoint.file.upload",
-                "onenote.page.update",
                 "outlook.email.send",
                 "teams.chat.message.send",
-                "repository.patch.apply",
             ):
                 self.assertIn(capability, capabilities)
+            self.assertNotIn("bitbucket.branch.push", capabilities)
+            self.assertNotIn("repository.patch.apply", capabilities)
+            self.assertNotIn("onenote.page.create", capabilities)
+            self.assertNotIn("onenote.page.update", capabilities)
+
+    def test_bitbucket_local_git_publication_is_explicitly_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "integrations.toml"
+            config_path.write_text(
+                _integration_text(
+                    enable_mutations=True,
+                    enable_git_mutations=True,
+                ),
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(config_path)
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "branch publication is disabled",
+            ):
+                build_live_connectors(
+                    config,
+                    environ={},
+                    include_writes=True,
+                    workspace_root=root,
+                    artifact_root=root,
+                )
 
     def test_sharepoint_write_requires_artifact_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -154,23 +189,46 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         missing = sorted(connector_capabilities - set(catalog.definitions))
         self.assertEqual(missing, [])
 
+    def test_onenote_writes_are_disabled_in_catalog_and_connector(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+
+        self.assertFalse(catalog.definitions["onenote.page.create"].enabled)
+        self.assertFalse(catalog.definitions["onenote.page.update"].enabled)
+        self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
+
+    def test_local_git_mutations_are_disabled_in_catalog(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+
+        for capability in (
+            "bitbucket.branch.push",
+            "repository.branch.create",
+            "repository.branch.push",
+            "repository.commit.create",
+            "repository.patch.apply",
+        ):
+            with self.subTest(capability=capability):
+                self.assertFalse(catalog.definitions[capability].enabled)
+
 
 def _capabilities(connectors: tuple[object, ...]) -> set[str]:
     return {
-        capability
-        for connector in connectors
-        for capability in getattr(connector, "capabilities")
+        capability for connector in connectors for capability in connector.capabilities
     }
 
 
-def _integration_text(*, enable_mutations: bool) -> str:
+def _integration_text(
+    *,
+    enable_mutations: bool,
+    enable_git_mutations: bool = False,
+) -> str:
     value = "true" if enable_mutations else "false"
+    git_value = "true" if enable_git_mutations else "false"
     return textwrap.dedent(
         f"""
         [connectors.jira]
         enabled = true
         deployment = "cloud"
-        base_url = "https://jira.example.test"
+        base_url = "https://example.atlassian.net"
         auth_mode = "none"
         write_enabled = {value}
         writes_enabled = {value}
@@ -178,7 +236,7 @@ def _integration_text(*, enable_mutations: bool) -> str:
         [connectors.confluence]
         enabled = true
         deployment = "cloud"
-        base_url = "https://confluence.example.test"
+        base_url = "https://example.atlassian.net"
         auth_mode = "none"
         write_enabled = {value}
         writes_enabled = {value}
@@ -190,7 +248,7 @@ def _integration_text(*, enable_mutations: bool) -> str:
         auth_mode = "none"
         write_enabled = {value}
         pull_request_writes_enabled = {value}
-        branch_push_enabled = {value}
+        branch_push_enabled = {git_value}
         branch_prefix = "agent/"
 
         [connectors.microsoft]
@@ -199,6 +257,7 @@ def _integration_text(*, enable_mutations: bool) -> str:
         base_url = "https://graph.microsoft.com/v1.0"
         auth_mode = "none"
         identity_mode = "delegated"
+        max_pages = 16
         write_enabled = {value}
         send_enabled = {value}
         sharepoint_writes_enabled = {value}

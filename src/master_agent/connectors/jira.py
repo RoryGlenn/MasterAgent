@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
@@ -43,7 +44,7 @@ class JiraConnector(ReadOnlyConnector):
             transport=transport,
             timeout_seconds=config.timeout_seconds,
             max_response_bytes=config.max_response_bytes,
-            ca_bundle=config.ca_bundle,
+            ca_bundle_data=config.ca_bundle_data,
             allowed_methods=frozenset({"GET", "HEAD", "POST"}),
         )
 

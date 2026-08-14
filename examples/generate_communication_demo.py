@@ -15,7 +15,6 @@ from master_agent.workflows.communication_context import (
     render_communication_context_package,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "examples" / "phase2b-demo"
 

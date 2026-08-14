@@ -2,26 +2,18 @@
 
 from __future__ import annotations
 
+import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatch
 from types import MappingProxyType
-import tomllib
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
-from master_agent.models import AgentAction, RiskLevel
-
-
-class DataClassification(StrEnum):
-    """Supported information classifications."""
-
-    PUBLIC = "public"
-    INTERNAL = "internal"
-    CONFIDENTIAL = "confidential"
-    RESTRICTED = "restricted"
+from master_agent.models import AgentAction, DataClassification, RiskLevel
 
 
 class EnvironmentKind(StrEnum):
@@ -106,7 +98,7 @@ class GovernanceProfile:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
     @classmethod
-    def from_toml(cls, path: ConfigSource) -> "GovernanceProfile":
+    def from_toml(cls, path: ConfigSource) -> GovernanceProfile:
         """Load an organization governance profile."""
 
         try:
@@ -125,17 +117,14 @@ class GovernanceProfile:
         rules: list[GovernanceRule] = []
         for index, value in enumerate(raw_rules, start=1):
             if not isinstance(value, Mapping):
-                raise ConfigurationError(
-                    f"governance rule {index} must be a table"
-                )
+                raise ConfigurationError(f"governance rule {index} must be a table")
             try:
                 classifications = frozenset(
                     DataClassification(str(item))
                     for item in value.get("data_classifications", [])
                 )
                 environments = frozenset(
-                    EnvironmentKind(str(item))
-                    for item in value.get("environments", [])
+                    EnvironmentKind(str(item)) for item in value.get("environments", [])
                 )
                 approval = ApprovalTier(str(value["approval_tier"]))
             except (KeyError, ValueError) as error:
@@ -150,7 +139,9 @@ class GovernanceProfile:
                     data_classifications=classifications,
                     approval_tier=approval,
                     environments=environments,
-                    enabled=_strict_bool(value.get("enabled", True), f"governance rule {index} enabled"),
+                    enabled=_strict_bool(
+                        value.get("enabled", True), f"governance rule {index} enabled"
+                    ),
                 )
             )
         return cls(
@@ -160,9 +151,7 @@ class GovernanceProfile:
             ),
             secret_manager=str(organization.get("secret_manager", "")),
             audit_sink=str(organization.get("audit_sink", "")),
-            external_model_policy=str(
-                organization.get("external_model_policy", "")
-            ),
+            external_model_policy=str(organization.get("external_model_policy", "")),
             rules=tuple(rules),
             metadata={
                 key: value
@@ -197,23 +186,33 @@ class GovernanceProfile:
         if self.environment not in rule.environments:
             return (
                 False,
-                f"capability {action.capability} is not allowed in "
-                f"{self.environment}",
+                (
+                    f"capability {action.capability} is not allowed in "
+                    f"{self.environment}"
+                ),
+            )
+        if action.data_classification not in rule.data_classifications:
+            return (
+                False,
+                (
+                    f"data classification {action.data_classification} is not allowed "
+                    f"for {action.capability}"
+                ),
             )
         if rule.approval_tier is ApprovalTier.PROHIBITED:
             return False, f"governance prohibits {action.capability}"
-        if (
-            rule.approval_tier is ApprovalTier.AUTOMATIC
-            and action.risk
-            not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
-        ):
+        if rule.approval_tier is ApprovalTier.AUTOMATIC and action.risk not in {
+            RiskLevel.READ_ONLY,
+            RiskLevel.LOCAL_GENERATION,
+        }:
             return (
                 False,
-                f"write capability {action.capability} cannot use automatic "
-                "governance approval",
+                (
+                    f"write capability {action.capability} cannot use automatic "
+                    "governance approval"
+                ),
             )
         return True, f"governed by {rule.owner} ({rule.approval_tier})"
-
 
     def approval_tier_for(self, capability: str) -> ApprovalTier | None:
         """Return the effective approval tier for a capability."""
@@ -239,9 +238,7 @@ class GovernanceProfile:
 
         rule = self.rule_for(capability)
         if rule is None:
-            raise ConfigurationError(
-                f"no governance owner/rule covers {capability}"
-            )
+            raise ConfigurationError(f"no governance owner/rule covers {capability}")
         if not rule.enabled or rule.approval_tier is ApprovalTier.PROHIBITED:
             raise ConfigurationError(f"governance prohibits {capability}")
         return {
@@ -265,8 +262,9 @@ class GovernanceProfile:
                 errors.append(
                     f"enabled catalog capability is disabled by governance: {name}"
                 )
-            if definition.authentication != rule.authentication and not (
-                rule.authentication == "provider_specific"
+            if (
+                definition.authentication != rule.authentication
+                and rule.authentication != "provider_specific"
             ):
                 errors.append(
                     f"authentication mismatch for {name}: "

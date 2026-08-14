@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Mapping
+from typing import Any, Protocol, runtime_checkable
 
 from master_agent.models import (
     AgentAction,
@@ -35,6 +36,26 @@ class Connector(Protocol):
         result: ExecutionResult,
     ) -> VerificationResult:
         """Verify actual state after execution."""
+
+
+@runtime_checkable
+class ClosableConnector(Protocol):
+    """Optional connector contract for releasing pinned runtime resources."""
+
+    def close(self) -> None:
+        """Release connector-owned runtime resources."""
+
+
+@runtime_checkable
+class IdempotencyVerifyingConnector(Protocol):
+    """Optional contract for independently verifying a completed retry."""
+
+    def verify_completed(
+        self,
+        action: AgentAction,
+        prior_result: Mapping[str, Any],
+    ) -> VerificationResult:
+        """Verify that the previously completed effect still holds."""
 
 
 @runtime_checkable

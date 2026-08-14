@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import tomllib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from master_agent.config_sources import ConfigSource
+from master_agent.connectors.drafts import write_artifact_bundle
+from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError
 from master_agent.models import (
     AgentAction,
@@ -47,14 +50,16 @@ class DraftPackageSettings:
     repository_after_text: str
 
     @classmethod
-    def from_toml(cls, path: ConfigSource) -> "DraftPackageSettings":
+    def from_toml(cls, path: ConfigSource) -> DraftPackageSettings:
         """Load draft package settings from TOML."""
 
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
         except FileNotFoundError as error:
-            raise ConfigurationError(f"draft-package configuration not found: {path}") from error
+            raise ConfigurationError(
+                f"draft-package configuration not found: {path}"
+            ) from error
         package = _table(raw, "package")
         jira = _table(raw, "jira")
         confluence = _table(raw, "confluence")
@@ -222,64 +227,62 @@ class DraftPackageArtifacts:
 def render_draft_package(
     report: RunReport,
     *,
-    output_dir: Path,
+    output_dir: Path | PinnedDirectory,
 ) -> DraftPackageArtifacts:
-    """Write a package summary and integrity manifest."""
+    """Create a package summary and manifest without following public paths."""
 
-    root = output_dir.expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    artifacts: list[dict[str, Any]] = []
-    rows: list[str] = []
-    for item in report.actions:
-        result = item.result
-        after = result.after if result is not None else None
-        path_value = after.get("path") if isinstance(after, Mapping) else None
-        digest = after.get("sha256") if isinstance(after, Mapping) else None
-        size = after.get("size") if isinstance(after, Mapping) else None
-        if isinstance(path_value, str):
-            path = Path(path_value).resolve()
-            try:
-                relative = path.relative_to(root)
-            except ValueError:
-                relative = path
-            artifacts.append(
-                {
-                    "capability": item.capability,
-                    "path": str(relative),
-                    "sha256": digest,
-                    "size": size,
-                }
-            )
-        rows.append(
-            f"| `{item.capability}` | `{item.state}` | {item.message} |"
+    with pin_directory(output_dir) as directory:
+        root = directory.path
+        artifacts: list[dict[str, Any]] = []
+        rows: list[str] = []
+        for item in report.actions:
+            result = item.result
+            after = result.after if result is not None else None
+            path_value = after.get("path") if isinstance(after, Mapping) else None
+            digest = after.get("sha256") if isinstance(after, Mapping) else None
+            size = after.get("size") if isinstance(after, Mapping) else None
+            if isinstance(path_value, str):
+                path = Path(path_value)
+                relative = Path(path.name) if path.parent == root else path
+                artifacts.append(
+                    {
+                        "capability": item.capability,
+                        "path": str(relative),
+                        "sha256": digest,
+                        "size": size,
+                    }
+                )
+            rows.append(f"| `{item.capability}` | `{item.state}` | {item.message} |")
+        manifest = {
+            "schema": "master-agent/draft-package-manifest@1",
+            "run_id": str(report.run_id),
+            "plan_id": str(report.plan_id),
+            "plan_fingerprint": report.plan_fingerprint,
+            "successful": report.successful,
+            "published": False,
+            "artifacts": artifacts,
+        }
+        manifest_path = root / "manifest.json"
+        summary_path = root / "README.md"
+        manifest_bytes = (
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+        summary_bytes = (
+            "# Draft change package\n\n"
+            "No external system was modified. No email or Teams message was sent.\n\n"
+            "| Capability | State | Result |\n"
+            "|---|---|---|\n"
+            + "\n".join(rows)
+            + "\n\nSee `manifest.json` for artifact hashes.\n"
+        ).encode("utf-8")
+        write_artifact_bundle(
+            directory,
+            (
+                (manifest_path, manifest_bytes, "application/json"),
+                (summary_path, summary_bytes, "text/markdown"),
+            ),
         )
-    manifest = {
-        "schema": "master-agent/draft-package-manifest@1",
-        "run_id": str(report.run_id),
-        "plan_id": str(report.plan_id),
-        "plan_fingerprint": report.plan_fingerprint,
-        "successful": report.successful,
-        "published": False,
-        "artifacts": artifacts,
-    }
-    manifest_path = root / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    summary_path = root / "README.md"
-    summary_path.write_text(
-        "# Draft change package\n\n"
-        "No external system was modified. No email or Teams message was sent.\n\n"
-        "| Capability | State | Result |\n"
-        "|---|---|---|\n"
-        + "\n".join(rows)
-        + "\n\nSee `manifest.json` for artifact hashes.\n",
-        encoding="utf-8",
-    )
-    _restrict(summary_path)
-    _restrict(manifest_path)
-    return DraftPackageArtifacts(summary_path, manifest_path)
+        return DraftPackageArtifacts(summary_path, manifest_path)
 
 
 def _table(raw: Mapping[str, Any], name: str) -> Mapping[str, Any]:
@@ -308,10 +311,3 @@ def _string_list(value: Any, name: str) -> tuple[str, ...]:
     ):
         raise ConfigurationError(f"{name} must be a non-empty string list")
     return tuple(item.strip() for item in value)
-
-
-def _restrict(path: Path) -> None:
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass

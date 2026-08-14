@@ -22,18 +22,33 @@ Read results are normalized into stable schemas, marked as untrusted content, sc
 
 Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects.
 
+Local Git mutation internals are quarantined. Their capability definitions are
+disabled, governance marks them prohibited, and the live factory does not
+register either workspace or local-Git publication connectors. Descriptor-pinned
+subprocess working directories alone do not prove that every ref, reflog, index,
+lock, object, and temporary metadata helper stayed on the same repository
+identity. Patch, branch, commit, and push remain unavailable until that entire
+metadata boundary is descriptor-backed and adversarially verified.
+
 ## Compensation
 
 Compensation is connector-specific:
 
 - Jira restores captured fields, removes the comment created by the workflow, or applies a configured reverse transition;
 - Confluence restores the captured prior page version/body or removes the exact page created by the workflow;
-- Bitbucket declines the exact PR and may delete only the exact unchanged branch created by the workflow;
-- SharePoint restores the captured prior version or removes the exact newly created item when the connector has sufficient evidence;
-- OneNote removes the exact new page or restores retained prior HTML;
-- Git restores the captured branch/commit/worktree state under strict preconditions.
+- Bitbucket declines the exact PR created by the workflow;
+- SharePoint restores the captured prior version only after hashing the prior, uploaded, and restored provider bytes;
+- Git mutation and compensation are not exposed by the live registry.
 
 A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
+
+SharePoint byte verification uses the bounded Graph content endpoint and never
+forwards credentials across an origin change. Tenants that return a cross-origin
+download redirect therefore remain fail-closed until a destination-attested,
+no-auth download broker is implemented. The full upload/verify/restore lifecycle
+requires at least 12 requests; packaged Microsoft defaults reserve 16 and cap
+approved uploads at 1,000,000 bytes so repeated byte proofs remain inside the
+shared response budget.
 
 ## Communication connectors
 
@@ -43,4 +58,7 @@ A provider acceptance response proves submission, not human delivery or readersh
 
 ## Plugins
 
-Connector plugins are Python entry points. Discovery reads entry-point metadata only. Loading imports only names explicitly passed to `--plugin` during `run --apply`. The returned connector enters the same capability registry and cannot overlap an existing capability for the same system.
+Connector plugins are Python entry points. Discovery, locking, and plan binding
+read metadata and artifact bytes without importing entry modules. CLI execution
+is disabled: `run --apply --plugin` fails closed before import until an isolated
+worker can verify the complete dependency closure.

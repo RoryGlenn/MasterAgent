@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
+from urllib.parse import urlparse
 
+from master_agent.audit import implemented_audit_sink
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.governance import EnvironmentKind, GovernanceProfile
+from master_agent.identity import IdentityRegistry
 from master_agent.oauth import AccessToken, inspect_jwt_claims
 from master_agent.oauth_config import OAuthProfiles
 
@@ -41,6 +45,7 @@ def assess_readiness(
     governance: GovernanceProfile,
     integrations: IntegrationConfig,
     oauth_profiles: OAuthProfiles | None = None,
+    identities: IdentityRegistry | None = None,
     environ: Mapping[str, str] | None = None,
     tokens: Mapping[str, AccessToken] | None = None,
 ) -> ReadinessReport:
@@ -54,6 +59,26 @@ def assess_readiness(
     checks: list[Mapping[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
+
+    audit_sink = implemented_audit_sink(governance.audit_sink)
+    audit_sink_ready = audit_sink is not None
+    checks.append(
+        {
+            "name": "audit_sink",
+            "passed": audit_sink_ready,
+            "configured": governance.audit_sink,
+            "kind": str(audit_sink.kind) if audit_sink is not None else None,
+            "external": audit_sink.external if audit_sink is not None else None,
+            "tamper_resistant": (
+                audit_sink.tamper_resistant if audit_sink is not None else None
+            ),
+        }
+    )
+    if audit_sink is None:
+        errors.append(
+            "configured audit sink has no implemented typed adapter: "
+            f"{governance.audit_sink}"
+        )
 
     coverage = governance.coverage_report(catalog)
     checks.append(
@@ -70,7 +95,15 @@ def assess_readiness(
         if not connector.enabled:
             continue
         enabled_connectors += 1
-        connector_errors = connector.configuration_errors(environ)
+        attestation_error = connector.principal_attestation_error()
+        connector_errors = tuple(
+            dict.fromkeys(
+                (
+                    *connector.configuration_errors(environ),
+                    *((attestation_error,) if attestation_error is not None else ()),
+                )
+            )
+        )
         checks.append(
             {
                 "name": f"connector:{name}",
@@ -84,6 +117,22 @@ def assess_readiness(
         warnings.append(
             "no live connectors are enabled; runtime is safe but not connected"
         )
+
+    if governance.environment is not EnvironmentKind.DEVELOPMENT:
+        deployment_errors = _non_development_placeholder_errors(
+            governance=governance,
+            integrations=integrations,
+            identities=identities,
+            enabled_connectors=enabled_connectors,
+        )
+        checks.append(
+            {
+                "name": "non_development_placeholders",
+                "passed": not deployment_errors,
+                "errors": list(deployment_errors),
+            }
+        )
+        errors.extend(deployment_errors)
 
     if oauth_profiles is not None:
         for name, profile in sorted(oauth_profiles.profiles.items()):
@@ -103,8 +152,8 @@ def assess_readiness(
             errors.extend(f"oauth {name}: {item}" for item in profile_errors)
 
     for name, token in sorted((tokens or {}).items()):
-        profile = oauth_profiles.profiles.get(name) if oauth_profiles else None
-        required = set(profile.scopes if profile else ())
+        token_profile = oauth_profiles.profiles.get(name) if oauth_profiles else None
+        required = set(token_profile.scopes if token_profile else ())
         granted = {item.casefold() for item in token.scopes}
         claims = inspect_jwt_claims(token.value)
         claim_scopes = str(claims.get("scp", "")).split()
@@ -141,8 +190,13 @@ def assess_readiness(
             approved = approval_value
         if not approved:
             errors.append("production governance has not been explicitly approved")
-        if "local" in governance.audit_sink.casefold():
-            errors.append("production audit sink must not be local-only")
+        if audit_sink is None:
+            errors.append(
+                "production requires an implemented external, tamper-resistant "
+                "audit sink"
+            )
+        elif not audit_sink.external or not audit_sink.tamper_resistant:
+            errors.append("production audit sink must be external and tamper-resistant")
         if "environment" in governance.secret_manager.casefold():
             warnings.append(
                 "production should use an approved secret manager rather than "
@@ -156,3 +210,62 @@ def assess_readiness(
         errors=tuple(dict.fromkeys(errors)),
         warnings=tuple(dict.fromkeys(warnings)),
     )
+
+
+def _non_development_placeholder_errors(
+    *,
+    governance: GovernanceProfile,
+    integrations: IntegrationConfig,
+    identities: IdentityRegistry | None,
+    enabled_connectors: int,
+) -> tuple[str, ...]:
+    """Reject packaged example facts outside the development environment."""
+
+    errors: list[str] = []
+    placeholders = {
+        "unassigned",
+        "example",
+        "example-organization",
+        "platform-owner",
+        "system-owner",
+        "source-control-owner",
+        "communications-owner",
+    }
+    if governance.organization.strip().casefold() in placeholders:
+        errors.append("non-development organization must not be a placeholder")
+    for key, value in governance.metadata.items():
+        if key.endswith("_owner") and str(value).strip().casefold() in placeholders:
+            errors.append(f"non-development governance owner is a placeholder: {key}")
+    for rule in governance.rules:
+        if rule.owner.strip().casefold() in placeholders:
+            errors.append(
+                f"non-development governance rule owner is a placeholder: "
+                f"{rule.pattern}"
+            )
+    if enabled_connectors == 0:
+        errors.append("non-development deployment requires an enabled connector")
+    for name, connector in integrations.connectors.items():
+        if not connector.enabled or not connector.base_url:
+            continue
+        hostname = (urlparse(connector.base_url).hostname or "").casefold()
+        if hostname in {"localhost", "127.0.0.1", "::1"} or any(
+            label == "example" or label.startswith("example-")
+            for label in hostname.split(".")
+        ):
+            errors.append(
+                f"non-development connector uses a placeholder endpoint: {name}"
+            )
+    if identities is None or not identities.people:
+        errors.append(
+            "non-development deployment requires a reviewed identity registry"
+        )
+    else:
+        for person in identities.people.values():
+            for system, value in person.identifiers.items():
+                normalized = value.strip().casefold()
+                if normalized == "me" or "@example." in normalized:
+                    errors.append(
+                        f"non-development identity is a placeholder: "
+                        f"{person.key}.{system}"
+                    )
+    return tuple(dict.fromkeys(errors))

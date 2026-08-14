@@ -32,7 +32,9 @@ Enable one read connector at a time and run:
 master-agent discover --systems jira --probe
 ```
 
-Then run the relevant read-only package workflow. Review normalized evidence, citations, retention, and audit output.
+Then generate and review the relevant read-only plan. Execute it only through a
+manifest-bound `run --apply`; the legacy weekly-status and communication-context
+package commands are disabled.
 
 ## 7. Validate draft-only output
 
@@ -40,15 +42,20 @@ Run `master-agent draft-package`. Review the generated `.eml`, Teams draft, deck
 
 ## 8. Validate reversible writes in non-production
 
-Use disposable Jira issues, Confluence pages, branches, SharePoint files, and OneNote pages. Capture expected versions. Obtain exact approvals. Enable only one granular provider flag. Execute, verify, and test compensation.
+Use disposable Jira issues, Confluence pages, and SharePoint files. Capture
+expected versions. Obtain exact approvals. Enable only one granular provider
+flag. Execute, verify, and test compensation. Do not enable local Git or OneNote
+writes; their catalog, governance, and live-registry routes are disabled.
 
 ## 9. Validate communication
 
 Use designated test recipients/chats/channels. Approve exact content. Verify provider identity and tenant restrictions. Confirm the runtime reports provider acceptance rather than claiming delivery/read receipt.
 
-## 10. Enable one recurring workflow
+## 10. Inspect recurring registrations
 
-Keep delivery local/draft-only. Set strict capability and canonical-source allowlists. Run manually, inspect scheduler state, then install the scheduler invocation. Do not enable overlapping broad workflows.
+Use `master-agent recurring-status` for due-state review. Do not install a
+`recurring-run` scheduler invocation; execution is disabled pending exact
+target/config/source and runtime-manifest binding.
 
 ## 11. Production controls
 
@@ -58,8 +65,7 @@ Before production:
 - use an approved secret manager;
 - define incident response and token revocation;
 - define evidence retention/legal hold;
-- restrict plugin installation and entry-point names;
-- pin package hashes;
+- keep plugin execution disabled; inventory and pin artifacts only for review;
 - review every enabled capability and connector gate;
 - preserve a tested rollback procedure;
 - monitor provider throttling and authentication failures.

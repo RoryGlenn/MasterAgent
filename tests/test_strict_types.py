@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
@@ -13,8 +12,8 @@ from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.governance import GovernanceProfile
 from master_agent.models import ChangePlan
 from master_agent.oauth_config import OAuthProfiles
-from master_agent.planners.static import build_weekly_status_plan
 from master_agent.orchestrator import RunReport
+from master_agent.planners.static import build_weekly_status_plan
 
 
 class StrictBooleanTests(unittest.TestCase):
@@ -71,9 +70,11 @@ class StrictBooleanTests(unittest.TestCase):
             for filename, content, loader in cases:
                 path = root / filename
                 path.write_text(content, encoding="utf-8")
-                with self.subTest(filename=filename):
-                    with self.assertRaises(ConfigurationError):
-                        loader(path)
+                with (
+                    self.subTest(filename=filename),
+                    self.assertRaises(ConfigurationError),
+                ):
+                    loader(path)
 
 
 if __name__ == "__main__":

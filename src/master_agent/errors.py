@@ -7,6 +7,10 @@ class MasterAgentError(Exception):
     """Base exception for governed runtime failures."""
 
 
+class StructuredDataTypeError(TypeError, ValueError):
+    """Malformed structured data with backward-compatible value semantics."""
+
+
 class ValidationError(MasterAgentError):
     """Raised when a model or configuration is invalid."""
 
@@ -25,6 +29,10 @@ class ApprovalRequiredError(MasterAgentError):
 
 class ConnectorError(MasterAgentError):
     """Raised when a connector cannot execute an action."""
+
+
+class PreEffectError(ConnectorError):
+    """Certify that a connector stopped before any observable side effect."""
 
 
 class UnsupportedCapabilityError(ConnectorError):

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from enum import StrEnum
-import base64
 
 from master_agent.errors import ConfigurationError
 from master_agent.oauth import TokenProvider
@@ -37,7 +37,9 @@ class ResolvedAuth:
     mode: AuthMode
     username: str | None = None
     secret: str | None = field(default=None, repr=False)
-    token_provider: TokenProvider | None = field(default=None, repr=False, compare=False)
+    token_provider: TokenProvider | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def headers(self) -> dict[str, str]:
         """Build HTTP authentication headers.
@@ -76,7 +78,7 @@ class ResolvedAuth:
                 raise ConfigurationError(
                     "username is required for Basic authentication"
                 )
-            material = f"{self.username}:{self.secret}".encode("utf-8")
+            material = f"{self.username}:{self.secret}".encode()
             encoded = base64.b64encode(material).decode("ascii")
             return {"Authorization": f"Basic {encoded}"}
         raise ConfigurationError(f"unsupported authentication mode: {self.mode}")
