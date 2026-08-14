@@ -7,6 +7,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -15,11 +16,20 @@ from pathlib import Path
 from typing import Self
 from urllib.parse import urlparse
 
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConnectorError
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_INDEX_BYTES = 128 * 1024 * 1024
 _MAX_REFLOG_BYTES = 128 * 1024 * 1024
+_PINNED_CWD_EXEC = (
+    "import os,sys;"
+    "fd=int(sys.argv[1]);"
+    "argv=sys.argv[2:];"
+    "os.fchdir(fd);"
+    "os.close(fd);"
+    "os.execve(argv[0],argv,os.environ)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +424,7 @@ class GitSandbox:
         index_file: Path | None = None,
         bare_repository: bool = False,
         worktree: Path | None = None,
+        working_directory: PinnedDirectory | None = None,
         check: bool = True,
     ) -> SandboxedGitResult:
         """Run an argv-only Git command with a minimal deterministic environment."""
@@ -426,28 +437,73 @@ class GitSandbox:
             command.extend(
                 (
                     f"--git-dir={repository.resolve()}",
-                    f"--work-tree={worktree.resolve()}",
+                    (
+                        "--work-tree=."
+                        if working_directory is not None
+                        else f"--work-tree={worktree.resolve()}"
+                    ),
                     "-c",
                     "core.bare=false",
                 )
             )
         elif not bare_repository:
-            command.extend(("-c", f"core.worktree={repository.resolve()}"))
+            command.extend(
+                (
+                    "-c",
+                    (
+                        "core.worktree=."
+                        if working_directory is not None
+                        else f"core.worktree={repository.resolve()}"
+                    ),
+                )
+            )
         command.extend(arguments)
+        inherited_descriptor: int | None = None
         try:
+            launch_command = command
+            launch_directory: Path = repository
+            pass_descriptors: tuple[int, ...] = ()
+            if working_directory is not None:
+                selected = worktree if worktree is not None else repository
+                if Path(os.path.abspath(os.fspath(selected))) != working_directory.path:
+                    raise ConnectorError(
+                        "pinned Git working directory does not match the command path"
+                    )
+                if os.name != "posix" or not hasattr(os, "fchdir"):
+                    raise ConnectorError(
+                        "descriptor-backed Git execution is unavailable"
+                    )
+                inherited_descriptor = working_directory.duplicate_fd()
+                launch_command = [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    _PINNED_CWD_EXEC,
+                    str(inherited_descriptor),
+                    *command,
+                ]
+                launch_directory = Path(os.sep)
+                pass_descriptors = (inherited_descriptor,)
             completed = subprocess.run(
-                command,
-                cwd=repository,
+                launch_command,
+                cwd=launch_directory,
                 input=input_bytes,
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
                 env=self._environment(index_file=index_file),
+                close_fds=True,
+                pass_fds=pass_descriptors,
             )
+            if working_directory is not None:
+                working_directory.validate()
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ConnectorError(
                 f"fixed Git operation failed: {type(error).__name__}"
             ) from error
+        finally:
+            if inherited_descriptor is not None:
+                os.close(inherited_descriptor)
         result = SandboxedGitResult(
             stdout=completed.stdout.decode("utf-8", errors="replace"),
             stdout_bytes=completed.stdout,

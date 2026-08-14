@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.sqlite_safety import (
     PinnedSQLiteDatabase,
@@ -80,8 +81,16 @@ class AuditLog:
         SQLite database path.
     """
 
-    def __init__(self, database: Path) -> None:
-        self._state = PinnedSQLiteDatabase(database)
+    def __init__(
+        self,
+        database: Path,
+        *,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        self._state = PinnedSQLiteDatabase(
+            database,
+            parent_directory=parent_directory,
+        )
         try:
             self._initialize()
         except Exception:

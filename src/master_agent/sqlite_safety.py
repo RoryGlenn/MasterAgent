@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 
 _DIGEST_BYTES = 32
@@ -112,8 +113,21 @@ class PinnedSQLiteDatabase:
     written to fresh private files before publication.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._path = Path(os.path.abspath(os.fspath(path)))
+    def __init__(
+        self,
+        path: Path,
+        *,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        self._parent_pin = (
+            parent_directory.duplicate() if parent_directory is not None else None
+        )
+        try:
+            self._path = _database_path(path, self._parent_pin)
+        except BaseException:
+            if self._parent_pin is not None:
+                self._parent_pin.close()
+            raise
         self._parent = self._path.parent
         self._name = self._path.name
         self._ledger_name = f".{self._name}{_LEDGER_SUFFIX}"
@@ -125,7 +139,16 @@ class PinnedSQLiteDatabase:
         self._lock_created = False
         self._ledger_created = False
 
-        parent_descriptor = _open_trusted_parent(self._parent, create=True)
+        try:
+            parent_descriptor = (
+                self._parent_pin.duplicate_fd()
+                if self._parent_pin is not None
+                else _open_trusted_parent(self._parent, create=True)
+            )
+        except BaseException:
+            if self._parent_pin is not None:
+                self._parent_pin.close()
+            raise
         lock_descriptor: int | None = None
         lock_identity: _FileIdentity | None = None
         database_descriptor: int | None = None
@@ -246,6 +269,8 @@ class PinnedSQLiteDatabase:
             if lock_descriptor is not None:
                 os.close(lock_descriptor)
             os.close(parent_descriptor)
+            if self._parent_pin is not None:
+                self._parent_pin.close()
             raise
         finally:
             if database_descriptor is not None:
@@ -266,6 +291,7 @@ class PinnedSQLiteDatabase:
             parent_descriptor,
             lock_descriptor,
             self._lock,
+            self._parent_pin,
         )
 
     @property
@@ -386,9 +412,14 @@ class PinnedSQLiteDatabase:
         _validated_parent_identity(parent_stat)
         if not self._parent_identity.matches(parent_stat):
             raise ConfigurationError("SQLite state database parent identity changed")
-        path_stat = self._parent.lstat()
-        if not self._parent_identity.matches(path_stat):
-            raise ConfigurationError("SQLite state database parent path was replaced")
+        if self._parent_pin is None:
+            path_stat = self._parent.lstat()
+            if not self._parent_identity.matches(path_stat):
+                raise ConfigurationError(
+                    "SQLite state database parent path was replaced"
+                )
+        else:
+            self._parent_pin.validate()
         _validate_flock_path(
             self._parent_descriptor,
             self._lock_name,
@@ -735,6 +766,23 @@ def _open_trusted_parent(path: Path, *, create: bool) -> int:
         os.close(descriptor)
         raise
     return descriptor
+
+
+def _database_path(path: Path, parent: PinnedDirectory | None) -> Path:
+    """Bind a database filename to an optional approved parent directory."""
+
+    selected = Path(path)
+    if parent is None:
+        return Path(os.path.abspath(os.fspath(selected)))
+    parent.validate()
+    if selected.parent == Path():
+        return parent.path / selected.name
+    absolute = Path(os.path.abspath(os.fspath(selected)))
+    if absolute.parent != parent.path:
+        raise ConfigurationError(
+            "SQLite state database must be an immediate child of its pinned parent"
+        )
+    return absolute
 
 
 def _open_flock_file(
@@ -1304,6 +1352,7 @@ def _close_descriptors(
     parent_descriptor: int,
     lock_descriptor: int,
     lock: RLock,
+    parent_pin: PinnedDirectory | None,
 ) -> None:
     """Close stable descriptors under the same lock used for transactions."""
 
@@ -1313,6 +1362,8 @@ def _close_descriptors(
                 os.close(descriptor)
             except OSError:
                 pass
+        if parent_pin is not None:
+            parent_pin.close()
 
 
 def _close_sqlite_connection(connection: sqlite3.Connection) -> None:
