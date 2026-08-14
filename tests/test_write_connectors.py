@@ -13,7 +13,7 @@ from master_agent.connectors.confluence_write import ConfluenceWriteConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.errors import ConnectorError, VersionConflictError
-from master_agent.models import RiskLevel
+from master_agent.models import AgentAction, RiskLevel
 from tests.fakes import ScriptedTransport
 from tests.helpers import action_for, resolved_config
 
@@ -149,6 +149,197 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
         ]
         self.assertEqual(writes[0]["version"]["number"], 5)
         self.assertEqual(writes[1]["version"]["number"], 6)
+
+    def test_update_rejects_provider_altered_first_poststate(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        transport.add_json("GET", path, _confluence_page("Status", "<p>Old</p>", 4))
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>PROVIDER ALTERED</p>", 5),
+        )
+        transport.add_json("PUT", path, {})
+        connector = _confluence_connector(transport)
+        action = _confluence_update_action("<p>Approved</p>")
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+        self.assertEqual(
+            [request.method for request in transport.requests],
+            ["GET", "PUT", "GET"],
+        )
+
+    def test_update_verification_compares_provider_to_approved_action(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        transport.add_json("GET", path, _confluence_page("Status", "<p>Old</p>", 4))
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>Approved</p>", 5),
+        )
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>PROVIDER ALTERED</p>", 5),
+        )
+        transport.add_json("PUT", path, {})
+        connector = _confluence_connector(transport)
+        action = _confluence_update_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertFalse(verification.verified)
+        self.assertEqual(
+            verification.observed["body"],
+            "<p>PROVIDER ALTERED</p>",
+        )
+
+    def test_update_rejects_provider_representation_change(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        body = '{"type":"doc","version":1}'
+        transport.add_json("GET", path, _confluence_page("Status", "<p>Old</p>", 4))
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", body, 5, representation="storage"),
+        )
+        transport.add_json("PUT", path, {})
+        connector = _confluence_connector(transport)
+        action = _confluence_update_action(
+            body,
+            representation="atlas_doc_format",
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+    def test_update_rejects_wrong_resulting_identity_or_version(self) -> None:
+        cases = (
+            _confluence_page("Status", "<p>Approved</p>", 6),
+            _confluence_page(
+                "Status",
+                "<p>Approved</p>",
+                5,
+                page_id="99",
+            ),
+        )
+        for altered in cases:
+            with self.subTest(altered=altered):
+                transport = ScriptedTransport()
+                path = "/wiki/api/v2/pages/42"
+                transport.add_json(
+                    "GET",
+                    path,
+                    _confluence_page("Status", "<p>Old</p>", 4),
+                )
+                transport.add_json("GET", path, altered)
+                transport.add_json("PUT", path, {})
+                connector = _confluence_connector(transport)
+
+                with self.assertRaisesRegex(ConnectorError, "poststate"):
+                    connector.execute(_confluence_update_action("<p>Approved</p>"))
+
+    def test_update_verifies_approved_atlas_representation(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        body = '{"type":"doc","version":1}'
+        transport.add_json("GET", path, _confluence_page("Status", "<p>Old</p>", 4))
+        for _ in range(2):
+            transport.add_json(
+                "GET",
+                path,
+                _confluence_page(
+                    "Status",
+                    body,
+                    5,
+                    representation="atlas_doc_format",
+                ),
+            )
+        transport.add_json("PUT", path, {})
+        connector = _confluence_connector(transport)
+        action = _confluence_update_action(
+            body,
+            representation="atlas_doc_format",
+        )
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertTrue(verification.verified)
+        self.assertIn("body-format=atlas_doc_format", transport.requests[-1].url)
+
+    def test_create_rejects_provider_altered_first_poststate(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/pages"
+        item = "/wiki/api/v2/pages/42"
+        transport.add_json("POST", collection, {"id": "42"}, status=201)
+        transport.add_json(
+            "GET",
+            item,
+            _confluence_page("Status", "<p>PROVIDER ALTERED</p>", 1),
+        )
+        connector = _confluence_connector(transport)
+        action = _confluence_create_action("<p>Approved</p>")
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+    def test_create_rejects_wrong_resulting_identity_or_version(self) -> None:
+        cases = (
+            _confluence_page("Status", "<p>Approved</p>", 2),
+            _confluence_page(
+                "Status",
+                "<p>Approved</p>",
+                1,
+                page_id="99",
+            ),
+        )
+        for altered in cases:
+            with self.subTest(altered=altered):
+                transport = ScriptedTransport()
+                collection = "/wiki/api/v2/pages"
+                item = "/wiki/api/v2/pages/42"
+                transport.add_json(
+                    "POST",
+                    collection,
+                    {"id": "42"},
+                    status=201,
+                )
+                transport.add_json("GET", item, altered)
+                connector = _confluence_connector(transport)
+
+                with self.assertRaisesRegex(ConnectorError, "poststate"):
+                    connector.execute(_confluence_create_action("<p>Approved</p>"))
+
+    def test_create_verification_compares_provider_to_approved_action(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/pages"
+        item = "/wiki/api/v2/pages/42"
+        transport.add_json("POST", collection, {"id": "42"}, status=201)
+        transport.add_json(
+            "GET",
+            item,
+            _confluence_page("Status", "<p>Approved</p>", 1),
+        )
+        transport.add_json(
+            "GET",
+            item,
+            _confluence_page("Status", "<p>PROVIDER ALTERED</p>", 1),
+        )
+        connector = _confluence_connector(transport)
+        action = _confluence_create_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertFalse(verification.verified)
+        self.assertEqual(result.after["id"], "42")
+        self.assertEqual(result.after["version"], 1)
 
 
 class BitbucketWriteConnectorTests(unittest.TestCase):
@@ -359,14 +550,77 @@ def _jira_issue(summary: str, updated: str) -> dict[str, object]:
     }
 
 
-def _confluence_page(title: str, body: str, version: int) -> dict[str, object]:
+def _confluence_connector(
+    transport: ScriptedTransport,
+) -> ConfluenceWriteConnector:
+    return ConfluenceWriteConnector(
+        resolved_config(
+            "confluence",
+            deployment=DeploymentType.CLOUD,
+            base_url="https://example.atlassian.net",
+        ),
+        transport=transport,
+    )
+
+
+def _confluence_update_action(
+    body: str,
+    *,
+    representation: str = "storage",
+) -> AgentAction:
+    return action_for(
+        "confluence.page.update",
+        system="confluence",
+        resource_type="page",
+        resource_id="42",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        expected_version="4",
+        parameters={
+            "title": "Status",
+            "body": body,
+            "representation": representation,
+            "status": "current",
+        },
+    )
+
+
+def _confluence_create_action(body: str) -> AgentAction:
+    return action_for(
+        "confluence.page.create",
+        system="confluence",
+        resource_type="page",
+        resource_id="new",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        parameters={
+            "space_id": "SPACE",
+            "title": "Status",
+            "body": body,
+            "representation": "storage",
+            "status": "current",
+        },
+    )
+
+
+def _confluence_page(
+    title: str,
+    body: str,
+    version: int,
+    *,
+    representation: str = "storage",
+    page_id: str = "42",
+) -> dict[str, object]:
     return {
-        "id": "42",
+        "id": page_id,
         "title": title,
         "status": "current",
         "spaceId": "SPACE",
         "version": {"number": version},
-        "body": {"storage": {"representation": "storage", "value": body}},
+        "body": {
+            representation: {
+                "representation": representation,
+                "value": body,
+            }
+        },
     }
 
 

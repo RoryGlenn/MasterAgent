@@ -95,16 +95,26 @@ class ConfluenceWriteConnector(CompensatingConnector):
         action: AgentAction,
         result: ExecutionResult,
     ) -> VerificationResult:
-        """Re-read the page and compare approved title/body."""
+        """Re-read the page and compare the exact approved poststate."""
 
         after = result.after or {}
-        page_id = str(after.get("id", action.target.resource_id))
-        observed = self._read_page(page_id)
-        expected_title = after.get("title")
-        expected_body = after.get("body")
-        verified = (
-            observed.get("title") == expected_title
-            and observed.get("body") == expected_body
+        try:
+            expected = self._approved_result_poststate(action, result)
+        except ConnectorError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message="Confluence result did not identify an approved poststate",
+            )
+        page_id = str(expected["id"])
+        observed = self._read_page(
+            page_id,
+            representation=str(expected["representation"]),
+        )
+        verified = _poststate_matches(after, expected) and _poststate_matches(
+            observed,
+            expected,
         )
         return VerificationResult(
             action_id=action.action_id,
@@ -127,7 +137,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
         after = result.after or {}
         page_id = str(after.get("id", action.target.resource_id))
         if result.before is None:
-            before = self._read_page(page_id)
+            before = self._read_page(
+                page_id,
+                representation=str(after.get("representation", "storage")),
+            )
             if not _page_matches(before, after):
                 raise VersionConflictError(
                     "Confluence page changed after creation; deletion is refused"
@@ -152,7 +165,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 message="deleted Confluence page created by rolled-back workflow",
             )
 
-        current = self._read_page(page_id)
+        current = self._read_page(
+            page_id,
+            representation=str(after.get("representation", "storage")),
+        )
         if not _page_matches(current, after):
             raise VersionConflictError(
                 "Confluence page changed after update; rollback is refused"
@@ -213,7 +229,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
     def _create(self, action: AgentAction) -> ExecutionResult:
         title = _required_text(action.parameters, "title")
         body = _required_text(action.parameters, "body")
-        representation = _representation(action.parameters)
+        representation = _representation_for_deployment(
+            action.parameters,
+            self._config.deployment,
+        )
         if self._config.deployment is DeploymentType.CLOUD:
             space_id = _required_text(action.parameters, "space_id")
             payload: dict[str, Any] = {
@@ -248,8 +267,15 @@ class ConfluenceWriteConnector(CompensatingConnector):
             )
         if not isinstance(data, Mapping) or not data.get("id"):
             raise ConnectorError("Confluence create response omitted a page ID")
-        page_id = str(data["id"])
-        after = self._read_page(page_id)
+        page_id = _provider_page_id(data)
+        after = self._read_page(page_id, representation=representation)
+        expected = _approved_poststate(
+            action,
+            page_id=page_id,
+            version=1,
+            deployment=self._config.deployment,
+        )
+        _require_poststate(after, expected, "create")
         after["compensation"] = {
             "capability": "confluence.page.delete_created",
             "page_id": page_id,
@@ -275,15 +301,19 @@ class ConfluenceWriteConnector(CompensatingConnector):
 
     def _update(self, action: AgentAction, *, compensating: bool) -> ExecutionResult:
         page_id = action.target.resource_id
-        before = self._read_page(page_id)
-        enforce_expected_version(action, before.get("version"))
         title = _required_text(action.parameters, "title")
         body = _required_text(action.parameters, "body")
-        representation = _representation(action.parameters)
-        try:
-            next_version = int(str(before["version"])) + 1
-        except (KeyError, TypeError, ValueError) as error:
-            raise ConnectorError("Confluence page version must be numeric") from error
+        representation = _representation_for_deployment(
+            action.parameters,
+            self._config.deployment,
+        )
+        next_version = _expected_updated_version(action)
+        before = self._read_page(page_id)
+        if before.get("id") != page_id:
+            raise ConnectorError(
+                "Confluence update prestate did not match the approved resource ID"
+            )
+        enforce_expected_version(action, before.get("version"))
         message = str(action.parameters.get("version_message", "")).strip()
 
         if self._config.deployment is DeploymentType.CLOUD:
@@ -325,7 +355,14 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 json_body=payload,
             )
 
-        observed = self._read_page(page_id)
+        observed = self._read_page(page_id, representation=representation)
+        expected = _approved_poststate(
+            action,
+            page_id=page_id,
+            version=next_version,
+            deployment=self._config.deployment,
+        )
+        _require_poststate(observed, expected, "update")
         observed["compensation"] = {
             "capability": "confluence.page.compensate",
             "title": before.get("title"),
@@ -350,31 +387,57 @@ class ConfluenceWriteConnector(CompensatingConnector):
             ).to_dict(),
         )
 
-    def _read_page(self, page_id: str) -> dict[str, Any]:
+    def _approved_result_poststate(
+        self,
+        action: AgentAction,
+        result: ExecutionResult,
+    ) -> dict[str, Any]:
+        if action.capability == "confluence.page.create":
+            page_id = _provider_page_id(result.after or {})
+            version = 1
+        else:
+            page_id = action.target.resource_id
+            version = _expected_updated_version(action)
+        return _approved_poststate(
+            action,
+            page_id=page_id,
+            version=version,
+            deployment=self._config.deployment,
+        )
+
+    def _read_page(
+        self,
+        page_id: str,
+        *,
+        representation: str = "storage",
+    ) -> dict[str, Any]:
         encoded = quote_segment(page_id)
         if self._config.deployment is DeploymentType.CLOUD:
             data, response = self._client.request_json(
                 "GET",
                 f"wiki/api/v2/pages/{encoded}",
-                query={"body-format": "storage"},
+                query={"body-format": representation},
             )
             if not isinstance(data, Mapping):
                 raise ConnectorError("Confluence page response must be an object")
-            body_value, representation = _cloud_body(data)
+            body_value, observed_representation = _cloud_body(
+                data,
+                preferred_representation=representation,
+            )
             version = data.get("version")
             version = version if isinstance(version, Mapping) else {}
             return {
-                "id": str(data.get("id", page_id)),
+                "id": _provider_page_id(data),
                 "title": str(data.get("title", "")),
                 "status": data.get("status"),
-                "version": version.get("number"),
+                "version": _provider_version(version.get("number")),
                 "space_id": data.get("spaceId"),
                 "space_key": None,
                 "body": body_value,
                 "body_text": html_to_text(body_value)
-                if representation == "storage"
+                if observed_representation == "storage"
                 else body_value,
-                "representation": representation,
+                "representation": observed_representation,
                 "reference": response.url,
             }
 
@@ -395,10 +458,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
         space = space if isinstance(space, Mapping) else {}
         body_value = str(storage.get("value", ""))
         return {
-            "id": str(data.get("id", page_id)),
+            "id": _provider_page_id(data),
             "title": str(data.get("title", "")),
             "status": data.get("status"),
-            "version": version.get("number"),
+            "version": _provider_version(version.get("number")),
             "space_id": space.get("id"),
             "space_key": space.get("key"),
             "body": body_value,
@@ -418,10 +481,17 @@ class ConfluenceWriteConnector(CompensatingConnector):
             raise ConnectorError("Confluence writes must use reversible_write risk")
 
 
-def _cloud_body(page: Mapping[str, Any]) -> tuple[str, str]:
+def _cloud_body(
+    page: Mapping[str, Any],
+    *,
+    preferred_representation: str,
+) -> tuple[str, str]:
     body = page.get("body")
     body = body if isinstance(body, Mapping) else {}
-    for representation in ("storage", "atlas_doc_format"):
+    fallback = (
+        "atlas_doc_format" if preferred_representation == "storage" else "storage"
+    )
+    for representation in (preferred_representation, fallback):
         value = body.get(representation)
         if isinstance(value, Mapping):
             return str(value.get("value", "")), representation
@@ -431,8 +501,80 @@ def _cloud_body(page: Mapping[str, Any]) -> tuple[str, str]:
 def _page_matches(observed: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
     return all(
         observed.get(key) == expected.get(key)
-        for key in ("id", "title", "body", "version")
+        for key in ("id", "title", "body", "representation", "version")
     )
+
+
+def _approved_poststate(
+    action: AgentAction,
+    *,
+    page_id: str,
+    version: int,
+    deployment: DeploymentType,
+) -> dict[str, Any]:
+    return {
+        "id": page_id,
+        "title": _required_text(action.parameters, "title"),
+        "body": _required_text(action.parameters, "body"),
+        "representation": _representation_for_deployment(
+            action.parameters,
+            deployment,
+        ),
+        "version": version,
+    }
+
+
+def _poststate_matches(
+    observed: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    for key in ("id", "title", "body", "representation", "version"):
+        actual = observed.get(key)
+        approved = expected.get(key)
+        if type(actual) is not type(approved) or actual != approved:
+            return False
+    return True
+
+
+def _require_poststate(
+    observed: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    operation: str,
+) -> None:
+    if not _poststate_matches(observed, expected):
+        raise ConnectorError(
+            f"Confluence {operation} provider poststate did not match approved content"
+        )
+
+
+def _provider_page_id(data: Mapping[str, Any]) -> str:
+    value = data.get("id")
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ConnectorError("Confluence page response omitted a page ID")
+    rendered = str(value).strip()
+    if not rendered:
+        raise ConnectorError("Confluence page response omitted a page ID")
+    return rendered
+
+
+def _provider_version(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ConnectorError("Confluence page response has an invalid version")
+    return value
+
+
+def _expected_updated_version(action: AgentAction) -> int:
+    expected = action.target.expected_version
+    if expected is None or not expected.isdecimal():
+        raise ConnectorError(
+            "Confluence update requires a numeric approved expected_version"
+        )
+    current = int(expected)
+    if current < 1 or str(current) != expected:
+        raise ConnectorError(
+            "Confluence update requires a normalized positive expected_version"
+        )
+    return current + 1
 
 
 def _required_text(parameters: Mapping[str, Any], key: str) -> str:
@@ -446,4 +588,16 @@ def _representation(parameters: Mapping[str, Any]) -> str:
     value = str(parameters.get("representation", "storage")).strip()
     if value not in {"storage", "atlas_doc_format"}:
         raise ConnectorError("representation must be storage or atlas_doc_format")
+    return value
+
+
+def _representation_for_deployment(
+    parameters: Mapping[str, Any],
+    deployment: DeploymentType,
+) -> str:
+    value = _representation(parameters)
+    if deployment is DeploymentType.DATA_CENTER and value != "storage":
+        raise ConnectorError(
+            "Confluence Data Center writes require storage representation"
+        )
     return value
