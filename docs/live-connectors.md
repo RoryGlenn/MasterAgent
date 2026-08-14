@@ -22,6 +22,13 @@ Read results are normalized into stable schemas, marked as untrusted content, sc
 
 Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects.
 
+Local Git commits are assembled in a private alternate index while the standard
+index lock is held. The reviewed diff becomes an immutable tree, the branch ref
+is updated by compare-and-swap, and the reviewed index is installed atomically;
+worktree edits made after the snapshot remain unstaged and are not discarded.
+Branch publication uses the exact approved commit object ID as the push source,
+so a concurrently advanced local branch cannot change the published content.
+
 ## Compensation
 
 Compensation is connector-specific:

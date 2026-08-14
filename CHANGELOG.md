@@ -39,6 +39,7 @@
 - provider mutation connectors require runtime, generic, and granular provider gates;
 - PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
 - standalone Git worktree restore is not exposed because a status precheck followed by `reset --hard` cannot preserve edits made between check and use.
+- local Git commits bind approved diffs through an isolated index and immutable tree, while pushes publish the exact approved commit object rather than a mutable branch source.
 
 ## 0.3.0 — Read-only communication context
 

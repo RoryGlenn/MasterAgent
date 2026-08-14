@@ -79,6 +79,8 @@ A resource may change between planning and execution.
 Controls:
 
 - expected version/eTag/commit preconditions;
+- exact commit-object push sources instead of mutable local branch ref sources;
+- isolated Git indexes, immutable reviewed trees, and compare-and-swap branch updates;
 - independent provider re-read;
 - fail-closed conflict states;
 - no automatic overwrite/rebase after conflict.

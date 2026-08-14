@@ -209,6 +209,167 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             ):
                 connector.compensate(action, result)
 
+    def test_push_publishes_approved_oid_when_branch_advances_at_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)],
+                check=True,
+                capture_output=True,
+            )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(remote))
+            _git(repository, "switch", "-c", "agent/change")
+            approved_commit = _git(repository, "rev-parse", "HEAD")
+            action = action_for(
+                "repository.branch.push",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_commit,
+                parameters={
+                    "workspace": "repo",
+                    "remote": "origin",
+                    "remote_url": str(remote),
+                    "branch": "agent/change",
+                },
+            )
+            connector = GitWorkspaceConnector(
+                workspace_root=root,
+                allow_file_remotes=True,
+            )
+            original_git = connector._git
+            raced_commit = ""
+
+            def racing_git(workspace: Path, *arguments: str):
+                nonlocal raced_commit
+                if arguments and arguments[0] == "push" and not raced_commit:
+                    (workspace / "README.md").write_text(
+                        "unapproved concurrent commit\n",
+                        encoding="utf-8",
+                    )
+                    _git(workspace, "add", "README.md")
+                    _git(workspace, "commit", "-m", "concurrent change")
+                    raced_commit = _git(workspace, "rev-parse", "HEAD")
+                return original_git(workspace, *arguments)
+
+            connector._git = racing_git  # type: ignore[method-assign]
+            result = connector.execute(action)
+            del connector._git
+
+            remote_commit = _git(
+                repository,
+                "ls-remote",
+                "--heads",
+                str(remote),
+                "refs/heads/agent/change",
+            ).split()[0]
+            self.assertNotEqual(raced_commit, approved_commit)
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), raced_commit)
+            self.assertEqual(remote_commit, approved_commit)
+            self.assertEqual(result.after["commit"], approved_commit)
+
+    def test_commit_isolates_index_at_content_binding_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            approved_digest = _diff_sha256(repository)
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": approved_digest,
+                },
+            )
+            connector = GitWorkspaceConnector(workspace_root=root)
+            original_git = connector._git
+            injected = False
+            stage_returncode: int | None = None
+
+            def racing_git(workspace: Path, *arguments: str):
+                nonlocal injected, stage_returncode
+                if (
+                    arguments
+                    and arguments[0] in {"commit", "commit-tree"}
+                    and not injected
+                ):
+                    injected = True
+                    (workspace / "README.md").write_text(
+                        "human boundary edit\n",
+                        encoding="utf-8",
+                    )
+                    stage = subprocess.run(
+                        ["git", "-C", str(workspace), "add", "README.md"],
+                        check=False,
+                        capture_output=True,
+                    )
+                    stage_returncode = stage.returncode
+                return original_git(workspace, *arguments)
+
+            connector._git = racing_git  # type: ignore[method-assign]
+            result = connector.execute(action)
+            del connector._git
+
+            self.assertTrue(injected)
+            self.assertIsNotNone(stage_returncode)
+            self.assertNotEqual(stage_returncode, 0)
+            self.assertEqual(_git(repository, "show", "HEAD:README.md"), "approved")
+            self.assertEqual(_git(repository, "show", ":README.md"), "approved")
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "human boundary edit\n",
+            )
+            self.assertEqual(_git(repository, "status", "--porcelain"), "M README.md")
+            self.assertEqual(result.after["diff_sha256"], approved_digest)
+
+    def test_commit_preserves_unrelated_shared_index_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            (repository / "OTHER.txt").write_text("unchanged\n", encoding="utf-8")
+            _git(repository, "add", "OTHER.txt")
+            _git(repository, "commit", "-m", "add unrelated file")
+            _git(repository, "update-index", "--assume-unchanged", "OTHER.txt")
+            index_entry = _git(repository, "ls-files", "-v", "OTHER.txt")
+            self.assertTrue(index_entry.startswith("h "))
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": _diff_sha256(repository),
+                },
+            )
+
+            GitWorkspaceConnector(workspace_root=root).execute(action)
+
+            self.assertEqual(
+                _git(repository, "ls-files", "-v", "OTHER.txt"),
+                index_entry,
+            )
+            self.assertEqual(_git(repository, "status", "--porcelain"), "")
+
     @unittest.skipUnless(os.name == "posix", "Git hook test requires POSIX")
     def test_commit_disables_repository_hooks_and_binds_exact_diff(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

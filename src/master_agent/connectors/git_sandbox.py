@@ -8,7 +8,8 @@ import shutil
 import stat
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -42,6 +43,7 @@ class GitSandbox:
         self._allow_file_protocol = allow_file_protocol
         self._state = tempfile.TemporaryDirectory(prefix="master-agent-git-")
         root = Path(self._state.name)
+        self._root = root.resolve()
         self._home = root / "home"
         self._hooks = root / "hooks"
         self._attributes = root / "attributes"
@@ -64,6 +66,7 @@ class GitSandbox:
         arguments: Sequence[str],
         *,
         input_bytes: bytes | None = None,
+        index_file: Path | None = None,
         check: bool = True,
     ) -> SandboxedGitResult:
         """Run an argv-only Git command with a minimal deterministic environment."""
@@ -83,7 +86,7 @@ class GitSandbox:
                 capture_output=True,
                 timeout=self._timeout_seconds,
                 check=False,
-                env=self._environment(),
+                env=self._environment(index_file=index_file),
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ConnectorError(
@@ -99,6 +102,16 @@ class GitSandbox:
             # output, and remote-controlled text.  Keep them out of audit logs.
             raise ConnectorError(f"Git operation returned {result.returncode}")
         return result
+
+    @contextmanager
+    def isolated_index(self) -> Iterator[Path]:
+        """Yield a private alternate index path outside repository control."""
+
+        with tempfile.TemporaryDirectory(
+            prefix="index-",
+            dir=self._root,
+        ) as directory:
+            yield Path(directory) / "index"
 
     def validate_repository_config(self, repository: Path) -> None:
         """Reject local config keys that can execute code or redirect I/O."""
@@ -192,8 +205,8 @@ class GitSandbox:
         )
         return tuple(item for key, value in values for item in ("-c", f"{key}={value}"))
 
-    def _environment(self) -> dict[str, str]:
-        return {
+    def _environment(self, *, index_file: Path | None = None) -> dict[str, str]:
+        environment = {
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "HOME": str(self._home),
             "LANG": "C",
@@ -208,7 +221,18 @@ class GitSandbox:
             "GIT_PAGER": "cat",
             "GIT_EDITOR": os.devnull,
             "GIT_SEQUENCE_EDITOR": os.devnull,
+            "GIT_OPTIONAL_LOCKS": "0",
         }
+        if index_file is not None:
+            resolved = index_file.resolve(strict=False)
+            try:
+                resolved.relative_to(self._root)
+            except ValueError as error:
+                raise ConnectorError(
+                    "alternate Git index is outside trusted temporary state"
+                ) from error
+            environment["GIT_INDEX_FILE"] = str(resolved)
+        return environment
 
 
 _DANGEROUS_EXACT_KEYS = frozenset(
