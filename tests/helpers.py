@@ -1,8 +1,10 @@
-"""Shared constructors for connector tests."""
+"""Shared constructors and filesystem helpers for tests."""
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from master_agent.auth import AuthMode, ResolvedAuth
@@ -13,6 +15,25 @@ from master_agent.models import (
     ResourceRef,
     RiskLevel,
 )
+
+
+def ensure_private_directory(path: Path) -> Path:
+    """Create one test directory with private permissions."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        path.chmod(0o700)
+    return path
+
+
+def copy_private_file(source: Path, destination: Path) -> Path:
+    """Copy one fixture or config file into a private test-controlled path."""
+
+    ensure_private_directory(destination.parent)
+    destination.write_bytes(source.read_bytes())
+    if os.name == "posix":
+        destination.chmod(0o600)
+    return destination
 
 
 def resolved_config(

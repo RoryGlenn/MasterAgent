@@ -10,6 +10,7 @@ from io import StringIO
 from pathlib import Path
 
 from master_agent.cli import main
+from tests.helpers import copy_private_file
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +39,10 @@ class PhaseCompletionCliTests(unittest.TestCase):
             root = Path(directory)
             output = root / "drafts"
             output.mkdir(mode=0o700)
+            workflow = copy_private_file(
+                ROOT / "config/draft-package.toml",
+                root / "draft-package.toml",
+            )
             stdout = StringIO()
             stderr = StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -45,7 +50,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
                     [
                         "draft-package",
                         "--workflow",
-                        str(ROOT / "config/draft-package.toml"),
+                        str(workflow),
                         "--output-dir",
                         str(output),
                         "--database",
