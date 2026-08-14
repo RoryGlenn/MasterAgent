@@ -121,9 +121,11 @@ master-agent plugins
 
 Configuration resolution is:
 
-1. an explicit CLI path;
-2. a project-local `config/` file;
-3. wheel-packaged safe defaults.
+1. an explicit, permission-checked CLI path;
+2. wheel-packaged safe defaults.
+
+The current working directory is never an implicit configuration source;
+repository-local files must be selected explicitly.
 
 ## Quick safe demonstration
 
