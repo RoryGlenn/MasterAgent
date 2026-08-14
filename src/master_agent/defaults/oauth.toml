@@ -1,0 +1,69 @@
+# All profiles are disabled in packaged defaults. Environment-variable fields
+# contain names, never credential values. Enable only one reviewed profile at a
+# time and use a separate integration configuration for broader privileges.
+
+[profiles.microsoft_delegated]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_device_code"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
+scopes = [
+  "User.Read",
+  "Mail.Read",
+  "Chat.Read",
+  "ChannelMessage.Read.All",
+  "Sites.Read.All",
+  "Notes.Read",
+]
+identity_mode = "delegated"
+purpose = "Phase 2C read-only validation"
+
+[profiles.microsoft_reversible_writes]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_device_code"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
+scopes = [
+  "User.Read",
+  "Sites.ReadWrite.All",
+  "Notes.ReadWrite",
+]
+identity_mode = "delegated"
+purpose = "Phase 4 approved SharePoint and OneNote writes"
+
+[profiles.microsoft_communications]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_device_code"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
+scopes = [
+  "User.Read",
+  "Mail.Send",
+  "ChatMessage.Send",
+  "ChannelMessage.Send",
+]
+identity_mode = "delegated"
+purpose = "Phase 5 exact-approval Outlook and Teams sends"
+
+[profiles.microsoft_application]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_client_credentials"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_APP_CLIENT_ID"
+client_secret_env = "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET"
+scopes = ["https://graph.microsoft.com/.default"]
+identity_mode = "application"
+purpose = "Organization-reviewed application permissions only"
+
+[profiles.microsoft_existing_token]
+enabled = false
+provider = "microsoft_graph"
+flow = "environment"
+access_token_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+expires_at_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT"
+scopes = ["User.Read"]
+purpose = "Short-lived operator-supplied token"

@@ -1,0 +1,7 @@
+{
+  "body_sha256": "9f7bc5bef82eeaf427347c96b55cefcf2a13fce4f2078bfd524a8ee75080a490",
+  "post": false,
+  "recipient_id": "engineering-status",
+  "recipient_type": "channel",
+  "schema": "master-agent/teams-draft@1"
+}

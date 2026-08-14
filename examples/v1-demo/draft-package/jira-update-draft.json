@@ -1,0 +1,16 @@
+{
+  "after": {
+    "coverage_target": 85,
+    "summary": "Raise frontend coverage target"
+  },
+  "before": {
+    "coverage_target": 80,
+    "summary": "Old requirement"
+  },
+  "expected_version": null,
+  "issue": "PROJECT-123",
+  "operation": "update",
+  "publish": false,
+  "schema": "master-agent/jira-draft@1",
+  "system": "jira"
+}

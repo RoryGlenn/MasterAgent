@@ -1,0 +1,49 @@
+[package]
+id = "example-change"
+goal = "Prepare a complete, reviewable change package without publishing anything."
+
+[jira]
+issue_key = "PROJECT-123"
+
+[jira.before]
+summary = "Old requirement"
+coverage_target = 80
+
+[jira.fields]
+summary = "Raise frontend coverage target"
+coverage_target = 85
+
+[confluence]
+page_id = "testing-policy"
+title = "Testing Policy"
+body = "<p>The frontend coverage target is 85%.</p>"
+
+[confluence.before]
+title = "Testing Policy"
+body = "<p>The frontend coverage target is 80%.</p>"
+
+[outlook]
+to = ["stakeholder@example.test"]
+subject = "Draft: testing target change"
+body = "The proposed frontend coverage target is 85%. This message is a draft."
+
+[teams]
+recipient_type = "channel"
+recipient_id = "engineering-status"
+body = "Draft update: the proposed frontend coverage target is 85%."
+
+[powerpoint]
+title = "Testing Target Change"
+
+[[powerpoint.slides]]
+title = "What changes"
+bullets = ["Frontend coverage target: 80% → 85%", "Jira and Confluence proposals included"]
+
+[[powerpoint.slides]]
+title = "Safety boundary"
+bullets = ["Nothing published", "No messages sent", "Source change remains a patch"]
+
+[repository]
+relative_path = "docs/testing-policy.md"
+before_text = "Frontend coverage target: 80%\n"
+after_text = "Frontend coverage target: 85%\n"

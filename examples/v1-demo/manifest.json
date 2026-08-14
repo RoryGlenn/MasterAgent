@@ -1,0 +1,107 @@
+{
+  "schema": "master-agent/v1-demo-manifest@1",
+  "published": false,
+  "uses_live_credentials": false,
+  "files": [
+    {
+      "path": "change-package-montage.png",
+      "size": 46311,
+      "sha256": "758b51137b8beb71efa24a7d4c7ce6e8a1f5f6f75a8d286d1bcb855497759a1d"
+    },
+    {
+      "path": "draft-package/README.md",
+      "size": 646,
+      "sha256": "5d58a2dd1158a357cfcf542c093daabddb9444e94ebdc24a27dd7b56727ef974"
+    },
+    {
+      "path": "draft-package/change-package.pptx",
+      "size": 30103,
+      "sha256": "dbe2aec33cf7621dcae8983863f18d8c996d0db6a76ffe3f070abf161e9db20f"
+    },
+    {
+      "path": "draft-package/confluence-update-draft.json",
+      "size": 473,
+      "sha256": "60e362bc736ad31f543c9951d15c7fe6c09c7d963a30412064d00f44ea660eb4"
+    },
+    {
+      "path": "draft-package/confluence-update-draft.md",
+      "size": 393,
+      "sha256": "1aed41fee8bc812b04dc6f1a8db60c03f74f3f09d0f5268c4f6a5be9054862d6"
+    },
+    {
+      "path": "draft-package/jira-update-draft.json",
+      "size": 335,
+      "sha256": "2e97faa1f482ba5bafe1c4bb8ec518dd002f1b715afbe48134e2baab44fe9acc"
+    },
+    {
+      "path": "draft-package/jira-update-draft.md",
+      "size": 295,
+      "sha256": "ad431df236e1de5a27124dab2f23f85755f6954c201e59d803caea238e9c967f"
+    },
+    {
+      "path": "draft-package/source-change.patch",
+      "size": 132,
+      "sha256": "8c289e1d213ceee3be4d8c8f5a79a9e7b38c40691396d7fb0fc6b3022aea91eb"
+    },
+    {
+      "path": "draft-package/stakeholder-email.eml",
+      "size": 231,
+      "sha256": "9d14e7f131c4f7a9a9d4fc46ccb6124f1aa19ceb861196ae653fc7709e25a18f"
+    },
+    {
+      "path": "draft-package/stakeholder-email.json",
+      "size": 265,
+      "sha256": "7b56387c7f5f19712ed0700d9ffe4123b3ecd27ecf7f0d8f3ad70c0a0ba074d5"
+    },
+    {
+      "path": "draft-package/team-message.json",
+      "size": 218,
+      "sha256": "e2822917cdee28092bdf23fbc1c0696d77790e190a839e499cbc887efca14af3"
+    },
+    {
+      "path": "draft-package/team-message.md",
+      "size": 178,
+      "sha256": "a5549e12ce85a47d95eb6d9932c018ca5b489f38e8068c7d7de86f044abcf2c3"
+    },
+    {
+      "path": "draft-package.txt",
+      "size": 1018,
+      "sha256": "d7c1cb823ec681809728808ebcd14e58d45c4d89432ab44756b254ad95cb8e94"
+    },
+    {
+      "path": "plugins.json",
+      "size": 58,
+      "sha256": "eb0f316383557e91debabda29b35d06ae80ba65b48811112bb45221cec88b091"
+    },
+    {
+      "path": "plugins.txt",
+      "size": 67,
+      "sha256": "8be3e16d51abb3b88282a5f35e31de519a8f38d9d4c4c67308e25b8e14488294"
+    },
+    {
+      "path": "powerpoint-validation.txt",
+      "size": 35,
+      "sha256": "13d8701a58c13435d9ce9570cb52fdb46135423ce5a9716ce200b2a2859f4d28"
+    },
+    {
+      "path": "readiness.json",
+      "size": 324,
+      "sha256": "45eca53f8d03f54e883d708f537caa00654c7ddf049cd5fa61ae171f952fdc7a"
+    },
+    {
+      "path": "readiness.txt",
+      "size": 177,
+      "sha256": "e06c6a25f907966ecc4031812808666767271df5cd757c2256321cb829741409"
+    },
+    {
+      "path": "recurring-status.json",
+      "size": 497,
+      "sha256": "111f6788482a126a39ddd972542ac904dcfd751b232812ebd9e72158ac4b6b51"
+    },
+    {
+      "path": "recurring-status.txt",
+      "size": 193,
+      "sha256": "be0ddfb05e9f5124e2fc80f7d037a4005c6f17cafb75b18820305726d0a44ed6"
+    }
+  ]
+}

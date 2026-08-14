@@ -1,0 +1,10 @@
+run ID: 2112fabf-160a-49b4-8207-6e091643aa7f
+plan fingerprint: 3ab0e872a9429b2697fb7b2ebdb48ea1a1b34d33b99c4040adfb333fbe91b048
+mode: dry-run
+planned              05ea66fe-6ae2-4956-85d2-c744079315fd jira.issue.search — permitted dry run: risk tier is auto-permitted: read_only
+planned              d965f77c-897b-4401-8ed0-72740912bb69 bitbucket.pull_request.search — permitted dry run: risk tier is auto-permitted: read_only
+planned              4d364f13-17e4-47d5-9e10-5014a7b26105 confluence.page.read — permitted dry run: risk tier is auto-permitted: read_only
+planned              fd25e85c-7f7f-4491-a2ff-9efee3f4ca07 powerpoint.presentation.generate — permitted dry run: risk tier is auto-permitted: local_generation
+planned              d08a2340-c76c-4f9f-84f5-d7269ea3b4fc teams.message.draft — permitted dry run: risk tier is auto-permitted: local_generation
+planned              e8974c33-0ca4-4de2-9ace-992124a05978 outlook.email.draft — permitted dry run: risk tier is auto-permitted: local_generation
+successful: True

@@ -1,0 +1,7 @@
+{
+  "evidence": "examples/phase2b-demo/communication-context-evidence.json",
+  "evidence_retention": "examples/phase2b-demo/communication-context-evidence.json.retention.json",
+  "markdown": "examples/phase2b-demo/communication-context.md",
+  "markdown_retention": "examples/phase2b-demo/communication-context.md.retention.json",
+  "manifest": "examples/phase2b-demo/manifest.json"
+}

@@ -1,0 +1,131 @@
+{
+  "schema": "master-agent/weekly-status-manifest@1",
+  "project": "Example Project",
+  "run_id": "00000000-0000-4000-8000-000000000201",
+  "plan_id": "00000000-0000-4000-8000-000000000202",
+  "plan_fingerprint": "demo-phase-2-fingerprint",
+  "successful": true,
+  "artifacts": {
+    "weekly-status-evidence.json": "f502627fd135a7639ac56071a31b66816cb7c768ef5a2c25b3e1ede09af4d237",
+    "weekly-status.md": "05e08b6fb1785ad29221a4567ed51be92911768f6ebf1dd47e7c6321a3a372a6",
+    "weekly-status.pptx": "0c1107034464349ac38849654eeef684fa6d3c1cea8c09f606917eb851374999"
+  },
+  "source_urls": [
+    "https://jira.example.test/issues/?jql=example",
+    "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests",
+    "https://confluence.example.test/display/RISE/Release+Status"
+  ],
+  "citations": [
+    {
+      "citation_id": "CIT-5BDBD2711E74",
+      "marker": "[CIT-5BDBD2711E74]",
+      "system": "jira",
+      "resource_type": "issue",
+      "resource_id": "RISE-142",
+      "parent_resource_id": null,
+      "title": "RISE-142 — Resolve release-blocking authentication regression",
+      "url": "https://jira.example.test/browse/RISE-142",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-81690448BC7A",
+      "marker": "[CIT-81690448BC7A]",
+      "system": "jira",
+      "resource_type": "issue",
+      "resource_id": "RISE-151",
+      "parent_resource_id": null,
+      "title": "RISE-151 — Raise backend coverage to 80 percent",
+      "url": "https://jira.example.test/browse/RISE-151",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-B8148E946A24",
+      "marker": "[CIT-B8148E946A24]",
+      "system": "jira",
+      "resource_type": "issue",
+      "resource_id": "RISE-155",
+      "parent_resource_id": null,
+      "title": "RISE-155 — Complete frontend regression suite",
+      "url": "https://jira.example.test/browse/RISE-155",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-A5637960157B",
+      "marker": "[CIT-A5637960157B]",
+      "system": "jira",
+      "resource_type": "issue",
+      "resource_id": "RISE-160",
+      "parent_resource_id": null,
+      "title": "RISE-160 — Publish deployment runbook",
+      "url": "https://jira.example.test/browse/RISE-160",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-DCA808F6D3E1",
+      "marker": "[CIT-DCA808F6D3E1]",
+      "system": "jira",
+      "resource_type": "issue",
+      "resource_id": "RISE-138",
+      "parent_resource_id": null,
+      "title": "RISE-138 — Cache dashboard section data",
+      "url": "https://jira.example.test/browse/RISE-138",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-E3033B704FD5",
+      "marker": "[CIT-E3033B704FD5]",
+      "system": "bitbucket",
+      "resource_type": "pull_request",
+      "resource_id": "293",
+      "parent_resource_id": null,
+      "title": "PR 293 — Fix authentication refresh race",
+      "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/293",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-598034FE7D1A",
+      "marker": "[CIT-598034FE7D1A]",
+      "system": "bitbucket",
+      "resource_type": "pull_request",
+      "resource_id": "296",
+      "parent_resource_id": null,
+      "title": "PR 296 — Add backend coverage tests",
+      "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/296",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-E954B6CB7DAD",
+      "marker": "[CIT-E954B6CB7DAD]",
+      "system": "bitbucket",
+      "resource_type": "pull_request",
+      "resource_id": "298",
+      "parent_resource_id": null,
+      "title": "PR 298 — Update release runbook",
+      "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/298",
+      "version": null
+    },
+    {
+      "citation_id": "CIT-5CAE22A76965",
+      "marker": "[CIT-5CAE22A76965]",
+      "system": "confluence",
+      "resource_type": "page",
+      "resource_id": "123456789",
+      "parent_resource_id": null,
+      "title": "RISE Release Status",
+      "url": "https://confluence.example.test/display/RISE/Release+Status",
+      "version": null
+    }
+  ],
+  "citation_ids": [
+    "CIT-5BDBD2711E74",
+    "CIT-81690448BC7A",
+    "CIT-B8148E946A24",
+    "CIT-A5637960157B",
+    "CIT-DCA808F6D3E1",
+    "CIT-E3033B704FD5",
+    "CIT-598034FE7D1A",
+    "CIT-E954B6CB7DAD",
+    "CIT-5CAE22A76965"
+  ],
+  "security_findings": []
+}

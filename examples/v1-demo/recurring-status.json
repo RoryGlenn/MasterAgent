@@ -1,0 +1,21 @@
+{
+  "schema": "master-agent/recurring-status@1",
+  "workflows": [
+    {
+      "name": "weekly_status",
+      "enabled": false,
+      "due": false,
+      "scheduled_at": "2026-08-13T20:00:00+00:00",
+      "last_success_at": null,
+      "reason": "workflow is disabled"
+    },
+    {
+      "name": "communication_context",
+      "enabled": false,
+      "due": false,
+      "scheduled_at": "2026-08-10T13:00:00+00:00",
+      "last_success_at": null,
+      "reason": "workflow is disabled"
+    }
+  ]
+}

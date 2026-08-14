@@ -1,0 +1,30 @@
+[policy]
+auto_permit_risks = ["read_only", "local_generation"]
+require_approval_risks = ["reversible_write", "external_communication", "high_impact"]
+prohibit_risks = ["destructive"]
+
+# fnmatch-style patterns
+prohibited_capabilities = [
+  "*.delete",
+  "*.permission.*",
+  "bitbucket.pull_request.merge",
+  "repository.protected_branch.*"
+]
+
+# These capabilities require a direct user or registered-workflow authority source.
+write_capability_patterns = [
+  "*.create",
+  "*.update",
+  "*.apply",
+  "*.restore",
+  "*.compensate",
+  "*.upload",
+  "*.push",
+  "*.send",
+  "*.post",
+  "*.reply",
+  "*.publish",
+  "*.transition",
+  "*.merge",
+  "*.delete"
+]

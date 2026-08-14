@@ -1,0 +1,21 @@
+{
+  "schema": "master-agent/communication-context-manifest@1",
+  "run_id": "00000000-0000-4000-8000-000000000201",
+  "plan_id": "00000000-0000-4000-8000-000000000202",
+  "successful": true,
+  "files": {
+    "communication-context-evidence.json": "d87452a0b1cbc054799be73cf35f72af910587807db41a99d06f74300bc73b21",
+    "communication-context-evidence.json.retention.json": "b7db0f84822885941423071ed8812350aeb19db9aa10973e1533752dde2d2cd4",
+    "communication-context.md": "21cc4810473aeed50df4736632a3f94dad9420242ba7027fc2350ea6af5ba55c",
+    "communication-context.md.retention.json": "0836af1fe11568755994e261529d648e3227e20b5a192ab17350176ca82aa5ef"
+  },
+  "counts": {
+    "people": 1,
+    "messages": 2,
+    "chats": 1,
+    "teams": 1,
+    "citations": 5,
+    "security_findings": 1,
+    "warnings": 0
+  }
+}

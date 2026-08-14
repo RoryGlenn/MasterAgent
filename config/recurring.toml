@@ -1,0 +1,59 @@
+[scheduler]
+state_database = ".master-agent/recurring.sqlite3"
+lock_dir = ".master-agent/recurring-locks"
+
+[workflows.weekly_status]
+enabled = false
+kind = "weekly_status_package"
+delivery_mode = "local_only"
+weekday = 3 # Thursday
+hour = 16
+minute = 0
+timezone = "America/New_York"
+max_lateness_minutes = 1440
+output_dir = ".master-agent/recurring/weekly-status"
+integration_config = "config/integrations.toml"
+workflow_config = "config/weekly-status.toml"
+identity_config = "config/identities.toml"
+retention_config = "config/retention.toml"
+allowed_capabilities = [
+  "jira.issue.search",
+  "bitbucket.pull_request.search",
+  "confluence.page.read",
+  "powerpoint.presentation.generate",
+]
+allowed_recipients = []
+canonical_sources = [
+  "jira://configured-project",
+  "bitbucket://configured-repository",
+  "confluence://configured-status-page",
+]
+
+[workflows.communication_context]
+enabled = false
+kind = "communication_context_package"
+delivery_mode = "draft_only"
+weekday = 0 # Monday
+hour = 9
+minute = 0
+timezone = "America/New_York"
+max_lateness_minutes = 240
+output_dir = ".master-agent/recurring/communication-context"
+integration_config = "config/integrations.toml"
+workflow_config = "config/communication-context.toml"
+identity_config = "config/identities.toml"
+retention_config = "config/retention.toml"
+allowed_capabilities = [
+  "identity.person.resolve",
+  "outlook.message.search",
+  "teams.chat.list",
+  "teams.team.list",
+  "outlook.email.draft",
+  "teams.message.draft",
+]
+allowed_recipients = []
+canonical_sources = [
+  "identity://configured-person",
+  "outlook://configured-mailbox",
+  "teams://configured-tenant",
+]

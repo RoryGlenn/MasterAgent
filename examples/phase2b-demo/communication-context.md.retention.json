@@ -1,0 +1,16 @@
+{
+  "evidence_path": "communication-context.md",
+  "evidence_type": "communication-context/markdown",
+  "created_at": "2026-08-13T23:49:40.378871+00:00",
+  "expires_at": "2026-08-16T23:49:40.378871+00:00",
+  "persistence": "explicit_content",
+  "content_included": true,
+  "content_digest": "ee3decea26ef3a9b7a101d1513341a33abff258b9e4d66e8b9a250410d880da1",
+  "citation_ids": [
+    "CIT-EEE640DFD280",
+    "CIT-E59DFA442499",
+    "CIT-17F1B5569B45",
+    "CIT-AD83674AFF0D",
+    "CIT-4FA985C9AB52"
+  ]
+}

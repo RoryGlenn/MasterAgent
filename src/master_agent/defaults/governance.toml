@@ -1,0 +1,235 @@
+[organization]
+name = "example-organization"
+environment = "development"
+secret_manager = "environment-or-approved-secret-store"
+audit_sink = "local-sqlite-for-development"
+external_model_policy = "no-restricted-data-without-organizational-approval"
+security_owner = "unassigned"
+retention_owner = "unassigned"
+production_approved = false
+
+[[rules]]
+pattern = "*.read"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.search"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.list"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.diffstat"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.resolve"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.children"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.info"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.draft"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.generate"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.plan"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "automatic"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.create"
+owner = "system-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.update"
+owner = "system-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.transition"
+owner = "system-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.upload"
+owner = "system-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.push"
+owner = "source-control-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.send"
+owner = "communications-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.post"
+owner = "communications-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.reply"
+owner = "communications-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+
+[[rules]]
+pattern = "*.apply"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.restore"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.compensate"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["public", "internal", "confidential"]
+approval_tier = "single"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "*.merge"
+owner = "source-control-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential"]
+approval_tier = "dual"
+environments = ["non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "*.delete"
+owner = "security-owner"
+authentication = "provider_specific"
+data_classifications = ["internal", "confidential", "restricted"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "*.permission.*"
+owner = "security-owner"
+authentication = "provider_specific"
+data_classifications = ["restricted"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "*"
+owner = "platform-owner"
+authentication = "provider_specific"
+data_classifications = ["internal"]
+approval_tier = "single"
+environments = ["development"]
+enabled = false

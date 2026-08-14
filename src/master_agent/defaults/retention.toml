@@ -1,0 +1,46 @@
+# Retention applies only when the caller explicitly persists retrieved evidence.
+# Durable audit records remain metadata/digest-only regardless of these values.
+
+[retention]
+default_ttl_hours = 168
+default_persistence = "metadata_only"
+
+[[rules]]
+pattern = "communication-context/*"
+ttl_hours = 72
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "run-result/*"
+ttl_hours = 24
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "microsoft.identity.*"
+ttl_hours = 720
+persistence = "metadata_only"
+
+[[rules]]
+pattern = "outlook.message.content"
+ttl_hours = 24
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "outlook.attachment.content"
+ttl_hours = 4
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "teams.chat_message.content"
+ttl_hours = 24
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "teams.channel_message.content"
+ttl_hours = 24
+persistence = "explicit_content"
+
+[[rules]]
+pattern = "*.credential*"
+ttl_hours = 1
+persistence = "prohibited"

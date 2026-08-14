@@ -1,0 +1,8 @@
+# Never put secrets here. Identifiers are references, not credentials.
+
+[people.rory]
+display_name = "Rory Glenn"
+aliases = ["Rory"]
+
+[people.rory.identifiers]
+microsoft = "me"

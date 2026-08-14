@@ -1,0 +1,19 @@
+{
+  "after": {
+    "body": "<p>The frontend coverage target is 85%.</p>",
+    "parent_id": null,
+    "representation": "storage",
+    "space_id": null,
+    "title": "Testing Policy"
+  },
+  "before": {
+    "body": "<p>The frontend coverage target is 80%.</p>",
+    "title": "Testing Policy"
+  },
+  "expected_version": null,
+  "operation": "update",
+  "page_id": "testing-policy",
+  "publish": false,
+  "schema": "master-agent/confluence-draft@1",
+  "system": "confluence"
+}

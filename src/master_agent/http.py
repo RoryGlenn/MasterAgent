@@ -1,0 +1,536 @@
+"""Restricted HTTP transport for live read-only connectors."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from email.message import Message
+import json
+from pathlib import Path
+import ssl
+import time
+from typing import Any, Callable, Mapping, Protocol, Sequence
+from urllib.error import HTTPError, URLError
+from urllib.parse import ParseResult, urlencode, urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+
+from master_agent.errors import (
+    AuthenticationError,
+    AuthorizationError,
+    ConnectorError,
+    ConnectorHttpError,
+    ConfigurationError,
+    RateLimitError,
+    ResourceNotFoundError,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class HttpResponse:
+    """HTTP response returned by a transport."""
+
+    status: int
+    headers: Mapping[str, str]
+    body: bytes
+    url: str
+
+    def json(self) -> Any:
+        """Decode the response body as JSON."""
+
+        try:
+            return json.loads(self.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ConnectorHttpError(
+                f"response from {self.url} was not valid JSON"
+            ) from error
+
+    def text(self, encoding: str = "utf-8") -> str:
+        """Decode the response body as text."""
+
+        try:
+            return self.body.decode(encoding)
+        except UnicodeDecodeError as error:
+            raise ConnectorHttpError(
+                f"response from {self.url} was not valid {encoding} text"
+            ) from error
+
+
+class HttpTransport(Protocol):
+    """Low-level transport protocol used by ``SafeHttpClient``."""
+
+    def request(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout_seconds: float,
+        max_response_bytes: int,
+    ) -> HttpResponse:
+        """Perform one HTTP request."""
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects that would carry credentials to another origin."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> Request | None:
+        old_origin = _origin(urlparse(req.full_url))
+        new_origin = _origin(urlparse(newurl))
+        if old_origin != new_origin:
+            raise ConnectorHttpError(
+                "cross-origin redirect rejected by connector HTTP policy"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class UrllibTransport:
+    """Standard-library HTTP transport with same-origin redirects."""
+
+    def __init__(self, *, ca_bundle: Path | None = None) -> None:
+        context = ssl.create_default_context(
+            cafile=str(ca_bundle) if ca_bundle is not None else None
+        )
+        self._opener = build_opener(
+            HTTPSHandler(context=context),
+            _SameOriginRedirectHandler(),
+        )
+
+    def request(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout_seconds: float,
+        max_response_bytes: int,
+    ) -> HttpResponse:
+        """Perform one bounded HTTP request."""
+
+        request = Request(
+            url=url,
+            data=body,
+            headers=dict(headers),
+            method=method,
+        )
+        try:
+            with self._opener.open(request, timeout=timeout_seconds) as response:
+                payload = _read_bounded(response, max_response_bytes)
+                return HttpResponse(
+                    status=int(response.status),
+                    headers=_normalize_headers(response.headers),
+                    body=payload,
+                    url=str(response.geturl()),
+                )
+        except HTTPError as error:
+            payload = _read_bounded(error, max_response_bytes)
+            return HttpResponse(
+                status=int(error.code),
+                headers=_normalize_headers(error.headers),
+                body=payload,
+                url=str(error.geturl()),
+            )
+        except ConnectorHttpError:
+            raise
+        except URLError as error:
+            reason = getattr(error, "reason", error)
+            raise ConnectorHttpError(
+                f"network request failed for {_safe_url(url)}: {reason}"
+            ) from error
+        except TimeoutError as error:
+            raise ConnectorHttpError(
+                f"network request timed out for {_safe_url(url)}"
+            ) from error
+
+
+class SafeHttpClient:
+    """Origin-bound, size-limited HTTP client for connector APIs.
+
+    Parameters
+    ----------
+    base_url
+        Connector API base URL. All requests and followed pagination links must
+        remain on this origin.
+    default_headers
+        Headers applied to every request. Authentication values are never
+        included in exceptions.
+    transport
+        Injectable transport. Defaults to ``UrllibTransport``.
+    timeout_seconds
+        Per-request timeout.
+    max_response_bytes
+        Maximum response body size.
+    retry_attempts
+        Number of retries after the first attempt for transient failures.
+    """
+
+    _RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        default_headers: Mapping[str, str] | None = None,
+        header_provider: Callable[[], Mapping[str, str]] | None = None,
+        transport: HttpTransport | None = None,
+        timeout_seconds: float = 20.0,
+        max_response_bytes: int = 10 * 1024 * 1024,
+        retry_attempts: int = 2,
+        ca_bundle: Path | None = None,
+        allowed_methods: frozenset[str] = frozenset({"GET", "HEAD"}),
+    ) -> None:
+        self._base_url = base_url.rstrip("/") + "/"
+        parsed = urlparse(self._base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ConfigurationError("connector HTTP clients require an HTTPS base URL")
+        if parsed.username or parsed.password:
+            raise ConfigurationError("connector base URL must not include credentials")
+        self._origin = _origin(parsed)
+        self._headers = {
+            "Accept": "application/json",
+            "User-Agent": "master-agent/1.0.0",
+            **dict(default_headers or {}),
+        }
+        self._header_provider = header_provider
+        self._transport = transport or UrllibTransport(ca_bundle=ca_bundle)
+        self._timeout_seconds = timeout_seconds
+        self._max_response_bytes = max_response_bytes
+        self._retry_attempts = max(0, retry_attempts)
+        self._allowed_methods = frozenset(
+            method.upper() for method in allowed_methods
+        )
+        if not self._allowed_methods:
+            raise ConfigurationError("allowed_methods must not be empty")
+
+    @property
+    def base_url(self) -> str:
+        """Return the normalized base URL."""
+
+        return self._base_url.rstrip("/")
+
+    def request_json(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        query: Mapping[str, Any] | Sequence[tuple[str, Any]] | None = None,
+        json_body: Any | None = None,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        safe_to_retry: bool = False,
+        max_response_bytes: int | None = None,
+        accepted_statuses: frozenset[int] = frozenset(),
+    ) -> tuple[Any, HttpResponse]:
+        """Perform an origin-bound request and decode JSON.
+
+        Parameters
+        ----------
+        method
+            HTTP method.
+        path_or_url
+            Relative path or same-origin absolute URL.
+        query
+            Query parameters. Sequence values are encoded with repeated keys.
+        json_body
+            JSON request body.
+        headers
+            Additional non-secret headers.
+        safe_to_retry
+            Whether a non-GET request is semantically safe to retry.
+
+        Returns
+        -------
+        tuple[Any, HttpResponse]
+            Decoded JSON value and response metadata.
+        """
+
+        response = self.request_bytes(
+            method,
+            path_or_url,
+            query=query,
+            json_body=json_body,
+            body=body,
+            content_type=content_type,
+            headers=headers,
+            safe_to_retry=safe_to_retry,
+            max_response_bytes=max_response_bytes,
+            accepted_statuses=accepted_statuses,
+        )
+        return response.json(), response
+
+
+    def request_form(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        form: Mapping[str, Any] | Sequence[tuple[str, Any]],
+        headers: Mapping[str, str] | None = None,
+        safe_to_retry: bool = False,
+        max_response_bytes: int | None = None,
+        accepted_statuses: frozenset[int] = frozenset(),
+    ) -> tuple[Any, HttpResponse]:
+        """Send an ``application/x-www-form-urlencoded`` request."""
+
+        encoded = urlencode(_query_items(form), doseq=True).encode("utf-8")
+        response = self.request_bytes(
+            method,
+            path_or_url,
+            body=encoded,
+            content_type="application/x-www-form-urlencoded",
+            headers=headers,
+            safe_to_retry=safe_to_retry,
+            max_response_bytes=max_response_bytes,
+            accepted_statuses=accepted_statuses,
+        )
+        return response.json(), response
+
+    def request_bytes(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        query: Mapping[str, Any] | Sequence[tuple[str, Any]] | None = None,
+        json_body: Any | None = None,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        safe_to_retry: bool = False,
+        max_response_bytes: int | None = None,
+        accepted_statuses: frozenset[int] = frozenset(),
+    ) -> HttpResponse:
+        """Perform an origin-bound request and return bounded bytes."""
+
+        normalized_method = method.upper()
+        if normalized_method not in self._allowed_methods:
+            raise ConnectorHttpError(
+                f"HTTP method {normalized_method} is not permitted by this connector"
+            )
+        url = self.resolve_url(path_or_url, query=query)
+        dynamic_headers = (
+            dict(self._header_provider())
+            if self._header_provider is not None
+            else {}
+        )
+        request_headers = {
+            **self._headers,
+            **dynamic_headers,
+            **dict(headers or {}),
+        }
+        if json_body is not None and body is not None:
+            raise ConnectorHttpError("json_body and body are mutually exclusive")
+        request_body = body
+        if json_body is not None:
+            request_body = json.dumps(
+                json_body,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+            request_headers["Content-Type"] = "application/json"
+        elif content_type is not None:
+            request_headers["Content-Type"] = content_type
+
+        effective_max_bytes = self._max_response_bytes
+        if max_response_bytes is not None:
+            if max_response_bytes <= 0:
+                raise ConnectorHttpError("max_response_bytes must be positive")
+            effective_max_bytes = min(max_response_bytes, self._max_response_bytes)
+
+        attempts = self._retry_attempts + 1
+        for attempt in range(attempts):
+            response = self._transport.request(
+                method=normalized_method,
+                url=url,
+                headers=request_headers,
+                body=request_body,
+                timeout_seconds=self._timeout_seconds,
+                max_response_bytes=effective_max_bytes,
+            )
+            if 200 <= response.status < 300 or response.status in accepted_statuses:
+                return response
+            can_retry = (
+                response.status in self._RETRYABLE_STATUSES
+                and attempt + 1 < attempts
+                and (normalized_method in {"GET", "HEAD"} or safe_to_retry)
+            )
+            if can_retry:
+                time.sleep(_retry_delay_seconds(response, attempt))
+                continue
+            raise _http_error(response)
+        raise ConnectorHttpError("HTTP retry loop exited unexpectedly")
+
+    def resolve_url(
+        self,
+        path_or_url: str,
+        *,
+        query: Mapping[str, Any] | Sequence[tuple[str, Any]] | None = None,
+    ) -> str:
+        """Resolve and validate a relative or absolute API URL."""
+
+        candidate = path_or_url.strip()
+        if not candidate:
+            raise ConnectorHttpError("request path must not be empty")
+        parsed_candidate = urlparse(candidate)
+        if parsed_candidate.scheme:
+            url = candidate
+        else:
+            url = urljoin(self._base_url, candidate.lstrip("/"))
+        parsed = urlparse(url)
+        if _origin(parsed) != self._origin:
+            raise ConnectorHttpError(
+                "connector attempted to access a URL outside its configured origin"
+            )
+        if parsed.username or parsed.password or parsed.fragment:
+            raise ConnectorHttpError("unsafe URL rejected by connector HTTP policy")
+        if query:
+            encoded = urlencode(_query_items(query), doseq=True)
+            separator = "&" if parsed.query else "?"
+            url = f"{url}{separator}{encoded}"
+        return url
+
+
+def download_public_https(
+    url: str,
+    *,
+    allowed_host_suffixes: tuple[str, ...],
+    transport: HttpTransport | None = None,
+    timeout_seconds: float = 20.0,
+    max_response_bytes: int = 2 * 1024 * 1024,
+) -> HttpResponse:
+    """Download a bounded HTTPS resource without authentication headers.
+
+    This helper is intended for short-lived SharePoint download URLs returned
+    by Microsoft Graph. It blocks IP literals, localhost, userinfo, and hosts
+    outside an explicit suffix allowlist.
+    """
+
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or _looks_like_ip(hostname)
+        or hostname in {"localhost", "localhost.localdomain"}
+    ):
+        raise ConnectorHttpError("unsafe download URL rejected")
+    normalized_suffixes = tuple(item.lower() for item in allowed_host_suffixes)
+    if not any(
+        hostname == suffix.lstrip(".") or hostname.endswith(suffix)
+        for suffix in normalized_suffixes
+    ):
+        raise ConnectorHttpError(
+            f"download host is not allowlisted: {hostname}"
+        )
+    client = SafeHttpClient(
+        base_url=f"https://{parsed.netloc}",
+        default_headers={"Accept": "*/*"},
+        transport=transport,
+        timeout_seconds=timeout_seconds,
+        max_response_bytes=max_response_bytes,
+        retry_attempts=1,
+    )
+    return client.request_bytes("GET", url)
+
+
+def _read_bounded(stream: Any, max_bytes: int) -> bytes:
+    payload = stream.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ConnectorHttpError(
+            f"response exceeded configured limit of {max_bytes} bytes"
+        )
+    return payload
+
+
+def _normalize_headers(headers: Message | Mapping[str, str]) -> dict[str, str]:
+    return {str(key).lower(): str(value) for key, value in headers.items()}
+
+
+def _origin(parsed: ParseResult) -> tuple[str, str, int]:
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower()
+    if not scheme or not hostname:
+        raise ConfigurationError("URL must include a scheme and hostname")
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return scheme, hostname, port
+
+
+def _query_items(
+    query: Mapping[str, Any] | Sequence[tuple[str, Any]],
+) -> list[tuple[str, Any]]:
+    items = list(query.items()) if isinstance(query, Mapping) else list(query)
+    normalized: list[tuple[str, Any]] = []
+    for key, value in items:
+        if value is None:
+            continue
+        if isinstance(value, (tuple, list, set)):
+            for item in value:
+                normalized.append((str(key), item))
+        else:
+            normalized.append((str(key), value))
+    return normalized
+
+
+def _retry_delay_seconds(response: HttpResponse, attempt: int) -> float:
+    retry_after = response.headers.get("retry-after")
+    if retry_after:
+        try:
+            return min(max(float(retry_after), 0.0), 5.0)
+        except ValueError:
+            pass
+    return min(0.25 * (2**attempt), 2.0)
+
+
+def _http_error(response: HttpResponse) -> ConnectorError:
+    request_id = (
+        response.headers.get("x-request-id")
+        or response.headers.get("request-id")
+        or response.headers.get("x-arequestid")
+        or response.headers.get("x-b3-traceid")
+    )
+    suffix = f" request_id={request_id}" if request_id else ""
+    message = f"HTTP {response.status} from {_safe_url(response.url)}{suffix}"
+    if response.status == 401:
+        return AuthenticationError(message)
+    if response.status == 403:
+        return AuthorizationError(message)
+    if response.status == 404:
+        return ResourceNotFoundError(message)
+    if response.status == 429:
+        retry_after: int | None = None
+        raw_retry = response.headers.get("retry-after")
+        if raw_retry:
+            try:
+                retry_after = max(0, int(float(raw_retry)))
+            except ValueError:
+                retry_after = None
+        return RateLimitError(message, retry_after_seconds=retry_after)
+    return ConnectorHttpError(
+        message,
+        status_code=response.status,
+        request_id=request_id,
+    )
+
+
+def _safe_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(query="", fragment="").geturl()
+
+
+def _looks_like_ip(hostname: str) -> bool:
+    if ":" in hostname:
+        return True
+    parts = hostname.split(".")
+    return len(parts) == 4 and all(part.isdigit() for part in parts)

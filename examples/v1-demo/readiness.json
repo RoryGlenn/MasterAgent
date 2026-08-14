@@ -1,0 +1,16 @@
+{
+  "schema": "master-agent/readiness@1",
+  "ready": true,
+  "environment": "development",
+  "checks": [
+    {
+      "name": "governance_coverage",
+      "passed": true,
+      "covered_capabilities": 71
+    }
+  ],
+  "errors": [],
+  "warnings": [
+    "no live connectors are enabled; runtime is safe but not connected"
+  ]
+}

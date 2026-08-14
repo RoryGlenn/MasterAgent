@@ -1,0 +1,2 @@
+no connector plugins installed
+wrote examples/v1-demo/plugins.json

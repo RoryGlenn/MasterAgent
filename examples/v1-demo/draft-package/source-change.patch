@@ -1,0 +1,5 @@
+--- a/docs/testing-policy.md
++++ b/docs/testing-policy.md
+@@ -1 +1 @@
+-Frontend coverage target: 80%
++Frontend coverage target: 85%

@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "ff62e966-f2e7-46a1-9f62-24bb71ab0213",
+  "goal": "Prepare read-only communication context: Project communication context",
+  "created_by": "registered-workflow:communication-context",
+  "created_at": "2026-08-13T23:48:18.520990+00:00",
+  "actions": [
+    {
+      "capability": "identity.person.resolve",
+      "target": {
+        "system": "identity",
+        "resource_type": "person",
+        "resource_id": "rory",
+        "expected_version": null
+      },
+      "parameters": {
+        "query": "rory"
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "communication-context:identity:rory",
+      "justification": "Resolve the configured employee across enterprise systems.",
+      "dependencies": [],
+      "action_id": "32938db0-2bd1-4f19-873d-8495f332bf05"
+    },
+    {
+      "capability": "outlook.message.search",
+      "target": {
+        "system": "outlook",
+        "resource_type": "mail_search",
+        "resource_id": "communication-context-rory",
+        "expected_version": null
+      },
+      "parameters": {
+        "query": "release blocker",
+        "limit": 25,
+        "identity": "me"
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "communication-context:outlook:rory",
+      "justification": "Search bounded Outlook message metadata for the requested context.",
+      "dependencies": [
+        "32938db0-2bd1-4f19-873d-8495f332bf05"
+      ],
+      "action_id": "7da7c483-c688-4634-960b-75bb1cb8430b"
+    },
+    {
+      "capability": "teams.chat.list",
+      "target": {
+        "system": "teams",
+        "resource_type": "chat_collection",
+        "resource_id": "communication-context-chats-rory",
+        "expected_version": null
+      },
+      "parameters": {
+        "identity": "me",
+        "limit": 25,
+        "include_members": true,
+        "include_last_message": true
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "communication-context:teams-chats:rory",
+      "justification": "List bounded Teams chat metadata for the requested identity.",
+      "dependencies": [
+        "32938db0-2bd1-4f19-873d-8495f332bf05"
+      ],
+      "action_id": "e177847c-4b0c-48e3-bd86-10fe73701735"
+    },
+    {
+      "capability": "teams.team.list",
+      "target": {
+        "system": "teams",
+        "resource_type": "team_collection",
+        "resource_id": "communication-context-teams-rory",
+        "expected_version": null
+      },
+      "parameters": {
+        "identity": "me",
+        "limit": 100
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "communication-context:joined-teams:rory",
+      "justification": "List bounded joined Teams metadata for the requested identity.",
+      "dependencies": [
+        "32938db0-2bd1-4f19-873d-8495f332bf05"
+      ],
+      "action_id": "1afa3f57-d6b5-4f8c-8d30-448c758aa69d"
+    }
+  ]
+}

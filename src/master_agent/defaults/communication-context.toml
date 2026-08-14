@@ -1,0 +1,19 @@
+[workflow]
+name = "Project communication context"
+identity_query = "rory"
+
+[outlook]
+query = "release blocker"
+# folder_id = "inbox"
+limit = 25
+
+[teams]
+chat_limit = 25
+team_limit = 100
+include_members = true
+include_last_message = true
+
+[output]
+max_email_rows = 20
+max_chat_rows = 20
+max_team_rows = 20

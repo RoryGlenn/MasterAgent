@@ -1,0 +1,2 @@
+wrote examples/communication-context-live-plan.json
+plan fingerprint: 7d6ca841907f0bc65b4f99d4c9d42b67ecd8c061aae23ed1e9525e3ef5b9644d

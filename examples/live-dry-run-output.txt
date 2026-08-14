@@ -1,0 +1,7 @@
+run ID: 41c9eaff-7853-4768-aef6-66a362bbaa23
+plan fingerprint: 98126a4c79a6da83a8c79d7d505047d220ce684fe2c1143748195154d61e3e35
+mode: dry-run
+planned              b00e791c-d7fc-4146-9a3f-68ec284d3cd3 jira.issue.search — permitted dry run: risk tier is auto-permitted: read_only
+planned              55d140c6-0118-4d2c-9d78-6de13b35fc92 bitbucket.pull_request.search — permitted dry run: risk tier is auto-permitted: read_only
+planned              9e9b3567-27ae-411e-bffe-f467906f3a7e confluence.page.read — permitted dry run: risk tier is auto-permitted: read_only
+successful: True

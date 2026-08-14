@@ -1,0 +1,5 @@
+environment: development
+ready: True
+  PASS governance_coverage
+warning: no live connectors are enabled; runtime is safe but not connected
+wrote examples/v1-demo/readiness.json

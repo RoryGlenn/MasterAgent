@@ -1,0 +1,11 @@
+{
+  "bcc": [],
+  "body_sha256": "00caac664f14a3680c50abc34070b8834c710a722426f8f734638bdf9c423ffc",
+  "cc": [],
+  "schema": "master-agent/outlook-draft@1",
+  "send": false,
+  "subject": "Draft: testing target change",
+  "to": [
+    "stakeholder@example.test"
+  ]
+}

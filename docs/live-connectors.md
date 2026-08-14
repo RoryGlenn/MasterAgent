@@ -1,0 +1,46 @@
+# Live Connector Contracts
+
+## Shared HTTP boundary
+
+All HTTP connectors use a constrained client that enforces:
+
+- HTTPS base URLs;
+- no embedded URL credentials;
+- same-origin API requests and pagination;
+- cross-origin authenticated redirect rejection;
+- bounded response bytes, pages, items, and timeouts;
+- method allowlists per connector;
+- controlled retries for transient failures;
+- query-free and secret-free errors;
+- no credential forwarding to temporary SharePoint download URLs.
+
+## Read connectors
+
+Read results are normalized into stable schemas, marked as untrusted content, scanned for prompt-injection indicators, and independently re-read for verification where practical. Communication bodies and document content remain in memory unless explicit evidence output and retention rules permit persistence.
+
+## Mutation connectors
+
+Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects.
+
+## Compensation
+
+Compensation is connector-specific:
+
+- Jira restores captured fields, removes the comment created by the workflow, or applies a configured reverse transition;
+- Confluence restores the captured prior page version/body or removes the exact page created by the workflow;
+- Bitbucket declines the exact PR and may delete only the exact unchanged branch created by the workflow;
+- SharePoint restores the captured prior version or removes the exact newly created item when the connector has sufficient evidence;
+- OneNote removes the exact new page or restores retained prior HTML;
+- Git restores the captured branch/commit/worktree state under strict preconditions.
+
+A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
+
+## Communication connectors
+
+Outlook and Teams sends are separate from local draft generation. They require `external_communication` risk, `requires_approval = true`, the runtime communication flag, a granular provider flag, and valid exact-plan approval. The built-in Teams Graph send connector is delegated-only. Outlook delegated sending is the default; application sending additionally requires an explicit private connector gate and organization policy.
+
+A provider acceptance response proves submission, not human delivery or readership. The runtime therefore reports provider acceptance and content verification, not guaranteed delivery.
+
+## Plugins
+
+Connector plugins are Python entry points. Discovery reads entry-point metadata only. Loading imports only names explicitly passed to `--plugin` during `run --apply`. The returned connector enters the same capability registry and cannot overlap an existing capability for the same system.

@@ -1,0 +1,4 @@
+examples/phase2-demo/weekly-status-evidence.json
+examples/phase2-demo/weekly-status.md
+examples/phase2-demo/weekly-status.pptx
+examples/phase2-demo/manifest.json

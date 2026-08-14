@@ -1,0 +1,106 @@
+{
+  "schema": "master-agent/discovery@1",
+  "records": [
+    {
+      "configuration": "bitbucket",
+      "system": "bitbucket",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "basic",
+      "base_url": "https://api.bitbucket.org/2.0",
+      "required_environment": [
+        "MASTER_AGENT_BITBUCKET_USERNAME",
+        "MASTER_AGENT_BITBUCKET_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_BITBUCKET_USERNAME",
+        "MASTER_AGENT_BITBUCKET_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "confluence",
+      "system": "confluence",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "basic",
+      "base_url": "https://example.atlassian.net",
+      "required_environment": [
+        "MASTER_AGENT_CONFLUENCE_USERNAME",
+        "MASTER_AGENT_CONFLUENCE_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_CONFLUENCE_USERNAME",
+        "MASTER_AGENT_CONFLUENCE_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "jira",
+      "system": "jira",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "basic",
+      "base_url": "https://example.atlassian.net",
+      "required_environment": [
+        "MASTER_AGENT_JIRA_USERNAME",
+        "MASTER_AGENT_JIRA_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_JIRA_USERNAME",
+        "MASTER_AGENT_JIRA_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "microsoft",
+      "system": "microsoft",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "bearer",
+      "base_url": "https://graph.microsoft.com/v1.0",
+      "required_environment": [
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "microsoft",
+      "system": "sharepoint",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "bearer",
+      "base_url": "https://graph.microsoft.com/v1.0",
+      "required_environment": [
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    }
+  ]
+}

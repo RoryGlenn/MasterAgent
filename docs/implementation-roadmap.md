@@ -1,0 +1,87 @@
+# Implementation Roadmap and Completion Status
+
+## Overall status
+
+The v1 software roadmap is complete. Organization-specific production activation remains a deployment and governance gate, because it requires real administrators, tenant/server access, approved applications, and credentials that are intentionally not part of the source release.
+
+| Phase | Software status | Operational status |
+|---|---|---|
+| 0 — environment/governance | Complete | Replace example governance and run readiness in the target organization |
+| 1 — local governed runtime | Complete | Ready |
+| 2A — Jira/Confluence/Bitbucket/SharePoint reads | Complete | Contract-tested; target deployment requires approved credentials |
+| 2B — Outlook/Teams/identity/citations/retention | Complete | Contract-tested; target deployment requires approved credentials |
+| 2C — authentication/readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
+| 3 — draft-only output | Complete | Usable locally without provider credentials |
+| 4 — approved reversible writes | Complete | Disabled until provider-specific gates and approvals are configured |
+| 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
+| 6 — recurring autonomy | Complete | Registered schedules remain disabled by default |
+
+## Phase acceptance criteria
+
+### Phase 0
+
+- capability owners and approval tiers are machine-readable;
+- production configuration fails closed without explicit approval;
+- secret-free readiness output identifies missing variable names and permissions;
+- no network call occurs during readiness.
+
+### Phase 1
+
+- immutable plans and exact-plan approvals;
+- policy and canonical-source enforcement;
+- idempotency, dependency handling, audit hash chain, prompt-injection scanning;
+- independent verification.
+
+### Phase 2
+
+- read-only connectors for all target systems;
+- bounded retrieval and safe authentication boundaries;
+- normalized evidence, citations, and retention;
+- real provider probes are explicit rather than automatic.
+
+### Phase 3
+
+- complete local review package across Jira, Confluence, Outlook, Teams, PowerPoint, and repository patch;
+- integrity manifest;
+- no external side effects.
+
+### Phase 4
+
+- separate write connectors;
+- expected-version or commit preconditions;
+- exact approvals and idempotency;
+- compensation for every advertised reversible operation;
+- protected branches, force pushes, merge, permissions, and broad deletion prohibited.
+
+### Phase 5
+
+- exact recipient/destination and content are inside the approved plan;
+- Outlook provider draft is re-read before sending;
+- Teams response is re-read after posting;
+- sends are labeled non-reversible and correction is a new approved action.
+
+### Phase 6
+
+- only registered built-in workflows run;
+- timezone-aware due calculation and maximum lateness;
+- durable occurrence state prevents duplicate runs;
+- per-workflow locks prevent overlap;
+- capability/recipient/source allowlists fail closed;
+- packaged workflows disabled and local/draft-only.
+
+## Deployment work that cannot be completed generically
+
+The following are intentionally outside a source-code release and must be performed in the target organization:
+
+1. choose Cloud or Data Center endpoints;
+2. register Microsoft Entra and/or Atlassian applications;
+3. obtain administrator consent and assign least-privilege scopes;
+4. satisfy Conditional Access and device/network requirements;
+5. provision a secret manager and production audit sink;
+6. define data classification, retention, legal hold, and external-model policy;
+7. replace sample identities, project keys, sites, repositories, recipients, and canonical resources;
+8. validate read-only probes in non-production;
+9. validate reversible writes using disposable resources;
+10. approve a narrow production rollout.
+
+The runtime reports this distinction rather than representing simulated API-contract tests as a successful company deployment.

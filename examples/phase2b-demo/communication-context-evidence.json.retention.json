@@ -1,0 +1,16 @@
+{
+  "evidence_path": "communication-context-evidence.json",
+  "evidence_type": "communication-context/package",
+  "created_at": "2026-08-13T23:49:40.378372+00:00",
+  "expires_at": "2026-08-16T23:49:40.378372+00:00",
+  "persistence": "explicit_content",
+  "content_included": true,
+  "content_digest": "57755bdb5135ac5380d98cc834aa5c84778232d303a11640070002847e777e82",
+  "citation_ids": [
+    "CIT-EEE640DFD280",
+    "CIT-E59DFA442499",
+    "CIT-17F1B5569B45",
+    "CIT-AD83674AFF0D",
+    "CIT-4FA985C9AB52"
+  ]
+}

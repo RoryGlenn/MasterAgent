@@ -1,0 +1,16 @@
+# Exact-resource rules for the scaffold. Production should support organization-owned
+# registries and carefully reviewed patterns.
+
+[[rules]]
+field = "project_status_narrative"
+canonical_system = "confluence"
+canonical_resource_id = "project-status"
+projections = ["powerpoint:weekly-status", "teams:weekly-status-draft", "outlook:weekly-status-draft"]
+direction = "outbound_only"
+
+[[rules]]
+field = "work_item_status"
+canonical_system = "jira"
+canonical_resource_id = "PROJECT-SPRINT"
+projections = ["powerpoint:weekly-status"]
+direction = "outbound_only"

@@ -1,0 +1,24 @@
+[project]
+name = "Example Project"
+
+[jira]
+jql = "project = EXAMPLE AND sprint in openSprints() ORDER BY priority DESC, updated DESC"
+limit = 100
+
+[bitbucket]
+# Cloud uses workspace; Data Center uses project.
+workspace = "example-workspace"
+project = "PROJECT"
+repository = "example-repository"
+state = "OPEN"
+limit = 50
+include_statuses = true
+include_diffstat = false
+enrichment_limit = 20
+
+[confluence]
+page_id = "123456789"
+
+[output]
+max_issue_rows = 20
+max_pull_request_rows = 20

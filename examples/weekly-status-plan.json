@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "afe5fc87-949a-4663-8cb2-bfbe2aaff56d",
+  "goal": "Prepare the weekly project status package without publishing or sending.",
+  "created_by": "registered_workflow:weekly_status_v1",
+  "created_at": "2026-08-13T22:59:07.538964+00:00",
+  "actions": [
+    {
+      "capability": "jira.issue.search",
+      "target": {
+        "system": "jira",
+        "resource_type": "sprint",
+        "resource_id": "PROJECT-SPRINT",
+        "expected_version": "7"
+      },
+      "parameters": {
+        "query": "current sprint"
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:jira:current-sprint:v1",
+      "justification": "Collect canonical work-item status for the weekly package.",
+      "dependencies": [],
+      "action_id": "05ea66fe-6ae2-4956-85d2-c744079315fd"
+    },
+    {
+      "capability": "bitbucket.pull_request.search",
+      "target": {
+        "system": "bitbucket",
+        "resource_type": "pull_request_collection",
+        "resource_id": "open-prs",
+        "expected_version": "4"
+      },
+      "parameters": {
+        "state": "OPEN"
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:bitbucket:open-prs:v1",
+      "justification": "Collect open pull requests and review state.",
+      "dependencies": [],
+      "action_id": "d965f77c-897b-4401-8ed0-72740912bb69"
+    },
+    {
+      "capability": "confluence.page.read",
+      "target": {
+        "system": "confluence",
+        "resource_type": "page",
+        "resource_id": "project-status",
+        "expected_version": "12"
+      },
+      "parameters": {},
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:confluence:project-status:v1",
+      "justification": "Read the canonical project-status narrative.",
+      "dependencies": [],
+      "action_id": "4d364f13-17e4-47d5-9e10-5014a7b26105"
+    },
+    {
+      "capability": "powerpoint.presentation.generate",
+      "target": {
+        "system": "powerpoint",
+        "resource_type": "presentation",
+        "resource_id": "weekly-status",
+        "expected_version": null
+      },
+      "parameters": {
+        "title": "Weekly Project Status",
+        "sections": [
+          "Executive summary",
+          "Sprint status",
+          "Pull requests",
+          "Blockers and decisions",
+          "Next actions"
+        ],
+        "source_action_ids": [
+          "05ea66fe-6ae2-4956-85d2-c744079315fd",
+          "d965f77c-897b-4401-8ed0-72740912bb69",
+          "4d364f13-17e4-47d5-9e10-5014a7b26105"
+        ]
+      },
+      "risk": "local_generation",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:powerpoint:v1",
+      "justification": "Generate a local presentation specification from canonical data.",
+      "dependencies": [
+        "05ea66fe-6ae2-4956-85d2-c744079315fd",
+        "d965f77c-897b-4401-8ed0-72740912bb69",
+        "4d364f13-17e4-47d5-9e10-5014a7b26105"
+      ],
+      "action_id": "fd25e85c-7f7f-4491-a2ff-9efee3f4ca07"
+    },
+    {
+      "capability": "teams.message.draft",
+      "target": {
+        "system": "teams",
+        "resource_type": "message_draft",
+        "resource_id": "weekly-status-draft",
+        "expected_version": null
+      },
+      "parameters": {
+        "audience": "project team",
+        "format": "summary, blockers, decisions, next actions",
+        "send": false
+      },
+      "risk": "local_generation",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:teams-draft:v1",
+      "justification": "Prepare but do not send the weekly Teams summary.",
+      "dependencies": [
+        "05ea66fe-6ae2-4956-85d2-c744079315fd",
+        "d965f77c-897b-4401-8ed0-72740912bb69",
+        "4d364f13-17e4-47d5-9e10-5014a7b26105"
+      ],
+      "action_id": "d08a2340-c76c-4f9f-84f5-d7269ea3b4fc"
+    },
+    {
+      "capability": "outlook.email.draft",
+      "target": {
+        "system": "outlook",
+        "resource_type": "email_draft",
+        "resource_id": "weekly-status-draft",
+        "expected_version": null
+      },
+      "parameters": {
+        "audience": "stakeholders",
+        "subject": "Weekly project status",
+        "send": false
+      },
+      "risk": "local_generation",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:outlook-draft:v1",
+      "justification": "Prepare but do not send the stakeholder email summary.",
+      "dependencies": [
+        "fd25e85c-7f7f-4491-a2ff-9efee3f4ca07"
+      ],
+      "action_id": "e8974c33-0ca4-4de2-9ace-992124a05978"
+    }
+  ]
+}

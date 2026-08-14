@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "0f0f6fa3-99d5-40b2-9792-dda6898896aa",
+  "goal": "Collect the read-only weekly status package for Example Project.",
+  "created_by": "registered_workflow:weekly_status_v2",
+  "created_at": "2026-08-13T22:59:11.517528+00:00",
+  "actions": [
+    {
+      "capability": "jira.issue.search",
+      "target": {
+        "system": "jira",
+        "resource_type": "issue_collection",
+        "resource_id": "weekly-status-jira-search",
+        "expected_version": null
+      },
+      "parameters": {
+        "jql": "project = EXAMPLE AND sprint in openSprints() ORDER BY priority DESC, updated DESC",
+        "limit": 100
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:live:jira:v2",
+      "justification": "Collect current work-item status from Jira.",
+      "dependencies": [],
+      "action_id": "b00e791c-d7fc-4146-9a3f-68ec284d3cd3"
+    },
+    {
+      "capability": "bitbucket.pull_request.search",
+      "target": {
+        "system": "bitbucket",
+        "resource_type": "pull_request_collection",
+        "resource_id": "weekly-status-open-pull-requests",
+        "expected_version": null
+      },
+      "parameters": {
+        "repository": "example-repository",
+        "state": "OPEN",
+        "limit": 50,
+        "include_statuses": true,
+        "include_diffstat": false,
+        "enrichment_limit": 20,
+        "workspace": "example-workspace"
+      },
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:live:bitbucket:v2",
+      "justification": "Collect open pull requests and CI evidence from Bitbucket.",
+      "dependencies": [],
+      "action_id": "55d140c6-0118-4d2c-9d78-6de13b35fc92"
+    },
+    {
+      "capability": "confluence.page.read",
+      "target": {
+        "system": "confluence",
+        "resource_type": "page",
+        "resource_id": "123456789",
+        "expected_version": null
+      },
+      "parameters": {},
+      "risk": "read_only",
+      "authority_source": "registered_workflow",
+      "requires_approval": false,
+      "idempotency_key": "weekly-status:live:confluence:v2",
+      "justification": "Read the canonical project-status narrative from Confluence.",
+      "dependencies": [],
+      "action_id": "9e9b3567-27ae-411e-bffe-f467906f3a7e"
+    }
+  ]
+}

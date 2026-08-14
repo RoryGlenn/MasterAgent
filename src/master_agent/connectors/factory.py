@@ -1,0 +1,296 @@
+"""Construct scoped connector registries from runtime configuration."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Mapping
+
+from master_agent.config import ConnectorConfig, IntegrationConfig
+from master_agent.connectors.base import Connector
+from master_agent.connectors.bitbucket import BitbucketConnector
+from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
+from master_agent.connectors.communications import OutlookSendConnector, TeamsSendConnector
+from master_agent.connectors.confluence import ConfluenceConnector
+from master_agent.connectors.confluence_write import ConfluenceWriteConnector
+from master_agent.connectors.drafts import (
+    ConfluenceDraftConnector,
+    JiraDraftConnector,
+    OutlookDraftConnector,
+    PowerPointDraftConnector,
+    RepositoryDraftConnector,
+    TeamsDraftConnector,
+)
+from master_agent.connectors.git_remote import GitBranchPushConnector
+from master_agent.connectors.git_workspace import GitWorkspaceConnector
+from master_agent.connectors.jira import JiraConnector
+from master_agent.connectors.jira_write import JiraWriteConnector
+from master_agent.connectors.microsoft import MicrosoftIdentityConnector, SharePointConnector
+from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
+from master_agent.connectors.outlook import OutlookConnector
+from master_agent.connectors.sharepoint_write import SharePointWriteConnector
+from master_agent.connectors.teams import TeamsConnector
+from master_agent.errors import ConfigurationError
+from master_agent.http import HttpTransport
+from master_agent.registry import ConnectorRegistry
+
+
+_READ_SYSTEMS = frozenset(
+    {
+        "jira",
+        "confluence",
+        "bitbucket",
+        "microsoft",
+        "sharepoint",
+        "outlook",
+        "teams",
+        "onenote",
+    }
+)
+
+
+def build_live_connectors(
+    config: IntegrationConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+    transport: HttpTransport | None = None,
+    systems: set[str] | None = None,
+    include_writes: bool = False,
+    include_communications: bool = False,
+    workspace_root: Path | None = None,
+    artifact_root: Path | None = None,
+) -> tuple[Connector, ...]:
+    """Construct explicitly enabled live connectors.
+
+    Provider mutation surfaces are double-gated: the caller must explicitly
+    include them and the provider configuration must enable the corresponding
+    feature flag. Read-only discovery never constructs a write connector.
+
+    Parameters
+    ----------
+    config
+        Parsed integration configuration.
+    environ
+        Environment mapping containing credential values.
+    transport
+        Optional injectable transport for deterministic contract testing.
+    systems
+        Runtime-system allowlist. ``None`` selects all read systems.
+    include_writes
+        Permit construction of reversible-write connectors.
+    include_communications
+        Permit construction of non-reversible communication connectors.
+    workspace_root
+        Root beneath which local Git workspaces and branch publication are
+        permitted.
+    artifact_root
+        Root containing generated files eligible for SharePoint publication.
+
+    Returns
+    -------
+    tuple[Connector, ...]
+        Deterministically ordered connector instances.
+    """
+
+    source = environ if environ is not None else os.environ
+    selected = systems or set(_READ_SYSTEMS) | {"repository"}
+    connectors: list[Connector] = []
+
+    for name in sorted(config.connectors):
+        unresolved = config.connectors[name]
+        if not unresolved.enabled:
+            continue
+        if name not in {"jira", "confluence", "bitbucket", "microsoft"}:
+            continue
+        resolved = unresolved.resolve(source, auth_transport=transport)
+
+        if name == "jira" and "jira" in selected:
+            connectors.append(JiraConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "writes_enabled")
+            ):
+                connectors.append(JiraWriteConnector(resolved, transport=transport))
+            continue
+
+        if name == "confluence" and "confluence" in selected:
+            connectors.append(ConfluenceConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "writes_enabled")
+            ):
+                connectors.append(
+                    ConfluenceWriteConnector(resolved, transport=transport)
+                )
+            continue
+
+        if name == "bitbucket" and "bitbucket" in selected:
+            connectors.append(BitbucketConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "pull_request_writes_enabled")
+            ):
+                connectors.append(BitbucketWriteConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "branch_push_enabled")
+            ):
+                root = _repository_root(unresolved, source, workspace_root)
+                connectors.append(
+                    GitBranchPushConnector(
+                        repository_root=root,
+                        branch_prefix=str(unresolved.extra.get("branch_prefix", "agent/")),
+                    )
+                )
+            continue
+
+        if name != "microsoft":
+            continue
+
+        if "microsoft" in selected:
+            connectors.append(MicrosoftIdentityConnector(resolved, transport=transport))
+        if "sharepoint" in selected:
+            connectors.append(SharePointConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "sharepoint_writes_enabled")
+            ):
+                if artifact_root is None:
+                    raise ConfigurationError(
+                        "SharePoint writes require an explicit artifact_root"
+                    )
+                connectors.append(
+                    SharePointWriteConnector(
+                        resolved,
+                        artifact_root=artifact_root,
+                        transport=transport,
+                    )
+                )
+        if "outlook" in selected:
+            connectors.append(OutlookConnector(resolved, transport=transport))
+            if (
+                include_communications
+                and _feature_enabled(unresolved, "send_enabled")
+                and _feature_enabled(unresolved, "outlook_send_enabled")
+            ):
+                connectors.append(OutlookSendConnector(resolved, transport=transport))
+        if "teams" in selected:
+            connectors.append(TeamsConnector(resolved, transport=transport))
+            if (
+                include_communications
+                and _feature_enabled(unresolved, "send_enabled")
+                and _feature_enabled(unresolved, "teams_send_enabled")
+            ):
+                connectors.append(TeamsSendConnector(resolved, transport=transport))
+        if "onenote" in selected and _feature_enabled(
+            unresolved,
+            "onenote_read_enabled",
+        ):
+            connectors.append(OneNoteReadConnector(resolved, transport=transport))
+        if (
+            "onenote" in selected
+            and include_writes
+            and _feature_enabled(unresolved, "write_enabled")
+            and _feature_enabled(unresolved, "onenote_writes_enabled")
+        ):
+            connectors.append(OneNoteWriteConnector(resolved, transport=transport))
+
+    if include_writes and workspace_root is not None and "repository" in selected:
+        connectors.append(
+            GitWorkspaceConnector(
+                workspace_root=workspace_root,
+                allowed_remotes=("origin",),
+            )
+        )
+
+    return tuple(connectors)
+
+
+def build_live_registry(
+    config: IntegrationConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+    transport: HttpTransport | None = None,
+    systems: set[str] | None = None,
+    include_writes: bool = False,
+    include_communications: bool = False,
+    workspace_root: Path | None = None,
+    artifact_root: Path | None = None,
+) -> ConnectorRegistry:
+    """Build a registry containing explicitly scoped live connectors."""
+
+    registry = ConnectorRegistry()
+    for connector in build_live_connectors(
+        config,
+        environ=environ,
+        transport=transport,
+        systems=systems,
+        include_writes=include_writes,
+        include_communications=include_communications,
+        workspace_root=workspace_root,
+        artifact_root=artifact_root,
+    ):
+        registry.register(connector)
+    return registry
+
+
+def register_draft_connectors(
+    registry: ConnectorRegistry,
+    output_root: Path,
+) -> ConnectorRegistry:
+    """Register all local, non-publishing Phase 3 generators."""
+
+    root = output_root.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    for connector in (
+        JiraDraftConnector(root),
+        ConfluenceDraftConnector(root),
+        OutlookDraftConnector(root),
+        TeamsDraftConnector(root),
+        PowerPointDraftConnector(root),
+        RepositoryDraftConnector(root),
+    ):
+        registry.register(connector)
+    return registry
+
+
+def build_draft_registry(output_root: Path) -> ConnectorRegistry:
+    """Build a registry containing only local draft generators."""
+
+    return register_draft_connectors(ConnectorRegistry(), output_root)
+
+
+def _feature_enabled(config: ConnectorConfig, key: str) -> bool:
+    value = config.extra.get(key, False)
+    if not isinstance(value, bool):
+        raise ConfigurationError(
+            f"connector {config.system} setting {key} must be a boolean"
+        )
+    return value
+
+
+def _repository_root(
+    config: ConnectorConfig,
+    environ: Mapping[str, str],
+    fallback: Path | None,
+) -> Path:
+    variable = str(config.extra.get("repository_root_env", "")).strip()
+    if variable:
+        value = environ.get(variable)
+        if not value:
+            raise ConfigurationError(
+                "Bitbucket branch publication requires environment variable "
+                f"{variable}"
+            )
+        return Path(value)
+    if fallback is None:
+        raise ConfigurationError(
+            "Bitbucket branch publication requires workspace_root or "
+            "repository_root_env"
+        )
+    return fallback

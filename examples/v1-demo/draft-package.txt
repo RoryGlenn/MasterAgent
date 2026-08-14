@@ -1,0 +1,12 @@
+run ID: 8a6cab6c-7534-4235-98bf-e8294a56728d
+plan fingerprint: 8835347838ee930dd841378ec2518b7c07c2625fdebf4a427896b774f9a70226
+mode: apply
+verified             718d6b2f-19f0-4418-b32d-10a27f9ec38d jira.issue.update.draft — verified local artifact digest
+verified             93fe3b44-7825-42a5-8490-ab3920becdc0 confluence.page.update.draft — verified local artifact digest
+verified             cb94f033-03a0-436c-b764-dba2a06b2f05 outlook.email.draft — verified local artifact digest
+verified             7e17839c-abcb-4775-858f-89afe6ab6048 teams.message.draft — verified local artifact digest
+verified             ce67446d-7881-4741-8401-012b989eae99 powerpoint.presentation.generate — verified local artifact digest
+verified             db64ea11-51b9-4513-b03a-83221ace2351 repository.patch.generate — verified local artifact digest
+successful: True
+summary: /mnt/data/master-agent/examples/v1-demo/draft-package/README.md
+manifest: /mnt/data/master-agent/examples/v1-demo/draft-package/manifest.json

@@ -1,0 +1,46 @@
+{
+  "schema": "master-agent/draft-package-manifest@1",
+  "run_id": "8a6cab6c-7534-4235-98bf-e8294a56728d",
+  "plan_id": "b005ab67-6385-4f68-9365-f4f4ea3f9f75",
+  "plan_fingerprint": "8835347838ee930dd841378ec2518b7c07c2625fdebf4a427896b774f9a70226",
+  "successful": true,
+  "published": false,
+  "artifacts": [
+    {
+      "capability": "jira.issue.update.draft",
+      "path": "jira-update-draft.json",
+      "sha256": "2e97faa1f482ba5bafe1c4bb8ec518dd002f1b715afbe48134e2baab44fe9acc",
+      "size": 335
+    },
+    {
+      "capability": "confluence.page.update.draft",
+      "path": "confluence-update-draft.json",
+      "sha256": "60e362bc736ad31f543c9951d15c7fe6c09c7d963a30412064d00f44ea660eb4",
+      "size": 473
+    },
+    {
+      "capability": "outlook.email.draft",
+      "path": "stakeholder-email.eml",
+      "sha256": "9d14e7f131c4f7a9a9d4fc46ccb6124f1aa19ceb861196ae653fc7709e25a18f",
+      "size": 231
+    },
+    {
+      "capability": "teams.message.draft",
+      "path": "team-message.md",
+      "sha256": "a5549e12ce85a47d95eb6d9932c018ca5b489f38e8068c7d7de86f044abcf2c3",
+      "size": 178
+    },
+    {
+      "capability": "powerpoint.presentation.generate",
+      "path": "change-package.pptx",
+      "sha256": "dbe2aec33cf7621dcae8983863f18d8c996d0db6a76ffe3f070abf161e9db20f",
+      "size": 30103
+    },
+    {
+      "capability": "repository.patch.generate",
+      "path": "source-change.patch",
+      "sha256": "8c289e1d213ceee3be4d8c8f5a79a9e7b38c40691396d7fb0fc6b3022aea91eb",
+      "size": 132
+    }
+  ]
+}

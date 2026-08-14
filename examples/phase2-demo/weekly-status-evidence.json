@@ -1,0 +1,308 @@
+{
+  "run_id": "00000000-0000-4000-8000-000000000201",
+  "plan_id": "00000000-0000-4000-8000-000000000202",
+  "plan_fingerprint": "demo-phase-2-fingerprint",
+  "dry_run": false,
+  "successful": true,
+  "actions": [
+    {
+      "action_id": "00000000-0000-4000-8000-000000000101",
+      "capability": "jira.issue.search",
+      "state": "verified",
+      "message": "Synthetic read verified for the Phase 2 demonstration.",
+      "result": {
+        "action_id": "00000000-0000-4000-8000-000000000101",
+        "state": "succeeded",
+        "before": null,
+        "after": {
+          "schema": "master-agent/jira-issues@1",
+          "returned": 5,
+          "issues": [
+            {
+              "key": "RISE-142",
+              "summary": "Resolve release-blocking authentication regression",
+              "status": "Blocked",
+              "blocked": true,
+              "priority": "Highest",
+              "assignee": "Engineer A",
+              "web_url": "https://jira.example.test/browse/RISE-142",
+              "citation_id": "CIT-5BDBD2711E74"
+            },
+            {
+              "key": "RISE-151",
+              "summary": "Raise backend coverage to 80 percent",
+              "status": "In Progress",
+              "blocked": false,
+              "priority": "High",
+              "assignee": "Engineer B",
+              "web_url": "https://jira.example.test/browse/RISE-151",
+              "citation_id": "CIT-81690448BC7A"
+            },
+            {
+              "key": "RISE-155",
+              "summary": "Complete frontend regression suite",
+              "status": "In Review",
+              "blocked": false,
+              "priority": "High",
+              "assignee": "Engineer A",
+              "web_url": "https://jira.example.test/browse/RISE-155",
+              "citation_id": "CIT-B8148E946A24"
+            },
+            {
+              "key": "RISE-160",
+              "summary": "Publish deployment runbook",
+              "status": "To Do",
+              "blocked": false,
+              "priority": "Medium",
+              "assignee": "Project Lead",
+              "web_url": "https://jira.example.test/browse/RISE-160",
+              "citation_id": "CIT-A5637960157B"
+            },
+            {
+              "key": "RISE-138",
+              "summary": "Cache dashboard section data",
+              "status": "Done",
+              "blocked": false,
+              "priority": "Medium",
+              "assignee": "Project Lead",
+              "web_url": "https://jira.example.test/browse/RISE-138",
+              "citation_id": "CIT-DCA808F6D3E1"
+            }
+          ],
+          "source_urls": [
+            "https://jira.example.test/issues/?jql=example"
+          ],
+          "evidence": {
+            "content_digest": "sha256:demo-jira"
+          },
+          "security": {
+            "prompt_injection_findings": []
+          },
+          "citations": [
+            {
+              "citation_id": "CIT-5BDBD2711E74",
+              "marker": "[CIT-5BDBD2711E74]",
+              "system": "jira",
+              "resource_type": "issue",
+              "resource_id": "RISE-142",
+              "parent_resource_id": null,
+              "title": "RISE-142 — Resolve release-blocking authentication regression",
+              "url": "https://jira.example.test/browse/RISE-142",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-81690448BC7A",
+              "marker": "[CIT-81690448BC7A]",
+              "system": "jira",
+              "resource_type": "issue",
+              "resource_id": "RISE-151",
+              "parent_resource_id": null,
+              "title": "RISE-151 — Raise backend coverage to 80 percent",
+              "url": "https://jira.example.test/browse/RISE-151",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-B8148E946A24",
+              "marker": "[CIT-B8148E946A24]",
+              "system": "jira",
+              "resource_type": "issue",
+              "resource_id": "RISE-155",
+              "parent_resource_id": null,
+              "title": "RISE-155 — Complete frontend regression suite",
+              "url": "https://jira.example.test/browse/RISE-155",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-A5637960157B",
+              "marker": "[CIT-A5637960157B]",
+              "system": "jira",
+              "resource_type": "issue",
+              "resource_id": "RISE-160",
+              "parent_resource_id": null,
+              "title": "RISE-160 — Publish deployment runbook",
+              "url": "https://jira.example.test/browse/RISE-160",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-DCA808F6D3E1",
+              "marker": "[CIT-DCA808F6D3E1]",
+              "system": "jira",
+              "resource_type": "issue",
+              "resource_id": "RISE-138",
+              "parent_resource_id": null,
+              "title": "RISE-138 — Cache dashboard section data",
+              "url": "https://jira.example.test/browse/RISE-138",
+              "version": null
+            }
+          ]
+        },
+        "connector_reference": "demo:jira.issue.search",
+        "message": "Synthetic evidence collected."
+      }
+    },
+    {
+      "action_id": "00000000-0000-4000-8000-000000000102",
+      "capability": "bitbucket.pull_request.search",
+      "state": "verified",
+      "message": "Synthetic read verified for the Phase 2 demonstration.",
+      "result": {
+        "action_id": "00000000-0000-4000-8000-000000000102",
+        "state": "succeeded",
+        "before": null,
+        "after": {
+          "schema": "master-agent/bitbucket-pull-requests@1",
+          "returned": 3,
+          "pull_requests": [
+            {
+              "id": 293,
+              "title": "Fix authentication refresh race",
+              "source_branch": "fix/auth-refresh-race",
+              "destination_branch": "main",
+              "author": "Engineer A",
+              "participants": [
+                {
+                  "display_name": "Reviewer",
+                  "approved": false
+                }
+              ],
+              "ci_summary": {
+                "successful": 12,
+                "failed": 1,
+                "in_progress": 0
+              },
+              "web_url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/293",
+              "citation_id": "CIT-E3033B704FD5"
+            },
+            {
+              "id": 296,
+              "title": "Add backend coverage tests",
+              "source_branch": "test/backend-coverage",
+              "destination_branch": "main",
+              "author": "Engineer B",
+              "participants": [
+                {
+                  "display_name": "Reviewer",
+                  "approved": true
+                }
+              ],
+              "ci_summary": {
+                "successful": 13,
+                "failed": 0,
+                "in_progress": 0
+              },
+              "web_url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/296",
+              "citation_id": "CIT-598034FE7D1A"
+            },
+            {
+              "id": 298,
+              "title": "Update release runbook",
+              "source_branch": "docs/release-runbook",
+              "destination_branch": "main",
+              "author": "Project Lead",
+              "participants": [],
+              "ci_summary": {
+                "successful": 4,
+                "failed": 0,
+                "in_progress": 1
+              },
+              "web_url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/298",
+              "citation_id": "CIT-E954B6CB7DAD"
+            }
+          ],
+          "source_urls": [
+            "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests"
+          ],
+          "evidence": {
+            "content_digest": "sha256:demo-bitbucket"
+          },
+          "security": {
+            "prompt_injection_findings": []
+          },
+          "citations": [
+            {
+              "citation_id": "CIT-E3033B704FD5",
+              "marker": "[CIT-E3033B704FD5]",
+              "system": "bitbucket",
+              "resource_type": "pull_request",
+              "resource_id": "293",
+              "parent_resource_id": null,
+              "title": "PR 293 — Fix authentication refresh race",
+              "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/293",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-598034FE7D1A",
+              "marker": "[CIT-598034FE7D1A]",
+              "system": "bitbucket",
+              "resource_type": "pull_request",
+              "resource_id": "296",
+              "parent_resource_id": null,
+              "title": "PR 296 — Add backend coverage tests",
+              "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/296",
+              "version": null
+            },
+            {
+              "citation_id": "CIT-E954B6CB7DAD",
+              "marker": "[CIT-E954B6CB7DAD]",
+              "system": "bitbucket",
+              "resource_type": "pull_request",
+              "resource_id": "298",
+              "parent_resource_id": null,
+              "title": "PR 298 — Update release runbook",
+              "url": "https://bitbucket.example.test/projects/RISE/repos/app/pull-requests/298",
+              "version": null
+            }
+          ]
+        },
+        "connector_reference": "demo:bitbucket.pull_request.search",
+        "message": "Synthetic evidence collected."
+      }
+    },
+    {
+      "action_id": "00000000-0000-4000-8000-000000000103",
+      "capability": "confluence.page.read",
+      "state": "verified",
+      "message": "Synthetic read verified for the Phase 2 demonstration.",
+      "result": {
+        "action_id": "00000000-0000-4000-8000-000000000103",
+        "state": "succeeded",
+        "before": null,
+        "after": {
+          "schema": "master-agent/confluence-page@1",
+          "page": {
+            "id": "123456789",
+            "title": "RISE Release Status",
+            "version": 14,
+            "body_excerpt": "The release remains conditionally on track. Authentication is the only active release blocker. Backend coverage work is progressing, and the deployment runbook must be published before the release gate.",
+            "web_url": "https://confluence.example.test/display/RISE/Release+Status",
+            "citation_id": "CIT-5CAE22A76965"
+          },
+          "source_urls": [
+            "https://confluence.example.test/display/RISE/Release+Status"
+          ],
+          "evidence": {
+            "content_digest": "sha256:demo-confluence"
+          },
+          "security": {
+            "prompt_injection_findings": []
+          },
+          "citations": [
+            {
+              "citation_id": "CIT-5CAE22A76965",
+              "marker": "[CIT-5CAE22A76965]",
+              "system": "confluence",
+              "resource_type": "page",
+              "resource_id": "123456789",
+              "parent_resource_id": null,
+              "title": "RISE Release Status",
+              "url": "https://confluence.example.test/display/RISE/Release+Status",
+              "version": null
+            }
+          ]
+        },
+        "connector_reference": "demo:confluence.page.read",
+        "message": "Synthetic evidence collected."
+      }
+    }
+  ]
+}

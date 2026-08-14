@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "master-agent"
+version = "1.0.0"
+description = "Governed orchestration layer for enterprise agent workflows."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Rory Glenn" }]
+dependencies = ["python-pptx>=1.0.2"]
+
+[project.scripts]
+master-agent = "master_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+master_agent = ["py.typed", "defaults/*.toml"]

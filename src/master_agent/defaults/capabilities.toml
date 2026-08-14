@@ -1,0 +1,412 @@
+# Master Agent v1 capability catalog. Live provider connectors remain disabled
+# in packaged integration defaults; enabling a capability does not grant credentials.
+
+[capabilities."bitbucket.branch.push"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = true
+description = "Push only a new agent-prefixed branch and delete only that exact unchanged ref during rollback."
+
+[capabilities."bitbucket.build_status.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."bitbucket.instance.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."bitbucket.pull_request.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create and verify a Bitbucket pull request; compensation declines it."
+
+[capabilities."bitbucket.pull_request.diffstat"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."bitbucket.pull_request.merge"]
+enabled = false
+authentication = "service_or_delegated"
+risk = "high_impact"
+reversible = false
+description = "Intentionally prohibited from the v1 autonomous execution surface."
+
+[capabilities."bitbucket.pull_request.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."bitbucket.pull_request.search"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."bitbucket.repository.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."confluence.page.compensate"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Restore the prior Confluence page version and body."
+
+[capabilities."confluence.page.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create a Confluence page with verified delete compensation."
+
+[capabilities."confluence.page.create.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Render a local Confluence page-create proposal."
+
+[capabilities."confluence.page.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."confluence.page.search"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."confluence.page.update"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Version-check and update a Confluence page."
+
+[capabilities."confluence.page.update.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Render a local Confluence page-update proposal."
+
+[capabilities."identity.identifier.resolve"]
+enabled = true
+authentication = "local"
+risk = "read_only"
+
+[capabilities."identity.person.list"]
+enabled = true
+authentication = "local"
+risk = "read_only"
+
+[capabilities."identity.person.resolve"]
+enabled = true
+authentication = "local"
+risk = "read_only"
+
+[capabilities."jira.issue.comment.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create a Jira comment that can be deleted during compensation."
+
+[capabilities."jira.issue.comment.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Render a local Jira comment proposal."
+
+[capabilities."jira.issue.compensate"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Restore Jira state captured by a prior approved action."
+
+[capabilities."jira.issue.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."jira.issue.search"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."jira.issue.transition"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Transition a Jira issue with an explicit reverse transition for compensation."
+
+[capabilities."jira.issue.transition.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Render a local Jira transition proposal."
+
+[capabilities."jira.issue.update"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Update explicitly named Jira fields after version validation."
+
+[capabilities."jira.issue.update.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Render a local Jira field-update proposal."
+
+[capabilities."jira.server.info"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."microsoft.identity.read"]
+enabled = true
+authentication = "delegated_or_explicit_user"
+risk = "read_only"
+
+[capabilities."microsoft.identity.search"]
+enabled = true
+authentication = "delegated_or_application"
+risk = "read_only"
+
+[capabilities."onenote.notebook.list"]
+enabled = true
+authentication = "delegated"
+risk = "read_only"
+description = "List delegated OneNote notebooks with bounded pagination."
+
+[capabilities."onenote.page.list"]
+enabled = true
+authentication = "delegated"
+risk = "read_only"
+description = "List delegated OneNote pages with bounded pagination."
+
+[capabilities."onenote.page.read"]
+enabled = true
+authentication = "delegated"
+risk = "read_only"
+description = "Read one delegated OneNote page as untrusted content."
+
+[capabilities."onenote.section.list"]
+enabled = true
+authentication = "delegated"
+risk = "read_only"
+description = "List delegated OneNote sections with bounded pagination."
+
+[capabilities."onenote.page.create"]
+enabled = true
+authentication = "delegated"
+risk = "reversible_write"
+reversible = true
+description = "Create a OneNote page using delegated identity."
+
+[capabilities."onenote.page.update"]
+enabled = true
+authentication = "delegated"
+risk = "reversible_write"
+reversible = true
+description = "Patch a OneNote page and retain the prior HTML for rollback."
+
+[capabilities."outlook.attachment.list"]
+enabled = true
+authentication = "microsoft_graph_mail"
+risk = "read_only"
+
+[capabilities."outlook.attachment.text.read"]
+enabled = true
+authentication = "microsoft_graph_mail"
+risk = "read_only"
+
+[capabilities."outlook.email.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+
+[capabilities."outlook.email.send"]
+enabled = true
+authentication = "delegated"
+risk = "external_communication"
+reversible = false
+description = "Send exact approval-bound Outlook content after provider-draft verification."
+
+[capabilities."outlook.mail_folder.list"]
+enabled = true
+authentication = "microsoft_graph_mail"
+risk = "read_only"
+
+[capabilities."outlook.message.read"]
+enabled = true
+authentication = "microsoft_graph_mail"
+risk = "read_only"
+
+[capabilities."outlook.message.search"]
+enabled = true
+authentication = "microsoft_graph_mail"
+risk = "read_only"
+
+[capabilities."powerpoint.presentation.generate"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+
+[capabilities."repository.branch.create"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = true
+description = "Create a non-protected local Git branch."
+
+[capabilities."repository.branch.plan"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Generate a local branch-operation plan."
+
+[capabilities."repository.branch.push"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = false
+description = "Push only the current non-protected branch without force."
+
+[capabilities."repository.commit.create"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = true
+description = "Create a local commit from an explicit path allowlist."
+
+[capabilities."repository.patch.apply"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = true
+description = "Apply a bounded approved patch with exact HEAD preconditions."
+
+[capabilities."repository.patch.generate"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+description = "Generate a reviewable unified diff without changing a repository."
+
+[capabilities."repository.worktree.restore"]
+enabled = true
+authentication = "local_git"
+risk = "reversible_write"
+reversible = true
+description = "Restore a local worktree to an explicitly approved commit."
+
+[capabilities."sharepoint.drive.children"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."sharepoint.drive.list"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."sharepoint.file.metadata.read"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."sharepoint.file.text.read"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."sharepoint.file.upload"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "reversible_write"
+reversible = true
+description = "Upload a bounded file while retaining the prior version for rollback."
+
+[capabilities."sharepoint.site.read"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."sharepoint.site.search"]
+enabled = true
+authentication = "microsoft_graph"
+risk = "read_only"
+
+[capabilities."teams.channel.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.channel.message.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.channel.message.read"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.channel.message.replies.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.channel.message.reply"]
+enabled = true
+authentication = "delegated"
+risk = "external_communication"
+reversible = false
+description = "Reply with exact approval-bound content in a Teams channel thread."
+
+[capabilities."teams.channel.message.send"]
+enabled = true
+authentication = "delegated"
+risk = "external_communication"
+reversible = false
+description = "Post exact approval-bound content to a Teams channel."
+
+[capabilities."teams.chat.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.chat.message.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.chat.message.read"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
+
+[capabilities."teams.chat.message.send"]
+enabled = true
+authentication = "delegated"
+risk = "external_communication"
+reversible = false
+description = "Post exact approval-bound content to an existing Teams chat."
+
+[capabilities."teams.message.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+
+[capabilities."teams.team.list"]
+enabled = true
+authentication = "microsoft_graph_teams"
+risk = "read_only"
