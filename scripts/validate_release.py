@@ -342,10 +342,26 @@ def _validate_demo(
         path = draft_manifest_path.parent / relative
         if not path.is_file() or sha256_file(path) != str(entry["sha256"]):
             errors.append(f"draft package artifact mismatch: {relative}")
+    _validate_demo_powerpoint(demo_root, checks, errors)
+
+
+def _validate_demo_powerpoint(
+    demo_root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Validate the packaged demonstration deck with an installed reader."""
+
     try:
         from pptx import Presentation
         from pptx.exc import PackageNotFoundError
+    except ImportError:
+        errors.append(
+            "v1 demonstration PowerPoint validation requires the python-pptx dependency"
+        )
+        return
 
+    try:
         deck = Presentation(demo_root / "draft-package/change-package.pptx")
         if len(deck.slides) != 3:
             errors.append(

@@ -5,8 +5,10 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from scripts.validate_release import (
+    _validate_demo_powerpoint,
     _validate_demo_readiness,
     _validate_file_hygiene,
     validate_project,
@@ -64,6 +66,23 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             self.assertEqual(checks, [])
             self.assertTrue(any("does not match" in error for error in errors))
+
+    def test_demo_powerpoint_reports_missing_dependency_cleanly(self) -> None:
+        """A minimal package-job environment must yield a release error, not crash."""
+
+        checks: list[str] = []
+        errors: list[str] = []
+
+        with patch.dict("sys.modules", {"pptx": None}):
+            _validate_demo_powerpoint(Path("unused"), checks, errors)
+
+        self.assertEqual(checks, [])
+        self.assertEqual(
+            errors,
+            [
+                "v1 demonstration PowerPoint validation requires the python-pptx dependency"
+            ],
+        )
 
 
 if __name__ == "__main__":
