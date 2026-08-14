@@ -20,8 +20,11 @@ A reversible write requires:
 
 - explicit field update;
 - comment creation;
-- transition with optional reverse transition;
+- transition with an explicit target status and required reverse transition;
 - compensation.
+
+Generic Jira `update` operators and transition-side field mutations are rejected
+because their complete poststate and rollback cannot yet be derived exactly.
 
 ### Confluence
 
@@ -41,14 +44,14 @@ A reversible write requires:
 ### SharePoint
 
 - upload or replace a bounded file from an approved artifact root;
-- verify resulting item metadata;
-- restore the previous version when supported.
+- hash bounded provider bytes before and after replacement;
+- restore the previous version and independently hash the restored bytes.
 
 ### OneNote
 
-- delegated page create;
-- delegated page patch;
-- delete exact created page or restore retained prior HTML.
+Delegated reads remain available. Page create/update definitions and governance
+routes are explicitly disabled until provider-normalized HTML and generic PATCH
+commands have an exact, target-aware DOM poststate contract.
 
 ## Compensation modes
 

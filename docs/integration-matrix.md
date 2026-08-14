@@ -8,8 +8,8 @@
 | Microsoft identity | delegated or explicit application user | current/explicit user and directory search | — | — | normalized identity/citation | disabled |
 | Outlook | Microsoft Graph delegated by default | folders, message search/read, attachment metadata, allowlisted UTF-8 text | `.eml` | send | create provider draft, re-read exact content, then send; non-reversible | disabled |
 | Teams | Microsoft Graph delegated for normal sends | chats, teams, channels, messages, replies | Markdown message draft | chat/channel send; channel reply | re-read created message; non-reversible | disabled |
-| SharePoint/OneDrive | Microsoft Graph delegated/application subject to policy | site/drive/item/folder/text | local artifact | bounded small-file upload | re-read metadata/hash; restore previous version or delete exact newly created item where permitted | disabled |
-| OneNote | Microsoft Graph delegated | notebooks, sections, pages, page content | HTML/proposal | page create/update | re-read content; delete created page; restore prior HTML | disabled |
+| SharePoint/OneDrive | Microsoft Graph delegated/application subject to policy | site/drive/item/folder/text | local artifact | bounded small-file upload | hash exact prior/uploaded/restored provider bytes; restore previous version | disabled |
+| OneNote | Microsoft Graph delegated | notebooks, sections, pages, page content | HTML/proposal | disabled pending exact DOM proof | read content is re-read; no write connector is registered | disabled |
 | PowerPoint | local `python-pptx` | — | `.pptx` generation | upload through SharePoint only | local file digest; SharePoint version verification after upload | available locally |
 | Git workspace | local Git identity | repository preconditions | branch and patch plan | apply patch, create branch/commit, push | exact HEAD/ref checks; connector-managed reverse patch and compare-and-swap local ref rollback; remote push recovery is manual; no standalone worktree restore | requires explicit workspace root |
 | Connector plugin | metadata-only entry-point inventory | — | — | disabled | future isolated-worker contract | never executed |
@@ -23,7 +23,7 @@
 - No force push or protected-branch write exists.
 - No standalone destructive Git worktree restore exists.
 - Teams application permissions are not used for ordinary message sending.
-- OneNote live connectors require delegated identity in this runtime.
+- OneNote read connectors require delegated identity; write capabilities remain disabled.
 
 ## Provider-specific activation
 

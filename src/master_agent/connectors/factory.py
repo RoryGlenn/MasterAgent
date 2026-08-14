@@ -32,7 +32,7 @@ from master_agent.connectors.microsoft import (
     MicrosoftIdentityConnector,
     SharePointConnector,
 )
-from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
+from master_agent.connectors.onenote import OneNoteReadConnector
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
@@ -222,14 +222,6 @@ def build_live_connectors(
             "onenote_read_enabled",
         ):
             connectors.append(OneNoteReadConnector(resolved, transport=transport))
-        if (
-            "onenote" in selected
-            and include_writes
-            and _feature_enabled(unresolved, "write_enabled")
-            and _feature_enabled(unresolved, "onenote_writes_enabled")
-        ):
-            connectors.append(OneNoteWriteConnector(resolved, transport=transport))
-
     if include_writes and workspace_root is not None and "repository" in selected:
         connectors.append(
             GitWorkspaceConnector(

@@ -100,6 +100,146 @@ class JiraWriteConnectorTests(unittest.TestCase):
             connector.execute(action)
         self.assertEqual([item.method for item in transport.requests], ["GET"])
 
+    def test_provider_altered_first_update_poststate_is_rejected(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transport.add_json("GET", path, _jira_issue("Old", "v1"))
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_json("GET", path, _jira_issue("PROVIDER ALTERED", "v2"))
+        connector = JiraWriteConnector(
+            resolved_config(
+                "jira",
+                deployment=DeploymentType.CLOUD,
+                base_url="https://example.atlassian.net",
+            ),
+            transport=transport,
+        )
+        action = _jira_update_action()
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+    def test_fresh_update_verification_rejects_later_substitution(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transport.add_json("GET", path, _jira_issue("Old", "v1"))
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_json("GET", path, _jira_issue("New summary", "v2"))
+        transport.add_json("GET", path, _jira_issue("PROVIDER ALTERED", "v2"))
+        connector = JiraWriteConnector(
+            resolved_config(
+                "jira",
+                deployment=DeploymentType.CLOUD,
+                base_url="https://example.atlassian.net",
+            ),
+            transport=transport,
+        )
+        action = _jira_update_action()
+
+        result = connector.execute(action)
+
+        self.assertFalse(connector.verify(action, result).verified)
+
+    def test_unsupported_update_operator_is_rejected_before_network(self) -> None:
+        transport = ScriptedTransport()
+        connector = JiraWriteConnector(
+            resolved_config(
+                "jira",
+                deployment=DeploymentType.CLOUD,
+                base_url="https://example.atlassian.net",
+            ),
+            transport=transport,
+        )
+        action = _jira_update_action(
+            parameters={
+                "fields": {"summary": "New summary"},
+                "update": {"labels": [{"add": "approved-label"}]},
+            }
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "operators are disabled"):
+            connector.execute(action)
+        self.assertEqual(transport.requests, [])
+
+    def test_transition_requires_verifiable_reversible_shape(self) -> None:
+        invalid_parameters = (
+            {"transition_id": "31", "reverse_transition_id": "21"},
+            {"transition_id": "31", "target_status": "Done"},
+            {
+                "transition_id": "31",
+                "target_status": "Done",
+                "reverse_transition_id": "21",
+                "fields": {"resolution": {"name": "Fixed"}},
+            },
+        )
+        for parameters in invalid_parameters:
+            with self.subTest(parameters=parameters):
+                transport = ScriptedTransport()
+                connector = JiraWriteConnector(
+                    resolved_config(
+                        "jira",
+                        deployment=DeploymentType.CLOUD,
+                        base_url="https://example.atlassian.net",
+                    ),
+                    transport=transport,
+                )
+                action = _jira_transition_action(parameters)
+                with self.assertRaises(ConnectorError):
+                    connector.execute(action)
+                self.assertEqual(transport.requests, [])
+
+    def test_ignored_transition_is_rejected_at_first_poststate(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transport.add_json("GET", path, _jira_issue("Old", "v1", status="Open"))
+        transport.add_bytes("POST", path + "/transitions", b"", status=204)
+        transport.add_json("GET", path, _jira_issue("Old", "v2", status="Open"))
+        connector = JiraWriteConnector(
+            resolved_config(
+                "jira",
+                deployment=DeploymentType.CLOUD,
+                base_url="https://example.atlassian.net",
+            ),
+            transport=transport,
+        )
+        action = _jira_transition_action(
+            {
+                "transition_id": "31",
+                "target_status": "Done",
+                "reverse_transition_id": "21",
+            }
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+    def test_fresh_transition_verification_uses_approved_status(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transport.add_json("GET", path, _jira_issue("Old", "v1", status="Open"))
+        transport.add_bytes("POST", path + "/transitions", b"", status=204)
+        transport.add_json("GET", path, _jira_issue("Old", "v2", status="Done"))
+        transport.add_json("GET", path, _jira_issue("Old", "v2", status="Open"))
+        connector = JiraWriteConnector(
+            resolved_config(
+                "jira",
+                deployment=DeploymentType.CLOUD,
+                base_url="https://example.atlassian.net",
+            ),
+            transport=transport,
+        )
+        action = _jira_transition_action(
+            {
+                "transition_id": "31",
+                "target_status": "Done",
+                "reverse_transition_id": "21",
+            }
+        )
+
+        result = connector.execute(action)
+
+        self.assertFalse(connector.verify(action, result).verified)
+
 
 class ConfluenceWriteConnectorTests(unittest.TestCase):
     """Validate cloud page update and exact-content rollback."""
@@ -388,6 +528,82 @@ class BitbucketWriteConnectorTests(unittest.TestCase):
         )
         self.assertEqual(compensation.after["state"], "DECLINED")
 
+    def test_altered_first_provider_poststate_is_rejected(self) -> None:
+        approved = _cloud_pr("OPEN")
+        alterations = {
+            "id": None,
+            "title": "PROVIDER ALTERED",
+            "description": "PROVIDER ALTERED",
+            "source": {"branch": {"name": "attacker/source"}},
+            "destination": {"branch": {"name": "production"}},
+            "close_source_branch": True,
+        }
+        for field, value in alterations.items():
+            with self.subTest(field=field):
+                transport = ScriptedTransport()
+                collection = "/2.0/repositories/acme/service/pullrequests"
+                item = collection + "/9"
+                transport.add_json("POST", collection, {"id": 9}, status=201)
+                transport.add_json("GET", item, {**approved, field: value})
+                connector = _bitbucket_cloud_connector(transport)
+
+                with self.assertRaisesRegex(ConnectorError, "poststate"):
+                    connector.execute(_bitbucket_action())
+
+    def test_fresh_verification_uses_approved_action_not_first_read(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/2.0/repositories/acme/service/pullrequests"
+        item = collection + "/9"
+        transport.add_json("POST", collection, {"id": 9}, status=201)
+        transport.add_json("GET", item, _cloud_pr("OPEN"))
+        transport.add_json(
+            "GET",
+            item,
+            {**_cloud_pr("OPEN"), "title": "PROVIDER ALTERED"},
+        )
+        connector = _bitbucket_cloud_connector(transport)
+        action = _bitbucket_action()
+
+        result = connector.execute(action)
+
+        self.assertFalse(connector.verify(action, result).verified)
+
+    def test_data_center_fields_are_normalized_and_verified(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/rest/api/1.0/projects/PROJ/repos/service/pull-requests"
+        item = collection + "/7"
+        exact = _server_pr("OPEN")
+        transport.add_json("POST", collection, {"id": 7}, status=201)
+        transport.add_json("GET", item, exact)
+        transport.add_json("GET", item, exact)
+        connector = BitbucketWriteConnector(
+            resolved_config(
+                "bitbucket",
+                deployment=DeploymentType.DATA_CENTER,
+                base_url="https://bitbucket.example",
+            ),
+            transport=transport,
+        )
+        action = action_for(
+            "bitbucket.pull_request.create",
+            system="bitbucket",
+            resource_type="pull_request",
+            resource_id="new",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "project_key": "PROJ",
+                "repository_slug": "service",
+                "title": "Agent change",
+                "description": "Reviewed proposal",
+                "source_branch": "agent/change",
+                "destination_branch": "main",
+            },
+        )
+
+        result = connector.execute(action)
+
+        self.assertTrue(connector.verify(action, result).verified)
+
     def test_close_source_branch_requires_boolean(self) -> None:
         transport = ScriptedTransport()
         connector = BitbucketWriteConnector(
@@ -449,6 +665,21 @@ class BitbucketWriteConnectorTests(unittest.TestCase):
 class SharePointWriteConnectorTests(unittest.TestCase):
     """Validate bounded overwrite and provider-version compensation."""
 
+    def test_exact_lifecycle_requires_sufficient_request_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "artifacts"
+            with self.assertRaisesRegex(ConnectorError, "at least 12"):
+                SharePointWriteConnector(
+                    resolved_config(
+                        "microsoft",
+                        base_url="https://graph.microsoft.com/v1.0",
+                        max_pages=11,
+                    ),
+                    artifact_root=root,
+                    transport=ScriptedTransport(),
+                )
+            self.assertFalse(root.exists())
+
     def test_existing_file_is_overwritten_and_restored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -463,14 +694,17 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             after = _drive_item("status.txt", len(b"new content"), '"etag-2"')
             restored = _drive_item("status.txt", len(b"old"), '"etag-3"')
             transport.add_json("GET", item, before)
+            transport.add_bytes("GET", content, b"old")
             transport.add_json("GET", versions, {"value": [{"id": "3"}]})
             transport.add_bytes("PUT", content, b"", status=200)
             transport.add_json("GET", item, after)
-            transport.add_json("GET", item, after)
+            transport.add_bytes("GET", content, b"new content")
+            transport.add_bytes("GET", content, b"new content")
             transport.add_json("GET", item, after)
             transport.add_bytes("POST", restore, b"", status=204)
             transport.add_json("GET", item, restored)
-            transport.add_json("GET", item, restored)
+            transport.add_bytes("GET", content, b"old")
+            transport.add_bytes("GET", content, b"old")
             connector = SharePointWriteConnector(
                 resolved_config(
                     "microsoft",
@@ -479,6 +713,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                         "identity_mode": "delegated",
                         "max_upload_bytes": 1000,
                     },
+                    max_pages=12,
                 ),
                 artifact_root=root,
                 transport=transport,
@@ -508,6 +743,74 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             self.assertIn("PUT", methods)
             self.assertIn("POST", methods)
 
+    def test_same_size_provider_substitution_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "status.txt"
+            local.write_bytes(b"GOOD")
+            transport = ScriptedTransport()
+            item = "/v1.0/drives/drive/items/item"
+            content = item + "/content"
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e1"))
+            transport.add_bytes("GET", content, b"OLD!")
+            transport.add_json("GET", item + "/versions", {"value": [{"id": "1"}]})
+            transport.add_bytes("PUT", content, b"", status=200)
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e2"))
+            transport.add_bytes("GET", content, b"EVIL")
+            connector = _sharepoint_connector(root, transport)
+            action = _sharepoint_action(local, expected_version="e1")
+
+            with self.assertRaisesRegex(ConnectorError, "approved bytes"):
+                connector.execute(action)
+
+    def test_fresh_content_verification_rejects_later_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "status.txt"
+            local.write_bytes(b"GOOD")
+            transport = ScriptedTransport()
+            item = "/v1.0/drives/drive/items/item"
+            content = item + "/content"
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e1"))
+            transport.add_bytes("GET", content, b"OLD!")
+            transport.add_json("GET", item + "/versions", {"value": [{"id": "1"}]})
+            transport.add_bytes("PUT", content, b"", status=200)
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e2"))
+            transport.add_bytes("GET", content, b"GOOD")
+            transport.add_bytes("GET", content, b"EVIL")
+            connector = _sharepoint_connector(root, transport)
+            action = _sharepoint_action(local, expected_version="e1")
+
+            result = connector.execute(action)
+
+            self.assertFalse(connector.verify(action, result).verified)
+
+    def test_restore_rejects_same_size_wrong_prior_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "status.txt"
+            local.write_bytes(b"GOOD")
+            transport = ScriptedTransport()
+            item = "/v1.0/drives/drive/items/item"
+            content = item + "/content"
+            versions = item + "/versions"
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e1"))
+            transport.add_bytes("GET", content, b"OLD!")
+            transport.add_json("GET", versions, {"value": [{"id": "1"}]})
+            transport.add_bytes("PUT", content, b"", status=200)
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e2"))
+            transport.add_bytes("GET", content, b"GOOD")
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e2"))
+            transport.add_bytes("POST", versions + "/1/restoreVersion", b"", status=204)
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e3"))
+            transport.add_bytes("GET", content, b"EVIL")
+            connector = _sharepoint_connector(root, transport)
+            action = _sharepoint_action(local, expected_version="e1")
+            result = connector.execute(action)
+
+            with self.assertRaisesRegex(ConnectorError, "prior bytes"):
+                connector.compensate(action, result)
+
     def test_file_outside_artifact_root_is_rejected_before_network(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -521,6 +824,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                     "microsoft",
                     base_url="https://graph.microsoft.com/v1.0",
                     extra={"identity_mode": "delegated"},
+                    max_pages=12,
                 ),
                 artifact_root=approved,
                 transport=transport,
@@ -538,16 +842,48 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             self.assertEqual(transport.requests, [])
 
 
-def _jira_issue(summary: str, updated: str) -> dict[str, object]:
+def _jira_issue(
+    summary: str,
+    updated: str,
+    *,
+    status: str = "In Progress",
+) -> dict[str, object]:
     return {
         "id": "10001",
         "key": "RISE-1",
         "fields": {
             "summary": summary,
             "updated": updated,
-            "status": {"name": "In Progress"},
+            "status": {"name": status},
         },
     }
+
+
+def _jira_update_action(
+    *,
+    parameters: dict[str, object] | None = None,
+) -> AgentAction:
+    return action_for(
+        "jira.issue.update",
+        system="jira",
+        resource_type="issue",
+        resource_id="RISE-1",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        expected_version="v1",
+        parameters=parameters or {"fields": {"summary": "New summary"}},
+    )
+
+
+def _jira_transition_action(parameters: dict[str, object]) -> AgentAction:
+    return action_for(
+        "jira.issue.transition",
+        system="jira",
+        resource_type="issue",
+        resource_id="RISE-1",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        expected_version="v1",
+        parameters=parameters,
+    )
 
 
 def _confluence_connector(
@@ -628,10 +964,57 @@ def _cloud_pr(state: str) -> dict[str, object]:
     return {
         "id": 9,
         "title": "Agent change",
+        "description": "Reviewed proposal",
+        "source": {"branch": {"name": "agent/change"}},
+        "destination": {"branch": {"name": "main"}},
+        "close_source_branch": False,
         "state": state,
         "updated_on": "2026-08-13T20:00:00Z",
         "links": {"html": {"href": "https://bitbucket.example/pr/9"}},
     }
+
+
+def _server_pr(state: str) -> dict[str, object]:
+    return {
+        "id": 7,
+        "title": "Agent change",
+        "description": "Reviewed proposal",
+        "fromRef": {"id": "refs/heads/agent/change"},
+        "toRef": {"id": "refs/heads/main"},
+        "state": state,
+        "version": 1,
+    }
+
+
+def _bitbucket_cloud_connector(
+    transport: ScriptedTransport,
+) -> BitbucketWriteConnector:
+    return BitbucketWriteConnector(
+        resolved_config(
+            "bitbucket",
+            deployment=DeploymentType.CLOUD,
+            base_url="https://api.bitbucket.org/2.0",
+        ),
+        transport=transport,
+    )
+
+
+def _bitbucket_action() -> AgentAction:
+    return action_for(
+        "bitbucket.pull_request.create",
+        system="bitbucket",
+        resource_type="pull_request",
+        resource_id="new",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        parameters={
+            "workspace": "acme",
+            "repository": "service",
+            "title": "Agent change",
+            "description": "Reviewed proposal",
+            "source_branch": "agent/change",
+            "destination_branch": "main",
+        },
+    )
 
 
 def _drive_item(name: str, size: int, etag: str) -> dict[str, object]:
@@ -644,6 +1027,39 @@ def _drive_item(name: str, size: int, etag: str) -> dict[str, object]:
         "lastModifiedDateTime": "2026-08-13T20:00:00Z",
         "webUrl": "https://tenant.sharepoint.com/item",
     }
+
+
+def _sharepoint_connector(
+    root: Path,
+    transport: ScriptedTransport,
+) -> SharePointWriteConnector:
+    return SharePointWriteConnector(
+        resolved_config(
+            "microsoft",
+            base_url="https://graph.microsoft.com/v1.0",
+            extra={"identity_mode": "delegated", "max_upload_bytes": 1000},
+            max_pages=12,
+        ),
+        artifact_root=root,
+        transport=transport,
+    )
+
+
+def _sharepoint_action(local: Path, *, expected_version: str) -> AgentAction:
+    return action_for(
+        "sharepoint.file.upload",
+        system="sharepoint",
+        resource_type="file",
+        resource_id="item",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        expected_version=expected_version,
+        parameters={
+            "drive_id": "drive",
+            "local_path": str(local),
+            "local_sha256": hashlib.sha256(local.read_bytes()).hexdigest(),
+            "content_type": "text/plain",
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -48,6 +48,19 @@ class CapabilityGovernanceTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("disabled", reason)
 
+    def test_onenote_writes_are_disabled_by_catalog_and_governance(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        for capability in ("onenote.page.create", "onenote.page.update"):
+            with self.subTest(capability=capability):
+                definition = catalog.definitions[capability]
+                rule = governance.rule_for(capability)
+                self.assertFalse(definition.enabled)
+                self.assertIsNotNone(rule)
+                assert rule is not None
+                self.assertFalse(rule.enabled)
+                self.assertEqual(rule.pattern, capability)
+
     def test_standalone_git_restore_has_no_execution_or_governance_route(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
         governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")

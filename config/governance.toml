@@ -99,6 +99,24 @@ environments = ["development", "non_production", "production"]
 enabled = true
 
 [[rules]]
+pattern = "onenote.page.create"
+owner = "system-owner"
+authentication = "delegated"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "onenote.page.update"
+owner = "system-owner"
+authentication = "delegated"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
 pattern = "*.create"
 owner = "system-owner"
 authentication = "provider_specific"

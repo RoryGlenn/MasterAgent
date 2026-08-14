@@ -40,7 +40,7 @@ Run `master-agent draft-package`. Review the generated `.eml`, Teams draft, deck
 
 ## 8. Validate reversible writes in non-production
 
-Use disposable Jira issues, Confluence pages, branches, SharePoint files, and OneNote pages. Capture expected versions. Obtain exact approvals. Enable only one granular provider flag. Execute, verify, and test compensation.
+Use disposable Jira issues, Confluence pages, branches, and SharePoint files. Capture expected versions. Obtain exact approvals. Enable only one granular provider flag. Execute, verify, and test compensation. Do not enable OneNote writes; their catalog and governance routes are disabled pending exact DOM verification.
 
 ## 9. Validate communication
 

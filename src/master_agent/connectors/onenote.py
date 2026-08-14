@@ -1,4 +1,4 @@
-"""Delegated Microsoft OneNote page create and update capabilities."""
+"""Delegated Microsoft OneNote read capabilities."""
 
 from __future__ import annotations
 
@@ -255,9 +255,14 @@ class OneNoteReadConnector(ReadOnlyConnector):
 
 
 class OneNoteWriteConnector:
-    """Create or patch OneNote pages using delegated Graph identity."""
+    """Fail-closed compatibility shim for disabled OneNote writes.
 
-    _CAPABILITIES = frozenset({"onenote.page.create", "onenote.page.update"})
+    Microsoft Graph rewrites OneNote HTML and the former generic PATCH surface
+    could not prove target-aware poststate semantics.  The capability remains
+    unavailable until a canonical DOM contract is implemented and reviewed.
+    """
+
+    _CAPABILITIES: frozenset[str] = frozenset()
 
     def __init__(
         self,
@@ -268,7 +273,7 @@ class OneNoteWriteConnector:
         mode = str(config.extra.get("identity_mode", "delegated")).lower()
         if mode != "delegated":
             raise ConnectorError(
-                "OneNote write capabilities require delegated identity mode"
+                "OneNote Graph operations require delegated identity mode"
             )
         self._config = config
         self._client = graph_client(
@@ -278,6 +283,10 @@ class OneNoteWriteConnector:
         )
         self._last: dict[str, dict[str, Any]] = {}
         self._previous_html: dict[str, str] = {}
+        raise ConnectorError(
+            "OneNote writes are disabled until exact target-aware provider "
+            "poststate verification is implemented"
+        )
 
     @property
     def system(self) -> str:

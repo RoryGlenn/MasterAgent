@@ -22,6 +22,7 @@ def resolved_config(
     base_url: str = "https://example.test",
     auth: ResolvedAuth | None = None,
     extra: Mapping[str, Any] | None = None,
+    max_pages: int = 10,
     max_items: int = 200,
 ) -> ResolvedConnectorConfig:
     """Build an in-memory connector configuration."""
@@ -31,6 +32,7 @@ def resolved_config(
         deployment=deployment,
         base_url=base_url,
         auth=auth or ResolvedAuth(AuthMode.NONE),
+        max_pages=max_pages,
         max_items=max_items,
         extra=dict(extra or {}),
     )

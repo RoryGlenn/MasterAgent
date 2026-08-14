@@ -110,7 +110,7 @@ class ConnectorFactoryGateTests(unittest.TestCase):
                 capability for item in connectors for capability in item.capabilities
             }
             self.assertIn("sharepoint.file.upload", capabilities)
-            self.assertIn("onenote.page.update", capabilities)
+            self.assertNotIn("onenote.page.update", capabilities)
             self.assertIn("outlook.email.send", capabilities)
             self.assertIn("teams.chat.message.send", capabilities)
             self.assertIn("onenote.page.read", capabilities)
@@ -143,6 +143,7 @@ base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "bearer"
 secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 identity_mode = "delegated"
+max_pages = 16
 write_enabled = {str(write_enabled).lower()}
 send_enabled = {str(send_enabled).lower()}
 sharepoint_writes_enabled = {flag}

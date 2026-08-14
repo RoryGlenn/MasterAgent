@@ -212,19 +212,19 @@ risk = "read_only"
 description = "List delegated OneNote sections with bounded pagination."
 
 [capabilities."onenote.page.create"]
-enabled = true
+enabled = false
 authentication = "delegated"
 risk = "reversible_write"
 reversible = true
-description = "Create a OneNote page using delegated identity."
+description = "Disabled until provider-normalized HTML can be verified exactly."
 
 [capabilities."onenote.page.update"]
-enabled = true
+enabled = false
 authentication = "delegated"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Patch a OneNote page and retain the prior HTML for rollback."
+description = "Disabled until target-aware PATCH poststate can be proven exactly."
 
 [capabilities."outlook.attachment.list"]
 enabled = true

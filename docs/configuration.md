@@ -51,7 +51,11 @@ Examples of granular flags:
 
 - Jira/Confluence: `writes_enabled`;
 - Bitbucket: `pull_request_writes_enabled`, `branch_push_enabled`;
-- Microsoft: `sharepoint_writes_enabled`, `onenote_read_enabled`, `onenote_writes_enabled`, `outlook_send_enabled`, `teams_send_enabled`.
+- Microsoft: `sharepoint_writes_enabled`, `onenote_read_enabled`, `outlook_send_enabled`, `teams_send_enabled`.
+
+OneNote write flags are intentionally not part of the runtime surface. Legacy
+`onenote_writes_enabled` values are ignored; page create/update remain disabled
+in the catalog, governance profile, connector capabilities, and live registry.
 
 The broad generic flag is retained as a compatibility gate, not as permission to enable every mutation.
 
@@ -61,7 +65,7 @@ Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucke
 
 ## Microsoft identity mode
 
-- `delegated` represents the signed-in user and is required by this runtime for OneNote and normal Teams sends.
+- `delegated` represents the signed-in user and is required by this runtime for OneNote reads and normal Teams sends.
 - `application` is supported only by capabilities and organization policy that explicitly permit it. The built-in Teams Graph send connector never accepts application identity; bot-based Teams communication must use a separate connector.
 - `default_identity = "me"` is valid only for delegated access.
 

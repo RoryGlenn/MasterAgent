@@ -34,7 +34,7 @@ All planned software phases are implemented:
 | 1 — governed runtime | Immutable plans, approvals, policy, source-of-truth validation, audit, idempotency, verification, and prompt-injection controls |
 | 2 — read-only context | Jira, Confluence, Bitbucket, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
 | 3 — draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests |
-| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, SharePoint files, OneNote pages, and controlled local/remote Git operations with compensation |
+| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, byte-verified SharePoint files, and controlled local/remote Git operations with compensation; unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
 | 6 — narrow recurring autonomy | Registered, allowlisted, local-output recurring workflows with durable scheduling state and overlap locks |
 
@@ -46,7 +46,7 @@ The catalog contains **70 typed capabilities**:
 
 - 39 read-only capabilities;
 - 10 local-generation capabilities;
-- 16 reversible-write capabilities;
+- 16 reversible-write definitions, including 2 disabled OneNote writes;
 - 4 external-communication capabilities;
 - 1 high-impact capability, `bitbucket.pull_request.merge`, deliberately disabled.
 
@@ -59,8 +59,8 @@ Supported domains:
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | new agent branch push, PR creation/decline compensation |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
-| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with restore compensation |
-| OneNote | notebooks, sections, pages | generated HTML/proposals | delegated page create/update with rollback |
+| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
+| OneNote | notebooks, sections, pages | generated HTML/proposals | disabled pending exact target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
 | Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, and push; verified in-process rollback for local changes, manual recovery for remote pushes |
 | Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
@@ -71,7 +71,7 @@ Supported domains:
 - **Three independent live gates:** runtime flag, provider-specific TOML flag, and capability/governance permission.
 - **Immutable approvals:** approvals bind to a SHA-256 plan fingerprint and exact action IDs; any mutation invalidates them.
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
-- **Version preconditions:** Jira, Confluence, SharePoint, OneNote, and Git operations stop on stale state.
+- **Version preconditions:** Jira, Confluence, SharePoint, and Git operations stop on stale state.
 - **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.

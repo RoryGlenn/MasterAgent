@@ -102,12 +102,13 @@ class ConnectorFactoryTests(unittest.TestCase):
                 "bitbucket.pull_request.create",
                 "bitbucket.branch.push",
                 "sharepoint.file.upload",
-                "onenote.page.update",
                 "outlook.email.send",
                 "teams.chat.message.send",
                 "repository.patch.apply",
             ):
                 self.assertIn(capability, capabilities)
+            self.assertNotIn("onenote.page.create", capabilities)
+            self.assertNotIn("onenote.page.update", capabilities)
 
     def test_sharepoint_write_requires_artifact_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -163,6 +164,13 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         missing = sorted(connector_capabilities - set(catalog.definitions))
         self.assertEqual(missing, [])
 
+    def test_onenote_writes_are_disabled_in_catalog_and_connector(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+
+        self.assertFalse(catalog.definitions["onenote.page.create"].enabled)
+        self.assertFalse(catalog.definitions["onenote.page.update"].enabled)
+        self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
+
 
 def _capabilities(connectors: tuple[object, ...]) -> set[str]:
     return {
@@ -206,6 +214,7 @@ def _integration_text(*, enable_mutations: bool) -> str:
         base_url = "https://graph.microsoft.com/v1.0"
         auth_mode = "none"
         identity_mode = "delegated"
+        max_pages = 16
         write_enabled = {value}
         send_enabled = {value}
         sharepoint_writes_enabled = {value}

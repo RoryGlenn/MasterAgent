@@ -29,6 +29,11 @@ class OAuthReadinessTests(unittest.TestCase):
             OAuthFlow.ENTRA_DEVICE_CODE,
         )
         self.assertFalse(profiles.profile("microsoft_delegated").enabled)
+        self.assertIn("Notes.Read", profiles.profile("microsoft_delegated").scopes)
+        self.assertNotIn(
+            "Notes.ReadWrite",
+            profiles.profile("microsoft_reversible_writes").scopes,
+        )
         rendered = repr(profiles)
         self.assertNotIn("client-secret", rendered)
 

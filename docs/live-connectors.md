@@ -36,8 +36,7 @@ Compensation is connector-specific:
 - Jira restores captured fields, removes the comment created by the workflow, or applies a configured reverse transition;
 - Confluence restores the captured prior page version/body or removes the exact page created by the workflow;
 - Bitbucket declines the exact PR and may delete only the exact unchanged branch created by the workflow;
-- SharePoint restores the captured prior version or removes the exact newly created item when the connector has sufficient evidence;
-- OneNote removes the exact new page or restores retained prior HTML;
+- SharePoint restores the captured prior version only after hashing the prior, uploaded, and restored provider bytes;
 - Git compensates only inside the verified connector flow: patches are reversed,
   commit refs use compare-and-swap plus a mixed index reset, and an exact unchanged
   new branch may be removed. Concurrent worktree content is preserved and causes
@@ -46,6 +45,14 @@ Compensation is connector-specific:
   automatically rewriting or deleting a published ref could destroy concurrent work.
 
 A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
+
+SharePoint byte verification uses the bounded Graph content endpoint and never
+forwards credentials across an origin change. Tenants that return a cross-origin
+download redirect therefore remain fail-closed until a destination-attested,
+no-auth download broker is implemented. The full upload/verify/restore lifecycle
+requires at least 12 requests; packaged Microsoft defaults reserve 16 and cap
+approved uploads at 1,000,000 bytes so repeated byte proofs remain inside the
+shared response budget.
 
 ## Communication connectors
 

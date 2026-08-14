@@ -61,21 +61,15 @@ class BitbucketWriteConnector:
         """Create a pull request from explicitly named branches."""
 
         self._validate(action)
-        title = string_parameter(action.parameters, "title", required=True)
-        source = _safe_branch(
-            string_parameter(action.parameters, "source_branch", required=True)
-        )
-        destination = _safe_branch(
-            string_parameter(action.parameters, "destination_branch", required=True)
-        )
-        description = str(action.parameters.get("description", ""))
+        approved = _approved_pull_request(action, self._config.deployment)
+        title = str(approved["title"])
+        source = str(approved["source_branch"])
+        destination = str(approved["destination_branch"])
+        description = str(approved["description"])
         if self._config.deployment is DeploymentType.CLOUD:
-            workspace = string_parameter(action.parameters, "workspace", required=True)
-            repository = string_parameter(
-                action.parameters,
-                "repository",
-                required=True,
-            )
+            context = _pull_request_context(action, self._config.deployment)
+            workspace = str(context["workspace"])
+            repository = str(context["repository"])
             path = (
                 f"repositories/{quote_segment(workspace)}/"
                 f"{quote_segment(repository)}/pullrequests"
@@ -88,21 +82,13 @@ class BitbucketWriteConnector:
                     "description": description,
                     "source": {"branch": {"name": source}},
                     "destination": {"branch": {"name": destination}},
-                    "close_source_branch": _boolean_parameter(
-                        action.parameters,
-                        "close_source_branch",
-                        default=False,
-                    ),
+                    "close_source_branch": approved["close_source_branch"],
                 },
             )
-            context = {"workspace": workspace, "repository": repository}
         else:
-            project = string_parameter(action.parameters, "project_key", required=True)
-            repository = string_parameter(
-                action.parameters,
-                "repository_slug",
-                required=True,
-            )
+            context = _pull_request_context(action, self._config.deployment)
+            project = str(context["project_key"])
+            repository = str(context["repository_slug"])
             path = (
                 f"rest/api/1.0/projects/{quote_segment(project)}/repos/"
                 f"{quote_segment(repository)}/pull-requests"
@@ -129,17 +115,15 @@ class BitbucketWriteConnector:
                     },
                 },
             )
-            context = {"project_key": project, "repository_slug": repository}
         if not isinstance(data, Mapping) or data.get("id") is None:
             raise ConnectorError("Bitbucket pull-request response omitted an ID")
         pr_id = str(data["id"])
         observed = self._read_pull_request(pr_id, context)
-        after = {
-            **observed,
-            **context,
-            "source_branch": source,
-            "destination_branch": destination,
-        }
+        if not _pull_request_matches(observed, approved, pr_id):
+            raise ConnectorError(
+                "Bitbucket provider poststate did not match the approved pull request"
+            )
+        after = {**observed, **context}
         self._last[pr_id] = deepcopy(after)
         return ExecutionResult(
             action_id=action.action_id,
@@ -174,12 +158,10 @@ class BitbucketWriteConnector:
 
         after = result.after or {}
         pr_id = str(after.get("id", ""))
-        observed = self._read_pull_request(pr_id, after)
-        verified = bool(
-            observed.get("id") == pr_id
-            and observed.get("state") in {"OPEN", "OPENED", "open", "OPENING"}
-            and observed.get("title") == after.get("title")
-        )
+        context = _pull_request_context(action, self._config.deployment)
+        approved = _approved_pull_request(action, self._config.deployment)
+        observed = self._read_pull_request(pr_id, context)
+        verified = _pull_request_matches(observed, approved, pr_id)
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
@@ -202,30 +184,31 @@ class BitbucketWriteConnector:
         pr_id = str(after.get("id", ""))
         if not pr_id:
             raise ConnectorError("pull-request compensation requires a provider ID")
-        current = self._read_pull_request(pr_id, after)
-        if any(
-            current.get(key) != after.get(key)
-            for key in ("id", "title", "state", "version")
-        ):
+        context = _pull_request_context(action, self._config.deployment)
+        approved = _approved_pull_request(action, self._config.deployment)
+        current = self._read_pull_request(pr_id, context)
+        if not _pull_request_matches(current, approved, pr_id) or current.get(
+            "version"
+        ) != after.get("version"):
             raise VersionConflictError(
                 "Bitbucket pull request changed after creation; decline is refused"
             )
         if self._config.deployment is DeploymentType.CLOUD:
-            workspace = str(after.get("workspace", ""))
-            repository = str(after.get("repository", ""))
+            workspace = context["workspace"]
+            repository = context["repository"]
             path = (
                 f"repositories/{quote_segment(workspace)}/"
                 f"{quote_segment(repository)}/pullrequests/{quote_segment(pr_id)}/decline"
             )
         else:
-            project = str(after.get("project_key", ""))
-            repository = str(after.get("repository_slug", ""))
+            project = context["project_key"]
+            repository = context["repository_slug"]
             path = (
                 f"rest/api/1.0/projects/{quote_segment(project)}/repos/"
                 f"{quote_segment(repository)}/pull-requests/{quote_segment(pr_id)}/decline"
             )
         self._client.request_bytes("POST", path, safe_to_retry=False)
-        observed = self._read_pull_request(pr_id, after)
+        observed = self._read_pull_request(pr_id, context)
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -243,9 +226,18 @@ class BitbucketWriteConnector:
     ) -> VerificationResult:
         """Verify the pull request is no longer open."""
 
-        observed = compensation.after or {}
+        after = original.after or {}
+        pr_id = str(after.get("id", ""))
+        context = _pull_request_context(action, self._config.deployment)
+        approved = _approved_pull_request(action, self._config.deployment)
+        observed = self._read_pull_request(pr_id, context)
         state = str(observed.get("state", "")).upper()
-        verified = state in {"DECLINED", "SUPERSEDED", "CLOSED"}
+        verified = bool(
+            pr_id
+            and observed.get("id") == pr_id
+            and state in {"DECLINED", "SUPERSEDED", "CLOSED"}
+            and all(observed.get(key) == value for key, value in approved.items())
+        )
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
@@ -295,8 +287,21 @@ class BitbucketWriteConnector:
             if isinstance(first, Mapping) and first.get("href"):
                 self_url = str(first["href"])
         return {
-            "id": str(data.get("id", pr_id)),
-            "title": str(data.get("title", "")),
+            "id": str(data["id"]) if data.get("id") is not None else "",
+            "title": data.get("title") if isinstance(data.get("title"), str) else None,
+            "description": (
+                data.get("description")
+                if isinstance(data.get("description"), str)
+                else None
+            ),
+            "source_branch": _provider_branch(data, source=True),
+            "destination_branch": _provider_branch(data, source=False),
+            "close_source_branch": (
+                data.get("close_source_branch")
+                if self._config.deployment is DeploymentType.CLOUD
+                and isinstance(data.get("close_source_branch"), bool)
+                else None
+            ),
             "state": data.get("state") or data.get("status"),
             "version": data.get("version") or data.get("updated_on"),
             "web_url": html.get("href") or self_url,
@@ -325,6 +330,110 @@ def _safe_branch(value: str) -> str:
     ):
         raise ConnectorError("unsafe branch name")
     return value
+
+
+def _approved_pull_request(
+    action: AgentAction,
+    deployment: DeploymentType,
+) -> dict[str, object]:
+    """Return only provider fields whose values are bound to the action."""
+
+    description = action.parameters.get("description", "")
+    if not isinstance(description, str):
+        raise ConnectorError("description must be a string")
+    approved: dict[str, object] = {
+        "title": string_parameter(action.parameters, "title", required=True),
+        "description": description,
+        "source_branch": _safe_branch(
+            string_parameter(action.parameters, "source_branch", required=True)
+        ),
+        "destination_branch": _safe_branch(
+            string_parameter(action.parameters, "destination_branch", required=True)
+        ),
+    }
+    if deployment is DeploymentType.CLOUD:
+        approved["close_source_branch"] = _boolean_parameter(
+            action.parameters,
+            "close_source_branch",
+            default=False,
+        )
+    elif "close_source_branch" in action.parameters:
+        raise ConnectorError(
+            "close_source_branch is not supported for Bitbucket Data Center"
+        )
+    return approved
+
+
+def _pull_request_context(
+    action: AgentAction,
+    deployment: DeploymentType,
+) -> dict[str, str]:
+    """Derive the provider path solely from approval-bound action fields."""
+
+    if deployment is DeploymentType.CLOUD:
+        return {
+            "workspace": string_parameter(
+                action.parameters,
+                "workspace",
+                required=True,
+            ),
+            "repository": string_parameter(
+                action.parameters,
+                "repository",
+                required=True,
+            ),
+        }
+    return {
+        "project_key": string_parameter(
+            action.parameters,
+            "project_key",
+            required=True,
+        ),
+        "repository_slug": string_parameter(
+            action.parameters,
+            "repository_slug",
+            required=True,
+        ),
+    }
+
+
+def _pull_request_matches(
+    observed: Mapping[str, Any],
+    approved: Mapping[str, object],
+    pr_id: str,
+) -> bool:
+    """Require the open provider PR to equal every approved mutable field."""
+
+    return bool(
+        pr_id
+        and observed.get("id") == pr_id
+        and str(observed.get("state", "")).upper() in {"OPEN", "OPENED", "OPENING"}
+        and observed.get("version")
+        and all(observed.get(key) == value for key, value in approved.items())
+    )
+
+
+def _provider_branch(data: Mapping[str, Any], *, source: bool) -> str | None:
+    """Normalize Cloud and Data Center branch response shapes."""
+
+    cloud_name = "source" if source else "destination"
+    cloud = data.get(cloud_name)
+    if isinstance(cloud, Mapping):
+        branch = cloud.get("branch")
+        if isinstance(branch, Mapping):
+            name = branch.get("name")
+            return name if isinstance(name, str) and name else None
+
+    server_name = "fromRef" if source else "toRef"
+    server = data.get(server_name)
+    if not isinstance(server, Mapping):
+        return None
+    raw_ref = server.get("id")
+    if not isinstance(raw_ref, str):
+        return None
+    ref = raw_ref
+    prefix = "refs/heads/"
+    return ref[len(prefix) :] if ref.startswith(prefix) else None
 
 
 def _boolean_parameter(
