@@ -240,6 +240,202 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         self.assertFalse(connector.verify(action, result).verified)
 
+    def test_comment_verification_rejects_provider_added_adf_semantics(self) -> None:
+        transport = ScriptedTransport()
+        issue_path = "/rest/api/3/issue/RISE-1"
+        collection = issue_path + "/comment"
+        item = collection + "/7"
+        altered = _jira_comment("7", "approved")
+        altered["body"]["content"][0]["content"][0]["marks"] = [
+            {
+                "type": "link",
+                "attrs": {"href": "https://evil.example"},
+            }
+        ]
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v1"))
+        transport.add_json("POST", collection, {"id": "7"}, status=201)
+        transport.add_json("GET", item, altered)
+        connector = _jira_connector(transport)
+        action = _jira_comment_action("approved")
+
+        result = connector.execute(action)
+
+        self.assertFalse(connector.verify(action, result).verified)
+
+    def test_update_verification_rejects_json_type_substitution(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        before = _jira_issue("Old", "v1")
+        before["fields"]["customfield_10000"] = 0
+        altered = _jira_issue("Old", "v2")
+        altered["fields"]["customfield_10000"] = True
+        transport.add_json("GET", path, before)
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_json("GET", path, altered)
+        connector = _jira_connector(transport)
+        action = _jira_update_action(parameters={"fields": {"customfield_10000": 1}})
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(action)
+
+    def test_update_verification_accepts_exact_nested_json(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        before = _jira_issue("Old", "v1")
+        changed = _jira_issue("Old", "v2")
+        exact = {
+            "priority": {"name": "High"},
+            "components": [{"id": "10001"}],
+        }
+        changed["fields"].update(exact)
+        transport.add_json("GET", path, before)
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_json("GET", path, changed)
+        transport.add_json("GET", path, changed)
+        connector = _jira_connector(transport)
+        action = _jira_update_action(parameters={"fields": exact})
+
+        result = connector.execute(action)
+
+        self.assertTrue(connector.verify(action, result).verified)
+
+    def test_comment_compensation_requires_provider_not_found(self) -> None:
+        transport = ScriptedTransport()
+        issue_path = "/rest/api/3/issue/RISE-1"
+        collection = issue_path + "/comment"
+        item = collection + "/7"
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v1"))
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v2"))
+        transport.add_json("POST", collection, {"id": "7"}, status=201)
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_bytes("GET", item, b"{}", status=404)
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _jira_connector(transport)
+        action = _jira_comment_action("approved")
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+        request_count = len(transport.requests)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(verification.observed, {"comment_id": "7", "exists": False})
+        self.assertEqual(len(transport.requests), request_count + 1)
+        self.assertEqual(transport.requests[-1].method, "GET")
+
+    def test_comment_compensation_rejects_still_present_comment(self) -> None:
+        transport = ScriptedTransport()
+        issue_path = "/rest/api/3/issue/RISE-1"
+        collection = issue_path + "/comment"
+        item = collection + "/7"
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v1"))
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v2"))
+        transport.add_json("POST", collection, {"id": "7"}, status=201)
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _jira_connector(transport)
+        action = _jira_comment_action("approved")
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertFalse(verification.verified)
+        observed = verification.observed
+        self.assertIsNotNone(observed)
+        assert observed is not None
+        self.assertEqual(observed["comment_id"], "7")
+
+    def test_comment_compensation_does_not_treat_other_errors_as_absence(self) -> None:
+        transport = ScriptedTransport()
+        issue_path = "/rest/api/3/issue/RISE-1"
+        collection = issue_path + "/comment"
+        item = collection + "/7"
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v1"))
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v2"))
+        transport.add_json("POST", collection, {"id": "7"}, status=201)
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_json("GET", item, _jira_comment("7", "approved"))
+        transport.add_bytes("GET", item, b"{}", status=400)
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _jira_connector(transport)
+        action = _jira_comment_action("approved")
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+
+        with self.assertRaises(ConnectorError):
+            connector.verify_compensation(action, result, compensation)
+
+    def test_update_compensation_verification_rejects_later_substitution(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        old = _jira_issue("Old summary", "v1")
+        changed = _jira_issue("New summary", "v2")
+        restored = _jira_issue("Old summary", "v3")
+        substituted = _jira_issue("PROVIDER ALTERED", "v3")
+        for payload in (
+            old,
+            changed,
+            changed,
+            changed,
+            changed,
+            restored,
+            substituted,
+        ):
+            transport.add_json("GET", path, payload)
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_bytes("PUT", path, b"", status=204)
+        connector = _jira_connector(transport)
+        action = _jira_update_action()
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+
+        self.assertFalse(
+            connector.verify_compensation(action, result, compensation).verified
+        )
+
+    def test_transition_compensation_verification_rejects_later_substitution(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transition_path = path + "/transitions"
+        old = _jira_issue("Old", "v1", status="Open")
+        changed = _jira_issue("Old", "v2", status="Done")
+        restored = _jira_issue("Old", "v3", status="Open")
+        substituted = _jira_issue("Old", "v3", status="Done")
+        for payload in (old, changed, changed, changed, restored, substituted):
+            transport.add_json("GET", path, payload)
+        transport.add_bytes("POST", transition_path, b"", status=204)
+        transport.add_bytes("POST", transition_path, b"", status=204)
+        connector = _jira_connector(transport)
+        action = _jira_transition_action(
+            {
+                "transition_id": "31",
+                "target_status": "Done",
+                "reverse_transition_id": "21",
+            }
+        )
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+
+        self.assertFalse(
+            connector.verify_compensation(action, result, compensation).verified
+        )
+
 
 class ConfluenceWriteConnectorTests(unittest.TestCase):
     """Validate cloud page update and exact-content rollback."""
@@ -874,6 +1070,18 @@ def _jira_update_action(
     )
 
 
+def _jira_comment_action(body: str) -> AgentAction:
+    return action_for(
+        "jira.issue.comment.create",
+        system="jira",
+        resource_type="issue",
+        resource_id="RISE-1",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        expected_version="v1",
+        parameters={"body": body},
+    )
+
+
 def _jira_transition_action(parameters: dict[str, object]) -> AgentAction:
     return action_for(
         "jira.issue.transition",
@@ -884,6 +1092,33 @@ def _jira_transition_action(parameters: dict[str, object]) -> AgentAction:
         expected_version="v1",
         parameters=parameters,
     )
+
+
+def _jira_connector(transport: ScriptedTransport) -> JiraWriteConnector:
+    return JiraWriteConnector(
+        resolved_config(
+            "jira",
+            deployment=DeploymentType.CLOUD,
+            base_url="https://example.atlassian.net",
+        ),
+        transport=transport,
+    )
+
+
+def _jira_comment(comment_id: str, body: str) -> dict[str, object]:
+    return {
+        "id": comment_id,
+        "body": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": body}],
+                }
+            ],
+        },
+    }
 
 
 def _confluence_connector(

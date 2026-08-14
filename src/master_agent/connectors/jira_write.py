@@ -13,7 +13,11 @@ from master_agent.connectors.utils import (
     quote_segment,
     string_parameter,
 )
-from master_agent.errors import ConnectorError, VersionConflictError
+from master_agent.errors import (
+    ConnectorError,
+    ResourceNotFoundError,
+    VersionConflictError,
+)
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
@@ -112,9 +116,14 @@ class JiraWriteConnector(CompensatingConnector):
                 )
             observed = self._read_comment(action.target.resource_id, comment_id)
             expected_body = string_parameter(action.parameters, "body", required=True)
+            expected_payload: object = (
+                _text_to_adf(expected_body)
+                if self._config.deployment is DeploymentType.CLOUD
+                else expected_body
+            )
             verified = bool(
                 observed.get("comment_id") == comment_id
-                and str(observed.get("body_text", "")) == expected_body
+                and _json_values_equal(observed.get("body"), expected_payload)
             )
             return VerificationResult(
                 action_id=action.action_id,
@@ -170,21 +179,20 @@ class JiraWriteConnector(CompensatingConnector):
         before_state = self._read_issue(action.target.resource_id)
         if action.capability == "jira.issue.update":
             expected_after = result.after or {}
+            approved_fields = _mapping_parameter(action.parameters, "fields")
             if before_state.get("version") != expected_after.get(
                 "version"
             ) or not _fields_match(
                 before_state.get("fields"),
-                expected_after.get("requested_fields", {}),
+                approved_fields,
             ):
                 raise VersionConflictError(
                     "Jira issue changed after update; rollback is refused"
                 )
-            fields = (result.after or {}).get("compensation", {}).get("fields")
-            if not isinstance(fields, Mapping) or not fields:
-                fields = _previous_values(
-                    (result.before or {}).get("fields"),
-                    (result.after or {}).get("requested_fields", {}),
-                )
+            fields = _previous_values(
+                (result.before or {}).get("fields"),
+                approved_fields,
+            )
             rollback = AgentAction(
                 capability="jira.issue.compensate",
                 target=ResourceRef(
@@ -204,15 +212,29 @@ class JiraWriteConnector(CompensatingConnector):
             return self._compensate(rollback)
 
         if action.capability == "jira.issue.comment.create":
-            comment_id = str((result.after or {}).get("comment_id", ""))
-            if not comment_id:
+            raw_comment_id = (result.after or {}).get("comment_id")
+            if not isinstance(raw_comment_id, str) or not raw_comment_id.strip():
                 raise ConnectorError("Jira comment rollback has no comment ID")
+            comment_id = raw_comment_id.strip()
+            expected_body = string_parameter(
+                action.parameters,
+                "body",
+                required=True,
+            )
+            expected_payload: object = (
+                _text_to_adf(expected_body)
+                if self._config.deployment is DeploymentType.CLOUD
+                else expected_body
+            )
             current_comment = self._read_comment(
                 action.target.resource_id,
                 comment_id,
             )
-            if current_comment.get("body_text") != (result.after or {}).get(
-                "body_text"
+            if current_comment.get(
+                "comment_id"
+            ) != comment_id or not _json_values_equal(
+                current_comment.get("body"),
+                expected_payload,
             ):
                 raise VersionConflictError(
                     "Jira comment changed after creation; deletion is refused"
@@ -230,9 +252,9 @@ class JiraWriteConnector(CompensatingConnector):
                 action_id=action.action_id,
                 state=ActionState.SUCCEEDED,
                 before={"comment_id": comment_id},
-                after={"comment_id": comment_id, "deleted": True},
+                after={"comment_id": comment_id, "deletion_requested": True},
                 connector_reference=response.url,
-                message="deleted Jira comment created by rolled-back workflow",
+                message="Jira comment deletion request accepted",
             )
 
         if action.capability == "jira.issue.transition":
@@ -243,15 +265,14 @@ class JiraWriteConnector(CompensatingConnector):
                 raise VersionConflictError(
                     "Jira issue changed after transition; reversal is refused"
                 )
-            reverse_id = str(
-                (result.after or {})
-                .get("compensation", {})
-                .get("reverse_transition_id", "")
-            ).strip()
-            if not reverse_id:
-                raise ConnectorError(
-                    "Jira transition rollback requires reverse_transition_id"
-                )
+            reverse_id = string_parameter(
+                action.parameters,
+                "reverse_transition_id",
+                required=True,
+            )
+            previous_status = (result.before or {}).get("status")
+            if not isinstance(previous_status, str) or not previous_status:
+                raise ConnectorError("Jira transition prior status is unavailable")
             response = self._client.request_bytes(
                 "POST",
                 (
@@ -262,6 +283,15 @@ class JiraWriteConnector(CompensatingConnector):
                 safe_to_retry=False,
             )
             observed = self._read_issue(action.target.resource_id)
+            if not _issue_poststate_matches(
+                action,
+                observed,
+                prior_version=before_state.get("version"),
+                expected_status=previous_status,
+            ):
+                raise ConnectorError(
+                    "Jira provider poststate did not match the captured prior status"
+                )
             return ExecutionResult(
                 action_id=action.action_id,
                 state=ActionState.SUCCEEDED,
@@ -278,18 +308,69 @@ class JiraWriteConnector(CompensatingConnector):
         original: ExecutionResult,
         compensation: ExecutionResult,
     ) -> VerificationResult:
-        """Verify rollback against the state captured before the original action."""
+        """Independently verify rollback against the captured original state."""
 
-        observed = compensation.after or {}
         if action.capability == "jira.issue.comment.create":
-            verified = bool(observed.get("deleted"))
-        elif action.capability == "jira.issue.update":
+            raw_comment_id = (original.after or {}).get("comment_id")
+            if not isinstance(raw_comment_id, str) or not raw_comment_id.strip():
+                return VerificationResult(
+                    action_id=action.action_id,
+                    verified=False,
+                    observed=None,
+                    message="Jira comment rollback has no provider ID",
+                )
+            comment_id = raw_comment_id.strip()
+            try:
+                observed = self._read_comment(
+                    action.target.resource_id,
+                    comment_id,
+                )
+            except ResourceNotFoundError:
+                return VerificationResult(
+                    action_id=action.action_id,
+                    verified=True,
+                    observed={"comment_id": comment_id, "exists": False},
+                    message="verified Jira comment deletion by provider not-found",
+                )
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=observed,
+                message="Jira comment still exists after rollback",
+            )
+
+        observed = self._read_issue(action.target.resource_id)
+        expected_version = (compensation.after or {}).get("version")
+        if action.capability == "jira.issue.update":
             previous = original.before or {}
-            requested = (original.after or {}).get("requested_fields", {})
+            requested = _mapping_parameter(action.parameters, "fields")
             expected = _previous_values(previous.get("fields"), requested)
-            verified = _fields_match(observed.get("fields"), expected)
+            verified = bool(
+                expected_version
+                and _issue_poststate_matches(
+                    action,
+                    observed,
+                    expected_version=expected_version,
+                    expected_fields=expected,
+                )
+            )
+        elif action.capability == "jira.issue.transition":
+            previous_status = (original.before or {}).get("status")
+            verified = bool(
+                expected_version
+                and isinstance(previous_status, str)
+                and previous_status
+                and _issue_poststate_matches(
+                    action,
+                    observed,
+                    expected_version=expected_version,
+                    expected_status=previous_status,
+                )
+            )
         else:
-            verified = observed.get("status") == (original.before or {}).get("status")
+            raise ConnectorError(
+                f"unsupported Jira compensation verification: {action.capability}"
+            )
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
@@ -512,6 +593,7 @@ class JiraWriteConnector(CompensatingConnector):
             raise ConnectorError("Jira comment response must be an object")
         return {
             "comment_id": str(data.get("id", "")),
+            "body": deepcopy(data.get("body")),
             "body_text": _adf_to_text(data.get("body")),
             "created": data.get("created"),
             "updated": data.get("updated"),
@@ -569,7 +651,34 @@ def _previous_values(current: Any, requested: Mapping[str, Any]) -> dict[str, An
 def _fields_match(observed: Any, expected: Any) -> bool:
     if not isinstance(observed, Mapping) or not isinstance(expected, Mapping):
         return False
-    return all(observed.get(key) == value for key, value in expected.items())
+    return all(
+        key in observed and _json_values_equal(observed[key], value)
+        for key, value in expected.items()
+    )
+
+
+def _json_values_equal(observed: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's bool/int equality coercion."""
+
+    if isinstance(expected, Mapping):
+        return (
+            isinstance(observed, Mapping)
+            and observed.keys() == expected.keys()
+            and all(
+                _json_values_equal(observed[key], value)
+                for key, value in expected.items()
+            )
+        )
+    if isinstance(expected, (list, tuple)):
+        return (
+            isinstance(observed, (list, tuple))
+            and len(observed) == len(expected)
+            and all(
+                _json_values_equal(observed_item, expected_item)
+                for observed_item, expected_item in zip(observed, expected, strict=True)
+            )
+        )
+    return type(observed) is type(expected) and bool(observed == expected)
 
 
 def _issue_poststate_matches(
