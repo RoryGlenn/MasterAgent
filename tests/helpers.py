@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,9 @@ from master_agent.models import (
 
 
 def ensure_private_directory(path: Path) -> Path:
-    """Create one test directory with private permissions."""
+    """Create a directory and missing parents with private permissions."""
 
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
     if os.name == "posix":
         path.chmod(0o700)
     return path
@@ -34,6 +35,19 @@ def copy_private_file(source: Path, destination: Path) -> Path:
     if os.name == "posix":
         destination.chmod(0o600)
     return destination
+
+
+def apply_private_umask(testcase: unittest.TestCase) -> None:
+    """Scope a private umask to one test case on POSIX platforms.
+
+    The unittest suite runs these cases sequentially in one process; this helper
+    intentionally does not try to coordinate concurrent thread-based runners.
+    """
+
+    if os.name != "posix":
+        return
+    previous = os.umask(0o077)
+    testcase.addCleanup(os.umask, previous)
 
 
 def resolved_config(

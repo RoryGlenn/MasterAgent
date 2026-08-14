@@ -15,7 +15,7 @@ from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import AgentAction, RiskLevel
 from tests.fakes import ScriptedTransport
-from tests.helpers import action_for, resolved_config
+from tests.helpers import action_for, apply_private_umask, resolved_config
 
 
 class JiraWriteConnectorTests(unittest.TestCase):
@@ -860,6 +860,10 @@ class BitbucketWriteConnectorTests(unittest.TestCase):
 
 class SharePointWriteConnectorTests(unittest.TestCase):
     """Validate bounded overwrite and provider-version compensation."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_exact_lifecycle_requires_sufficient_request_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

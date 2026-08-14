@@ -41,10 +41,15 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import apply_private_umask
 
 
 class ExecutionContextTests(unittest.TestCase):
     """Verify approvals cover runtime destinations and trust roots."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_changed_resolved_origin_is_rejected_before_connector_construction(
         self,

@@ -11,12 +11,17 @@ from tempfile import TemporaryDirectory
 
 from master_agent.cli import main
 from master_agent.planners.static import build_weekly_status_plan
+from tests.helpers import apply_private_umask
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
     """Verify CLI boundaries that protect live credentials and operators."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_live_mode_dry_run_does_not_require_credentials(self) -> None:
         """A policy-only dry run must not construct live connectors."""

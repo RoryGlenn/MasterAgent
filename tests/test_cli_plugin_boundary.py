@@ -33,6 +33,7 @@ from master_agent.plugins import (
     PluginLock,
     discover_connector_plugins,
 )
+from tests.helpers import apply_private_umask
 
 
 @dataclass
@@ -48,6 +49,10 @@ class _FakeDistribution:
 
 class CliPluginBoundaryTests(unittest.TestCase):
     """Prove CLI apply never crosses the in-process plugin boundary."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_plugin_marker_is_absent_with_valid_or_invalid_approval(self) -> None:
         for valid_approval in (True, False):

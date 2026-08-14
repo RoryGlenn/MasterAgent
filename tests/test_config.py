@@ -9,10 +9,15 @@ from master_agent.auth import AuthMode, ResolvedAuth
 from master_agent.config import IntegrationConfig
 from master_agent.config_sources import resolve_config_source
 from master_agent.errors import ConfigurationError
+from tests.helpers import apply_private_umask
 
 
 class IntegrationConfigTests(unittest.TestCase):
     """Verify secret references, validation, and resolution."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_repository_config_parses_without_resolving_secrets(self) -> None:
         root = Path(__file__).resolve().parents[1]

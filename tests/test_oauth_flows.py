@@ -18,10 +18,15 @@ from master_agent.oauth import (
     write_token_file,
 )
 from tests.fakes import ScriptedTransport
+from tests.helpers import apply_private_umask
 
 
 class OAuthFlowTests(unittest.TestCase):
     """Validate bounded OAuth flows without external network access."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        apply_private_umask(self)
 
     def test_client_credentials_uses_form_body_and_returns_scopes(self) -> None:
         transport = ScriptedTransport()
