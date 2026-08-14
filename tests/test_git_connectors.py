@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from master_agent.connectors.git_remote import GitBranchPushConnector
+from master_agent.connectors.git_sandbox import validate_remote_url
 from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import RiskLevel
@@ -479,6 +480,22 @@ class GitBranchPushConnectorTests(unittest.TestCase):
                 _git(changed, "show-ref", "--heads", "agent/change", check=False),
                 "",
             )
+
+    def test_https_remote_rejects_all_userinfo(self) -> None:
+        for remote_url in (
+            "https://user@example.test/repo.git",
+            "https://user:password@example.test/repo.git",
+        ):
+            with (
+                self.subTest(remote_url=remote_url),
+                self.assertRaisesRegex(ConnectorError, "invalid"),
+            ):
+                validate_remote_url(remote_url)
+
+        self.assertEqual(
+            validate_remote_url("ssh://git@example.test/repo.git"),
+            "ssh://git@example.test/repo.git",
+        )
 
 
 def _repository(path: Path) -> Path:

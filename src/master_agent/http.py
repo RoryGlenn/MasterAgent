@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import re
@@ -18,7 +19,13 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import ParseResult, urlencode, urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    Request,
+    build_opener,
+)
 
 from master_agent.errors import (
     AuthenticationError,
@@ -126,6 +133,64 @@ def http_action_budget(
         _ACTION_BUDGET.reset(token)
 
 
+@contextmanager
+def activate_http_action_budget(
+    budget: HttpActionBudget | None,
+) -> Iterator[HttpActionBudget | None]:
+    """Activate a retained budget for another phase of the same action.
+
+    The orchestrator retains one mutable budget from execution through
+    verification and any later compensation. Nested connector helpers reuse
+    that same object, so entering another phase cannot reset page, request, or
+    response-byte counters.
+    """
+
+    if budget is None:
+        yield None
+        return
+    existing = _ACTION_BUDGET.get()
+    if existing is budget:
+        yield budget
+        return
+    if existing is not None:
+        raise ConfigurationError("cannot replace an active HTTP action budget")
+    token = _ACTION_BUDGET.set(budget)
+    try:
+        yield budget
+    finally:
+        _ACTION_BUDGET.reset(token)
+
+
+def connector_http_action_budget(connector: object) -> HttpActionBudget | None:
+    """Create the production lifecycle budget for one configured connector.
+
+    Local-only connectors have no resolved integration configuration and do
+    not receive an HTTP budget. Every live read or write connector stores its
+    validated ``ResolvedConnectorConfig`` as ``_config``.
+    """
+
+    config = getattr(connector, "_config", None)
+    if config is None:
+        return None
+    max_requests = getattr(config, "max_pages", None)
+    max_response_bytes = getattr(config, "max_response_bytes", None)
+    if (
+        not isinstance(max_requests, int)
+        or isinstance(max_requests, bool)
+        or max_requests <= 0
+        or not isinstance(max_response_bytes, int)
+        or isinstance(max_response_bytes, bool)
+        or max_response_bytes <= 0
+    ):
+        raise ConfigurationError(
+            "live connector HTTP action budgets must be positive integers"
+        )
+    return HttpActionBudget(
+        max_requests=max_requests,
+        max_response_bytes=max_response_bytes,
+    )
+
+
 class HttpTransport(Protocol):
     """Low-level transport protocol used by ``SafeHttpClient``."""
 
@@ -163,6 +228,60 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect TLS to an already-vetted address while preserving SNI."""
+
+    _context: ssl.SSLContext
+    _tunnel_host: str | None
+    source_address: tuple[str, int] | None
+
+    def connect(self) -> None:
+        """Resolve once, vet every candidate, and connect only by sockaddr."""
+
+        if self._tunnel_host is not None:
+            raise ConnectorHttpError("HTTP proxy tunneling is disabled")
+        raw_socket, approved_address = _connect_public_address(
+            self.host,
+            self.port,
+            timeout=self.timeout,
+            source_address=self.source_address,
+        )
+        try:
+            wrapped = self._context.wrap_socket(
+                raw_socket,
+                server_hostname=self.host,
+            )
+        except Exception:
+            raw_socket.close()
+            raise
+        try:
+            peer_address = ipaddress.ip_address(wrapped.getpeername()[0])
+        except (OSError, ValueError) as error:
+            wrapped.close()
+            raise ConnectorHttpError(
+                "TLS peer address could not be verified"
+            ) from error
+        if peer_address != approved_address:
+            wrapped.close()
+            raise ConnectorHttpError("TLS peer did not match the vetted destination")
+        self.sock = wrapped
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    """urllib handler that uses a DNS-pinned HTTPS connection."""
+
+    _context: ssl.SSLContext
+
+    def https_open(self, req: Request) -> Any:
+        """Open one request through the pinned connection implementation."""
+
+        return self.do_open(
+            _PinnedHTTPSConnection,
+            req,
+            context=self._context,
+        )
+
+
 class UrllibTransport:
     """Standard-library HTTP transport with same-origin redirects."""
 
@@ -171,7 +290,10 @@ class UrllibTransport:
             cafile=str(ca_bundle) if ca_bundle is not None else None
         )
         self._opener = build_opener(
-            HTTPSHandler(context=context),
+            # Never inherit HTTP(S)_PROXY, macOS System Configuration proxies,
+            # or credentials embedded in ambient proxy settings.
+            ProxyHandler({}),
+            _PinnedHTTPSHandler(context=context),
             _SameOriginRedirectHandler(),
         )
 
@@ -644,22 +766,70 @@ def _require_public_https_destination(url: str) -> None:
         if not literal.is_global:
             raise ConnectorHttpError("private or reserved network destination rejected")
         return
+    _public_address_records(hostname, parsed.port or 443, diagnostic_url=url)
+
+
+def _public_address_records(
+    hostname: str,
+    port: int,
+    *,
+    diagnostic_url: str | None = None,
+) -> tuple[tuple[Any, ...], ...]:
+    """Resolve and return only a wholly public set of socket addresses."""
+
     try:
-        records = socket.getaddrinfo(
-            hostname, parsed.port or 443, type=socket.SOCK_STREAM
-        )
+        records = tuple(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
     except OSError as error:
+        target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
         raise ConnectorHttpError(
-            f"network destination could not be resolved for {_safe_url(url)}"
+            f"network destination could not be resolved for {target}"
         ) from error
     if not records:
+        target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
         raise ConnectorHttpError(
-            f"network destination could not be resolved for {_safe_url(url)}"
+            f"network destination could not be resolved for {target}"
         )
     for record in records:
-        address = ipaddress.ip_address(record[4][0])
+        try:
+            address = ipaddress.ip_address(record[4][0])
+        except (IndexError, ValueError) as error:
+            raise ConnectorHttpError(
+                "network resolver returned an invalid address"
+            ) from error
         if not address.is_global:
             raise ConnectorHttpError("private or reserved network destination rejected")
+    return records
+
+
+def _connect_public_address(
+    hostname: str,
+    port: int,
+    *,
+    timeout: object,
+    source_address: tuple[str, int] | None,
+) -> tuple[socket.socket, ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Connect directly to a vetted resolver result without resolving again."""
+
+    records = _public_address_records(hostname.rstrip("."), port)
+    last_error: OSError | None = None
+    for family, socktype, protocol, _, sockaddr in records:
+        candidate = socket.socket(family, socktype, protocol)
+        try:
+            if timeout is None:
+                candidate.settimeout(None)
+            elif isinstance(timeout, (int, float)):
+                candidate.settimeout(float(timeout))
+            if source_address is not None:
+                candidate.bind(source_address)
+            candidate.connect(sockaddr)
+            approved_address = ipaddress.ip_address(sockaddr[0])
+            return candidate, approved_address
+        except OSError as error:
+            last_error = error
+            candidate.close()
+    raise ConnectorHttpError(
+        "network request could not connect to a vetted public destination"
+    ) from last_error
 
 
 def _looks_like_ip(hostname: str) -> bool:

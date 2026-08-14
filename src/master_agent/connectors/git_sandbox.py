@@ -246,7 +246,15 @@ def validate_remote_url(value: str, *, allow_file: bool = False) -> str:
             raise ConnectorError("Git file remote URL is invalid")
         return rendered
     if parsed.scheme in {"https", "ssh"}:
-        if not parsed.hostname or parsed.password or parsed.query or parsed.fragment:
+        has_forbidden_userinfo = parsed.password is not None or (
+            parsed.scheme == "https" and parsed.username is not None
+        )
+        if (
+            not parsed.hostname
+            or has_forbidden_userinfo
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ConnectorError("Git network remote URL is invalid")
         return rendered
     if re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s]+", rendered):

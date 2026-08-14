@@ -1,9 +1,18 @@
 """Restricted HTTP client tests."""
 
+import socket
 import unittest
+from unittest.mock import MagicMock, patch
+from urllib.request import ProxyHandler
 
 from master_agent.errors import AuthenticationError, ConnectorHttpError
-from master_agent.http import HttpResponse, SafeHttpClient, http_action_budget
+from master_agent.http import (
+    HttpResponse,
+    SafeHttpClient,
+    UrllibTransport,
+    _PinnedHTTPSConnection,
+    http_action_budget,
+)
 from tests.fakes import ExpectedRequest, QueueTransport, ScriptedTransport
 
 
@@ -139,6 +148,85 @@ class SafeHttpClientTests(unittest.TestCase):
             client.request_bytes("GET", "one")
             with self.assertRaisesRegex(ConnectorHttpError, "response-byte budget"):
                 client.request_bytes("GET", "two")
+
+    def test_default_transport_ignores_ambient_proxy_configuration(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"HTTPS_PROXY": "http://user:secret@attacker.test:8080"},
+        ):
+            transport = UrllibTransport()
+
+        proxy_handlers = [
+            handler
+            for handler in transport._opener.handlers
+            if isinstance(handler, ProxyHandler)
+        ]
+        # ``build_opener`` omits an explicitly empty ProxyHandler from the
+        # finalized chain; its absence proves the environment-derived default
+        # handler was suppressed.
+        self.assertEqual(proxy_handlers, [])
+
+    def test_https_connection_uses_vetted_address_and_original_tls_hostname(
+        self,
+    ) -> None:
+        public_address = "93.184.216.34"
+        records = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                (public_address, 443),
+            )
+        ]
+        connected_socket = MagicMock()
+        connected_socket.getpeername.return_value = (public_address, 443)
+        context = MagicMock()
+        context.wrap_socket.return_value = connected_socket
+        connection = _PinnedHTTPSConnection(
+            "api.example.test",
+            timeout=3.0,
+            context=context,
+        )
+
+        with (
+            patch("master_agent.http.socket.getaddrinfo", return_value=records),
+            patch("master_agent.http.socket.socket", return_value=connected_socket),
+        ):
+            connection.connect()
+
+        connected_socket.connect.assert_called_once_with((public_address, 443))
+        context.wrap_socket.assert_called_once_with(
+            connected_socket,
+            server_hostname="api.example.test",
+        )
+
+    def test_https_connection_rejects_private_rebinding_result_before_connect(
+        self,
+    ) -> None:
+        records = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("127.0.0.1", 443),
+            )
+        ]
+        connection = _PinnedHTTPSConnection(
+            "api.example.test",
+            timeout=3.0,
+            context=MagicMock(),
+        )
+
+        with (
+            patch("master_agent.http.socket.getaddrinfo", return_value=records),
+            patch("master_agent.http.socket.socket") as socket_factory,
+            self.assertRaisesRegex(ConnectorHttpError, "private or reserved"),
+        ):
+            connection.connect()
+
+        socket_factory.assert_not_called()
 
 
 if __name__ == "__main__":

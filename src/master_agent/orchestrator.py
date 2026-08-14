@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 from master_agent.audit import AuditLog, IdempotencyClaimState
@@ -16,8 +16,13 @@ from master_agent.connectors.base import (
     IdempotencyVerifyingConnector,
 )
 from master_agent.errors import ConfigurationError, VersionConflictError
-from master_agent.governance import GovernanceProfile
 from master_agent.evidence import audit_message_metadata, result_audit_summary
+from master_agent.governance import GovernanceProfile
+from master_agent.http import (
+    HttpActionBudget,
+    activate_http_action_budget,
+    connector_http_action_budget,
+)
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -51,9 +56,7 @@ class ActionReport:
             "message": self.message,
             "result": self.result.to_dict() if self.result is not None else None,
             "compensation": (
-                self.compensation.to_dict()
-                if self.compensation is not None
-                else None
+                self.compensation.to_dict() if self.compensation is not None else None
             ),
         }
 
@@ -65,9 +68,7 @@ class ActionReport:
         compensation_data = data.get("compensation")
         if result_data is not None and not isinstance(result_data, Mapping):
             raise ValueError("action report result must be an object or null")
-        if compensation_data is not None and not isinstance(
-            compensation_data, Mapping
-        ):
+        if compensation_data is not None and not isinstance(compensation_data, Mapping):
             raise ValueError("action report compensation must be an object or null")
         return cls(
             action_id=UUID(str(data["action_id"])),
@@ -157,6 +158,7 @@ class _ExecutedAction:
     connector: Connector
     result: ExecutionResult
     report_index: int
+    http_budget: HttpActionBudget | None
 
 
 class WorkflowOrchestrator:
@@ -221,9 +223,7 @@ class WorkflowOrchestrator:
             action_id=None,
             event_type="plan_started",
             payload={
-                "goal_digest": hashlib.sha256(
-                    plan.goal.encode("utf-8")
-                ).hexdigest(),
+                "goal_digest": hashlib.sha256(plan.goal.encode("utf-8")).hexdigest(),
                 "goal_length": len(plan.goal),
                 "fingerprint": plan.fingerprint,
                 "dry_run": dry_run,
@@ -354,11 +354,13 @@ class WorkflowOrchestrator:
             connector: Connector | None = None
             result: ExecutionResult | None = None
             claim_token: str | None = None
+            http_budget: HttpActionBudget | None = None
             try:
                 connector = self._connectors.resolve(
                     action.target.system,
                     action.capability,
                 )
+                http_budget = connector_http_action_budget(connector)
                 if _uses_idempotency(action):
                     claim = self._audit.claim_action(
                         idempotency_key=action.idempotency_key,
@@ -388,10 +390,11 @@ class WorkflowOrchestrator:
                                 dry_run=dry_run,
                             )
                             continue
-                        reuse_verification = connector.verify_completed(
-                            action,
-                            claim.result or {},
-                        )
+                        with activate_http_action_budget(http_budget):
+                            reuse_verification = connector.verify_completed(
+                                action,
+                                claim.result or {},
+                            )
                         if not reuse_verification.verified:
                             report = ActionReport(
                                 action_id=action.action_id,
@@ -476,8 +479,9 @@ class WorkflowOrchestrator:
                     claim_token = claim.token
                     if claim_token is None:  # pragma: no cover - invariant guard.
                         raise RuntimeError("idempotency claim omitted its token")
-                result = connector.execute(action)
-                verification = connector.verify(action, result)
+                with activate_http_action_budget(http_budget):
+                    result = connector.execute(action)
+                    verification = connector.verify(action, result)
                 if not verification.verified:
                     report = ActionReport(
                         action_id=action.action_id,
@@ -539,6 +543,7 @@ class WorkflowOrchestrator:
                         connector=connector,
                         result=result,
                         report_index=len(reports) - 1,
+                        http_budget=http_budget,
                     )
                 )
 
@@ -563,12 +568,9 @@ class WorkflowOrchestrator:
             action_id=None,
             event_type="plan_finished",
             payload={
-                "states": {
-                    str(report.action_id): report.state for report in reports
-                },
+                "states": {str(report.action_id): report.state for report in reports},
                 "compensated": any(
-                    report.state is ActionState.COMPENSATED
-                    for report in reports
+                    report.state is ActionState.COMPENSATED for report in reports
                 ),
             },
         )
@@ -645,18 +647,19 @@ class WorkflowOrchestrator:
                 continue
 
             try:
-                postcondition = connector.verify(action, item.result)
-                if not postcondition.verified:
-                    raise VersionConflictError(
-                        "automatic compensation refused because the target no "
-                        "longer matches the agent's verified post-state"
+                with activate_http_action_budget(item.http_budget):
+                    postcondition = connector.verify(action, item.result)
+                    if not postcondition.verified:
+                        raise VersionConflictError(
+                            "automatic compensation refused because the target no "
+                            "longer matches the agent's verified post-state"
+                        )
+                    compensation = connector.compensate(action, item.result)
+                    verification = connector.verify_compensation(
+                        action,
+                        item.result,
+                        compensation,
                     )
-                compensation = connector.compensate(action, item.result)
-                verification = connector.verify_compensation(
-                    action,
-                    item.result,
-                    compensation,
-                )
                 if not verification.verified:
                     raise RuntimeError(
                         f"compensation verification failed: {verification.message}"
