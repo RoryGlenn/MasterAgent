@@ -19,10 +19,9 @@ approval service, or external audit-sink adapter is bundled.
 - The wheel is installed outside the source tree and exercised with safe defaults before release.
 - Release archives are checked for integrity, forbidden secret/runtime files, and symbolic links.
 
-Ruff and mypy findings remain tracked engineering debt and are not silently
-excluded from a claimed static-analysis gate. They should become required CI
-checks only after the existing findings are resolved rather than by weakening
-their rules.
+Ruff linting and formatting plus strict mypy checks pass without file
+exclusions and are required CI gates. Tool versions are pinned in the project
+development dependencies so local and CI results use the same rule set.
 
 ## Deployment boundary
 

@@ -7,15 +7,16 @@ ring that binds a key ID to one normalized human identity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime
 import hashlib
 import hmac
 import os
+import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-import tomllib
-from typing import Mapping, Protocol
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from master_agent.errors import ConfigurationError, ValidationError
@@ -68,7 +69,7 @@ class HmacApprovalAuthenticator:
         path: Path,
         *,
         environ: Mapping[str, str] | None = None,
-    ) -> "HmacApprovalAuthenticator":
+    ) -> HmacApprovalAuthenticator:
         """Load identity bindings while resolving secrets from the environment."""
 
         try:

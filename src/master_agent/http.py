@@ -652,6 +652,8 @@ def download_public_https(
 
 def _read_bounded(stream: Any, max_bytes: int) -> bytes:
     payload = stream.read(max_bytes + 1)
+    if not isinstance(payload, bytes):
+        raise ConnectorHttpError("HTTP transport returned a non-bytes response")
     if len(payload) > max_bytes:
         raise ConnectorHttpError(
             f"response exceeded configured limit of {max_bytes} bytes"
@@ -695,7 +697,7 @@ def _retry_delay_seconds(response: HttpResponse, attempt: int) -> float:
             return min(max(float(retry_after), 0.0), 5.0)
         except ValueError:
             pass
-    return min(0.25 * (2**attempt), 2.0)
+    return min(0.25 * (2.0**attempt), 2.0)
 
 
 def _http_error(response: HttpResponse) -> ConnectorError:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import tomllib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
@@ -47,14 +48,16 @@ class DraftPackageSettings:
     repository_after_text: str
 
     @classmethod
-    def from_toml(cls, path: ConfigSource) -> "DraftPackageSettings":
+    def from_toml(cls, path: ConfigSource) -> DraftPackageSettings:
         """Load draft package settings from TOML."""
 
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
         except FileNotFoundError as error:
-            raise ConfigurationError(f"draft-package configuration not found: {path}") from error
+            raise ConfigurationError(
+                f"draft-package configuration not found: {path}"
+            ) from error
         package = _table(raw, "package")
         jira = _table(raw, "jira")
         confluence = _table(raw, "confluence")
@@ -250,9 +253,7 @@ def render_draft_package(
                     "size": size,
                 }
             )
-        rows.append(
-            f"| `{item.capability}` | `{item.state}` | {item.message} |"
-        )
+        rows.append(f"| `{item.capability}` | `{item.state}` | {item.message} |")
     manifest = {
         "schema": "master-agent/draft-package-manifest@1",
         "run_id": str(report.run_id),

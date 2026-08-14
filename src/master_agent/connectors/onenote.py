@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-import hashlib
 from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
@@ -267,7 +267,9 @@ class OneNoteWriteConnector:
     ) -> None:
         mode = str(config.extra.get("identity_mode", "delegated")).lower()
         if mode != "delegated":
-            raise ConnectorError("OneNote write capabilities require delegated identity mode")
+            raise ConnectorError(
+                "OneNote write capabilities require delegated identity mode"
+            )
         self._config = config
         self._client = graph_client(
             config,
@@ -296,7 +298,9 @@ class OneNoteWriteConnector:
         identity = str(action.parameters.get("identity", "me"))
         root, _ = graph_user_root(self._config, identity)
         if action.capability == "onenote.page.create":
-            section_id = string_parameter(action.parameters, "section_id", required=True)
+            section_id = string_parameter(
+                action.parameters, "section_id", required=True
+            )
             html = string_parameter(action.parameters, "html", required=True)
             data, response = self._client.request_json(
                 "POST",
@@ -363,11 +367,15 @@ class OneNoteWriteConnector:
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
-            before={key: value for key, value in before.items() if key != "content_html"},
+            before={
+                key: value for key, value in before.items() if key != "content_html"
+            },
             after={
                 **observed,
                 "expected_fragments": [
-                    item.get("content", "") for item in normalized if item.get("content")
+                    item.get("content", "")
+                    for item in normalized
+                    if item.get("content")
                 ],
             },
             connector_reference=str(observed.get("web_url") or page_id),
@@ -417,7 +425,9 @@ class OneNoteWriteConnector:
         return VerificationResult(
             action_id=action.action_id,
             verified=bool(verified),
-            observed={key: value for key, value in observed.items() if key != "content_html"},
+            observed={
+                key: value for key, value in observed.items() if key != "content_html"
+            },
             message=(
                 "verified OneNote page by independent re-read"
                 if verified
@@ -470,9 +480,7 @@ class OneNoteWriteConnector:
         self._client.request_bytes(
             "PATCH",
             f"{root}/onenote/pages/{quote_segment(page_id)}/content",
-            json_body=[
-                {"target": "body", "action": "replace", "content": previous}
-            ],
+            json_body=[{"target": "body", "action": "replace", "content": previous}],
             safe_to_retry=False,
         )
         observed = self._read_page(root, page_id, include_content=True)
@@ -509,7 +517,9 @@ class OneNoteWriteConnector:
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
-            observed={key: value for key, value in observed.items() if key != "content_html"},
+            observed={
+                key: value for key, value in observed.items() if key != "content_html"
+            },
             message=(
                 "verified OneNote rollback"
                 if verified
@@ -562,10 +572,9 @@ class OneNoteWriteConnector:
             raise ConnectorError("OneNote writes must use reversible_write risk")
 
 
-
 def _normalize_notebook(value: Mapping[str, Any]) -> dict[str, Any]:
-    links = value.get("links") if isinstance(value.get("links"), Mapping) else {}
-    web = links.get("oneNoteWebUrl") if isinstance(links.get("oneNoteWebUrl"), Mapping) else {}
+    links = _as_mapping(value.get("links"))
+    web = _as_mapping(links.get("oneNoteWebUrl"))
     return {
         "id": str(value.get("id", "")),
         "display_name": str(value.get("displayName", "")),
@@ -576,9 +585,9 @@ def _normalize_notebook(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_section(value: Mapping[str, Any]) -> dict[str, Any]:
-    links = value.get("links") if isinstance(value.get("links"), Mapping) else {}
-    web = links.get("oneNoteWebUrl") if isinstance(links.get("oneNoteWebUrl"), Mapping) else {}
-    parent = value.get("parentNotebook") if isinstance(value.get("parentNotebook"), Mapping) else {}
+    links = _as_mapping(value.get("links"))
+    web = _as_mapping(links.get("oneNoteWebUrl"))
+    parent = _as_mapping(value.get("parentNotebook"))
     return {
         "id": str(value.get("id", "")),
         "display_name": str(value.get("displayName", "")),
@@ -590,9 +599,9 @@ def _normalize_section(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_page(value: Mapping[str, Any]) -> dict[str, Any]:
-    links = value.get("links") if isinstance(value.get("links"), Mapping) else {}
-    web = links.get("oneNoteWebUrl") if isinstance(links.get("oneNoteWebUrl"), Mapping) else {}
-    parent = value.get("parentSection") if isinstance(value.get("parentSection"), Mapping) else {}
+    links = _as_mapping(value.get("links"))
+    web = _as_mapping(links.get("oneNoteWebUrl"))
+    parent = _as_mapping(value.get("parentSection"))
     return {
         "id": str(value.get("id", "")),
         "title": str(value.get("title", "")),
@@ -602,3 +611,7 @@ def _normalize_page(value: Mapping[str, Any]) -> dict[str, Any]:
         "version": value.get("lastModifiedDateTime"),
         "web_url": web.get("href"),
     }
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}

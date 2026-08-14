@@ -136,7 +136,7 @@ def redact_secrets(value: Any) -> Any:
 def _mapping_summary(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if value is None:
         return None
-    keys = sorted(str(key) for key in value.keys())
+    keys = sorted(str(key) for key in value)
     summary: dict[str, Any] = {
         "digest": content_digest(redact_secrets(value)),
         "keys": keys[:50],

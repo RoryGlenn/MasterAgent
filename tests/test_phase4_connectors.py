@@ -175,9 +175,7 @@ class Phase4ConnectorTests(unittest.TestCase):
                 parameters={
                     "drive_id": "drive-1",
                     "local_path": str(artifact),
-                    "local_sha256": hashlib.sha256(
-                        artifact.read_bytes()
-                    ).hexdigest(),
+                    "local_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
                 },
             )
             result = connector.execute(action)
@@ -245,18 +243,10 @@ class Phase4ConnectorTests(unittest.TestCase):
         }
         content = b"<html><body><h1>Status</h1><div>Ready</div></body></html>"
         for _ in range(2):
-            transport.add_json(
-                "GET", "/v1.0/me/onenote/pages/page-1", metadata
-            )
-            transport.add_bytes(
-                "GET", "/v1.0/me/onenote/pages/page-1/content", content
-            )
-        transport.add_json(
-            "GET", "/v1.0/me/onenote/pages/page-1", metadata
-        )
-        transport.add_bytes(
-            "DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204
-        )
+            transport.add_json("GET", "/v1.0/me/onenote/pages/page-1", metadata)
+            transport.add_bytes("GET", "/v1.0/me/onenote/pages/page-1/content", content)
+        transport.add_json("GET", "/v1.0/me/onenote/pages/page-1", metadata)
+        transport.add_bytes("DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204)
         transport.add_json(
             "GET", "/v1.0/me/onenote/pages/page-1", {"error": "not found"}, status=404
         )

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.config import DeploymentType
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
@@ -63,8 +63,12 @@ class JiraWriteConnectorTests(unittest.TestCase):
         self.assertEqual(compensation.after["fields"]["summary"], "Old summary")
         put_requests = [item for item in transport.requests if item.method == "PUT"]
         self.assertEqual(len(put_requests), 2)
-        self.assertEqual(put_requests[0].json_body()["fields"]["summary"], "New summary")
-        self.assertEqual(put_requests[1].json_body()["fields"]["summary"], "Old summary")
+        self.assertEqual(
+            put_requests[0].json_body()["fields"]["summary"], "New summary"
+        )
+        self.assertEqual(
+            put_requests[1].json_body()["fields"]["summary"], "Old summary"
+        )
 
     def test_version_mismatch_blocks_update_before_put(self) -> None:
         transport = ScriptedTransport()
@@ -140,7 +144,9 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
             connector.verify_compensation(action, result, compensation).verified
         )
         self.assertEqual(compensation.after["body"], "<p>Old</p>")
-        writes = [item.json_body() for item in transport.requests if item.method == "PUT"]
+        writes = [
+            item.json_body() for item in transport.requests if item.method == "PUT"
+        ]
         self.assertEqual(writes[0]["version"]["number"], 5)
         self.assertEqual(writes[1]["version"]["number"], 6)
 
@@ -296,9 +302,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                 parameters={
                     "drive_id": "drive",
                     "local_path": str(local),
-                    "local_sha256": hashlib.sha256(
-                        local.read_bytes()
-                    ).hexdigest(),
+                    "local_sha256": hashlib.sha256(local.read_bytes()).hexdigest(),
                     "content_type": "text/plain",
                 },
             )

@@ -73,7 +73,13 @@ class OneNoteWriteConnectorTests(unittest.TestCase):
         # Execute: old metadata/content, PATCH, new metadata/content.
         # Verify: new metadata/content.
         # Compensate: current metadata, PATCH, restored metadata/content.
-        for payload in (old_metadata, new_metadata, new_metadata, new_metadata, restored_metadata):
+        for payload in (
+            old_metadata,
+            new_metadata,
+            new_metadata,
+            new_metadata,
+            restored_metadata,
+        ):
             transport.add_json("GET", metadata_path, payload)
         for payload in (old_html, new_html, new_html, old_html):
             transport.add_bytes("GET", content_path, payload)
@@ -108,7 +114,11 @@ class OneNoteWriteConnectorTests(unittest.TestCase):
         self.assertTrue(
             connector.verify_compensation(action, result, compensation).verified
         )
-        patch_bodies = [request.json_body() for request in transport.requests if request.method == "PATCH"]
+        patch_bodies = [
+            request.json_body()
+            for request in transport.requests
+            if request.method == "PATCH"
+        ]
         self.assertEqual(patch_bodies[0][0]["content"], "<p>New</p>")
         self.assertIn("<p>Old</p>", patch_bodies[1][0]["content"])
 
@@ -130,9 +140,7 @@ def _page_metadata(page_id: str, title: str, modified: str) -> dict[str, object]
         "createdDateTime": "2026-08-13T19:00:00Z",
         "lastModifiedDateTime": modified,
         "parentSection": {"id": "section-1"},
-        "links": {
-            "oneNoteWebUrl": {"href": f"https://onenote.example/{page_id}"}
-        },
+        "links": {"oneNoteWebUrl": {"href": f"https://onenote.example/{page_id}"}},
     }
 
 

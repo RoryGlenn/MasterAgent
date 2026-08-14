@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from enum import StrEnum
 import hashlib
 import json
 import math
-from collections.abc import Iterator
-from typing import Any, Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
@@ -241,10 +241,14 @@ class AgentAction:
                 str(data.get("data_classification", DataClassification.INTERNAL))
             ),
             authority_source=AuthoritySource(str(data["authority_source"])),
-            requires_approval=_strict_bool(data.get("requires_approval"), "requires_approval"),
+            requires_approval=_strict_bool(
+                data.get("requires_approval"), "requires_approval"
+            ),
             idempotency_key=str(data["idempotency_key"]),
             justification=str(data["justification"]),
-            dependencies=tuple(UUID(str(item)) for item in data.get("dependencies", [])),
+            dependencies=tuple(
+                UUID(str(item)) for item in data.get("dependencies", [])
+            ),
             action_id=UUID(str(data["action_id"])),
         )
 
@@ -273,8 +277,13 @@ class ChangePlan:
             raise ValidationError("created_by must not be empty")
         if self.workflow_id is not None and not self.workflow_id.strip():
             raise ValidationError("workflow_id must not be empty when supplied")
-        if self.workflow_fingerprint is not None and not self.workflow_fingerprint.strip():
-            raise ValidationError("workflow_fingerprint must not be empty when supplied")
+        if (
+            self.workflow_fingerprint is not None
+            and not self.workflow_fingerprint.strip()
+        ):
+            raise ValidationError(
+                "workflow_fingerprint must not be empty when supplied"
+            )
         if self.workflow_fingerprint is not None and self.workflow_id is None:
             raise ValidationError("workflow_fingerprint requires workflow_id")
         object.__setattr__(self, "actions", tuple(self.actions))
@@ -462,9 +471,7 @@ class CompensationDescriptor:
         if self.mode is CompensationMode.PLAN and not (
             self.capability and self.capability.strip()
         ):
-            raise ValidationError(
-                "plan compensation requires an executable capability"
-            )
+            raise ValidationError("plan compensation requires an executable capability")
         if self.mode is not CompensationMode.PLAN and not (
             self.reason and self.reason.strip()
         ):
@@ -488,7 +495,7 @@ class CompensationDescriptor:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "CompensationDescriptor":
+    def from_dict(cls, data: Mapping[str, Any]) -> CompensationDescriptor:
         """Parse a versioned descriptor or a supported legacy descriptor."""
 
         if data.get("schema") == "master-agent/compensation@1":
@@ -516,9 +523,7 @@ class CompensationDescriptor:
                     else None
                 ),
                 reason=(
-                    str(data["reason"])
-                    if data.get("reason") is not None
-                    else None
+                    str(data["reason"]) if data.get("reason") is not None else None
                 ),
             )
 
@@ -579,7 +584,7 @@ class ExecutionResult:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "ExecutionResult":
+    def from_dict(cls, data: Mapping[str, Any]) -> ExecutionResult:
         """Create an execution result from JSON-compatible data."""
 
         before = data.get("before")
@@ -630,11 +635,11 @@ class VerificationResult:
         }
 
 
-
 def _strict_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValidationError(f"{name} must be a boolean")
     return value
+
 
 def _expect_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     value = data.get(key)
@@ -721,14 +726,14 @@ class _FrozenMapping(Mapping[str, Any]):
 def _reject_control_characters(value: str, name: str) -> None:
     """Reject terminal-control bytes from fields rendered during approval."""
 
-    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+    if any(
+        ord(character) < 32 or 127 <= ord(character) <= 159 for character in value
+    ):
         raise ValidationError(f"{name} must not contain control characters")
 
 
 def _validate_acyclic(actions: tuple[AgentAction, ...]) -> None:
-    dependencies = {
-        action.action_id: set(action.dependencies) for action in actions
-    }
+    dependencies = {action.action_id: set(action.dependencies) for action in actions}
     visiting: set[UUID] = set()
     visited: set[UUID] = set()
 

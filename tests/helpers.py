@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from master_agent.auth import AuthMode, ResolvedAuth
 from master_agent.config import DeploymentType, ResolvedConnectorConfig

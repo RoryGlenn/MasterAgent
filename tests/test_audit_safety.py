@@ -210,7 +210,14 @@ class AuditSafetyTests(unittest.TestCase):
                         event_type="concurrent-test",
                         payload={"index": index},
                     )
-                except Exception as error:  # Preserve thread failures.
+                except (
+                    OSError,
+                    RuntimeError,
+                    sqlite3.Error,
+                    TypeError,
+                    ValueError,
+                ) as error:
+                    # Preserve expected worker failures for the main assertion.
                     errors.append(error)
 
             threads = [

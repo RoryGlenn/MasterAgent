@@ -52,15 +52,17 @@ class RetentionTests(unittest.TestCase):
 
     def test_content_requires_explicit_content_rule(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
-        with TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ConfigurationError, "does not permit"):
-                write_retained_json(
-                    Path(directory) / "evidence.json",
-                    {"messages": [{"body": "sensitive"}]},
-                    evidence_type="outlook.message.metadata",
-                    config=config,
-                    include_content=True,
-                )
+        with (
+            TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "does not permit"),
+        ):
+            write_retained_json(
+                Path(directory) / "evidence.json",
+                {"messages": [{"body": "sensitive"}]},
+                evidence_type="outlook.message.metadata",
+                config=config,
+                include_content=True,
+            )
 
     def test_metadata_only_recursively_removes_retrieved_content(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
@@ -119,15 +121,17 @@ class RetentionTests(unittest.TestCase):
         decision = config.decide("run-result/foo.credential.token")
 
         self.assertEqual(decision.persistence.value, "prohibited")
-        with TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ConfigurationError, "prohibits"):
-                write_retained_json(
-                    Path(directory) / "result.json",
-                    {"token": "TOP-SECRET"},
-                    evidence_type="run-result/foo.credential.token",
-                    config=config,
-                    include_content=False,
-                )
+        with (
+            TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "prohibits"),
+        ):
+            write_retained_json(
+                Path(directory) / "result.json",
+                {"token": "TOP-SECRET"},
+                evidence_type="run-result/foo.credential.token",
+                config=config,
+                include_content=False,
+            )
 
     def test_shadowed_allow_rule_is_rejected_at_load_time(self) -> None:
         with TemporaryDirectory() as directory:
@@ -281,15 +285,17 @@ persistence = "explicit_content"
 
     def test_prohibited_evidence_cannot_be_persisted(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
-        with TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ConfigurationError, "prohibits"):
-                write_retained_json(
-                    Path(directory) / "credential.json",
-                    {"token": "secret"},
-                    evidence_type="outlook.credential.token",
-                    config=config,
-                    include_content=False,
-                )
+        with (
+            TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "prohibits"),
+        ):
+            write_retained_json(
+                Path(directory) / "credential.json",
+                {"token": "secret"},
+                evidence_type="outlook.credential.token",
+                config=config,
+                include_content=False,
+            )
 
     def test_cleanup_rejects_path_traversal_sidecar(self) -> None:
         with TemporaryDirectory() as directory:

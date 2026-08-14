@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from html import unescape
 from html.parser import HTMLParser
-import re
 
 
 class _TextExtractor(HTMLParser):
@@ -47,7 +47,7 @@ def html_to_text(value: str) -> str:
         parser.feed(value)
         parser.close()
         rendered = "".join(parser.parts)
-    except Exception:
+    except (AssertionError, UnicodeError, ValueError):
         rendered = re.sub(r"<[^>]+>", " ", value)
     rendered = unescape(rendered)
     lines = [" ".join(line.split()) for line in rendered.splitlines()]

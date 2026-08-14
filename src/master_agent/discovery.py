@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-import os
-from typing import Any, Mapping
+from typing import Any, TypedDict
 
 from master_agent.config import IntegrationConfig
 from master_agent.connectors.base import Connector
 from master_agent.connectors.factory import build_live_connectors
+from master_agent.errors import MasterAgentError
 from master_agent.http import HttpTransport
 
 
@@ -22,6 +24,16 @@ class DiscoveryStatus(StrEnum):
     READY = "ready"
     REACHABLE = "reachable"
     FAILED = "failed"
+
+
+class _DiscoveryCommon(TypedDict):
+    configuration: str
+    enabled: bool
+    deployment: str
+    auth_mode: str
+    base_url: str | None
+    required_environment: tuple[str, ...]
+    missing_environment: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +74,8 @@ class DiscoveryReport:
         """Return whether at least one enabled connector is ready."""
 
         enabled = tuple(
-            item for item in self.connectors
+            item
+            for item in self.connectors
             if item.status is not DiscoveryStatus.DISABLED
         )
         return bool(enabled) and all(
@@ -155,24 +168,20 @@ def discover_integrations(
     for configuration in sorted(config.connectors):
         unresolved = config.connectors[configuration]
         runtime_systems = tuple(
-            system
-            for system in _runtime_systems(configuration)
-            if system in selected
+            system for system in _runtime_systems(configuration) if system in selected
         )
         if not runtime_systems:
             continue
 
         configuration_errors = unresolved.configuration_errors(source)
-        common = {
+        common: _DiscoveryCommon = {
             "configuration": configuration,
             "enabled": unresolved.enabled,
             "deployment": str(unresolved.deployment),
             "auth_mode": str(unresolved.auth_mode),
             "base_url": unresolved.base_url
             or (
-                source.get(unresolved.base_url_env)
-                if unresolved.base_url_env
-                else None
+                source.get(unresolved.base_url_env) if unresolved.base_url_env else None
             ),
             "required_environment": unresolved.required_environment_variables(),
             "missing_environment": unresolved.missing_environment_variables(source),
@@ -215,7 +224,14 @@ def discover_integrations(
                 systems=set(runtime_systems),
             )
             by_system = {connector.system: connector for connector in live}
-        except Exception as error:
+        except (
+            KeyError,
+            MasterAgentError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as error:
             records.extend(
                 DiscoveryRecord(
                     system=system,
@@ -263,7 +279,14 @@ def discover_integrations(
                         **common,
                     )
                 )
-            except Exception as error:
+            except (
+                KeyError,
+                MasterAgentError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as error:
                 records.append(
                     DiscoveryRecord(
                         system=system,

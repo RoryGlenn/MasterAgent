@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import unittest
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.capabilities import CapabilityCatalog
@@ -18,7 +18,6 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -96,7 +95,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
             idempotency_key="dual-test",
             justification="test",
         )
-        plan = ChangePlan(goal="dual approval test", actions=(action,), created_by="test")
+        plan = ChangePlan(
+            goal="dual approval test", actions=(action,), created_by="test"
+        )
         now = datetime.now(UTC)
 
         def approval(name: str):
@@ -136,7 +137,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
             ApprovalTier.PROHIBITED,
         )
 
-    def test_governance_minimum_forces_approval_even_if_risk_is_auto_permitted(self) -> None:
+    def test_governance_minimum_forces_approval_even_if_risk_is_auto_permitted(
+        self,
+    ) -> None:
         action = AgentAction(
             capability="example.high_impact",
             target=ResourceRef("example", "resource", "1"),
@@ -147,7 +150,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
             idempotency_key="governance-forces-approval",
             justification="test",
         )
-        plan = ChangePlan(goal="governance approval", actions=(action,), created_by="test")
+        plan = ChangePlan(
+            goal="governance approval", actions=(action,), created_by="test"
+        )
         policy = PolicyEngine(
             PolicyConfig(
                 auto_permit_risks=frozenset({RiskLevel.HIGH_IMPACT}),

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import unittest
+from uuid import uuid4
+
 from master_agent.compensation import build_compensation_plan
 from master_agent.errors import ValidationError
 from master_agent.models import (
@@ -16,8 +19,6 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import ActionReport, RunReport
-from uuid import uuid4
-import unittest
 
 
 class CompensationPlanTests(unittest.TestCase):

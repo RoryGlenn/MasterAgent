@@ -144,8 +144,8 @@ def assess_readiness(
             errors.extend(f"oauth {name}: {item}" for item in profile_errors)
 
     for name, token in sorted((tokens or {}).items()):
-        profile = oauth_profiles.profiles.get(name) if oauth_profiles else None
-        required = set(profile.scopes if profile else ())
+        token_profile = oauth_profiles.profiles.get(name) if oauth_profiles else None
+        required = set(token_profile.scopes if token_profile else ())
         granted = {item.casefold() for item in token.scopes}
         claims = inspect_jwt_claims(token.value)
         claim_scopes = str(claims.get("scp", "")).split()

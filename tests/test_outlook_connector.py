@@ -73,7 +73,9 @@ class OutlookConnectorTests(unittest.TestCase):
         query = parse_qs(urlparse(transport.requests[0].url).query)
         self.assertEqual(query["$search"], ['"release blocker"'])
         self.assertEqual(query["$top"], ["10"])
-        self.assertIn("outlook.body-content-type", transport.requests[0].headers["Prefer"])
+        self.assertIn(
+            "outlook.body-content-type", transport.requests[0].headers["Prefer"]
+        )
 
     def test_full_message_read_returns_text_body_and_checks_etag(self) -> None:
         transport = ScriptedTransport()
@@ -123,7 +125,9 @@ class OutlookConnectorTests(unittest.TestCase):
         result = connector.execute(action)
 
         self.assertEqual(result.after["message"]["body"], "Release is on track.")
-        self.assertEqual(result.after["message"]["to"][0]["address"], "rory@example.com")
+        self.assertEqual(
+            result.after["message"]["to"][0]["address"], "rory@example.com"
+        )
         self.assertEqual(
             result.after["retention"]["evidence_type"],
             "outlook.message.content",

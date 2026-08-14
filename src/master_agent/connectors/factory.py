@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from master_agent.config import ConnectorConfig, IntegrationConfig
 from master_agent.connectors.base import Connector
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
-from master_agent.connectors.communications import OutlookSendConnector, TeamsSendConnector
+from master_agent.connectors.communications import (
+    OutlookSendConnector,
+    TeamsSendConnector,
+)
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.confluence_write import ConfluenceWriteConnector
 from master_agent.connectors.drafts import (
@@ -25,7 +28,10 @@ from master_agent.connectors.git_remote import GitBranchPushConnector
 from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
-from master_agent.connectors.microsoft import MicrosoftIdentityConnector, SharePointConnector
+from master_agent.connectors.microsoft import (
+    MicrosoftIdentityConnector,
+    SharePointConnector,
+)
 from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
@@ -33,7 +39,6 @@ from master_agent.connectors.teams import TeamsConnector
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
 from master_agent.registry import ConnectorRegistry
-
 
 _READ_SYSTEMS = frozenset(
     {
@@ -133,7 +138,9 @@ def build_live_connectors(
                 and _feature_enabled(unresolved, "write_enabled")
                 and _feature_enabled(unresolved, "pull_request_writes_enabled")
             ):
-                connectors.append(BitbucketWriteConnector(resolved, transport=transport))
+                connectors.append(
+                    BitbucketWriteConnector(resolved, transport=transport)
+                )
             if (
                 include_writes
                 and _feature_enabled(unresolved, "write_enabled")
@@ -143,7 +150,9 @@ def build_live_connectors(
                 connectors.append(
                     GitBranchPushConnector(
                         repository_root=root,
-                        branch_prefix=str(unresolved.extra.get("branch_prefix", "agent/")),
+                        branch_prefix=str(
+                            unresolved.extra.get("branch_prefix", "agent/")
+                        ),
                     )
                 )
             continue
@@ -284,8 +293,7 @@ def _repository_root(
         value = environ.get(variable)
         if not value:
             raise ConfigurationError(
-                "Bitbucket branch publication requires environment variable "
-                f"{variable}"
+                f"Bitbucket branch publication requires environment variable {variable}"
             )
         return Path(value)
     if fallback is None:

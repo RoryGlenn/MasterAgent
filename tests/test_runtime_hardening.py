@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
-from contextlib import closing, redirect_stderr
-from io import StringIO
 import json
 import os
-from pathlib import Path
 import sqlite3
-from tempfile import TemporaryDirectory
 import threading
-from typing import Any, Mapping
 import unittest
+from collections.abc import Mapping
+from contextlib import closing, redirect_stderr
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
 from unittest.mock import patch
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
@@ -34,7 +35,6 @@ from master_agent.models import (
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -217,11 +217,14 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 'secret_env = "TEST_APPROVAL_SECRET"\n',
                 encoding="utf-8",
             )
-            with patch.dict(
-                os.environ,
-                {"TEST_APPROVAL_SECRET": "x" * 32},
-                clear=False,
-            ), redirect_stderr(StringIO()):
+            with (
+                patch.dict(
+                    os.environ,
+                    {"TEST_APPROVAL_SECRET": "x" * 32},
+                    clear=False,
+                ),
+                redirect_stderr(StringIO()),
+            ):
                 status = main(
                     [
                         "approve",

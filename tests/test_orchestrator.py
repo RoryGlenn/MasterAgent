@@ -1,8 +1,8 @@
 """Workflow orchestration tests."""
 
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
@@ -12,7 +12,6 @@ from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,9 +74,7 @@ def _orchestrator(audit: AuditLog) -> WorkflowOrchestrator:
 
     return WorkflowOrchestrator(
         policy=PolicyEngine(PolicyConfig.from_toml(ROOT / "config/policy.toml")),
-        sources=SourceOfTruthRegistry.from_toml(
-            ROOT / "config/sources_of_truth.toml"
-        ),
+        sources=SourceOfTruthRegistry.from_toml(ROOT / "config/sources_of_truth.toml"),
         connectors=registry,
         audit=audit,
     )

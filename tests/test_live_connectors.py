@@ -192,7 +192,9 @@ class BitbucketConnectorTests(unittest.TestCase):
                             "created_on": "2026-08-12T00:00:00Z",
                             "updated_on": "2026-08-13T00:00:00Z",
                             "links": {
-                                "html": {"href": "https://bitbucket.org/acme/service/pull-requests/12"}
+                                "html": {
+                                    "href": "https://bitbucket.org/acme/service/pull-requests/12"
+                                }
                             },
                         }
                     ]

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from fnmatch import fnmatch
-import tomllib
-from typing import Iterable
 
 from master_agent.approvals import ApprovalAuthenticator
 from master_agent.config_sources import ConfigSource
@@ -175,9 +175,7 @@ class PolicyEngine:
             return PolicyDecision(
                 permitted=True,
                 approval_required=True,
-                reason=(
-                    f"{len(covered_by)} valid immutable-plan approval(s) supplied"
-                ),
+                reason=(f"{len(covered_by)} valid immutable-plan approval(s) supplied"),
             )
 
         if action.risk in self._config.auto_permit_risks:

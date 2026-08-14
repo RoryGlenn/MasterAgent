@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from uuid import uuid4
 
 from master_agent.citations import make_resource_citation
@@ -20,7 +20,6 @@ from master_agent.workflows.communication_context import (
     build_communication_context_plan,
     render_communication_context_package,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,13 +36,17 @@ class CommunicationContextWorkflowTests(unittest.TestCase):
         plan = build_communication_context_plan(settings, identities)
 
         self.assertEqual(len(plan.actions), 4)
-        self.assertTrue(all(action.risk is RiskLevel.READ_ONLY for action in plan.actions))
+        self.assertTrue(
+            all(action.risk is RiskLevel.READ_ONLY for action in plan.actions)
+        )
         identity_action = plan.actions[0]
         self.assertEqual(identity_action.capability, "identity.person.resolve")
         for action in plan.actions[1:]:
             self.assertEqual(action.dependencies, (identity_action.action_id,))
         outlook = next(
-            action for action in plan.actions if action.capability == "outlook.message.search"
+            action
+            for action in plan.actions
+            if action.capability == "outlook.message.search"
         )
         self.assertEqual(outlook.parameters["identity"], "me")
         self.assertEqual(outlook.parameters["query"], "release blocker")
@@ -117,9 +120,7 @@ include_members = "false"
             self.assertEqual(len(sidecar["citation_ids"]), 4)
             self.assertTrue(sidecar["content_included"])
 
-            manifest = json.loads(
-                artifacts.manifest_json.read_text(encoding="utf-8")
-            )
+            manifest = json.loads(artifacts.manifest_json.read_text(encoding="utf-8"))
             self.assertTrue(manifest["successful"])
             self.assertEqual(manifest["counts"]["citations"], 4)
             for filename, digest in manifest["files"].items():

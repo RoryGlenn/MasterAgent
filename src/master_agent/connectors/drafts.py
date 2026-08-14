@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from email.message import EmailMessage
 import difflib
 import hashlib
 import json
-from pathlib import Path
 import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from email.message import EmailMessage
+from pathlib import Path
 from typing import Any
 
 from master_agent.errors import ConnectorError
@@ -20,7 +20,6 @@ from master_agent.models import (
     ResourceRef,
     VerificationResult,
 )
-
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -75,7 +74,9 @@ class _LocalDraftConnector:
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
         """Read generated artifact metadata by resource identifier."""
 
-        matches = sorted(self._output_root.glob(f"{_safe_name(resource.resource_id)}.*"))
+        matches = sorted(
+            self._output_root.glob(f"{_safe_name(resource.resource_id)}.*")
+        )
         if not matches:
             return None
         path = matches[0]
@@ -257,7 +258,9 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
         body = _required_text(action.parameters, "body")
         representation = str(action.parameters.get("representation", "storage")).strip()
         if representation not in {"storage", "atlas_doc_format"}:
-            raise ConnectorError("Confluence representation must be storage or atlas_doc_format")
+            raise ConnectorError(
+                "Confluence representation must be storage or atlas_doc_format"
+            )
         after = {
             "title": title,
             "body": body,
@@ -340,7 +343,10 @@ class OutlookDraftConnector(_LocalDraftConnector):
             action,
             artifact,
             message="generated local Outlook email draft without sending",
-            extra={"manifest": manifest.to_dict(), "recipients": len(to) + len(cc) + len(bcc)},
+            extra={
+                "manifest": manifest.to_dict(),
+                "recipients": len(to) + len(cc) + len(bcc),
+            },
         )
 
 
@@ -412,7 +418,9 @@ class PowerPointDraftConnector(_LocalDraftConnector):
             from pptx import Presentation
             from pptx.util import Inches, Pt
         except ImportError as error:  # pragma: no cover - declared dependency.
-            raise ConnectorError("python-pptx is required for PowerPoint generation") from error
+            raise ConnectorError(
+                "python-pptx is required for PowerPoint generation"
+            ) from error
 
         title = _required_text(action.parameters, "title")
         slides_value = action.parameters.get("slides")
@@ -452,7 +460,11 @@ class PowerPointDraftConnector(_LocalDraftConnector):
             text_frame = slide.placeholders[1].text_frame
             text_frame.clear()
             for index, bullet in enumerate(bullets[:12]):
-                paragraph = text_frame.paragraphs[0] if index == 0 else text_frame.add_paragraph()
+                paragraph = (
+                    text_frame.paragraphs[0]
+                    if index == 0
+                    else text_frame.add_paragraph()
+                )
                 paragraph.text = str(bullet)[:800]
                 paragraph.level = 0
                 paragraph.font.size = Pt(20)
@@ -460,7 +472,7 @@ class PowerPointDraftConnector(_LocalDraftConnector):
         path = self._artifact_path(action, default_suffix=".pptx")
         if path.suffix.lower() != ".pptx":
             path = path.with_suffix(".pptx")
-        presentation.save(path)
+        presentation.save(str(path))
         _restrict(path)
         artifact = GeneratedArtifact(
             path=path,
@@ -479,9 +491,7 @@ class PowerPointDraftConnector(_LocalDraftConnector):
 class RepositoryDraftConnector(_LocalDraftConnector):
     """Generate source-code patches and branch plans without touching a repo."""
 
-    _CAPABILITIES = frozenset(
-        {"repository.patch.generate", "repository.branch.plan"}
-    )
+    _CAPABILITIES = frozenset({"repository.patch.generate", "repository.branch.plan"})
 
     def __init__(self, output_root: Path) -> None:
         super().__init__(
@@ -527,7 +537,8 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             "schema": "master-agent/repository-branch-plan@1",
             "branch": branch,
             "base": base,
-            "remote": str(action.parameters.get("remote", "origin")).strip() or "origin",
+            "remote": str(action.parameters.get("remote", "origin")).strip()
+            or "origin",
             "push": False,
         }
         path = self._artifact_path(action, default_suffix=".branch-plan.json")
@@ -624,7 +635,9 @@ def _safe_name(value: str) -> str:
     return rendered[:180] or "artifact"
 
 
-def _mapping(value: Any, name: str, *, default: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _mapping(
+    value: Any, name: str, *, default: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     if value is None and default is not None:
         return dict(default)
     if not isinstance(value, Mapping):

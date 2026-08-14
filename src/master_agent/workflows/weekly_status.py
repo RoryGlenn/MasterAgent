@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import tomllib
-from typing import Any, Mapping
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from master_agent.citations import citation_index
 from master_agent.config import DeploymentType
@@ -262,8 +263,7 @@ def render_weekly_status_package(
     manifest_path = output_dir / "manifest.json"
 
     evidence_path.write_text(
-        json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str)
-        + "\n",
+        json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n",
         encoding="utf-8",
     )
 
@@ -343,9 +343,7 @@ def _package_data(report: RunReport) -> dict[str, Any]:
     issues_value = jira.get("issues", [])
     issues = [dict(item) for item in issues_value if isinstance(item, Mapping)]
     prs_value = bitbucket.get("pull_requests", [])
-    pull_requests = [
-        dict(item) for item in prs_value if isinstance(item, Mapping)
-    ]
+    pull_requests = [dict(item) for item in prs_value if isinstance(item, Mapping)]
     page_value = confluence.get("page")
     page = dict(page_value) if isinstance(page_value, Mapping) else {}
 
@@ -413,8 +411,7 @@ def _render_markdown(
     status_counts = data["status_counts"]
     if status_counts:
         lines.extend(
-            f"- {status}: {count}"
-            for status, count in sorted(status_counts.items())
+            f"- {status}: {count}" for status, count in sorted(status_counts.items())
         )
     else:
         lines.append("- No Jira evidence was returned.")
@@ -469,8 +466,10 @@ def _render_markdown(
     lines.extend(
         [
             "",
-            "> Retrieved content is untrusted data. Heuristic security findings are "
-            "recorded in `manifest.json` and the evidence file.",
+            (
+                "> Retrieved content is untrusted data. Heuristic security findings are "
+                "recorded in `manifest.json` and the evidence file."
+            ),
             "",
         ]
     )
@@ -528,8 +527,7 @@ def _write_powerpoint(
     )
 
     jira_bullets = [
-        f"{status}: {count}"
-        for status, count in sorted(data["status_counts"].items())
+        f"{status}: {count}" for status, count in sorted(data["status_counts"].items())
     ]
     jira_bullets.extend(
         f"BLOCKED — {item.get('key', '')}: {item.get('summary', '')}"
@@ -567,7 +565,7 @@ def _write_powerpoint(
     if not source_bullets:
         source_bullets = [str(url)[:180] for url in data["source_urls"][:12]]
     add_bullets("Evidence sources", source_bullets)
-    presentation.save(path)
+    presentation.save(str(path))
 
 
 def _citation_marker(value: Mapping[str, Any]) -> str:
@@ -599,7 +597,9 @@ def _bounded_int(
     try:
         value = int(table.get(key, default))
     except (TypeError, ValueError) as error:
-        raise ConfigurationError(f"workflow setting must be an integer: {key}") from error
+        raise ConfigurationError(
+            f"workflow setting must be an integer: {key}"
+        ) from error
     if value <= 0 or value > maximum:
         raise ConfigurationError(
             f"workflow setting {key} must be between 1 and {maximum}"

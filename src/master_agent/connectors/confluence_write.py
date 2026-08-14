@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.base import CompensatingConnector
@@ -75,7 +76,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
         elif action.capability == "confluence.page.compensate":
             result = self._update(action, compensating=True)
         else:  # pragma: no cover
-            raise ConnectorError(f"unsupported Confluence capability: {action.capability}")
+            raise ConnectorError(
+                f"unsupported Confluence capability: {action.capability}"
+            )
         if result.after is not None:
             page_id = str(result.after.get("id", action.target.resource_id))
             self._last[page_id] = deepcopy(dict(result.after))
@@ -113,7 +116,6 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 else "Confluence page did not match approved content"
             ),
         )
-
 
     def compensate(
         self,
@@ -194,10 +196,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
             verified = bool(observed.get("deleted"))
         else:
             prior = original.before
-            verified = (
-                observed.get("title") == prior.get("title")
-                and observed.get("body") == prior.get("body")
-            )
+            verified = observed.get("title") == prior.get("title") and observed.get(
+                "body"
+            ) == prior.get("body")
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
@@ -235,9 +236,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 "type": "page",
                 "title": title,
                 "space": {"key": space_key},
-                "body": {
-                    "storage": {"value": body, "representation": "storage"}
-                },
+                "body": {"storage": {"value": body, "representation": "storage"}},
             }
             parent_id = str(action.parameters.get("parent_id", "")).strip()
             if parent_id:
@@ -290,7 +289,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
         if self._config.deployment is DeploymentType.CLOUD:
             payload: dict[str, Any] = {
                 "id": page_id,
-                "status": str(action.parameters.get("status", before.get("status") or "current")),
+                "status": str(
+                    action.parameters.get("status", before.get("status") or "current")
+                ),
                 "title": title,
                 "body": {"representation": representation, "value": body},
                 "version": {"number": next_version},
@@ -313,9 +314,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 "type": "page",
                 "title": title,
                 "space": {"key": space_key},
-                "body": {
-                    "storage": {"value": body, "representation": "storage"}
-                },
+                "body": {"storage": {"value": body, "representation": "storage"}},
                 "version": {"number": next_version},
             }
             if message:
@@ -372,7 +371,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 "space_id": data.get("spaceId"),
                 "space_key": None,
                 "body": body_value,
-                "body_text": html_to_text(body_value) if representation == "storage" else body_value,
+                "body_text": html_to_text(body_value)
+                if representation == "storage"
+                else body_value,
                 "representation": representation,
                 "reference": response.url,
             }

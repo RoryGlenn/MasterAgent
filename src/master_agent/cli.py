@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime, timedelta
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 from master_agent.approvals import HmacApprovalAuthenticator
@@ -16,6 +16,7 @@ from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.citations import find_citations
+from master_agent.compensation import build_compensation_plan
 from master_agent.config import IntegrationConfig
 from master_agent.config_sources import resolve_config_source
 from master_agent.connectors.factory import (
@@ -26,6 +27,7 @@ from master_agent.connectors.factory import (
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
 from master_agent.discovery import DiscoveryStatus, discover_integrations
+from master_agent.errors import MasterAgentError, StructuredDataTypeError
 from master_agent.governance import GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import Approval, ChangePlan
@@ -33,13 +35,13 @@ from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
-from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.plugins import discover_connector_plugins, load_connector_plugins
+from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.readiness import assess_readiness
 from master_agent.recurring import (
     RecurringConfig,
-    RecurringRunResult,
     RecurringRunner,
+    RecurringRunResult,
     RegisteredWorkflow,
     WorkflowKind,
     validate_plan_scope,
@@ -51,16 +53,15 @@ from master_agent.retention import (
     write_retained_json,
 )
 from master_agent.security import PromptInjectionGuard
-from master_agent.compensation import build_compensation_plan
-from master_agent.workflows.draft_package import (
-    DraftPackageSettings,
-    build_draft_package_plan,
-    render_draft_package,
-)
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
     build_communication_context_plan,
     render_communication_context_package,
+)
+from master_agent.workflows.draft_package import (
+    DraftPackageSettings,
+    build_draft_package_plan,
+    render_draft_package,
 )
 from master_agent.workflows.weekly_status import (
     WeeklyStatusSettings,
@@ -215,7 +216,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "audit-verify":
             return _audit_verify(args.database)
         parser.error("unknown command")
-    except Exception as error:
+    except (
+        KeyError,
+        MasterAgentError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"error: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
 
@@ -628,8 +636,7 @@ def _run(
         )
         for item in loaded:
             print(
-                f"loaded plugin {item.descriptor.name}: "
-                + ", ".join(item.capabilities)
+                f"loaded plugin {item.descriptor.name}: " + ", ".join(item.capabilities)
             )
 
     report = _orchestrator(
@@ -734,9 +741,7 @@ def _oauth_device_code(
 ) -> int:
     """Run an explicitly selected delegated Entra device-code flow."""
 
-    profiles = OAuthProfiles.from_toml(
-        resolve_config_source(oauth_path, "oauth.toml")
-    )
+    profiles = OAuthProfiles.from_toml(resolve_config_source(oauth_path, "oauth.toml"))
     profile = profiles.profile(profile_name)
     if profile.flow is not OAuthFlow.ENTRA_DEVICE_CODE:
         raise ValueError("selected OAuth profile is not an Entra device-code flow")
@@ -791,9 +796,12 @@ def _compensation_plan(
     original = _load_plan(plan_path)
     raw = json.loads(report_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError("run report must be a JSON object")
+        raise StructuredDataTypeError("run report must be a JSON object")
     report = RunReport.from_dict(raw)
-    if report.plan_id != original.plan_id or report.plan_fingerprint != original.fingerprint:
+    if (
+        report.plan_id != original.plan_id
+        or report.plan_fingerprint != original.fingerprint
+    ):
         raise ValueError("run report does not belong to the supplied immutable plan")
     plan = build_compensation_plan(original, report, created_by=created_by)
     _write_json(output, plan.to_dict(), restricted=True)
@@ -814,8 +822,7 @@ def _recurring_status(
     )
     runner = RecurringRunner(config)
     records = [
-        runner.due_status(workflow).to_dict()
-        for workflow in config.workflows.values()
+        runner.due_status(workflow).to_dict() for workflow in config.workflows.values()
     ]
     for record in records:
         print(
@@ -867,9 +874,9 @@ def _execute_registered_workflow(
 
     if workflow.kind is WorkflowKind.WEEKLY_STATUS_PACKAGE:
         integrations = IntegrationConfig.from_toml(workflow.integration_config)
-        settings = WeeklyStatusSettings.from_toml(workflow.workflow_config)
+        weekly_settings = WeeklyStatusSettings.from_toml(workflow.workflow_config)
         plan = build_weekly_status_read_plan(
-            settings,
+            weekly_settings,
             bitbucket_deployment=integrations.connector("bitbucket").deployment,
         )
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
@@ -890,7 +897,7 @@ def _execute_registered_workflow(
         report = _orchestrator(registry, database).run(plan, dry_run=False)
         artifacts = render_weekly_status_package(
             report,
-            settings,
+            weekly_settings,
             output_dir=workflow.output_dir,
         )
         return report.successful, {
@@ -908,10 +915,12 @@ def _execute_registered_workflow(
                 "communication context workflow requires identity and retention config"
             )
         integrations = IntegrationConfig.from_toml(workflow.integration_config)
-        settings = CommunicationContextSettings.from_toml(workflow.workflow_config)
+        context_settings = CommunicationContextSettings.from_toml(
+            workflow.workflow_config
+        )
         identities = IdentityRegistry.from_toml(workflow.identity_config)
         retention = RetentionConfig.from_toml(workflow.retention_config)
-        plan = build_communication_context_plan(settings, identities)
+        plan = build_communication_context_plan(context_settings, identities)
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
         if connector_mode == "mock":
             registry = _mock_read_registry(plan)
@@ -926,9 +935,9 @@ def _execute_registered_workflow(
             _require_systems(registry, {"identity", "outlook", "teams"}, workflow.name)
         database = workflow.output_dir / "audit.sqlite3"
         report = _orchestrator(registry, database).run(plan, dry_run=False)
-        artifacts = render_communication_context_package(
+        context_artifacts = render_communication_context_package(
             report,
-            settings,
+            context_settings,
             output_dir=workflow.output_dir,
             retention=retention,
         )
@@ -937,11 +946,10 @@ def _execute_registered_workflow(
             "kind": str(workflow.kind),
             "successful": report.successful,
             "output_dir": str(workflow.output_dir),
-            "manifest": str(artifacts.manifest_json),
+            "manifest": str(context_artifacts.manifest_json),
         }
 
     raise ValueError(f"unsupported recurring workflow kind: {workflow.kind}")
-
 
 
 def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
@@ -1014,6 +1022,7 @@ def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
             )
         )
     return registry
+
 
 def _discover(
     *,
@@ -1142,7 +1151,7 @@ def _retain_evidence(
 ) -> int:
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("retained evidence input must be a JSON object")
+        raise StructuredDataTypeError("retained evidence input must be a JSON object")
     config = RetentionConfig.from_toml(
         resolve_config_source(retention_path, "retention.toml")
     )
@@ -1246,7 +1255,9 @@ def _communication_context(
         systems={"outlook", "teams"},
     )
     registry.register(IdentityMapConnector(identities))
-    _require_systems(registry, {"identity", "outlook", "teams"}, "communication-context")
+    _require_systems(
+        registry, {"identity", "outlook", "teams"}, "communication-context"
+    )
     report = _orchestrator(registry, database).run(plan, dry_run=False)
     _print_report(report)
     artifacts = render_communication_context_package(
@@ -1264,7 +1275,12 @@ def _communication_context(
 
 
 def _scan(*, text: str | None, file: Path | None) -> int:
-    content = text if text is not None else file.read_text(encoding="utf-8")
+    if text is not None:
+        content = text
+    elif file is not None:
+        content = file.read_text(encoding="utf-8")
+    else:
+        raise ValueError("scan requires either text or a file")
     findings = PromptInjectionGuard().scan(content)
     if not findings:
         print("no heuristic findings; content remains untrusted data")
@@ -1396,7 +1412,7 @@ def _print_report(report: RunReport) -> None:
     print(f"mode: {'dry-run' if report.dry_run else 'apply'}")
     for item in report.actions:
         print(
-            f"{item.state:<20} {str(item.action_id):<36} "
+            f"{item.state:<20} {item.action_id!s:<36} "
             f"{item.capability} — {item.message}"
         )
     print(f"successful: {report.successful}")

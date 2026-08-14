@@ -1,9 +1,9 @@
 """Source-of-truth tests."""
 
 import hashlib
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.errors import ConfigurationError
@@ -14,7 +14,6 @@ from master_agent.models import (
     ResourceRef,
     RiskLevel,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 

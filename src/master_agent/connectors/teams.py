@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from master_agent.config import ResolvedConnectorConfig
@@ -67,7 +68,9 @@ class TeamsConnector(ReadOnlyConnector):
                 query={"$top": 1},
             )
         if not isinstance(data, Mapping) or not isinstance(data.get("value", []), list):
-            raise ConnectorError("Microsoft Graph Teams probe response must be a collection")
+            raise ConnectorError(
+                "Microsoft Graph Teams probe response must be a collection"
+            )
         return {
             "reachable": True,
             "identity": identity,
@@ -223,13 +226,12 @@ class TeamsConnector(ReadOnlyConnector):
         message_id = action.target.resource_id
         data, response = self._client.request_json(
             "GET",
-            (
-                f"chats/{quote_segment(chat_id)}/messages/"
-                f"{quote_segment(message_id)}"
-            ),
+            (f"chats/{quote_segment(chat_id)}/messages/{quote_segment(message_id)}"),
         )
         if not isinstance(data, Mapping):
-            raise ConnectorError("Microsoft Graph chat message response must be an object")
+            raise ConnectorError(
+                "Microsoft Graph chat message response must be an object"
+            )
         message = _normalize_message(data, chat_id=chat_id)
         enforce_expected_version(
             action,
@@ -413,7 +415,9 @@ class TeamsConnector(ReadOnlyConnector):
             ),
         )
         if not isinstance(data, Mapping):
-            raise ConnectorError("Microsoft Graph channel message response must be an object")
+            raise ConnectorError(
+                "Microsoft Graph channel message response must be an object"
+            )
         message = _normalize_message(
             data,
             team_id=team_id,
@@ -512,9 +516,7 @@ def _normalize_chat(chat: Mapping[str, Any]) -> dict[str, Any]:
         "web_url": chat.get("webUrl"),
         "meeting_join_web_url": meeting.get("joinWebUrl"),
         "members": [
-            _normalize_member(item)
-            for item in members
-            if isinstance(item, Mapping)
+            _normalize_member(item) for item in members if isinstance(item, Mapping)
         ]
         if isinstance(members, list)
         else [],
@@ -582,9 +584,7 @@ def _normalize_message(
     body = body if isinstance(body, Mapping) else {}
     body_text = _body_text(body)
     channel_identity = message.get("channelIdentity")
-    channel_identity = (
-        channel_identity if isinstance(channel_identity, Mapping) else {}
-    )
+    channel_identity = channel_identity if isinstance(channel_identity, Mapping) else {}
     effective_team_id = team_id or _optional_text(channel_identity.get("teamId"))
     effective_channel_id = channel_id or _optional_text(
         channel_identity.get("channelId")
@@ -719,9 +719,7 @@ def _filter_messages(
     for message in messages:
         sender = message.get("from")
         sender_name = (
-            str(sender.get("display_name") or "")
-            if isinstance(sender, Mapping)
-            else ""
+            str(sender.get("display_name") or "") if isinstance(sender, Mapping) else ""
         )
         haystack = "\n".join(
             (

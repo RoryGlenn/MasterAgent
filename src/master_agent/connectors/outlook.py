@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import PurePosixPath
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import (
@@ -23,11 +24,8 @@ from master_agent.http import HttpTransport
 from master_agent.models import AgentAction
 from master_agent.text import excerpt, html_to_text
 
-
 _IMMUTABLE_ID_PREFER = 'IdType="ImmutableId"'
-_TEXT_AND_IMMUTABLE_PREFER = (
-    'outlook.body-content-type="text", IdType="ImmutableId"'
-)
+_TEXT_AND_IMMUTABLE_PREFER = 'outlook.body-content-type="text", IdType="ImmutableId"'
 
 
 class OutlookConnector(ReadOnlyConnector):
@@ -65,7 +63,9 @@ class OutlookConnector(ReadOnlyConnector):
             },
         )
         if not isinstance(data, Mapping):
-            raise ConnectorError("Microsoft Graph mail folder response must be an object")
+            raise ConnectorError(
+                "Microsoft Graph mail folder response must be an object"
+            )
         folder = _normalize_mail_folder(data)
         return {
             "reachable": True,
@@ -303,19 +303,22 @@ class OutlookConnector(ReadOnlyConnector):
             maximum=min(self._config.max_response_bytes, 2_000_000),
         )
         attachment_path = (
-            f"{root}/messages/{quote_segment(message_id)}/attachments/"
-            f"{attachment_id}"
+            f"{root}/messages/{quote_segment(message_id)}/attachments/{attachment_id}"
         )
         data, metadata_response = self._client.request_json(
             "GET",
             attachment_path,
         )
         if not isinstance(data, Mapping):
-            raise ConnectorError("Microsoft Graph attachment response must be an object")
+            raise ConnectorError(
+                "Microsoft Graph attachment response must be an object"
+            )
         attachment = _normalize_attachment(data, message_id=message_id)
         odata_type = str(data.get("@odata.type", ""))
         if odata_type and not odata_type.endswith("fileAttachment"):
-            raise ConnectorError("only Outlook file attachments support text extraction")
+            raise ConnectorError(
+                "only Outlook file attachments support text extraction"
+            )
         if attachment.get("is_inline"):
             raise ConnectorError(
                 "inline Outlook attachments are not eligible for text extraction"
@@ -372,7 +375,9 @@ class OutlookConnector(ReadOnlyConnector):
         try:
             content = content_response.body.decode("utf-8-sig")
         except UnicodeDecodeError as error:
-            raise ConnectorError("Outlook text attachment is not valid UTF-8") from error
+            raise ConnectorError(
+                "Outlook text attachment is not valid UTF-8"
+            ) from error
         enforce_expected_version(action, attachment.get("updated_at"))
         return RetrievedPayload(
             data={
@@ -501,7 +506,10 @@ def _normalize_attachment(
 
 
 def _bounded_query(value: str, *, maximum: int) -> str:
-    if any(ord(character) < 32 and character not in {"\t", "\n", "\r"} for character in value):
+    if any(
+        ord(character) < 32 and character not in {"\t", "\n", "\r"}
+        for character in value
+    ):
         raise ConnectorError("Outlook query contains unsupported control characters")
     rendered = " ".join(value.split())
     if len(rendered) > maximum:

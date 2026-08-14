@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from types import MappingProxyType
 import tomllib
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
@@ -71,7 +71,9 @@ class IdentityRegistry:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
         except FileNotFoundError as error:
-            raise ConfigurationError(f"identity configuration not found: {path}") from error
+            raise ConfigurationError(
+                f"identity configuration not found: {path}"
+            ) from error
         raw_people = raw.get("people", {})
         if not isinstance(raw_people, Mapping):
             raise ConfigurationError("[people] must be a TOML table")
@@ -82,6 +84,7 @@ class IdentityRegistry:
                 raise ConfigurationError(f"identity must be a table: {key}")
             display_name = str(value.get("display_name", "")).strip()
             aliases_value = value.get("aliases", [])
+            aliases: tuple[str, ...]
             if isinstance(aliases_value, str):
                 aliases = (aliases_value.strip(),) if aliases_value.strip() else ()
             elif isinstance(aliases_value, list):
@@ -105,7 +108,9 @@ class IdentityRegistry:
                 elif field_name.endswith("_user_id"):
                     identifiers[field_name.removesuffix("_user_id")] = str(field_value)
                 elif field_name.endswith("_account_id"):
-                    identifiers[field_name.removesuffix("_account_id")] = str(field_value)
+                    identifiers[field_name.removesuffix("_account_id")] = str(
+                        field_value
+                    )
 
             people[str(key)] = PersonIdentity(
                 key=str(key),

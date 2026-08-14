@@ -7,6 +7,10 @@ class MasterAgentError(Exception):
     """Base exception for governed runtime failures."""
 
 
+class StructuredDataTypeError(TypeError, ValueError):
+    """Malformed structured data with backward-compatible value semantics."""
+
+
 class ValidationError(MasterAgentError):
     """Raised when a model or configuration is invalid."""
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
 import tomllib
+from dataclasses import dataclass
 from uuid import UUID
 
 from master_agent.config_sources import ConfigSource
@@ -53,16 +53,20 @@ class SourceOfTruthRegistry:
                 item.get("projection_capabilities"),
                 "projection_capabilities",
             )
-            rules.append(SourceRule(
-                field=str(item["field"]),
-                canonical_uri=(
-                    f"{item['canonical_system']}:{item['canonical_resource_id']}"
-                ),
-                projection_uris=frozenset(str(uri) for uri in item["projections"]),
-                direction=direction,
-                canonical_capabilities=canonical_capabilities,
-                projection_capabilities=projection_capabilities,
-            ))
+            rules.append(
+                SourceRule(
+                    field=str(item["field"]),
+                    canonical_uri=(
+                        f"{item['canonical_system']}:{item['canonical_resource_id']}"
+                    ),
+                    projection_uris=frozenset(
+                        str(uri) for uri in item["projections"]
+                    ),
+                    direction=direction,
+                    canonical_capabilities=canonical_capabilities,
+                    projection_capabilities=projection_capabilities,
+                )
+            )
         return cls(tuple(rules))
 
     def validate(self, plan: ChangePlan, action: AgentAction) -> tuple[bool, str]:
@@ -100,8 +104,10 @@ class SourceOfTruthRegistry:
             if not canonical_writes:
                 return (
                     False,
-                    f"{rule.field} is owned by {rule.canonical_uri}; update the "
-                    "canonical source before its projection",
+                    (
+                        f"{rule.field} is owned by {rule.canonical_uri}; update the "
+                        "canonical source before its projection"
+                    ),
                 )
             ancestors = _dependency_ancestors(plan, action)
             bound_ancestors = {
@@ -112,8 +118,10 @@ class SourceOfTruthRegistry:
             if bound_ancestors.isdisjoint(ancestors):
                 return (
                     False,
-                    f"{rule.field} projection must depend on a matching field-bound "
-                    f"write to {rule.canonical_uri}; plan ordering alone is not authority",
+                    (
+                        f"{rule.field} projection must depend on a matching field-bound "
+                        f"{rule.canonical_uri}; plan ordering alone is not authority"
+                    ),
                 )
 
         return True, "source-of-truth policy satisfied"

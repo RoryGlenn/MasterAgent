@@ -57,7 +57,9 @@ class OutlookSendConnector:
         """Send exactly the recipients, subject, and body in the approved plan."""
 
         self._validate(action)
-        identity = str(action.parameters.get("identity", action.target.resource_id)).strip()
+        identity = str(
+            action.parameters.get("identity", action.target.resource_id)
+        ).strip()
         root, normalized_identity = graph_user_root(self._config, identity or None)
         payload = _mail_payload(action.parameters)
         approved = _canonical_mail(payload)
@@ -149,13 +151,12 @@ class OutlookSendConnector:
         data, _ = self._client.request_json(
             "GET",
             f"{root}/messages/{quote_segment(message_id)}",
-            query={
-                "$select": "subject,body,toRecipients,ccRecipients,bccRecipients"
-            },
+            query={"$select": "subject,body,toRecipients,ccRecipients,bccRecipients"},
         )
         if not isinstance(data, Mapping):
             raise ConnectorError("Outlook draft read response must be an object")
-        body = data.get("body") if isinstance(data.get("body"), Mapping) else {}
+        body_value = data.get("body")
+        body: Mapping[str, Any] = body_value if isinstance(body_value, Mapping) else {}
         return {
             "subject": str(data.get("subject", "")),
             "body": {
@@ -168,17 +169,24 @@ class OutlookSendConnector:
         }
 
     def _validate(self, action: AgentAction) -> None:
-        if action.target.system != self.system or action.capability not in self.capabilities:
+        if (
+            action.target.system != self.system
+            or action.capability not in self.capabilities
+        ):
             raise ConnectorError("unsupported Outlook communication action")
         if action.risk is not RiskLevel.EXTERNAL_COMMUNICATION:
             raise ConnectorError("Outlook send must use external_communication risk")
         if not action.requires_approval:
             raise ConnectorError("Outlook send must be explicitly approval-bound")
         mode = str(self._config.extra.get("identity_mode", "delegated")).lower()
-        if mode != "delegated" and self._config.extra.get(
-            "allow_application_mail_send",
-            False,
-        ) is not True:
+        if (
+            mode != "delegated"
+            and self._config.extra.get(
+                "allow_application_mail_send",
+                False,
+            )
+            is not True
+        ):
             raise ConnectorError(
                 "application-mode Outlook sending is disabled by connector policy"
             )
@@ -245,10 +253,9 @@ class TeamsSendConnector:
         observed, read_response = self._client.request_json("GET", read_path)
         if not isinstance(observed, Mapping):
             raise ConnectorError("Teams message read response must be an object")
-        observed_body = (
-            observed.get("body")
-            if isinstance(observed.get("body"), Mapping)
-            else {}
+        observed_body_value = observed.get("body")
+        observed_body: Mapping[str, Any] = (
+            observed_body_value if isinstance(observed_body_value, Mapping) else {}
         )
         provider_payload = {
             "body": {
@@ -339,8 +346,7 @@ class TeamsSendConnector:
         if action.capability == "teams.chat.message.send":
             chat_id = _required(parameters, "chat_id")
             return (
-                f"chats/{quote_segment(chat_id)}/messages/"
-                f"{quote_segment(message_id)}"
+                f"chats/{quote_segment(chat_id)}/messages/{quote_segment(message_id)}"
             )
         team_id = _required(parameters, "team_id")
         channel_id = _required(parameters, "channel_id")
@@ -351,13 +357,15 @@ class TeamsSendConnector:
         if action.capability == "teams.channel.message.reply":
             parent_id = _required(parameters, "parent_message_id")
             return (
-                f"{root}/{quote_segment(parent_id)}/replies/"
-                f"{quote_segment(message_id)}"
+                f"{root}/{quote_segment(parent_id)}/replies/{quote_segment(message_id)}"
             )
         return f"{root}/{quote_segment(message_id)}"
 
     def _validate(self, action: AgentAction) -> None:
-        if action.target.system != self.system or action.capability not in self.capabilities:
+        if (
+            action.target.system != self.system
+            or action.capability not in self.capabilities
+        ):
             raise ConnectorError("unsupported Teams communication action")
         if action.risk is not RiskLevel.EXTERNAL_COMMUNICATION:
             raise ConnectorError("Teams send must use external_communication risk")
@@ -388,7 +396,8 @@ def _mail_payload(parameters: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _canonical_mail(payload: Mapping[str, Any]) -> dict[str, Any]:
-    body = payload.get("body") if isinstance(payload.get("body"), Mapping) else {}
+    body_value = payload.get("body")
+    body: Mapping[str, Any] = body_value if isinstance(body_value, Mapping) else {}
     return {
         "subject": str(payload.get("subject", "")),
         "body": str(body.get("content", "")),

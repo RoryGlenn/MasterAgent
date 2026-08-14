@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from master_agent.errors import ConfigurationError, StructuredDataTypeError
+
 
 class IdempotencyClaimState(StrEnum):
     """Result of atomically reserving one idempotency key."""
@@ -33,8 +35,6 @@ class IdempotencyClaim:
     state: IdempotencyClaimState
     token: str | None = None
     result: Mapping[str, Any] | None = None
-
-from master_agent.errors import ConfigurationError
 
 
 class AuditSinkKind(StrEnum):
@@ -300,7 +300,12 @@ class AuditLog:
             return None
         if action_fingerprint is not None and row[1] != action_fingerprint:
             return None
-        return json.loads(str(row[0]))
+        result = json.loads(str(row[0]))
+        if not isinstance(result, dict):
+            raise StructuredDataTypeError(
+                "completed action result must be a JSON object"
+            )
+        return result
 
     def clear_completed(
         self,

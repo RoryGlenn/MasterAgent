@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
+from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import graph_client
-from master_agent.connectors.utils import enforce_expected_version, quote_segment, string_parameter
+from master_agent.connectors.utils import (
+    enforce_expected_version,
+    quote_segment,
+    string_parameter,
+)
 from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport
 from master_agent.models import (
@@ -85,9 +90,7 @@ class SharePointWriteConnector:
         item_id = action.target.resource_id
         local_path = self._local_path(action.parameters)
         content = local_path.read_bytes()
-        approved_digest = str(
-            action.parameters.get("local_sha256", "")
-        ).strip().lower()
+        approved_digest = str(action.parameters.get("local_sha256", "")).strip().lower()
         observed_digest = hashlib.sha256(content).hexdigest()
         if len(approved_digest) != 64 or approved_digest != observed_digest:
             raise ConnectorError(
@@ -269,7 +272,9 @@ class SharePointWriteConnector:
         try:
             path.relative_to(self._artifact_root)
         except ValueError as error:
-            raise ConnectorError("local_path is outside the approved artifact root") from error
+            raise ConnectorError(
+                "local_path is outside the approved artifact root"
+            ) from error
         if not path.is_file():
             raise ConnectorError("SharePoint local_path is not a file")
         return path
@@ -292,7 +297,9 @@ class SharePointWriteConnector:
     def _read_versions(self, item_path: str) -> list[Mapping[str, Any]]:
         data, _ = self._client.request_json("GET", f"{item_path}/versions")
         if not isinstance(data, Mapping) or not isinstance(data.get("value"), list):
-            raise ConnectorError("SharePoint versions response must contain a value list")
+            raise ConnectorError(
+                "SharePoint versions response must contain a value list"
+            )
         return [item for item in data["value"] if isinstance(item, Mapping)]
 
     def _validate(self, action: AgentAction) -> None:
@@ -303,12 +310,12 @@ class SharePointWriteConnector:
                 f"unsupported SharePoint write capability: {action.capability}"
             )
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
-            raise ConnectorError("SharePoint replacement must use reversible_write risk")
+            raise ConnectorError(
+                "SharePoint replacement must use reversible_write risk"
+            )
         if not action.requires_approval:
             raise ConnectorError("SharePoint replacement requires explicit approval")
 
     @staticmethod
     def _item_path(drive_id: str, item_id: str) -> str:
-        return (
-            f"drives/{quote_segment(drive_id)}/items/{quote_segment(item_id)}"
-        )
+        return f"drives/{quote_segment(drive_id)}/items/{quote_segment(item_id)}"

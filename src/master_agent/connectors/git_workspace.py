@@ -139,11 +139,9 @@ class GitWorkspaceConnector(CompensatingConnector):
                 ).hexdigest(),
                 "worktree_status_sha256": self._status_digest(workspace),
             }
-            verified = (
-                observed["diff_sha256"] == after.get("diff_sha256")
-                and observed["worktree_status_sha256"]
-                == after.get("worktree_status_sha256")
-            )
+            verified = observed["diff_sha256"] == after.get("diff_sha256") and observed[
+                "worktree_status_sha256"
+            ] == after.get("worktree_status_sha256")
         else:
             observed = {
                 "branch": self._current_branch(workspace),
@@ -711,9 +709,7 @@ class GitWorkspaceConnector(CompensatingConnector):
 
     def _status_digest(self, workspace: Path) -> str:
         return hashlib.sha256(
-            self._git(workspace, "status", "--porcelain=v1").stdout.encode(
-                "utf-8"
-            )
+            self._git(workspace, "status", "--porcelain=v1").stdout.encode("utf-8")
         ).hexdigest()
 
     def _remote_branch_hash(

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.base import CompensatingConnector
@@ -142,7 +143,6 @@ class JiraWriteConnector(CompensatingConnector):
             ),
         )
 
-
     def compensate(
         self,
         action: AgentAction,
@@ -153,12 +153,11 @@ class JiraWriteConnector(CompensatingConnector):
         before_state = self._read_issue(action.target.resource_id)
         if action.capability == "jira.issue.update":
             expected_after = result.after or {}
-            if (
-                before_state.get("version") != expected_after.get("version")
-                or not _fields_match(
-                    before_state.get("fields"),
-                    expected_after.get("requested_fields", {}),
-                )
+            if before_state.get("version") != expected_after.get(
+                "version"
+            ) or not _fields_match(
+                before_state.get("fields"),
+                expected_after.get("requested_fields", {}),
             ):
                 raise VersionConflictError(
                     "Jira issue changed after update; rollback is refused"
@@ -221,17 +220,16 @@ class JiraWriteConnector(CompensatingConnector):
 
         if action.capability == "jira.issue.transition":
             expected_after = result.after or {}
-            if (
-                before_state.get("version") != expected_after.get("version")
-                or before_state.get("status") != expected_after.get("status")
-            ):
+            if before_state.get("version") != expected_after.get(
+                "version"
+            ) or before_state.get("status") != expected_after.get("status"):
                 raise VersionConflictError(
                     "Jira issue changed after transition; reversal is refused"
                 )
             reverse_id = str(
-                (result.after or {}).get("compensation", {}).get(
-                    "reverse_transition_id", ""
-                )
+                (result.after or {})
+                .get("compensation", {})
+                .get("reverse_transition_id", "")
             ).strip()
             if not reverse_id:
                 raise ConnectorError(
@@ -485,7 +483,9 @@ class JiraWriteConnector(CompensatingConnector):
         if action.target.system != self.system:
             raise ConnectorError("Jira write connector received another system")
         if action.capability not in self.capabilities:
-            raise ConnectorError(f"unsupported Jira write capability: {action.capability}")
+            raise ConnectorError(
+                f"unsupported Jira write capability: {action.capability}"
+            )
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
             raise ConnectorError("Jira writes must use reversible_write risk")
 

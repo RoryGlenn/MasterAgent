@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from master_agent.errors import ValidationError
@@ -48,9 +49,7 @@ def build_compensation_plan(
         if not isinstance(compensation, Mapping):
             after = item.result.after
             compensation = (
-                after.get("compensation")
-                if isinstance(after, Mapping)
-                else None
+                after.get("compensation") if isinstance(after, Mapping) else None
             )
         if not isinstance(compensation, Mapping):
             unavailable.append(f"{item.action_id}: compensation descriptor is missing")

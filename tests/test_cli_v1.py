@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
 import json
 import os
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import textwrap
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from master_agent.cli import main
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -89,7 +88,9 @@ class VersionOneCliTests(unittest.TestCase):
                 "source-change.patch",
                 "manifest.json",
             }
-            self.assertTrue(expected.issubset({item.name for item in (root / "drafts").iterdir()}))
+            self.assertTrue(
+                expected.issubset({item.name for item in (root / "drafts").iterdir()})
+            )
 
     def test_force_does_not_enable_packaged_recurring_workflow(self) -> None:
         with TemporaryDirectory() as directory:
@@ -112,8 +113,8 @@ class VersionOneCliTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""
                     [scheduler]
-                    state_database = "{root / 'state.sqlite3'}"
-                    lock_dir = "{root / 'locks'}"
+                    state_database = "{root / "state.sqlite3"}"
+                    lock_dir = "{root / "locks"}"
 
                     [workflows.weekly]
                     enabled = true
@@ -124,11 +125,11 @@ class VersionOneCliTests(unittest.TestCase):
                     minute = 0
                     timezone = "America/New_York"
                     max_lateness_minutes = 10080
-                    output_dir = "{root / 'output'}"
-                    integration_config = "{ROOT / 'config/integrations.toml'}"
-                    workflow_config = "{ROOT / 'config/weekly-status.toml'}"
-                    identity_config = "{ROOT / 'config/identities.toml'}"
-                    retention_config = "{ROOT / 'config/retention.toml'}"
+                    output_dir = "{root / "output"}"
+                    integration_config = "{ROOT / "config/integrations.toml"}"
+                    workflow_config = "{ROOT / "config/weekly-status.toml"}"
+                    identity_config = "{ROOT / "config/identities.toml"}"
+                    retention_config = "{ROOT / "config/retention.toml"}"
                     allowed_capabilities = [
                       "jira.issue.search",
                       "bitbucket.pull_request.search",
@@ -137,7 +138,8 @@ class VersionOneCliTests(unittest.TestCase):
                     allowed_recipients = []
                     canonical_sources = ["jira://project"]
                     """
-                ).strip() + "\n",
+                ).strip()
+                + "\n",
                 encoding="utf-8",
             )
             status, stdout, stderr = _run_cli(

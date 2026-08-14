@@ -15,7 +15,12 @@ from master_agent.connectors.base import (
     Connector,
     IdempotencyVerifyingConnector,
 )
-from master_agent.errors import ConfigurationError, VersionConflictError
+from master_agent.errors import (
+    ConfigurationError,
+    ConnectorError,
+    StructuredDataTypeError,
+    VersionConflictError,
+)
 from master_agent.evidence import audit_message_metadata, result_audit_summary
 from master_agent.governance import GovernanceProfile
 from master_agent.http import (
@@ -61,7 +66,7 @@ class ActionReport:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "ActionReport":
+    def from_dict(cls, data: Mapping[str, object]) -> ActionReport:
         """Create an action report from persisted JSON data."""
 
         result_data = data.get("result")
@@ -132,16 +137,16 @@ class RunReport:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "RunReport":
+    def from_dict(cls, data: Mapping[str, object]) -> RunReport:
         """Create a run report from persisted JSON data."""
 
         raw_actions = data.get("actions")
         if not isinstance(raw_actions, list):
-            raise ValueError("run report actions must be a list")
+            raise StructuredDataTypeError("run report actions must be a list")
         actions: list[ActionReport] = []
         for item in raw_actions:
             if not isinstance(item, Mapping):
-                raise ValueError("run report action must be an object")
+                raise StructuredDataTypeError("run report action must be an object")
             actions.append(ActionReport.from_dict(item))
         return cls(
             run_id=UUID(str(data["run_id"])),
@@ -515,7 +520,14 @@ class WorkflowOrchestrator:
                     state=ActionState.CONFLICTED,
                     message=str(error),
                 )
-            except Exception as error:  # Connector boundary preserves partial state.
+            except (
+                ConnectorError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as error:  # Connector boundary preserves partial state.
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
@@ -676,7 +688,14 @@ class WorkflowOrchestrator:
                     action.idempotency_key,
                     action_fingerprint=action.effect_fingerprint,
                 )
-            except Exception as error:
+            except (
+                ConnectorError,
+                KeyError,
+                OSError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as error:
                 reports[item.report_index] = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
@@ -770,5 +789,5 @@ def _uses_idempotency(action: AgentAction) -> bool:
 
 def _strict_bool(value: object, name: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean")
+        raise StructuredDataTypeError(f"{name} must be a boolean")
     return value

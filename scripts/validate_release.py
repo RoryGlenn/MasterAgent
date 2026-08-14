@@ -342,6 +342,7 @@ def _validate_demo(
             errors.append(f"draft package artifact mismatch: {relative}")
     try:
         from pptx import Presentation
+        from pptx.exc import PackageNotFoundError
 
         deck = Presentation(demo_root / "draft-package/change-package.pptx")
         if len(deck.slides) != 3:
@@ -350,7 +351,7 @@ def _validate_demo(
             )
         else:
             checks.append("v1 demonstration PowerPoint opens with 3 slides")
-    except Exception as error:
+    except (KeyError, OSError, PackageNotFoundError, TypeError, ValueError) as error:
         errors.append(f"v1 demonstration PowerPoint failed to open: {error}")
 
 

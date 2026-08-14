@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from master_agent.config_sources import ConfigSource
-from master_agent.errors import ConfigurationError
+from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.evidence import content_digest
 
 
@@ -323,7 +323,7 @@ def purge_expired_evidence(
         try:
             raw = json.loads(sidecar.read_text(encoding="utf-8"))
             if not isinstance(raw, Mapping):
-                raise TypeError("retention sidecar must be a JSON object")
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
             expires_at = datetime.fromisoformat(str(raw["expires_at"]))
             expires_at = _aware_utc(expires_at)
             if expires_at > current:
@@ -344,7 +344,8 @@ def purge_expired_evidence(
                     removed.append(str(candidate))
                     if not dry_run:
                         candidate.unlink()
-        except Exception as error:  # Corrupt sidecars must not stop other cleanup.
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            # Corrupt sidecars must not stop cleanup of independent records.
             errors.append(f"{sidecar}: {type(error).__name__}: {error}")
 
     return RetentionPurgeResult(
@@ -390,7 +391,7 @@ def repair_orphaned_evidence(
                 raise OSError("retention sidecar must not be a symbolic link")
             raw = json.loads(sidecar.read_text(encoding="utf-8"))
             if not isinstance(raw, Mapping):
-                raise ValueError("retention sidecar must be a JSON object")
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
             evidence_name = str(raw.get("evidence_path", ""))
             if not evidence_name or Path(evidence_name).name != evidence_name:
                 raise ValueError("retention evidence_path must be a sibling filename")

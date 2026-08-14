@@ -13,7 +13,6 @@ from master_agent.workflows.weekly_status import (
     render_weekly_status_package,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -132,9 +131,7 @@ def main() -> None:
             ),
             "web_url": "https://confluence.example.test/display/RISE/Release+Status",
         },
-        "source_urls": [
-            "https://confluence.example.test/display/RISE/Release+Status"
-        ],
+        "source_urls": ["https://confluence.example.test/display/RISE/Release+Status"],
         "evidence": {"content_digest": "sha256:demo-confluence"},
         "security": {"prompt_injection_findings": []},
     }

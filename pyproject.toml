@@ -11,6 +11,12 @@ requires-python = ">=3.12"
 authors = [{ name = "Rory Glenn" }]
 dependencies = ["python-pptx>=1.0.2"]
 
+[project.optional-dependencies]
+dev = [
+    "mypy==2.3.0",
+    "ruff==0.16.3",
+]
+
 [project.scripts]
 master-agent = "master_agent.cli:main"
 
@@ -19,3 +25,12 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 master_agent = ["py.typed", "defaults/*.toml"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+strict = true
+
+[tool.ruff]
+required-version = "==0.16.3"
+target-version = "py312"

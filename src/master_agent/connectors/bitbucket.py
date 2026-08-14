@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
@@ -77,9 +78,7 @@ class BitbucketConnector(ReadOnlyConnector):
             return self._read_diffstat(action)
         if action.capability == "bitbucket.build_status.read":
             return self._read_build_status(action)
-        raise ConnectorError(
-            f"unsupported Bitbucket capability: {action.capability}"
-        )
+        raise ConnectorError(f"unsupported Bitbucket capability: {action.capability}")
 
     def _read_instance(self) -> RetrievedPayload:
         if self._config.deployment is DeploymentType.CLOUD:
@@ -126,9 +125,7 @@ class BitbucketConnector(ReadOnlyConnector):
     def _read_repository(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
         if self._config.deployment is DeploymentType.CLOUD:
-            path = (
-                f"repositories/{quote_segment(owner)}/{quote_segment(repository)}"
-            )
+            path = f"repositories/{quote_segment(owner)}/{quote_segment(repository)}"
         else:
             path = self._dc_repo_path(owner, repository)
         data, response = self._client.request_json("GET", path)
@@ -222,9 +219,7 @@ class BitbucketConnector(ReadOnlyConnector):
         source_urls = [reference]
         for pull_request in pull_requests:
             source_urls.extend(
-                str(url)
-                for url in pull_request.get("source_urls", [])
-                if url
+                str(url) for url in pull_request.get("source_urls", []) if url
             )
         return RetrievedPayload(
             data={
@@ -403,7 +398,9 @@ class BitbucketConnector(ReadOnlyConnector):
             if bool(data.get("isLastPage")) or not mapped:
                 break
             next_start = data.get("nextPageStart")
-            start = int(next_start) if isinstance(next_start, int) else start + len(mapped)
+            start = (
+                int(next_start) if isinstance(next_start, int) else start + len(mapped)
+            )
         return results[:limit], reference
 
     def _statuses_for_pull_request(
@@ -471,7 +468,9 @@ class BitbucketConnector(ReadOnlyConnector):
                 )
             reference = response.url
             if not isinstance(data, Mapping):
-                raise ConnectorError("Bitbucket build-status response must be an object")
+                raise ConnectorError(
+                    "Bitbucket build-status response must be an object"
+                )
             page = data.get("values", [])
             if not isinstance(page, list):
                 raise ConnectorError("Bitbucket build statuses must be a list")
@@ -486,7 +485,11 @@ class BitbucketConnector(ReadOnlyConnector):
                 if bool(data.get("isLastPage")) or not mapped:
                     break
                 next_start = data.get("nextPageStart")
-                start = int(next_start) if isinstance(next_start, int) else start + len(mapped)
+                start = (
+                    int(next_start)
+                    if isinstance(next_start, int)
+                    else start + len(mapped)
+                )
         return statuses[: self._config.max_items], reference
 
     def _diffstat_for_pull_request(
@@ -496,7 +499,9 @@ class BitbucketConnector(ReadOnlyConnector):
         repository: str,
         pull_request_id: str,
     ) -> tuple[list[dict[str, Any]], str]:
-        suffix = "diffstat" if self._config.deployment is DeploymentType.CLOUD else "changes"
+        suffix = (
+            "diffstat" if self._config.deployment is DeploymentType.CLOUD else "changes"
+        )
         path = f"{self._pull_request_path(owner, repository, pull_request_id)}/{suffix}"
         changes: list[dict[str, Any]] = []
         next_url: str | None = None
@@ -533,7 +538,11 @@ class BitbucketConnector(ReadOnlyConnector):
                 if bool(data.get("isLastPage")) or not mapped:
                     break
                 next_start = data.get("nextPageStart")
-                start = int(next_start) if isinstance(next_start, int) else start + len(mapped)
+                start = (
+                    int(next_start)
+                    if isinstance(next_start, int)
+                    else start + len(mapped)
+                )
         return changes[: self._config.max_items], reference
 
     def _pull_request_path(
@@ -628,9 +637,7 @@ class BitbucketConnector(ReadOnlyConnector):
             "destination_branch": _branch_name(destination),
             "source_commit": _commit_hash(source),
             "reviewers": [
-                _person_name(item)
-                for item in reviewers
-                if isinstance(item, Mapping)
+                _person_name(item) for item in reviewers if isinstance(item, Mapping)
             ],
             "participants": [
                 {
@@ -684,8 +691,7 @@ class BitbucketConnector(ReadOnlyConnector):
             "reviewers": [
                 _person_name(item.get("user"))
                 for item in reviewers
-                if isinstance(item, Mapping)
-                and isinstance(item.get("user"), Mapping)
+                if isinstance(item, Mapping) and isinstance(item.get("user"), Mapping)
             ],
             "participants": [
                 {
