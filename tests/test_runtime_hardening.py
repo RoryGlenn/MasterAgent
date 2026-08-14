@@ -548,6 +548,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                     ),
                 )
                 connection.commit()
+            database.chmod(0o600)
             audit = AuditLog(database)
             legacy = audit.claim_action(
                 idempotency_key="legacy",

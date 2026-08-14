@@ -19,7 +19,8 @@ from master_agent.errors import ConfigurationError
 
 _DIGEST_BYTES = 32
 _DIGEST_HEX_LENGTH = _DIGEST_BYTES * 2
-_LOCK_SUFFIX = ".master-agent.lock"
+_LEDGER_SUFFIX = ".master-agent.lock"
+_FLOCK_SUFFIX = ".master-agent.flock"
 _MAX_LEDGER_BYTES = 8 * 1024 * 1024
 
 
@@ -86,6 +87,16 @@ class _LedgerState:
     pending_new: _GenerationRef | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _LedgerGeneration:
+    """One immutable, validated ledger snapshot."""
+
+    content: bytes
+    digest: str
+    identity: _FileIdentity
+    state: _LedgerState
+
+
 class PinnedSQLiteDatabase:
     """SQLite state serialized through a pinned directory and stable lock.
 
@@ -94,75 +105,141 @@ class PinnedSQLiteDatabase:
     substitution race. This class therefore executes SQL in memory and persists
     ordinary SQLite bytes as same-directory, fsynced, atomic generations.
 
-    A retained lock-file descriptor serializes independent instances. Its small
-    append-only ledger binds the approved database name to a content digest and
-    makes the prepare/replace/commit crash windows deterministic on restart.
+    A retained parent-directory descriptor serializes independent instances.
+    An atomically replaced ledger binds the approved database name to a content
+    digest and makes the prepare/replace/commit crash windows deterministic on
+    restart. Ledger files are only ever opened read-only; state transitions are
+    written to fresh private files before publication.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = Path(os.path.abspath(os.fspath(path)))
         self._parent = self._path.parent
         self._name = self._path.name
-        self._lock_name = f".{self._name}{_LOCK_SUFFIX}"
+        self._ledger_name = f".{self._name}{_LEDGER_SUFFIX}"
+        self._lock_name = f".{self._name}{_FLOCK_SUFFIX}"
         self._lock = RLock()
         self._active_context = False
         self._poisoned = False
         self._created = False
         self._lock_created = False
+        self._ledger_created = False
 
         parent_descriptor = _open_trusted_parent(self._parent, create=True)
         lock_descriptor: int | None = None
+        lock_identity: _FileIdentity | None = None
         database_descriptor: int | None = None
         database_identity: _FileIdentity | None = None
+        ledger_identity: _FileIdentity | None = None
         try:
             self._parent_identity = _validated_parent_identity(
                 os.fstat(parent_descriptor)
             )
-            lock_descriptor, self._lock_created = _open_lock_file(
-                parent_descriptor,
-                self._lock_name,
-                create=True,
-            )
-            self._lock_identity = _validated_state_file_identity(
-                os.fstat(lock_descriptor),
-                label="SQLite state lock",
-            )
-            with (
-                _file_lock(parent_descriptor, exclusive=True),
-                _file_lock(lock_descriptor, exclusive=True),
-            ):
-                database_descriptor, self._created = _open_database_file(
-                    parent_descriptor,
-                    self._name,
-                    create=True,
-                )
-                database_identity = _validated_state_file_identity(
-                    os.fstat(database_descriptor),
-                    label="SQLite state database",
-                )
-                generation = _read_generation(database_descriptor)
-                _reject_sqlite_sidecars(parent_descriptor, self._name)
-                _reconcile_ledger(
-                    lock_descriptor,
-                    _GenerationRef.from_generation(generation),
-                )
-        except BaseException:
-            if database_descriptor is not None:
-                os.close(database_descriptor)
-            if self._created:
-                _unlink_if_identity(
-                    parent_descriptor,
-                    self._name,
-                    database_identity,
-                )
-            if lock_descriptor is not None:
-                os.close(lock_descriptor)
-            if self._lock_created:
-                _unlink_if_identity(
+            with _file_lock(parent_descriptor, exclusive=True):
+                lock_descriptor, self._lock_created = _open_flock_file(
                     parent_descriptor,
                     self._lock_name,
-                    self._lock_identity if hasattr(self, "_lock_identity") else None,
                 )
+                lock_identity = _validated_state_file_identity(
+                    os.fstat(lock_descriptor),
+                    label="SQLite state transaction lock",
+                )
+                with _file_lock(lock_descriptor, exclusive=True):
+                    _validate_flock_path(
+                        parent_descriptor,
+                        self._lock_name,
+                        lock_descriptor,
+                        lock_identity,
+                    )
+                    database_descriptor, self._created = _open_database_file(
+                        parent_descriptor,
+                        self._name,
+                        create=True,
+                    )
+                    database_identity = _validated_state_file_identity(
+                        os.fstat(database_descriptor),
+                        label="SQLite state database",
+                    )
+                    generation = _read_generation(database_descriptor)
+                    _reject_sqlite_sidecars(parent_descriptor, self._name)
+                    validation_connection = _memory_connection(generation.content)
+                    _close_sqlite_connection(validation_connection)
+                    ledger = _read_ledger_generation(
+                        parent_descriptor,
+                        self._ledger_name,
+                        missing_ok=True,
+                    )
+                    ledger_created = ledger is None
+                    self._ledger_created = ledger_created
+                    reconciled = _reconcile_ledger(
+                        parent_descriptor,
+                        self._ledger_name,
+                        _GenerationRef.from_generation(generation),
+                        ledger,
+                    )
+                    ledger_identity = reconciled.identity
+        except BaseException:
+            ledger_publication_is_indeterminate = (
+                self._ledger_created and ledger_identity is None
+            )
+            if (
+                not ledger_publication_is_indeterminate
+                and lock_descriptor is not None
+                and lock_identity is not None
+            ):
+                try:
+                    with (
+                        _file_lock(parent_descriptor, exclusive=True),
+                        _file_lock(lock_descriptor, exclusive=True),
+                    ):
+                        parent_stat = os.fstat(parent_descriptor)
+                        if not self._parent_identity.matches(
+                            parent_stat
+                        ) or not self._parent_identity.matches(self._parent.lstat()):
+                            raise ConfigurationError(
+                                "SQLite state database parent path was replaced"
+                            )
+                        _validate_flock_path(
+                            parent_descriptor,
+                            self._lock_name,
+                            lock_descriptor,
+                            lock_identity,
+                        )
+                        removed = False
+                        database_cleanup_complete = not self._created
+                        if self._created:
+                            database_cleanup_complete = _unlink_if_identity(
+                                parent_descriptor,
+                                self._name,
+                                database_identity,
+                            )
+                            removed = database_cleanup_complete
+                        if self._ledger_created and database_cleanup_complete:
+                            removed = (
+                                _unlink_if_identity(
+                                    parent_descriptor,
+                                    self._ledger_name,
+                                    ledger_identity,
+                                )
+                                or removed
+                            )
+                        if self._lock_created and database_cleanup_complete:
+                            removed = (
+                                _unlink_if_identity(
+                                    parent_descriptor,
+                                    self._lock_name,
+                                    lock_identity,
+                                )
+                                or removed
+                            )
+                        if removed:
+                            os.fsync(parent_descriptor)
+                except (ConfigurationError, OSError):
+                    pass
+            if database_descriptor is not None:
+                os.close(database_descriptor)
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
             os.close(parent_descriptor)
             raise
         finally:
@@ -172,8 +249,11 @@ class PinnedSQLiteDatabase:
                 except OSError:
                     pass
 
+        if lock_descriptor is None or lock_identity is None:
+            raise RuntimeError("SQLite state transaction lock was not initialized")
         self._parent_descriptor = parent_descriptor
         self._lock_descriptor = lock_descriptor
+        self._lock_identity = lock_identity
         self._finalizer = weakref.finalize(
             self,
             _close_descriptors,
@@ -242,6 +322,17 @@ class PinnedSQLiteDatabase:
                                 self._name,
                                 generation.identity,
                             )
+                            if removed and self._ledger_created:
+                                ledger = _read_ledger_generation(
+                                    self._parent_descriptor,
+                                    self._ledger_name,
+                                    missing_ok=True,
+                                )
+                                _unlink_if_identity(
+                                    self._parent_descriptor,
+                                    self._ledger_name,
+                                    ledger.identity if ledger is not None else None,
+                                )
                             if removed and self._lock_created:
                                 _unlink_if_identity(
                                     self._parent_descriptor,
@@ -270,7 +361,7 @@ class PinnedSQLiteDatabase:
             )
 
     def _validate_fixed_paths(self) -> None:
-        """Verify the public parent and stable lock still name pinned objects."""
+        """Verify the public parent still names the pinned directory."""
 
         parent_stat = os.fstat(self._parent_descriptor)
         _validated_parent_identity(parent_stat)
@@ -279,21 +370,12 @@ class PinnedSQLiteDatabase:
         path_stat = self._parent.lstat()
         if not self._parent_identity.matches(path_stat):
             raise ConfigurationError("SQLite state database parent path was replaced")
-
-        lock_stat = os.fstat(self._lock_descriptor)
-        _validated_state_file_identity(lock_stat, label="SQLite state lock")
-        if not self._lock_identity.matches(lock_stat):
-            raise ConfigurationError("SQLite state lock descriptor identity changed")
-        try:
-            public_lock = os.stat(
-                self._lock_name,
-                dir_fd=self._parent_descriptor,
-                follow_symlinks=False,
-            )
-        except OSError as error:
-            raise ConfigurationError("SQLite state lock path was replaced") from error
-        if not self._lock_identity.matches(public_lock):
-            raise ConfigurationError("SQLite state lock path was replaced")
+        _validate_flock_path(
+            self._parent_descriptor,
+            self._lock_name,
+            self._lock_descriptor,
+            self._lock_identity,
+        )
 
     def _load_current_generation(self) -> _Generation:
         """Read the approved generation and reconcile an interrupted replace."""
@@ -308,9 +390,16 @@ class PinnedSQLiteDatabase:
             generation = _read_generation(descriptor)
         finally:
             os.close(descriptor)
+        ledger = _read_ledger_generation(
+            self._parent_descriptor,
+            self._ledger_name,
+            missing_ok=False,
+        )
         _reconcile_ledger(
-            self._lock_descriptor,
+            self._parent_descriptor,
+            self._ledger_name,
             _GenerationRef.from_generation(generation),
+            ledger,
         )
         return generation
 
@@ -356,15 +445,32 @@ class PinnedSQLiteDatabase:
                 device=temp_identity.device,
                 inode=temp_identity.inode,
             )
-            ledger = _parse_ledger(self._lock_descriptor)
-            if ledger.pending_new is not None or ledger.committed != previous_ref:
+            ledger = _read_ledger_generation(
+                self._parent_descriptor,
+                self._ledger_name,
+                missing_ok=False,
+            )
+            if ledger is None:
+                raise ConfigurationError(
+                    "SQLite state database has no trusted lock ledger"
+                )
+            if (
+                ledger.state.pending_new is not None
+                or ledger.state.committed != previous_ref
+            ):
                 raise ConfigurationError(
                     "SQLite state ledger changed before database commit"
                 )
 
-            _append_ledger_record(
-                self._lock_descriptor,
-                f"P {_format_ref(previous_ref)} {_format_ref(updated_ref)}\n",
+            prepared_ledger = _replace_ledger_generation(
+                self._parent_descriptor,
+                self._ledger_name,
+                expected=ledger,
+                state=_LedgerState(
+                    committed=previous_ref,
+                    pending_old=previous_ref,
+                    pending_new=updated_ref,
+                ),
             )
             prepared = True
 
@@ -390,9 +496,11 @@ class PinnedSQLiteDatabase:
                 raise ConfigurationError(
                     "SQLite state database replacement could not be verified"
                 )
-            _append_ledger_record(
-                self._lock_descriptor,
-                f"C {_format_ref(updated_ref)}\n",
+            _replace_ledger_generation(
+                self._parent_descriptor,
+                self._ledger_name,
+                expected=prepared_ledger,
+                state=_LedgerState(committed=updated_ref),
             )
         except BaseException:
             if prepared:
@@ -430,6 +538,7 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
     absolute = Path(os.path.abspath(os.fspath(path)))
     parent = absolute.parent
     parent_descriptor = _open_trusted_parent(parent, create=False)
+    parent_identity = _validated_parent_identity(os.fstat(parent_descriptor))
     lock_descriptor: int | None = None
     database_descriptor: int | None = None
     connection: sqlite3.Connection | None = None
@@ -443,9 +552,10 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
             writable=False,
         )
         os.close(probe_descriptor)
-        lock_name = f".{absolute.name}{_LOCK_SUFFIX}"
+        ledger_name = f".{absolute.name}{_LEDGER_SUFFIX}"
+        lock_name = f".{absolute.name}{_FLOCK_SUFFIX}"
         try:
-            lock_descriptor, _ = _open_lock_file(
+            lock_descriptor, _ = _open_flock_file(
                 parent_descriptor,
                 lock_name,
                 create=False,
@@ -453,12 +563,29 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
             )
         except FileNotFoundError as error:
             raise ConfigurationError(
-                "SQLite state database has no trusted lock ledger"
+                "SQLite state database has no trusted transaction lock"
             ) from error
+        lock_identity = _validated_state_file_identity(
+            os.fstat(lock_descriptor),
+            label="SQLite state transaction lock",
+        )
         with (
             _file_lock(parent_descriptor, exclusive=False),
             _file_lock(lock_descriptor, exclusive=False),
         ):
+            current_parent = os.fstat(parent_descriptor)
+            if not parent_identity.matches(
+                current_parent
+            ) or not parent_identity.matches(parent.lstat()):
+                raise ConfigurationError(
+                    "SQLite state database parent path was replaced"
+                )
+            _validate_flock_path(
+                parent_descriptor,
+                lock_name,
+                lock_descriptor,
+                lock_identity,
+            )
             database_descriptor, _ = _open_database_file(
                 parent_descriptor,
                 absolute.name,
@@ -467,16 +594,25 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
             )
             generation = _read_generation(database_descriptor)
             _reject_sqlite_sidecars(parent_descriptor, absolute.name)
-            ledger = _parse_ledger(lock_descriptor)
-            if ledger.pending_new is not None:
+            ledger = _read_ledger_generation(
+                parent_descriptor,
+                ledger_name,
+                missing_ok=False,
+            )
+            if ledger is None:
+                raise ConfigurationError(
+                    "SQLite state database has no trusted lock ledger"
+                )
+            if ledger.state.pending_new is not None:
                 raise ConfigurationError(
                     "SQLite state database has an interrupted replacement"
                 )
-            if ledger.committed != _GenerationRef.from_generation(generation):
+            if ledger.state.committed != _GenerationRef.from_generation(generation):
                 raise ConfigurationError(
                     "SQLite state database content identity changed"
                 )
             connection = _memory_connection(generation.content)
+            connection.execute("PRAGMA query_only = ON")
             yield connection
     finally:
         if connection is not None:
@@ -580,14 +716,14 @@ def _open_trusted_parent(path: Path, *, create: bool) -> int:
     return descriptor
 
 
-def _open_lock_file(
+def _open_flock_file(
     parent_descriptor: int,
     name: str,
     *,
-    create: bool,
+    create: bool = True,
     writable: bool = True,
 ) -> tuple[int, bool]:
-    """Open or securely create the stable transaction lock and ledger."""
+    """Open or create the stable, content-free transaction lock."""
 
     flags = (os.O_RDWR if writable else os.O_RDONLY) | _no_follow_flag()
     created = False
@@ -606,21 +742,88 @@ def _open_lock_file(
     else:
         descriptor = os.open(name, flags, dir_fd=parent_descriptor)
     try:
-        opened_identity = _FileIdentity.from_stat(os.fstat(descriptor))
-        _validated_state_file_identity(
-            os.fstat(descriptor),
-            label="SQLite state lock",
+        value = os.fstat(descriptor)
+        opened_identity = _FileIdentity.from_stat(value)
+        _validate_regular_owned_single_link(
+            value,
+            label="SQLite state transaction lock",
         )
         if created:
             os.fchmod(descriptor, 0o600)
             os.fsync(descriptor)
             os.fsync(parent_descriptor)
+        elif stat.S_IMODE(value.st_mode) != 0o600:
+            raise ConfigurationError(
+                "SQLite state transaction lock permissions must remain 0600"
+            )
+        if os.fstat(descriptor).st_size != 0:
+            raise ConfigurationError(
+                "SQLite state transaction lock must remain content-free"
+            )
     except BaseException:
         os.close(descriptor)
         if created:
             _unlink_if_identity(parent_descriptor, name, opened_identity)
         raise
     return descriptor, created
+
+
+def _validate_flock_path(
+    parent_descriptor: int,
+    name: str,
+    descriptor: int,
+    identity: _FileIdentity,
+) -> None:
+    """Prove the retained transaction lock still owns its public name."""
+
+    descriptor_stat = os.fstat(descriptor)
+    _validated_state_file_identity(
+        descriptor_stat,
+        label="SQLite state transaction lock",
+    )
+    if descriptor_stat.st_size != 0:
+        raise ConfigurationError(
+            "SQLite state transaction lock must remain content-free"
+        )
+    if not identity.matches(descriptor_stat):
+        raise ConfigurationError(
+            "SQLite state transaction lock descriptor identity changed"
+        )
+    try:
+        public = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ConfigurationError(
+            "SQLite state transaction lock path was replaced"
+        ) from error
+    _validated_state_file_identity(public, label="SQLite state transaction lock")
+    if not identity.matches(public):
+        raise ConfigurationError("SQLite state transaction lock path was replaced")
+
+
+def _open_ledger_file(parent_descriptor: int, name: str) -> int:
+    """Open one existing ledger read-only without following aliases."""
+
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | _no_follow_flag(),
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise ConfigurationError(
+            "SQLite state ledger must be a regular no-follow file"
+        ) from error
+    try:
+        _validated_state_file_identity(
+            os.fstat(descriptor),
+            label="SQLite state ledger",
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def _open_database_file(
@@ -659,11 +862,10 @@ def _open_database_file(
         value = os.fstat(descriptor)
         opened_identity = _FileIdentity.from_stat(value)
         _validate_regular_owned_single_link(value, label="SQLite state database")
-        if created or create:
+        if created:
             os.fchmod(descriptor, 0o600)
             os.fsync(descriptor)
-            if created:
-                os.fsync(parent_descriptor)
+            os.fsync(parent_descriptor)
         elif stat.S_IMODE(value.st_mode) != 0o600:
             raise ConfigurationError(
                 "SQLite state database permissions must remain 0600"
@@ -688,10 +890,12 @@ def _read_generation(descriptor: int) -> _Generation:
     return _Generation(content=content, digest=_digest(content), identity=identity)
 
 
-def _read_descriptor(descriptor: int) -> bytes:
+def _read_descriptor(descriptor: int, *, max_bytes: int | None = None) -> bytes:
     """Read all bytes without sharing or changing the descriptor offset."""
 
     size = os.fstat(descriptor).st_size
+    if max_bytes is not None and size > max_bytes:
+        raise ConfigurationError("SQLite state ledger exceeds its safety limit")
     chunks: list[bytes] = []
     offset = 0
     while offset < size:
@@ -722,19 +926,61 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _parse_ledger(descriptor: int) -> _LedgerState:
-    """Strictly parse a complete append-only generation ledger."""
+def _read_ledger_generation(
+    parent_descriptor: int,
+    name: str,
+    *,
+    missing_ok: bool,
+) -> _LedgerGeneration | None:
+    """Read one complete ledger through a read-only, identity-checked handle."""
 
-    raw = _read_descriptor(descriptor)
-    if len(raw) > _MAX_LEDGER_BYTES:
-        raise ConfigurationError("SQLite state ledger exceeds its safety limit")
-    if raw and not raw.endswith(b"\n"):
+    try:
+        descriptor = _open_ledger_file(parent_descriptor, name)
+    except FileNotFoundError as error:
+        if missing_ok:
+            return None
+        raise ConfigurationError(
+            "SQLite state database has no trusted lock ledger"
+        ) from error
+    try:
+        before = os.fstat(descriptor)
+        identity = _validated_state_file_identity(
+            before,
+            label="SQLite state ledger",
+        )
+        if before.st_size > _MAX_LEDGER_BYTES:
+            raise ConfigurationError("SQLite state ledger exceeds its safety limit")
+        content = _read_descriptor(descriptor, max_bytes=_MAX_LEDGER_BYTES)
+        after = os.fstat(descriptor)
+        _validated_state_file_identity(after, label="SQLite state ledger")
+        if not identity.matches(after) or after.st_size != len(content):
+            raise ConfigurationError("SQLite state ledger changed while it was read")
+        try:
+            public = os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise ConfigurationError("SQLite state ledger path was replaced") from error
+        _validated_state_file_identity(public, label="SQLite state ledger")
+        if not identity.matches(public):
+            raise ConfigurationError("SQLite state ledger path was replaced")
+    finally:
+        os.close(descriptor)
+    if not content.endswith(b"\n"):
         raise ConfigurationError("SQLite state ledger has a torn tail")
-    return _parse_complete_ledger(raw)
+    state = _parse_complete_ledger(content)
+    return _LedgerGeneration(
+        content=content,
+        digest=_digest(content),
+        identity=identity,
+        state=state,
+    )
 
 
 def _parse_complete_ledger(raw: bytes) -> _LedgerState:
-    """Parse ledger bytes already proven to end at a record boundary."""
+    """Parse one snapshot or a legacy append-only ledger."""
 
     committed: _GenerationRef | None = None
     pending_old: _GenerationRef | None = None
@@ -779,98 +1025,130 @@ def _parse_complete_ledger(raw: bytes) -> _LedgerState:
     )
 
 
+def _format_ledger_state(state: _LedgerState) -> bytes:
+    """Serialize one compact, complete ledger snapshot."""
+
+    records = [f"C {_format_ref(state.committed)}\n"]
+    if (state.pending_old is None) != (state.pending_new is None):
+        raise ConfigurationError("SQLite state ledger pending state is incomplete")
+    if state.pending_old is not None and state.pending_new is not None:
+        if state.pending_old != state.committed:
+            raise ConfigurationError("SQLite state ledger prepare is inconsistent")
+        records.append(
+            f"P {_format_ref(state.pending_old)} {_format_ref(state.pending_new)}\n"
+        )
+    return "".join(records).encode("ascii")
+
+
+def _replace_ledger_generation(
+    parent_descriptor: int,
+    name: str,
+    *,
+    expected: _LedgerGeneration | None,
+    state: _LedgerState,
+) -> _LedgerGeneration:
+    """Publish a complete ledger snapshot without mutating an opened ledger."""
+
+    content = _format_ledger_state(state)
+    temp_name = f".{name}.tmp-{secrets.token_hex(16)}"
+    descriptor = os.open(
+        temp_name,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | _no_follow_flag(),
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    temp_identity: _FileIdentity | None = None
+    replaced = False
+    try:
+        os.fchmod(descriptor, 0o600)
+        temp_identity = _validated_state_file_identity(
+            os.fstat(descriptor),
+            label="SQLite state temporary ledger",
+        )
+        _write_descriptor(descriptor, content)
+        os.fsync(descriptor)
+        if _read_descriptor(descriptor) != content:
+            raise OSError("SQLite state temporary ledger verification failed")
+
+        observed = _read_ledger_generation(
+            parent_descriptor,
+            name,
+            missing_ok=True,
+        )
+        if expected is None:
+            if observed is not None:
+                raise ConfigurationError(
+                    "SQLite state ledger appeared before publication"
+                )
+        elif (
+            observed is None
+            or observed.identity != expected.identity
+            or observed.digest != expected.digest
+            or observed.content != expected.content
+        ):
+            raise ConfigurationError("SQLite state ledger changed before publication")
+
+        os.replace(
+            temp_name,
+            name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        replaced = True
+        os.fsync(parent_descriptor)
+        published = _read_ledger_generation(
+            parent_descriptor,
+            name,
+            missing_ok=False,
+        )
+        if published is None:
+            raise ConfigurationError(
+                "SQLite state ledger disappeared after publication"
+            )
+        if published.identity != temp_identity or published.content != content:
+            raise ConfigurationError(
+                "SQLite state ledger replacement could not be verified"
+            )
+        return published
+    finally:
+        os.close(descriptor)
+        if not replaced and temp_identity is not None:
+            _unlink_if_identity(parent_descriptor, temp_name, temp_identity)
+
+
 def _reconcile_ledger(
-    descriptor: int,
+    parent_descriptor: int,
+    name: str,
     current: _GenerationRef,
-) -> _LedgerState:
+    ledger: _LedgerGeneration | None,
+) -> _LedgerGeneration:
     """Resolve only the two outcomes of a prepared atomic replacement."""
 
-    if os.fstat(descriptor).st_size == 0:
-        _append_ledger_record(descriptor, f"C {_format_ref(current)}\n")
-    _recover_proven_torn_tail(descriptor, current)
-    state = _parse_ledger(descriptor)
+    if ledger is None:
+        return _replace_ledger_generation(
+            parent_descriptor,
+            name,
+            expected=None,
+            state=_LedgerState(committed=current),
+        )
+    state = ledger.state
     if state.pending_new is not None:
-        if current == state.pending_new:
-            _append_ledger_record(descriptor, f"C {_format_ref(current)}\n")
-        elif current == state.pending_old:
-            _append_ledger_record(descriptor, f"A {_format_ref(current)}\n")
+        if current == state.pending_new or current == state.pending_old:
+            reconciled = _LedgerState(committed=current)
         else:
             raise ConfigurationError(
                 "SQLite state database does not match either prepared generation"
             )
-        state = _parse_ledger(descriptor)
+        ledger = _replace_ledger_generation(
+            parent_descriptor,
+            name,
+            expected=ledger,
+            state=reconciled,
+        )
+        state = ledger.state
     if state.committed != current:
         raise ConfigurationError("SQLite state database content identity changed")
-    return state
-
-
-def _recover_proven_torn_tail(
-    descriptor: int,
-    current: _GenerationRef,
-) -> None:
-    """Truncate only a tail consistent with the exact durable crash phase."""
-
-    raw = _read_descriptor(descriptor)
-    if not raw or raw.endswith(b"\n"):
-        return
-    complete_length = raw.rfind(b"\n") + 1
-    complete = raw[:complete_length]
-    tail = raw[complete_length:]
-    state = _parse_complete_ledger(complete)
-    if state.pending_new is None:
-        expected_prefix = f"P {_format_ref(state.committed)} ".encode("ascii")
-        plausible = current == state.committed and (
-            expected_prefix.startswith(tail)
-            or (
-                tail.startswith(expected_prefix)
-                and _plausible_partial_reference(tail[len(expected_prefix) :])
-            )
-        )
-    elif current == state.pending_new:
-        expected = f"C {_format_ref(state.pending_new)}".encode("ascii")
-        plausible = expected.startswith(tail)
-    elif current == state.pending_old:
-        expected = f"A {_format_ref(state.pending_old)}".encode("ascii")
-        plausible = expected.startswith(tail)
-    else:
-        plausible = False
-    if not plausible:
-        raise ConfigurationError("SQLite state ledger has an unprovable torn tail")
-    os.ftruncate(descriptor, complete_length)
-    os.fsync(descriptor)
-
-
-def _plausible_partial_reference(value: bytes) -> bool:
-    """Return whether bytes can be a prefix of one digest/device/inode tuple."""
-
-    try:
-        text = value.decode("ascii")
-    except UnicodeDecodeError:
-        return False
-    if len(text) > _DIGEST_HEX_LENGTH + 1 + 20 + 1 + 20:
-        return False
-    parts = text.split(" ")
-    if len(parts) > 3:
-        return False
-    if parts and any(character not in "0123456789abcdef" for character in parts[0]):
-        return False
-    if parts and len(parts[0]) > _DIGEST_HEX_LENGTH:
-        return False
-    return all(part.isdigit() for part in parts[1:] if part)
-
-
-def _append_ledger_record(descriptor: int, record: str) -> None:
-    """Durably append one complete ASCII ledger transition."""
-
-    payload = record.encode("ascii")
-    offset = os.fstat(descriptor).st_size
-    written = 0
-    while written < len(payload):
-        count = os.pwrite(descriptor, payload[written:], offset + written)
-        if count <= 0:
-            raise OSError("SQLite state ledger append stalled")
-        written += count
-    os.fsync(descriptor)
+    return ledger
 
 
 def _is_digest(value: str) -> bool:

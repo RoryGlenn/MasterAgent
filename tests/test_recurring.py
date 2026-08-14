@@ -288,6 +288,7 @@ class RecurringWorkflowTests(unittest.TestCase):
                     )
                     """
                 )
+            database.chmod(0o600)
             stores: list[RecurringStateStore] = []
             errors: list[BaseException] = []
             barrier = threading.Barrier(8)

@@ -108,6 +108,7 @@ class SQLiteSafetyTests(unittest.TestCase):
             root = Path(directory)
             database_path = root / "state.sqlite3"
             ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
             database = PinnedSQLiteDatabase(database_path)
             with database.connect() as connection:
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
@@ -116,10 +117,31 @@ class SQLiteSafetyTests(unittest.TestCase):
 
             self.assertFalse(database_path.exists())
             self.assertFalse(ledger_path.exists())
+            self.assertFalse(lock_path.exists())
             replacement = PinnedSQLiteDatabase(database_path)
             with replacement.connect() as connection:
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
             replacement.close()
+
+    def test_ledger_snapshots_remain_compact_and_lock_remains_content_free(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            database = PinnedSQLiteDatabase(database_path)
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE counter (value INTEGER NOT NULL)")
+                connection.execute("INSERT INTO counter VALUES (0)")
+            for _ in range(100):
+                with database.connect() as connection:
+                    connection.execute("UPDATE counter SET value = value + 1")
+            database.close()
+
+            self.assertLess(ledger_path.stat().st_size, 512)
+            self.assertEqual(lock_path.read_bytes(), b"")
 
     def test_last_moment_destination_swap_never_writes_attacker_inode(self) -> None:
         with TemporaryDirectory() as directory:
@@ -137,12 +159,18 @@ class SQLiteSafetyTests(unittest.TestCase):
                 connection.commit()
             os.link(attacker, attacker_alias)
             real_replace = sqlite_safety.os.replace
+            swapped = False
 
             def replace_after_destination_swap(
                 source: str,
                 destination: str,
                 **kwargs: object,
             ) -> None:
+                nonlocal swapped
+                if destination != database_path.name or swapped:
+                    real_replace(source, destination, **kwargs)  # type: ignore[arg-type]
+                    return
+                swapped = True
                 database_path.rename(displaced)
                 attacker.rename(database_path)
                 real_replace(source, destination, **kwargs)  # type: ignore[arg-type]
@@ -207,23 +235,38 @@ class SQLiteSafetyTests(unittest.TestCase):
             database = PinnedSQLiteDatabase(database_path)
             with database.connect() as connection:
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
-            real_append = sqlite_safety._append_ledger_record
+            real_replace = sqlite_safety._replace_ledger_generation
             prepared = False
 
-            def fail_commit_record(descriptor: int, record: str) -> None:
+            def fail_commit_record(
+                parent_descriptor: int,
+                name: str,
+                *,
+                expected: Any,
+                state: Any,
+            ) -> Any:
                 nonlocal prepared
-                if record.startswith("P "):
+                if state.pending_new is not None:
                     prepared = True
-                    real_append(descriptor, record)
-                    return
-                if prepared and record.startswith("C "):
+                    return real_replace(
+                        parent_descriptor,
+                        name,
+                        expected=expected,
+                        state=state,
+                    )
+                if prepared:
                     raise OSError("simulated crash after replace")
-                real_append(descriptor, record)
+                return real_replace(
+                    parent_descriptor,
+                    name,
+                    expected=expected,
+                    state=state,
+                )
 
             with (
                 patch.object(
                     sqlite_safety,
-                    "_append_ledger_record",
+                    "_replace_ledger_generation",
                     side_effect=fail_commit_record,
                 ),
                 self.assertRaisesRegex(OSError, "after replace"),
@@ -238,6 +281,196 @@ class SQLiteSafetyTests(unittest.TestCase):
                     "SELECT value FROM values_for_test"
                 ).fetchall()
             self.assertEqual(rows, [(1,)])
+            recovered.close()
+
+    def test_constructor_ledger_swap_never_writes_opened_victim(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            displaced_ledger = root / "trusted-ledger"
+            victim = root / "victim.txt"
+            database = PinnedSQLiteDatabase(database_path)
+            database.close()
+            victim.write_bytes(b"must-not-change")
+            victim.chmod(0o600)
+            victim_before = (victim.read_bytes(), victim.stat().st_mode & 0o777)
+            real_open = sqlite_safety._open_ledger_file
+
+            def open_swapped_ledger(parent_descriptor: int, name: str) -> int:
+                ledger_path.rename(displaced_ledger)
+                victim.rename(ledger_path)
+                try:
+                    return real_open(parent_descriptor, name)
+                finally:
+                    ledger_path.rename(victim)
+                    displaced_ledger.rename(ledger_path)
+
+            with (
+                patch.object(
+                    sqlite_safety,
+                    "_open_ledger_file",
+                    side_effect=open_swapped_ledger,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "ledger path was replaced"),
+            ):
+                PinnedSQLiteDatabase(database_path)
+
+            self.assertEqual(
+                (victim.read_bytes(), victim.stat().st_mode & 0o777),
+                victim_before,
+            )
+
+    def test_constructor_flock_swap_fails_before_state_mutation(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            displaced_lock = root / "trusted-lock"
+            victim = root / "victim.lock"
+            database = PinnedSQLiteDatabase(database_path)
+            database.close()
+            victim.write_bytes(b"")
+            victim.chmod(0o600)
+            database_before = database_path.read_bytes()
+            ledger_before = ledger_path.read_bytes()
+            victim_before = (victim.read_bytes(), victim.stat().st_mode & 0o777)
+            real_open = sqlite_safety._open_flock_file
+
+            def open_swapped_lock(
+                parent_descriptor: int,
+                name: str,
+                *,
+                create: bool = True,
+                writable: bool = True,
+            ) -> tuple[int, bool]:
+                lock_path.rename(displaced_lock)
+                victim.rename(lock_path)
+                try:
+                    return real_open(
+                        parent_descriptor,
+                        name,
+                        create=create,
+                        writable=writable,
+                    )
+                finally:
+                    lock_path.rename(victim)
+                    displaced_lock.rename(lock_path)
+
+            with (
+                patch.object(
+                    sqlite_safety,
+                    "_open_flock_file",
+                    side_effect=open_swapped_lock,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "lock path was replaced"),
+            ):
+                PinnedSQLiteDatabase(database_path)
+
+            self.assertEqual(database_path.read_bytes(), database_before)
+            self.assertEqual(ledger_path.read_bytes(), ledger_before)
+            self.assertEqual(
+                (victim.read_bytes(), victim.stat().st_mode & 0o777),
+                victim_before,
+            )
+
+    def test_constructor_database_swap_never_chmods_opened_victim(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            displaced_database = root / "trusted-database"
+            victim = root / "victim.txt"
+            database = PinnedSQLiteDatabase(database_path)
+            database.close()
+            victim.write_bytes(b"must-not-change")
+            victim.chmod(0o644)
+            victim_before = (victim.read_bytes(), victim.stat().st_mode & 0o777)
+            real_open = sqlite_safety._open_database_file
+
+            def open_swapped_database(
+                parent_descriptor: int,
+                name: str,
+                *,
+                create: bool,
+                writable: bool = True,
+            ) -> tuple[int, bool]:
+                if not create:
+                    return real_open(
+                        parent_descriptor,
+                        name,
+                        create=create,
+                        writable=writable,
+                    )
+                database_path.rename(displaced_database)
+                victim.rename(database_path)
+                try:
+                    return real_open(
+                        parent_descriptor,
+                        name,
+                        create=create,
+                        writable=writable,
+                    )
+                finally:
+                    database_path.rename(victim)
+                    displaced_database.rename(database_path)
+
+            with (
+                patch.object(
+                    sqlite_safety,
+                    "_open_database_file",
+                    side_effect=open_swapped_database,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "permissions must remain"),
+            ):
+                PinnedSQLiteDatabase(database_path)
+
+            self.assertEqual(
+                (victim.read_bytes(), victim.stat().st_mode & 0o777),
+                victim_before,
+            )
+
+    def test_indeterminate_initial_ledger_publication_remains_recoverable(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            real_replace = sqlite_safety._replace_ledger_generation
+
+            def publish_then_fail(
+                parent_descriptor: int,
+                name: str,
+                *,
+                expected: Any,
+                state: Any,
+            ) -> Any:
+                _ = real_replace(
+                    parent_descriptor,
+                    name,
+                    expected=expected,
+                    state=state,
+                )
+                raise OSError("simulated lost publication acknowledgement")
+
+            with (
+                patch.object(
+                    sqlite_safety,
+                    "_replace_ledger_generation",
+                    side_effect=publish_then_fail,
+                ),
+                self.assertRaisesRegex(OSError, "lost publication acknowledgement"),
+            ):
+                PinnedSQLiteDatabase(database_path)
+
+            self.assertTrue(database_path.exists())
+            self.assertTrue(ledger_path.exists())
+            self.assertTrue(lock_path.exists())
+            recovered = PinnedSQLiteDatabase(database_path)
+            with recovered.connect() as connection:
+                connection.execute("CREATE TABLE recovered (value INTEGER)")
             recovered.close()
 
     def test_rollback_failure_poison_closes_the_connection(self) -> None:

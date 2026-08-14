@@ -201,6 +201,46 @@ class AuditSafetyTests(unittest.TestCase):
                 before_ledger,
             )
 
+    def test_successful_verification_does_not_mutate_snapshot_files(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            ledger = root / ".audit.sqlite3.master-agent.lock"
+            lock = root / ".audit.sqlite3.master-agent.flock"
+            audit = AuditLog(database)
+            audit.record(
+                run_id=uuid4(),
+                plan_id=uuid4(),
+                action_id=None,
+                event_type="test",
+                payload={"safe": True},
+            )
+            audit.close()
+            paths = (database, ledger, lock)
+            before = {
+                path.name: (
+                    path.read_bytes(),
+                    path.stat().st_mode & 0o777,
+                    path.stat().st_mtime_ns,
+                    path.stat().st_ctime_ns,
+                )
+                for path in paths
+            }
+
+            valid, message = AuditLog.verify_existing(database)
+
+            after = {
+                path.name: (
+                    path.read_bytes(),
+                    path.stat().st_mode & 0o777,
+                    path.stat().st_mtime_ns,
+                    path.stat().st_ctime_ns,
+                )
+                for path in paths
+            }
+            self.assertTrue(valid, message)
+            self.assertEqual(after, before)
+
     def test_verification_does_not_recreate_a_missing_lock_ledger(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
