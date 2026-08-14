@@ -41,8 +41,9 @@ def capture_connector_executions(
     integrations: IntegrationConfig,
     *,
     environ: Mapping[str, str] | None = None,
+    require_trusted_principal: bool = True,
 ) -> tuple[CapturedConnectorExecution, ...]:
-    """Capture all enabled connector destinations and CA bytes exactly once."""
+    """Capture enabled destinations and, when required, trusted principals."""
 
     source = environ if environ is not None else os.environ
     captured: list[CapturedConnectorExecution] = []
@@ -61,7 +62,11 @@ def capture_connector_executions(
                     config_identity_sha256=target.config_identity,
                     resolved_base_url=target.base_url,
                     resolved_origin=_origin(target.base_url, system=config.system),
-                    credential_identity=config.credential_identity(source),
+                    credential_identity=(
+                        config.credential_identity(source)
+                        if require_trusted_principal
+                        else None
+                    ),
                     ca_bundle_path=(
                         str(ca_bundle.path) if ca_bundle is not None else None
                     ),

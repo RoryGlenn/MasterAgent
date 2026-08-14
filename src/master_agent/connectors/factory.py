@@ -109,7 +109,11 @@ def build_live_connectors(
     source = dict(environ if environ is not None else os.environ)
     selected = systems or set(_READ_SYSTEMS) | {"repository"}
     connectors: list[Connector] = []
-    captured = capture_connector_executions(config, environ=source)
+    captured = capture_connector_executions(
+        config,
+        environ=source,
+        require_trusted_principal=approved_execution_context is not None,
+    )
     if approved_execution_context is not None:
         _verify_approved_execution_context(
             config,

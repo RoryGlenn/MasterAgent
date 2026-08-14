@@ -43,6 +43,8 @@ Controls:
 
 - separate OAuth profiles by read/write/send purpose;
 - disabled defaults;
+- opaque bearer/delegated credentials fail closed for live applied execution
+  until a provider-verified principal or trusted broker attestation is available;
 - runtime + provider master + granular gates;
 - capability catalog required scopes;
 - delegated/application identity checks;

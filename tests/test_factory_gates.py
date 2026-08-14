@@ -142,7 +142,6 @@ deployment = "cloud"
 base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "bearer"
 secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
-credential_identity = "tenant-a:test-principal"
 identity_mode = "delegated"
 max_pages = 16
 write_enabled = {str(write_enabled).lower()}

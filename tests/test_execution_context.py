@@ -14,7 +14,11 @@ from unittest.mock import MagicMock, patch
 
 from master_agent.cli import main
 from master_agent.config import IntegrationConfig
-from master_agent.config_sources import ConfigSnapshot
+from master_agent.config_sources import (
+    ConfigSnapshot,
+    ConfigSource,
+    resolve_config_source,
+)
 from master_agent.connectors.factory import build_live_registry
 from master_agent.errors import ConfigurationError
 from master_agent.execution_context import (
@@ -26,7 +30,9 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    ConnectorExecutionBinding,
     DataClassification,
+    ExecutionContext,
     ResourceRef,
     RiskLevel,
 )
@@ -474,27 +480,200 @@ class ExecutionContextTests(unittest.TestCase):
             str((root / "repo-a").resolve()),
         )
 
-    def test_opaque_token_requires_explicit_non_secret_credential_identity(
-        self,
-    ) -> None:
+    def test_declared_alias_cannot_hide_an_opaque_token_swap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "integrations.toml"
-            path.write_text(_MICROSOFT_BEARER_CONFIG, encoding="utf-8")
-            integrations = IntegrationConfig.from_toml(path)
-            with self.assertRaisesRegex(ConfigurationError, "credential_identity"):
-                build_execution_context(integrations)
-
             path.write_text(
                 _MICROSOFT_BEARER_CONFIG
                 + '\ncredential_identity = "tenant-a:user-object-1"\n',
                 encoding="utf-8",
             )
-            declared = build_execution_context(IntegrationConfig.from_toml(path))
+            integrations = IntegrationConfig.from_toml(path)
+            for token in ("opaque-token-for-user-a", "opaque-admin-token"):
+                with (
+                    self.subTest(token=token),
+                    self.assertRaisesRegex(
+                        ConfigurationError,
+                        "no such adapter is implemented",
+                    ),
+                ):
+                    build_execution_context(
+                        integrations,
+                        environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": token},
+                    )
 
-        self.assertEqual(
-            declared.connectors[0].credential_identity,
-            "tenant-a:user-object-1",
-        )
+    def test_live_bind_rejects_declared_opaque_principal_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(
+                _MICROSOFT_BEARER_CONFIG
+                + '\ncredential_identity = "tenant-a:user-object-1"\n',
+                encoding="utf-8",
+            )
+            source_plan = root / "plan.json"
+            source_plan.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+            bound_plan = root / "bound.json"
+            stderr = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "opaque-user-token"},
+                ),
+                redirect_stderr(stderr),
+            ):
+                result = main(
+                    [
+                        "bind-context",
+                        str(source_plan),
+                        "--connector-mode",
+                        "live",
+                        "--integrations",
+                        str(integrations_path),
+                        "--output",
+                        str(bound_plan),
+                    ]
+                )
+            bound_was_written = bound_plan.exists()
+
+        self.assertEqual(result, 1)
+        self.assertIn("provider-verified principal", stderr.getvalue())
+        self.assertNotIn("opaque-user-token", stderr.getvalue())
+        self.assertFalse(bound_was_written)
+
+    def test_live_apply_rejects_legacy_alias_after_opaque_token_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(
+                _MICROSOFT_BEARER_CONFIG
+                + '\ncredential_identity = "tenant-a:user-object-1"\n',
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(integrations_path)
+            integrations_sha256 = integrations.source_sha256
+            self.assertIsNotNone(integrations_sha256)
+            assert integrations_sha256 is not None
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            runtime = build_runtime_execution_binding(
+                integrations,
+                connector_mode="live",
+                include_writes=False,
+                include_communications=False,
+                audit_database=database,
+                artifact_root=drafts,
+                workspace_root=None,
+                result_json=None,
+                evidence_type="run-result/full",
+                configuration_sources=_default_runtime_sources(),
+                environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "original-user-token"},
+            )
+            legacy_context = ExecutionContext(
+                integrations_sha256=integrations_sha256,
+                connectors=(
+                    ConnectorExecutionBinding(
+                        system="microsoft",
+                        deployment="cloud",
+                        config_identity_sha256=integrations.connector(
+                            "microsoft"
+                        ).identity,
+                        resolved_base_url="https://graph.microsoft.com/v1.0",
+                        resolved_origin="https://graph.microsoft.com",
+                        credential_identity="tenant-a:user-object-1",
+                    ),
+                ),
+                runtime=runtime,
+            )
+            plan_path = root / "legacy-bound-plan.json"
+            plan_path.write_text(
+                json.dumps(
+                    replace(_plan(), execution_context=legacy_context).to_dict()
+                ),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "swapped-admin-token"},
+                ),
+                patch("master_agent.cli.build_live_registry") as build_registry,
+                redirect_stderr(stderr),
+            ):
+                result = main(
+                    [
+                        "run",
+                        str(plan_path),
+                        "--apply",
+                        "--connector-mode",
+                        "live",
+                        "--integrations",
+                        str(integrations_path),
+                        "--database",
+                        str(database),
+                        "--draft-output-dir",
+                        str(drafts),
+                    ]
+                )
+
+        self.assertEqual(result, 1)
+        self.assertIn("trusted credential-broker attestation", stderr.getvalue())
+        self.assertNotIn("swapped-admin-token", stderr.getvalue())
+        build_registry.assert_not_called()
+
+    def test_every_opaque_live_credential_flow_requires_attestation(self) -> None:
+        configurations = {
+            "bearer": """
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+""",
+            "delegated environment": """
+auth_mode = "oauth_delegated"
+oauth_flow = "environment"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+""",
+            "delegated token file": """
+auth_mode = "oauth_delegated"
+oauth_flow = "token_file"
+token_file_env = "MASTER_AGENT_GRAPH_TOKEN_FILE"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+""",
+            "application environment": """
+auth_mode = "oauth_application"
+oauth_flow = "environment"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+""",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            for name, authentication in configurations.items():
+                with self.subTest(name=name):
+                    path.write_text(
+                        "[connectors.microsoft]\n"
+                        "enabled = true\n"
+                        'deployment = "cloud"\n'
+                        'base_url = "https://graph.microsoft.com/v1.0"\n'
+                        + authentication.strip()
+                        + '\ncredential_identity = "claimed-principal"\n',
+                        encoding="utf-8",
+                    )
+                    integrations = IntegrationConfig.from_toml(path)
+                    with self.assertRaisesRegex(
+                        ConfigurationError,
+                        "provider-verified principal",
+                    ):
+                        build_execution_context(integrations, environ={})
+
+    def test_disabled_default_opaque_connector_does_not_block_safe_context(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        integrations = IntegrationConfig.from_toml(root / "config/integrations.toml")
+
+        context = build_execution_context(integrations, environ={})
+
+        self.assertEqual(context.connectors, ())
 
     def test_entra_application_tenant_and_client_are_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -809,6 +988,20 @@ def _runtime_sources(root: Path, *, suffix: str) -> dict[str, ConfigSnapshot]:
             payload=f"{name}:{suffix}\n".encode(),
         )
         for name in names
+    }
+
+
+def _default_runtime_sources() -> dict[str, ConfigSource]:
+    return {
+        name: resolve_config_source(None, f"{name}.toml")
+        for name in (
+            "policy",
+            "sources_of_truth",
+            "capabilities",
+            "governance",
+            "identities",
+            "retention",
+        )
     }
 
 

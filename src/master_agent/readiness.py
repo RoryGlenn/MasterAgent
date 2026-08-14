@@ -95,7 +95,15 @@ def assess_readiness(
         if not connector.enabled:
             continue
         enabled_connectors += 1
-        connector_errors = connector.configuration_errors(environ)
+        attestation_error = connector.principal_attestation_error()
+        connector_errors = tuple(
+            dict.fromkeys(
+                (
+                    *connector.configuration_errors(environ),
+                    *((attestation_error,) if attestation_error is not None else ()),
+                )
+            )
+        )
         checks.append(
             {
                 "name": f"connector:{name}",

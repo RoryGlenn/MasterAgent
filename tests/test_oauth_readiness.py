@@ -58,6 +58,39 @@ class OAuthReadinessTests(unittest.TestCase):
         )
         self.assertTrue(report.ready, report.errors)
         self.assertTrue(any("not connected" in item for item in report.warnings))
+        self.assertFalse(any("principal" in item for item in report.errors))
+
+    def test_enabled_opaque_connector_reports_missing_principal_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "oauth_delegated"
+oauth_flow = "environment"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+credential_identity = "tenant-a:claimed-user"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "opaque-token"},
+            )
+
+        rendered = "\n".join(report.errors)
+        self.assertFalse(report.ready)
+        self.assertIn("trusted credential-broker attestation", rendered)
+        self.assertIn("no such adapter is implemented", rendered)
+        self.assertNotIn("opaque-token", rendered)
 
     def test_enabled_profile_reports_only_variable_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

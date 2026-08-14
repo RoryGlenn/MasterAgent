@@ -205,7 +205,7 @@ Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI do
 ## Exact-plan approvals
 
 Before approving an applied plan, bind the complete runtime manifest into it.
-The manifest covers integrations and credential principals, resolved
+The manifest covers integrations and flow-enforced credential identities, resolved
 destinations and CA bundles, policy/source/capability/governance/identity and
 retention snapshots, connector gates, filesystem roots, audit database, and
 retained-result destination:
@@ -229,12 +229,14 @@ master-agent bind-context change-plan.json \
   --output bound-change-plan.json
 ```
 
-Every corresponding `run --apply` argument must match. Opaque bearer or
-delegated credentials must declare a reviewed, non-secret
-`credential_identity` in `integrations.toml`; Basic usernames and Entra
-application tenant/client IDs are derived and bound automatically. Credential
-secrets and token bytes are never fingerprinted, so ordinary rotation remains
-possible within the approved principal identity.
+Every corresponding `run --apply` argument must match. Basic usernames and
+Entra client-credential tenant/client IDs are derived and bound automatically;
+their password, API-token, or client-secret bytes are never fingerprinted, so
+ordinary rotation remains possible for the same flow-enforced identity. Opaque
+bearer, delegated, token-file, and application-environment tokens are rejected
+for live applied execution: a configured identity label is not attestation.
+Those flows require a provider-verified principal or a trusted credential-broker
+adapter, neither of which is currently implemented.
 
 Inspect the bound plan and its new fingerprint:
 

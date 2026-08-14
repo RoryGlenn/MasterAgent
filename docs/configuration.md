@@ -32,13 +32,16 @@ TOML contains environment-variable **names**, never secret values. The runtime r
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
 
-Exact-plan binding records the non-secret credential principal, not the token
-or password. Basic usernames and Entra client-credential tenant/client IDs are
-derived from their configured environment variables. Opaque bearer and
-delegated credentials require an explicit reviewed `credential_identity` in
-the connector table (for example, a tenant ID plus provider object ID or UPN).
-Changing that identity invalidates the approved execution context while normal
-secret rotation for the same identity remains possible.
+Exact-plan binding records a flow-enforced non-secret credential identity, not
+the token or password. Basic usernames and Entra client-credential tenant/client
+IDs are derived from their configured environment variables. Their secrets may
+rotate without changing the bound identity. Opaque bearer, delegated,
+token-file, and application-environment tokens cannot prove their principal to
+this runtime. Both `bind-context --connector-mode live` and live `run --apply`
+therefore reject them even if configuration supplies a claimed identity label.
+A provider-verified principal or trusted
+credential-broker attestation adapter is required before those flows can be
+used for applied execution.
 
 ## Applied-run manifest
 
