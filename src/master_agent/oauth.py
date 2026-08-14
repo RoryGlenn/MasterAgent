@@ -409,7 +409,9 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
     try:
         directory_fd = os.open(parent, directory_flags)
     except OSError as error:
-        raise AuthenticationError("token directory could not be opened safely") from error
+        raise AuthenticationError(
+            "token directory could not be opened safely"
+        ) from error
 
     parent_open = os.fstat(directory_fd)
     try:

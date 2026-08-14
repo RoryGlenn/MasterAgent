@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -59,9 +59,7 @@ class SourceOfTruthRegistry:
                     canonical_uri=(
                         f"{item['canonical_system']}:{item['canonical_resource_id']}"
                     ),
-                    projection_uris=frozenset(
-                        str(uri) for uri in item["projections"]
-                    ),
+                    projection_uris=frozenset(str(uri) for uri in item["projections"]),
                     direction=direction,
                     canonical_capabilities=canonical_capabilities,
                     projection_capabilities=projection_capabilities,

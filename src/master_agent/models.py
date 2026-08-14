@@ -719,16 +719,14 @@ class _FrozenMapping(Mapping[str, Any]):
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Mapping) and dict(self.items()) == dict(other.items())
 
-    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenMapping":
+    def __deepcopy__(self, _memo: dict[int, Any]) -> _FrozenMapping:
         return self
 
 
 def _reject_control_characters(value: str, name: str) -> None:
     """Reject terminal-control bytes from fields rendered during approval."""
 
-    if any(
-        ord(character) < 32 or 127 <= ord(character) <= 159 for character in value
-    ):
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
         raise ValidationError(f"{name} must not contain control characters")
 
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from master_agent.errors import AuthenticationError
 from master_agent.oauth import (
@@ -174,10 +174,13 @@ class OAuthFlowTests(unittest.TestCase):
                 parent.symlink_to(attacker, target_is_directory=True)
                 return "fixed-race-name"
 
-            with patch(
-                "master_agent.oauth.secrets.token_hex",
-                side_effect=swap_parent,
-            ), self.assertRaisesRegex(AuthenticationError, "directory changed"):
+            with (
+                patch(
+                    "master_agent.oauth.secrets.token_hex",
+                    side_effect=swap_parent,
+                ),
+                self.assertRaisesRegex(AuthenticationError, "directory changed"),
+            ):
                 write_token_file(parent / "graph-token.json", token)
 
             self.assertFalse((attacker / "graph-token.json").exists())

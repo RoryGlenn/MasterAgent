@@ -126,7 +126,10 @@ class GitSandbox:
         expected_git_dir = git_entry.resolve()
         if observed_git_dir != expected_git_dir:
             raise ConnectorError("Git metadata is outside the approved repository")
-        if self.run(repository, ("rev-parse", "--is-bare-repository")).stdout.strip() != "false":
+        if (
+            self.run(repository, ("rev-parse", "--is-bare-repository")).stdout.strip()
+            != "false"
+        ):
             raise ConnectorError("bare Git repositories are not approved workspaces")
 
     def reject_path_filters(self, repository: Path, paths: Sequence[str]) -> None:

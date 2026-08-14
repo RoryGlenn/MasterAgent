@@ -223,7 +223,9 @@ class GitWorkspaceConnector(CompensatingConnector):
         elif action.capability == "repository.commit.create":
             current_branch = self._current_branch(workspace)
             if not current_branch:
-                raise ConnectorError("detached-HEAD commits require manual compensation")
+                raise ConnectorError(
+                    "detached-HEAD commits require manual compensation"
+                )
             _branch(current_branch, allow_protected=True)
             self._git(
                 workspace,
@@ -247,7 +249,9 @@ class GitWorkspaceConnector(CompensatingConnector):
             "head": self._head(workspace),
             "branch": self._current_branch(workspace),
             "worktree_status_sha256": observed_status,
-            "worktree_clean": not bool(self._git(workspace, "status", "--porcelain").stdout.strip()),
+            "worktree_clean": not bool(
+                self._git(workspace, "status", "--porcelain").stdout.strip()
+            ),
             "deleted_branch": created_branch or None,
         }
         return ExecutionResult(
@@ -473,7 +477,11 @@ class GitWorkspaceConnector(CompensatingConnector):
             )
         message = _required(action.parameters, "message")
         paths = action.parameters.get("paths")
-        if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or not paths:
+        if (
+            not isinstance(paths, Sequence)
+            or isinstance(paths, (str, bytes))
+            or not paths
+        ):
             raise ConnectorError("commit paths must be a non-empty list")
         normalized = tuple(_relative_path(str(item)) for item in paths)
         if len(normalized) != len(set(normalized)):

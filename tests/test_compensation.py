@@ -89,7 +89,9 @@ class CompensationPlanTests(unittest.TestCase):
         self.assertTrue(reverse.requires_approval)
         self.assertEqual(reverse.authority_source, AuthoritySource.DIRECT_USER)
 
-    def test_mixed_compensation_modes_fail_instead_of_returning_partial_plan(self) -> None:
+    def test_mixed_compensation_modes_fail_instead_of_returning_partial_plan(
+        self,
+    ) -> None:
         planned = _action("planned")
         in_process = _action("in-process")
         original = ChangePlan(
@@ -129,9 +131,15 @@ def _report(action: AgentAction, mode: CompensationMode) -> ActionReport:
     descriptor = CompensationDescriptor(
         kind="restore_previous_value",
         mode=mode,
-        capability=("example.resource.restore" if mode is CompensationMode.PLAN else None),
+        capability=(
+            "example.resource.restore" if mode is CompensationMode.PLAN else None
+        ),
         parameters={"value": "old"},
-        reason=("requires originating connector" if mode is not CompensationMode.PLAN else None),
+        reason=(
+            "requires originating connector"
+            if mode is not CompensationMode.PLAN
+            else None
+        ),
     )
     return ActionReport(
         action_id=action.action_id,
