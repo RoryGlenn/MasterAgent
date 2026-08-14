@@ -7,6 +7,7 @@ code only from a private snapshot of the locked distribution artifacts.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import importlib
 import json
@@ -75,7 +76,7 @@ class PluginDescriptor:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "PluginDescriptor":
+    def from_dict(cls, data: Mapping[str, Any]) -> PluginDescriptor:
         """Parse and authenticate one descriptor from an operator lock."""
 
         supplied_identity = str(data.get("identity_sha256", ""))
@@ -147,7 +148,7 @@ class PluginLock:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "PluginLock":
+    def from_dict(cls, data: Mapping[str, Any]) -> PluginLock:
         """Parse a strict plugin lock object."""
 
         raw_plugins = data.get("plugins")
@@ -161,7 +162,7 @@ class PluginLock:
         )
 
     @classmethod
-    def from_json(cls, source: ConfigSource) -> "PluginLock":
+    def from_json(cls, source: ConfigSource) -> PluginLock:
         """Read a plugin lock without importing any plugin modules."""
 
         try:
@@ -485,6 +486,10 @@ def _load_from_verified_snapshot(
     is_new = snapshot is None
     if snapshot is None:
         temporary_directory = tempfile.TemporaryDirectory(prefix="master-agent-plugin-")
+        # Keep loaded plugin modules available for the lifetime of the process,
+        # but explicitly clean their private snapshot before weakref's fallback
+        # finalizer emits a ResourceWarning during interpreter shutdown.
+        atexit.register(temporary_directory.cleanup)
         snapshot = _PluginSnapshot(
             temporary_directory=temporary_directory,
             root=Path(temporary_directory.name).resolve(),
@@ -553,9 +558,10 @@ def _snapshot_contains_module(root: Path, module_name: str) -> bool:
     module_files.extend(
         Path(f"{root / module_path}{suffix}") for suffix in machinery.EXTENSION_SUFFIXES
     )
-    return any(path.is_file() for path in module_files) or (
-        root / module_path / "__init__.py"
-    ).is_file()
+    return (
+        any(path.is_file() for path in module_files)
+        or (root / module_path / "__init__.py").is_file()
+    )
 
 
 def _reject_cached_module_outside_snapshot(module_name: str, root: Path) -> None:

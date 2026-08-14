@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.metadata as metadata
 import os
 import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 from master_agent.connectors.mock import MockConnector

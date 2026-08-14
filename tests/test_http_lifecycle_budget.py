@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
-from master_agent.errors import ConnectorError
+from master_agent.errors import PreEffectError
 from master_agent.http import SafeHttpClient
 from master_agent.models import (
     ActionState,
@@ -52,7 +52,7 @@ class _LifecycleConnector:
 
     def execute(self, action: AgentAction) -> ExecutionResult:
         if action.target.resource_id == "fail":
-            raise ConnectorError("injected second-action failure")
+            raise PreEffectError("injected second-action failure")
         self._client.request_json(
             "GET" if action.risk is RiskLevel.READ_ONLY else "POST",
             f"{action.target.resource_id}/execute",

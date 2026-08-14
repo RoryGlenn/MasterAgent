@@ -46,21 +46,23 @@ class ExecutionContextTests(unittest.TestCase):
             )
             bound_plan = root / "bound-plan.json"
 
-            with patch.dict(
-                os.environ,
-                {"MASTER_AGENT_JIRA_BASE_URL": "https://tenant-a.atlassian.net"},
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_JIRA_BASE_URL": "https://tenant-a.atlassian.net"},
+                ),
+                redirect_stdout(io.StringIO()),
             ):
-                with redirect_stdout(io.StringIO()):
-                    result = main(
-                        [
-                            "bind-context",
-                            str(source_plan),
-                            "--integrations",
-                            str(integrations_path),
-                            "--output",
-                            str(bound_plan),
-                        ]
-                    )
+                result = main(
+                    [
+                        "bind-context",
+                        str(source_plan),
+                        "--integrations",
+                        str(integrations_path),
+                        "--output",
+                        str(bound_plan),
+                    ]
+                )
             self.assertEqual(result, 0)
 
             error_output = io.StringIO()
@@ -147,7 +149,9 @@ class ExecutionContextTests(unittest.TestCase):
                         0,
                     )
 
-                def change_origin(*_args: object, **_kwargs: object) -> ConnectorRegistry:
+                def change_origin(
+                    *_args: object, **_kwargs: object
+                ) -> ConnectorRegistry:
                     os.environ["MASTER_AGENT_JIRA_BASE_URL"] = (
                         "https://tenant-b.atlassian.net"
                     )
