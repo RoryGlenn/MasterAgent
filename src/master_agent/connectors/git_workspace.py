@@ -50,6 +50,7 @@ class _LockedRepositoryIndex:
         self._head_lock_identity: tuple[int, int] | None = None
         self._prepared = False
         self._installed = False
+        self._head_installed = False
 
     def __enter__(self) -> Self:
         try:
@@ -195,6 +196,45 @@ class _LockedRepositoryIndex:
         self._installed = True
         os.fsync(self._directory_fd)
 
+    def install_symbolic_head(self, branch: str) -> None:
+        """Atomically install a reviewed symbolic HEAD without checking out files."""
+
+        if self._head_lock_fd < 0:
+            raise ConnectorError("repository HEAD lock is unavailable")
+        payload = f"ref: refs/heads/{branch}\n".encode("ascii")
+        self._validate_paths()
+        try:
+            os.ftruncate(self._head_lock_fd, 0)
+            os.lseek(self._head_lock_fd, 0, os.SEEK_SET)
+            remaining = memoryview(payload)
+            while remaining:
+                written = os.write(self._head_lock_fd, remaining)
+                if written <= 0:
+                    raise ConnectorError("repository symbolic HEAD write failed")
+                remaining = remaining[written:]
+            os.fsync(self._head_lock_fd)
+            self._validate_paths()
+            os.close(self._head_lock_fd)
+            self._head_lock_fd = -1
+            os.replace(
+                "HEAD.lock",
+                "HEAD",
+                src_dir_fd=self._directory_fd,
+                dst_dir_fd=self._directory_fd,
+            )
+            self._head_installed = True
+            os.fsync(self._directory_fd)
+        except OSError as error:
+            raise ConnectorError(
+                "repository symbolic HEAD publication failed"
+            ) from error
+
+    @property
+    def head_installed(self) -> bool:
+        """Return whether the reviewed symbolic HEAD replacement became visible."""
+
+        return self._head_installed
+
     def validate_head(self) -> None:
         """Prove HEAD still names the exact branch pinned at lock acquisition."""
 
@@ -299,6 +339,172 @@ class _LockedRepositoryIndex:
                     raise ConnectorError("Git index write failed")
                 view = view[written:]
             remaining -= len(chunk)
+
+
+class _LockedLooseBranchRef:
+    """Pin one exact loose branch ref while its conventional lock is held."""
+
+    def __init__(self, workspace: Path, *, branch: str, expected_oid: str) -> None:
+        self._git_path = workspace / ".git"
+        self._parts = ("refs", "heads", *Path(branch).parts)
+        self._expected = f"{expected_oid}\n".encode("ascii")
+        self._directory_fds: list[int] = []
+        self._directory_chain: list[tuple[int, str, tuple[int, int]]] = []
+        self._ref_fd = -1
+        self._lock_fd = -1
+        self._ref_identity: tuple[int, int] | None = None
+        self._lock_identity: tuple[int, int] | None = None
+
+    def __enter__(self) -> Self:
+        try:
+            root_metadata = self._git_path.lstat()
+            if not stat.S_ISDIR(root_metadata.st_mode):
+                raise VersionConflictError("repository Git metadata changed")
+            root_fd = os.open(
+                self._git_path,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            self._directory_fds.append(root_fd)
+            if _identity(os.fstat(root_fd)) != _identity(root_metadata):
+                raise VersionConflictError("repository Git metadata changed")
+            current_fd = root_fd
+            for part in self._parts[:-1]:
+                child_fd = os.open(
+                    part,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=current_fd,
+                )
+                metadata = os.fstat(child_fd)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise VersionConflictError(
+                        "repository branch ref directory changed"
+                    )
+                self._directory_chain.append((current_fd, part, _identity(metadata)))
+                self._directory_fds.append(child_fd)
+                current_fd = child_fd
+            leaf = self._parts[-1]
+            self._lock_fd = os.open(
+                f"{leaf}.lock",
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=current_fd,
+            )
+            lock_metadata = os.fstat(self._lock_fd)
+            self._lock_identity = _identity(lock_metadata)
+            if (
+                not stat.S_ISREG(lock_metadata.st_mode)
+                or lock_metadata.st_nlink != 1
+                or lock_metadata.st_uid != os.geteuid()
+            ):
+                raise VersionConflictError("repository branch ref lock is not a file")
+            self._ref_fd = os.open(
+                leaf,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_fd,
+            )
+            ref_metadata = os.fstat(self._ref_fd)
+            self._ref_identity = _identity(ref_metadata)
+            if (
+                not stat.S_ISREG(ref_metadata.st_mode)
+                or ref_metadata.st_nlink != 1
+                or ref_metadata.st_uid != os.geteuid()
+                or _read_fd(self._ref_fd, len(self._expected) + 1) != self._expected
+            ):
+                raise VersionConflictError("repository branch ref changed")
+            return self
+        except FileExistsError as error:
+            self.close()
+            raise VersionConflictError("repository branch ref is busy") from error
+        except ConnectorError:
+            self.close()
+            raise
+        except OSError as error:
+            self.close()
+            raise ConnectorError("repository branch ref could not be pinned") from error
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def validate(self) -> None:
+        """Prove the exact branch ref, directory chain, and lock remain pinned."""
+
+        if (
+            self._ref_fd < 0
+            or self._ref_identity is None
+            or self._lock_identity is None
+            or not self._directory_fds
+        ):
+            raise VersionConflictError("repository branch ref lock is unavailable")
+        try:
+            for parent_fd, name, identity in self._directory_chain:
+                metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or _identity(metadata) != identity
+                ):
+                    raise VersionConflictError(
+                        "repository branch ref directory changed"
+                    )
+            parent_fd = self._directory_fds[-1]
+            leaf = self._parts[-1]
+            ref_metadata = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+            lock_metadata = os.stat(
+                f"{leaf}.lock",
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise VersionConflictError("repository branch ref changed") from error
+        if (
+            _identity(ref_metadata) != self._ref_identity
+            or _identity(lock_metadata) != self._lock_identity
+            or ref_metadata.st_nlink != 1
+            or lock_metadata.st_nlink != 1
+            or _read_fd(self._ref_fd, len(self._expected) + 1) != self._expected
+        ):
+            raise VersionConflictError("repository branch ref changed")
+
+    def close(self) -> None:
+        """Release only the exact branch lock created by this guard."""
+
+        if self._ref_fd >= 0:
+            os.close(self._ref_fd)
+            self._ref_fd = -1
+        if self._lock_fd >= 0:
+            os.close(self._lock_fd)
+            self._lock_fd = -1
+        if self._directory_fds:
+            parent_fd = self._directory_fds[-1]
+            leaf = self._parts[-1]
+            if self._lock_identity is not None:
+                try:
+                    metadata = os.stat(
+                        f"{leaf}.lock",
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    metadata = None
+                if metadata is not None and _identity(metadata) == self._lock_identity:
+                    try:
+                        os.unlink(f"{leaf}.lock", dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
+            for directory_fd in reversed(self._directory_fds):
+                os.close(directory_fd)
+            self._directory_fds.clear()
 
 
 def _identity(metadata: os.stat_result) -> tuple[int, int]:
@@ -601,86 +807,98 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise ConnectorError("branch compensation metadata is incomplete")
         _branch(created_branch)
         _branch(previous_branch, allow_protected=True)
-        if self._current_branch(workspace) != created_branch:
-            raise VersionConflictError("created branch is no longer checked out")
-        if self._head(workspace) != created_head:
-            raise VersionConflictError("created branch advanced after creation")
-        previous_ref = self._git(
+        with _LockedRepositoryIndex(
             workspace,
-            "rev-parse",
-            f"refs/heads/{previous_branch}",
-        ).stdout.strip()
-        if previous_ref != previous_head:
-            raise VersionConflictError("previous branch advanced after branch creation")
-        self._git(
-            workspace,
-            "symbolic-ref",
-            "-m",
-            "rollback: restore prior branch",
-            "HEAD",
-            f"refs/heads/{previous_branch}",
-        )
-        try:
-            validate_config()
+            expected_branch=created_branch,
+        ) as repository_state:
+            if self._current_branch(workspace) != created_branch:
+                raise VersionConflictError("created branch is no longer checked out")
+            if self._head(workspace) != created_head:
+                raise VersionConflictError("created branch advanced after creation")
+            previous_ref = self._git(
+                workspace,
+                "rev-parse",
+                f"refs/heads/{previous_branch}",
+            ).stdout.strip()
+            if previous_ref != previous_head:
+                raise VersionConflictError(
+                    "previous branch advanced after branch creation"
+                )
             if expected_status and self._status_digest(workspace) != expected_status:
                 raise VersionConflictError(
                     "Git worktree changed during compensation; created branch was retained"
                 )
-            self._git(
+            repository_state.validate_head()
+            head_reason = f"checkout: moving from {created_branch} to {previous_branch}"
+            head_record = (created_head, previous_head, head_reason)
+            rollback_reason = "rollback: retain created branch"
+            head_recorded = False
+            branch_deleted = False
+            with self._sandbox.isolated_head_reflog_transaction(
                 workspace,
-                "update-ref",
-                "-d",
-                f"refs/heads/{created_branch}",
-                created_head,
-            )
-            validate_config()
-        except ConnectorError:
-            self._restore_created_branch_ref(
-                workspace,
-                created_branch=created_branch,
-                created_head=created_head,
-            )
-            raise
+                branch=created_branch,
+            ) as head_transaction:
+                try:
+                    self._git_head_reflog_transaction(
+                        head_transaction.git_dir,
+                        head_reason,
+                        previous_branch,
+                    )
+                    head_recorded = True
+                    head_transaction.validate_records((head_record,))
+                    validate_config()
+                    repository_state.validate_head()
+                    if (
+                        self._head(workspace) != created_head
+                        or self._current_branch(workspace) != created_branch
+                        or (
+                            expected_status
+                            and self._status_digest(workspace) != expected_status
+                        )
+                    ):
+                        raise VersionConflictError(
+                            "repository branch, HEAD, index, or worktree changed during compensation"
+                        )
+                    self._git_delete_ref_transaction(
+                        head_transaction.git_dir,
+                        "rollback: remove exact created branch",
+                        f"refs/heads/{created_branch}",
+                        created_head,
+                    )
+                    branch_deleted = True
+                    validate_config()
+                    repository_state.validate_head()
+                    repository_state.install_symbolic_head(previous_branch)
+                except ConnectorError:
+                    if not repository_state.head_installed:
+                        try:
+                            if branch_deleted:
+                                self._git_ref_transaction(
+                                    head_transaction.git_dir,
+                                    rollback_reason,
+                                    f"refs/heads/{created_branch}",
+                                    created_head,
+                                    "0" * len(created_head),
+                                )
+                            records: tuple[tuple[str, str, str], ...] = ()
+                            if head_recorded:
+                                self._git_head_reflog_transaction(
+                                    head_transaction.git_dir,
+                                    rollback_reason,
+                                    created_branch,
+                                )
+                                records = (
+                                    head_record,
+                                    (previous_head, created_head, rollback_reason),
+                                )
+                            head_transaction.validate_records(records)
+                        except ConnectorError as rollback_error:
+                            raise ConnectorError(
+                                "branch compensation metadata changed and restoration "
+                                "could not be confirmed"
+                            ) from rollback_error
+                    raise
         return created_branch
-
-    def _restore_created_branch_ref(
-        self,
-        workspace: Path,
-        *,
-        created_branch: str,
-        created_head: str,
-    ) -> None:
-        """Restore an unchanged created branch and HEAD without checking out files."""
-
-        observed = self._sandbox.run(
-            workspace,
-            (
-                "rev-parse",
-                "--verify",
-                f"refs/heads/{created_branch}",
-            ),
-            check=False,
-        )
-        if observed.returncode != 0:
-            self._git(
-                workspace,
-                "update-ref",
-                f"refs/heads/{created_branch}",
-                created_head,
-                "0" * len(created_head),
-            )
-        elif observed.stdout.strip() != created_head:
-            raise VersionConflictError(
-                "created branch changed while compensation was being restored"
-            )
-        self._git(
-            workspace,
-            "symbolic-ref",
-            "-m",
-            "rollback: retain created branch",
-            "HEAD",
-            f"refs/heads/{created_branch}",
-        )
 
     def _patch_payload(self, action: AgentAction) -> bytes:
         """Read and revalidate the exact approval-bound patch bytes."""
@@ -742,50 +960,101 @@ class GitWorkspaceConnector(CompensatingConnector):
         with self._sandbox.lock_repository_config(workspace) as config_guard:
             self._sandbox.validate_repository_config(workspace)
             config_guard.validate()
-            if (
-                self._head(workspace) != current_head
-                or self._current_branch(workspace) != current_branch
-            ):
-                raise VersionConflictError(
-                    "repository branch or HEAD changed before branch creation"
-                )
-            switched = False
-            try:
-                # The start point is the already checked-out commit. Git only
-                # creates the new ref and changes symbolic HEAD; it never has a
-                # reason to materialize worktree files through repository filters.
-                self._git(workspace, "switch", "-c", branch, current_head)
-                switched = True
-                config_guard.validate()
-                post_status = self._status_digest(workspace)
-                config_guard.validate()
-            except ConnectorError:
-                if switched:
+            with _LockedRepositoryIndex(
+                workspace,
+                expected_branch=current_branch,
+            ) as repository_state:
+                if (
+                    self._head(workspace) != current_head
+                    or self._current_branch(workspace) != current_branch
+                    or self._status_digest(workspace)
+                    != before["worktree_status_sha256"]
+                ):
+                    raise VersionConflictError(
+                        "repository branch, HEAD, index, or worktree changed before branch creation"
+                    )
+                repository_state.validate_head()
+                head_reason = f"checkout: moving from {current_branch} to {branch}"
+                head_record = (current_head, current_head, head_reason)
+                rollback_reason = "rollback: branch creation metadata changed"
+                branch_created = False
+                head_recorded = False
+                with self._sandbox.isolated_head_reflog_transaction(
+                    workspace,
+                    branch=current_branch,
+                ) as head_transaction:
                     try:
-                        self._git(
-                            workspace,
-                            "symbolic-ref",
-                            "-m",
-                            "rollback: branch creation metadata changed",
-                            "HEAD",
-                            f"refs/heads/{current_branch}",
-                        )
-                        self._git(
-                            workspace,
-                            "update-ref",
-                            "-d",
+                        self._git_ref_transaction(
+                            head_transaction.git_dir,
+                            f"branch: Created from {current_branch}",
                             f"refs/heads/{branch}",
                             current_head,
+                            "0" * len(current_head),
                         )
-                    except ConnectorError as rollback_error:
-                        raise ConnectorError(
-                            "branch creation metadata changed and restoration could "
-                            "not be confirmed"
-                        ) from rollback_error
-                raise
+                        branch_created = True
+                        with _LockedLooseBranchRef(
+                            workspace,
+                            branch=branch,
+                            expected_oid=current_head,
+                        ) as branch_ref:
+                            self._git_head_reflog_transaction(
+                                head_transaction.git_dir,
+                                head_reason,
+                                branch,
+                            )
+                            head_recorded = True
+                            head_transaction.validate_records((head_record,))
+                            config_guard.validate()
+                            repository_state.validate_head()
+                            branch_ref.validate()
+                            if (
+                                self._head(workspace) != current_head
+                                or self._current_branch(workspace) != current_branch
+                                or self._status_digest(workspace)
+                                != before["worktree_status_sha256"]
+                            ):
+                                raise VersionConflictError(
+                                    "repository branch, HEAD, index, or worktree changed during branch creation"
+                                )
+                            config_guard.validate()
+                            repository_state.validate_head()
+                            branch_ref.validate()
+                            repository_state.install_symbolic_head(branch)
+                    except ConnectorError:
+                        if branch_created and not repository_state.head_installed:
+                            try:
+                                records: tuple[tuple[str, str, str], ...] = ()
+                                if head_recorded:
+                                    self._git_head_reflog_transaction(
+                                        head_transaction.git_dir,
+                                        rollback_reason,
+                                        current_branch,
+                                    )
+                                    records = (
+                                        head_record,
+                                        (
+                                            current_head,
+                                            current_head,
+                                            rollback_reason,
+                                        ),
+                                    )
+                                head_transaction.validate_records(records)
+                                self._git_delete_ref_transaction(
+                                    head_transaction.git_dir,
+                                    rollback_reason,
+                                    f"refs/heads/{branch}",
+                                    current_head,
+                                )
+                            except ConnectorError as rollback_error:
+                                raise ConnectorError(
+                                    "branch creation metadata changed and restoration "
+                                    "could not be confirmed"
+                                ) from rollback_error
+                        raise
+                post_status = before["worktree_status_sha256"]
         after = {
             "branch": branch,
-            "head": self._head(workspace),
+            "head": current_head,
             "base": base,
             "base_hash": base_hash,
             "worktree_status_sha256": post_status,
@@ -1306,6 +1575,52 @@ class GitWorkspaceConnector(CompensatingConnector):
                 ref,
                 new_oid,
                 old_oid,
+            ),
+            bare_repository=True,
+        )
+
+    def _git_delete_ref_transaction(
+        self,
+        git_dir: Path,
+        reason: str,
+        ref: str,
+        old_oid: str,
+    ) -> SandboxedGitResult:
+        """Delete one exact common ref through trusted private Git metadata."""
+
+        return self._sandbox.run(
+            git_dir,
+            (
+                "--git-dir",
+                str(git_dir),
+                "update-ref",
+                "-m",
+                reason,
+                "-d",
+                ref,
+                old_oid,
+            ),
+            bare_repository=True,
+        )
+
+    def _git_head_reflog_transaction(
+        self,
+        git_dir: Path,
+        reason: str,
+        branch: str,
+    ) -> SandboxedGitResult:
+        """Move only a trusted private symbolic HEAD and append its linked reflog."""
+
+        return self._sandbox.run(
+            git_dir,
+            (
+                "--git-dir",
+                str(git_dir),
+                "symbolic-ref",
+                "-m",
+                reason,
+                "HEAD",
+                f"refs/heads/{branch}",
             ),
             bare_repository=True,
         )

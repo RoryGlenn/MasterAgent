@@ -82,6 +82,48 @@ class IsolatedRefTransaction:
 
 
 @dataclass(frozen=True, slots=True)
+class IsolatedHeadReflogTransaction:
+    """Trusted private symbolic HEAD linked to the pinned source HEAD reflog."""
+
+    git_dir: Path
+    source_head_log: Path
+    head_log_identity: tuple[int, int]
+    head_log_before: bytes
+
+    def validate_records(
+        self,
+        records: Sequence[tuple[str, str, str]] = (),
+    ) -> None:
+        """Prove exact symbolic-HEAD records reached the pinned source reflog."""
+
+        try:
+            source_metadata = self.source_head_log.lstat()
+            linked_metadata = (self.git_dir / "logs" / "HEAD").lstat()
+        except FileNotFoundError as error:
+            raise ConnectorError("repository HEAD reflog identity changed") from error
+        if (
+            not stat.S_ISREG(source_metadata.st_mode)
+            or _identity(source_metadata) != self.head_log_identity
+            or _identity(linked_metadata) != self.head_log_identity
+            or source_metadata.st_nlink != 2
+        ):
+            raise ConnectorError("repository HEAD reflog identity changed")
+        head_bytes = _read_path_bounded(
+            self.source_head_log,
+            maximum_bytes=_MAX_REFLOG_BYTES,
+            label="repository HEAD reflog",
+            expected_identity=self.head_log_identity,
+            expected_links=2,
+        )
+        suffix = head_bytes[len(self.head_log_before) :]
+        if not head_bytes.startswith(self.head_log_before) or not _valid_reflog_records(
+            suffix,
+            records,
+        ):
+            raise ConnectorError("repository HEAD reflog transaction record is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class IsolatedWorktreeSnapshot:
     """Trusted Git metadata and private index for worktree inspection."""
 
@@ -626,6 +668,79 @@ class GitSandbox:
                 source_branch_log=branch_log,
                 branch_log_identity=_identity(branch_log_metadata),
                 branch_log_before=branch_log_before,
+            )
+            transaction.validate_records()
+            yield transaction
+
+    @contextmanager
+    def isolated_head_reflog_transaction(
+        self,
+        source: Path,
+        *,
+        branch: str,
+    ) -> Iterator[IsolatedHeadReflogTransaction]:
+        """Yield a private symbolic HEAD sharing only the pinned source HEAD log.
+
+        The caller holds the source ``HEAD.lock`` and ``index.lock``. Symbolic
+        HEAD can therefore move in trusted temporary metadata without touching
+        the source worktree while Git appends an exact record to the real HEAD
+        reflog through a verified hard link.
+        """
+
+        common = (source / ".git").resolve()
+        if any(character in str(common) for character in ("\n", "\r", "\0")):
+            raise ConnectorError("repository Git metadata path is invalid")
+        head_log = common / "logs" / "HEAD"
+        if head_log.parent.resolve() != head_log.parent:
+            raise ConnectorError(
+                "repository HEAD reflog directory cannot be a symbolic link"
+            )
+        try:
+            head_log_metadata = head_log.lstat()
+        except FileNotFoundError as error:
+            raise ConnectorError(
+                "repository HEAD reflog is required for branch publication"
+            ) from error
+        if (
+            not stat.S_ISREG(head_log_metadata.st_mode)
+            or head_log_metadata.st_uid != os.geteuid()
+            or head_log_metadata.st_nlink != 1
+            or head_log_metadata.st_size < 0
+            or head_log_metadata.st_size > _MAX_REFLOG_BYTES
+        ):
+            raise ConnectorError(
+                "repository HEAD reflog must be bounded, singly linked, and current-user owned"
+            )
+        head_log_before = _read_path_bounded(
+            head_log,
+            maximum_bytes=_MAX_REFLOG_BYTES,
+            label="repository HEAD reflog",
+            expected_identity=_identity(head_log_metadata),
+            expected_links=1,
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="head-transaction-",
+            dir=self._root,
+        ) as directory:
+            git_dir = Path(directory) / "git-dir"
+            logs = git_dir / "logs"
+            logs.mkdir(parents=True, mode=0o700)
+            (git_dir / "HEAD").write_text(
+                f"ref: refs/heads/{branch}\n",
+                encoding="ascii",
+            )
+            (git_dir / "commondir").write_text(f"{common}\n", encoding="utf-8")
+            os.link(
+                head_log,
+                logs / "HEAD",
+                follow_symlinks=False,
+            )
+            transaction = IsolatedHeadReflogTransaction(
+                git_dir=git_dir,
+                source_head_log=head_log,
+                head_log_identity=_identity(head_log_metadata),
+                head_log_before=head_log_before,
             )
             transaction.validate_records()
             yield transaction

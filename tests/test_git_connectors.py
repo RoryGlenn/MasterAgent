@@ -104,6 +104,11 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             _git(repository, "add", ".gitattributes")
             _git(repository, "commit", "-m", "add attributes")
             head = _git(repository, "rev-parse", "HEAD")
+            _git(repository, "switch", "-c", "other")
+            (repository / "README.md").write_text("other\n", encoding="utf-8")
+            _git(repository, "add", "README.md")
+            _git(repository, "commit", "-m", "other")
+            _git(repository, "switch", "main")
             marker = root / "filter-ran"
             command = root / "smudge-filter"
             command.write_text(
@@ -125,26 +130,45 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                     "base": "main",
                 },
             )
-            original_git = connector._git
+            original_ref_transaction = connector._git_ref_transaction
             injected = False
+            switch_returncode: int | None = None
 
-            def racing_git(workspace: Path, *arguments: str):
-                nonlocal injected
-                if arguments == ("switch", "-c", "agent/change", head):
+            def racing_ref_transaction(
+                git_dir: Path,
+                reason: str,
+                ref: str,
+                new_oid: str,
+                old_oid: str,
+            ):
+                nonlocal injected, switch_returncode
+                if ref == "refs/heads/agent/change" and not injected:
                     injected = True
                     with (repository / ".git/config").open(
                         "a",
                         encoding="utf-8",
                     ) as config:
                         config.write(f'\n[filter "evil"]\n\tsmudge = {command}\n')
-                return original_git(workspace, *arguments)
+                    switch_returncode = subprocess.run(
+                        ["git", "-C", str(repository), "switch", "other"],
+                        check=False,
+                        capture_output=True,
+                    ).returncode
+                return original_ref_transaction(
+                    git_dir,
+                    reason,
+                    ref,
+                    new_oid,
+                    old_oid,
+                )
 
-            connector._git = racing_git  # type: ignore[method-assign]
+            connector._git_ref_transaction = racing_ref_transaction  # type: ignore[method-assign]
             with self.assertRaisesRegex(ConnectorError, "config identity changed"):
                 connector.execute(action)
-            del connector._git
+            del connector._git_ref_transaction
 
             self.assertTrue(injected)
+            self.assertNotEqual(switch_returncode, 0)
             self.assertFalse(marker.exists())
             self.assertEqual(_git(repository, "branch", "--show-current"), "main")
             self.assertEqual(_git(repository, "branch", "--list", "agent/change"), "")
@@ -165,6 +189,11 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             _git(repository, "add", ".gitattributes")
             _git(repository, "commit", "-m", "add attributes")
             head = _git(repository, "rev-parse", "HEAD")
+            _git(repository, "switch", "-c", "other")
+            (repository / "README.md").write_text("other\n", encoding="utf-8")
+            _git(repository, "add", "README.md")
+            _git(repository, "commit", "-m", "other")
+            _git(repository, "switch", "main")
             marker = root / "filter-ran"
             command = root / "smudge-filter"
             command.write_text(
@@ -187,32 +216,37 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                 },
             )
             result = connector.execute(action)
-            original_git = connector._git
+            original_head_transaction = connector._git_head_reflog_transaction
             injected = False
+            switch_returncode: int | None = None
 
-            def racing_git(workspace: Path, *arguments: str):
-                nonlocal injected
-                if arguments == (
-                    "symbolic-ref",
-                    "-m",
-                    "rollback: restore prior branch",
-                    "HEAD",
-                    "refs/heads/main",
-                ):
+            def racing_head_transaction(
+                git_dir: Path,
+                reason: str,
+                branch: str,
+            ):
+                nonlocal injected, switch_returncode
+                if reason.startswith("checkout: moving") and not injected:
                     injected = True
                     with (repository / ".git/config").open(
                         "a",
                         encoding="utf-8",
                     ) as config:
                         config.write(f'\n[filter "evil"]\n\tsmudge = {command}\n')
-                return original_git(workspace, *arguments)
+                    switch_returncode = subprocess.run(
+                        ["git", "-C", str(repository), "switch", "other"],
+                        check=False,
+                        capture_output=True,
+                    ).returncode
+                return original_head_transaction(git_dir, reason, branch)
 
-            connector._git = racing_git  # type: ignore[method-assign]
+            connector._git_head_reflog_transaction = racing_head_transaction  # type: ignore[method-assign]
             with self.assertRaisesRegex(ConnectorError, "config identity changed"):
                 connector.compensate(action, result)
-            del connector._git
+            del connector._git_head_reflog_transaction
 
             self.assertTrue(injected)
+            self.assertNotEqual(switch_returncode, 0)
             self.assertFalse(marker.exists())
             self.assertEqual(
                 _git(repository, "branch", "--show-current"),
@@ -221,6 +255,74 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             self.assertEqual(
                 _git(repository, "rev-parse", "refs/heads/agent/change"),
                 head,
+            )
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
+    def test_branch_creation_pins_the_exact_new_ref_until_head_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            _git(repository, "switch", "-c", "other")
+            (repository / "README.md").write_text("other\n", encoding="utf-8")
+            _git(repository, "add", "README.md")
+            _git(repository, "commit", "-m", "other")
+            attacker_head = _git(repository, "rev-parse", "HEAD")
+            _git(repository, "switch", "main")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+            original_head_transaction = connector._git_head_reflog_transaction
+            race_returncode: int | None = None
+
+            def racing_head_transaction(
+                git_dir: Path,
+                reason: str,
+                branch: str,
+            ):
+                nonlocal race_returncode
+                if race_returncode is None:
+                    race_returncode = subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(repository),
+                            "update-ref",
+                            "refs/heads/agent/change",
+                            attacker_head,
+                            approved_head,
+                        ],
+                        check=False,
+                        capture_output=True,
+                    ).returncode
+                return original_head_transaction(git_dir, reason, branch)
+
+            connector._git_head_reflog_transaction = racing_head_transaction  # type: ignore[method-assign]
+            result = connector.execute(action)
+            del connector._git_head_reflog_transaction
+
+            self.assertNotEqual(race_returncode, 0)
+            self.assertTrue(connector.verify(action, result).verified)
+            self.assertEqual(
+                _git(repository, "rev-parse", "refs/heads/agent/change"),
+                approved_head,
+            )
+            self.assertEqual(
+                _git(repository, "branch", "--show-current"), "agent/change"
             )
             self.assertEqual(
                 (repository / "README.md").read_text(encoding="utf-8"),
@@ -1241,33 +1343,27 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                 },
             )
             result = connector.execute(action)
-            original_git = connector._git
+            original_head_transaction = connector._git_head_reflog_transaction
             injected = False
 
-            def racing_git(workspace: Path, *arguments: str):
+            def racing_head_transaction(
+                git_dir: Path,
+                reason: str,
+                branch: str,
+            ):
                 nonlocal injected
-                if (
-                    arguments
-                    == (
-                        "symbolic-ref",
-                        "-m",
-                        "rollback: restore prior branch",
-                        "HEAD",
-                        "refs/heads/main",
-                    )
-                    and not injected
-                ):
+                if reason.startswith("checkout: moving") and not injected:
                     injected = True
-                    (workspace / "README.md").write_text(
+                    (repository / "README.md").write_text(
                         "human concurrent work\n",
                         encoding="utf-8",
                     )
-                return original_git(workspace, *arguments)
+                return original_head_transaction(git_dir, reason, branch)
 
-            connector._git = racing_git  # type: ignore[method-assign]
+            connector._git_head_reflog_transaction = racing_head_transaction  # type: ignore[method-assign]
             with self.assertRaisesRegex(VersionConflictError, "worktree changed"):
                 connector.compensate(action, result)
-            del connector._git
+            del connector._git_head_reflog_transaction
 
             self.assertEqual(
                 (repository / "README.md").read_text(),
