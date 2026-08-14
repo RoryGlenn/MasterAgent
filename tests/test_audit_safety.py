@@ -14,7 +14,7 @@ from uuid import uuid4
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.connectors.mock import MockConnector
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConfigurationError, ConnectorError
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -233,6 +233,71 @@ class AuditSafetyTests(unittest.TestCase):
                 AuditLog.verify_existing(database),
                 (True, "verified 8 audit events"),
             )
+
+    def test_post_construction_symlink_rebinding_is_rejected_without_write(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            replacement = root / "replacement.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            audit = AuditLog(database)
+            replacement_audit = AuditLog(replacement)
+            replacement_audit.close()
+
+            database.rename(displaced)
+            database.symlink_to(replacement.name)
+
+            with self.assertRaisesRegex(ConfigurationError, "no-follow"):
+                audit.record(
+                    run_id=uuid4(),
+                    plan_id=uuid4(),
+                    action_id=None,
+                    event_type="must-not-be-redirected",
+                    payload={"unexpected": True},
+                )
+
+            self.assertEqual(_audit_event_count(replacement), 0)
+            self.assertEqual(_audit_event_count(displaced), 0)
+            audit.close()
+
+    def test_post_construction_regular_file_rebinding_is_rejected_without_write(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            replacement = root / "replacement.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            audit = AuditLog(database)
+            replacement_audit = AuditLog(replacement)
+            replacement_audit.close()
+
+            database.rename(displaced)
+            replacement.rename(database)
+
+            with self.assertRaisesRegex(ConfigurationError, "identity changed"):
+                audit.record(
+                    run_id=uuid4(),
+                    plan_id=uuid4(),
+                    action_id=None,
+                    event_type="must-not-be-redirected",
+                    payload={"unexpected": True},
+                )
+
+            self.assertEqual(_audit_event_count(database), 0)
+            self.assertEqual(_audit_event_count(displaced), 0)
+            audit.close()
+
+
+def _audit_event_count(database: Path) -> int:
+    """Return the number of events without mutating the test database."""
+
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()
+    assert row is not None
+    return int(row[0])
 
 
 if __name__ == "__main__":

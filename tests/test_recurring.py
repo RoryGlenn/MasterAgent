@@ -332,6 +332,88 @@ class RecurringWorkflowTests(unittest.TestCase):
         self.assertIn("claim_token", columns)
         self.assertEqual(stored_token, (str(claim_token),))
 
+    def test_post_construction_symlink_rebinding_rejects_claim_without_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "state.sqlite3"
+            replacement = root / "replacement.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
+            store = RecurringStateStore(database)
+            replacement_store = RecurringStateStore(replacement)
+            self.assertIsNotNone(
+                store.claim(
+                    name="original",
+                    scheduled_at=scheduled,
+                    started_at=scheduled,
+                )
+            )
+            self.assertIsNotNone(
+                replacement_store.claim(
+                    name="replacement",
+                    scheduled_at=scheduled,
+                    started_at=scheduled,
+                )
+            )
+            replacement_store.close()
+
+            database.rename(displaced)
+            database.symlink_to(replacement.name)
+
+            with self.assertRaisesRegex(ConfigurationError, "no-follow"):
+                store.claim(
+                    name="must-not-be-redirected",
+                    scheduled_at=scheduled + timedelta(days=7),
+                    started_at=scheduled + timedelta(days=7),
+                )
+
+            self.assertEqual(_recurring_run_count(replacement), 1)
+            self.assertEqual(_recurring_run_count(displaced), 1)
+            store.close()
+
+    def test_post_construction_regular_rebinding_rejects_claim_without_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "state.sqlite3"
+            replacement = root / "replacement.sqlite3"
+            displaced = root / "displaced.sqlite3"
+            scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
+            store = RecurringStateStore(database)
+            replacement_store = RecurringStateStore(replacement)
+            self.assertIsNotNone(
+                store.claim(
+                    name="original",
+                    scheduled_at=scheduled,
+                    started_at=scheduled,
+                )
+            )
+            self.assertIsNotNone(
+                replacement_store.claim(
+                    name="replacement",
+                    scheduled_at=scheduled,
+                    started_at=scheduled,
+                )
+            )
+            replacement_store.close()
+
+            database.rename(displaced)
+            replacement.rename(database)
+
+            with self.assertRaisesRegex(ConfigurationError, "identity changed"):
+                store.claim(
+                    name="must-not-be-redirected",
+                    scheduled_at=scheduled + timedelta(days=7),
+                    started_at=scheduled + timedelta(days=7),
+                )
+
+            self.assertEqual(_recurring_run_count(database), 1)
+            self.assertEqual(_recurring_run_count(displaced), 1)
+            store.close()
+
     def test_scope_and_recipient_allowlists_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -380,6 +462,15 @@ class RecurringWorkflowTests(unittest.TestCase):
 def _record_callback(name: str, calls: list[str]) -> RecurringRunResult:
     calls.append(name)
     return RecurringRunResult(successful=True, summary={"workflow": name})
+
+
+def _recurring_run_count(database: Path) -> int:
+    """Return the occurrence count without mutating the test database."""
+
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute("SELECT COUNT(*) FROM recurring_runs").fetchone()
+    assert row is not None
+    return int(row[0])
 
 
 def _config_text(root: Path) -> str:

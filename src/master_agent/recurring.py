@@ -7,12 +7,12 @@ import os
 import sqlite3
 import tomllib
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, RLock, Thread
 from types import MappingProxyType
 from typing import Any
 from uuid import UUID, uuid4
@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
+from master_agent.sqlite_safety import PinnedSQLiteDatabase, path_entry_exists
 
 
 class WorkflowKind(StrEnum):
@@ -253,18 +254,28 @@ class RecurringStateStore:
     ) -> None:
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
-        self._path = path
+        self._path = Path(os.path.abspath(os.fspath(path)))
         self._lease_duration = lease_duration
+        self._initialization_lock = RLock()
+        self._database: PinnedSQLiteDatabase | None = None
         self._initialized = False
-        if path.exists():
+        if path_entry_exists(self._path):
             self._ensure_initialized()
+
+    def close(self) -> None:
+        """Close the persistent scheduler-state database connection."""
+
+        with self._initialization_lock:
+            if self._database is not None:
+                self._database.close()
 
     def last_success(self, name: str) -> datetime | None:
         """Return the most recent successful completion time."""
 
-        if not self._path.exists():
+        if self._database is None and not path_entry_exists(self._path):
             return None
-        with closing(sqlite3.connect(self._path)) as connection:
+        self._ensure_initialized()
+        with self._connect() as connection:
             row = connection.execute(
                 "SELECT finished_at FROM recurring_runs "
                 "WHERE workflow_name = ? AND successful = 1 "
@@ -276,9 +287,10 @@ class RecurringStateStore:
     def occurrence_status(self, name: str, scheduled_at: datetime) -> str | None:
         """Return the durable state of one scheduled occurrence."""
 
-        if not self._path.exists():
+        if self._database is None and not path_entry_exists(self._path):
             return None
-        with closing(sqlite3.connect(self._path)) as connection:
+        self._ensure_initialized()
+        with self._connect() as connection:
             row = connection.execute(
                 "SELECT status FROM recurring_runs "
                 "WHERE workflow_name = ? AND scheduled_at = ?",
@@ -297,7 +309,7 @@ class RecurringStateStore:
 
         self._ensure_initialized()
         claim_token = uuid4()
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             lease_expires_at = started_at + self._lease_duration
             cursor = connection.execute(
@@ -355,7 +367,7 @@ class RecurringStateStore:
 
         self._ensure_initialized()
         current = (now or datetime.now(UTC)).astimezone(UTC)
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
@@ -377,11 +389,11 @@ class RecurringStateStore:
     def expire_claims(self, *, now: datetime | None = None) -> int:
         """Mark elapsed running leases expired without automatically retrying."""
 
-        if not self._path.exists():
+        if self._database is None and not path_entry_exists(self._path):
             return 0
         self._ensure_initialized()
         current = (now or datetime.now(UTC)).astimezone(UTC)
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
@@ -403,10 +415,10 @@ class RecurringStateStore:
     def mark_recoverable(self, *, name: str, scheduled_at: datetime) -> bool:
         """Explicitly permit a reviewed expired occurrence to be reclaimed."""
 
-        if not self._path.exists():
+        if self._database is None and not path_entry_exists(self._path):
             return False
         self._ensure_initialized()
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
@@ -442,7 +454,7 @@ class RecurringStateStore:
             separators=(",", ":"),
             default=str,
         )
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
@@ -501,7 +513,7 @@ class RecurringStateStore:
         )
 
     def _initialize(self) -> None:
-        with closing(sqlite3.connect(self._path)) as connection:
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
@@ -563,12 +575,27 @@ class RecurringStateStore:
     def _ensure_initialized(self) -> None:
         """Create scheduler state only when state is read or written."""
 
-        if self._initialized:
-            return
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._initialize()
-        _restrict(self._path)
-        self._initialized = True
+        with self._initialization_lock:
+            if self._initialized:
+                return
+            database = PinnedSQLiteDatabase(self._path)
+            self._database = database
+            try:
+                self._initialize()
+            except Exception:
+                self._database = None
+                database.close(remove_created=True)
+                raise
+            self._initialized = True
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Yield only the persistent identity-pinned database connection."""
+
+        if self._database is None:
+            raise RuntimeError("recurring state database is not initialized")
+        with self._database.connect() as connection:
+            yield connection
 
 
 class RecurringRunner:

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
-import stat
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -16,7 +14,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from master_agent.errors import ConfigurationError, StructuredDataTypeError
+from master_agent.errors import StructuredDataTypeError
+from master_agent.sqlite_safety import PinnedSQLiteDatabase
 
 
 class IdempotencyClaimState(StrEnum):
@@ -79,15 +78,17 @@ class AuditLog:
     """
 
     def __init__(self, database: Path) -> None:
-        database.parent.mkdir(parents=True, exist_ok=True)
-        self._database = database
-        created = _prepare_database_file(database)
+        self._state = PinnedSQLiteDatabase(database)
         try:
             self._initialize()
         except Exception:
-            if created:
-                database.unlink(missing_ok=True)
+            self._state.close(remove_created=True)
             raise
+
+    def close(self) -> None:
+        """Close the persistent local audit database connection."""
+
+        self._state.close()
 
     def record(
         self,
@@ -525,48 +526,5 @@ class AuditLog:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Open, commit, and close one SQLite transaction safely."""
 
-        connection = sqlite3.connect(self._database, timeout=30.0)
-        connection.execute("PRAGMA busy_timeout = 30000")
-        try:
+        with self._state.connect() as connection:
             yield connection
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-
-def _prepare_database_file(path: Path) -> bool:
-    """Create or open a regular audit database without following symlinks."""
-
-    if path.parent.is_symlink():
-        raise ConfigurationError("audit database parent must not be a symbolic link")
-    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-    created = False
-    try:
-        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
-        created = True
-    except FileExistsError:
-        try:
-            descriptor = os.open(path, flags)
-        except OSError as error:
-            raise ConfigurationError(
-                "audit database must be a regular no-follow file"
-            ) from error
-    except OSError as error:
-        raise ConfigurationError(
-            "audit database could not be created safely"
-        ) from error
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ConfigurationError("audit database must be a regular file")
-        os.fchmod(descriptor, 0o600)
-        os.fsync(descriptor)
-    except Exception:
-        os.close(descriptor)
-        if created:
-            path.unlink(missing_ok=True)
-        raise
-    os.close(descriptor)
-    return created
