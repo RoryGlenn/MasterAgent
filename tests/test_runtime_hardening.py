@@ -21,7 +21,7 @@ from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog, IdempotencyClaimState
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.cli import main
-from master_agent.errors import ValidationError
+from master_agent.errors import PreEffectError, ValidationError, VersionConflictError
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -48,12 +48,22 @@ class _StateConnector:
         entered: threading.Event | None = None,
         release: threading.Event | None = None,
         verify: bool = True,
+        raise_after_effect: bool = False,
+        raise_before_effect_once: bool = False,
+        raise_pre_effect_during_verification: bool = False,
+        raise_version_conflict_once: bool = False,
     ) -> None:
         self._system = system
         self._capabilities = capabilities
         self._entered = entered
         self._release = release
         self._verify = verify
+        self._raise_after_effect = raise_after_effect
+        self._raise_before_effect_once = raise_before_effect_once
+        self._raise_pre_effect_during_verification = (
+            raise_pre_effect_during_verification
+        )
+        self._raise_version_conflict_once = raise_version_conflict_once
         self.execute_count = 0
         self.compensate_count = 0
         self.state: dict[str, object] = {}
@@ -68,7 +78,15 @@ class _StateConnector:
 
     def execute(self, action: AgentAction) -> ExecutionResult:
         self.execute_count += 1
+        if self._raise_before_effect_once:
+            self._raise_before_effect_once = False
+            raise PreEffectError("provider rejected the request before mutation")
+        if self._raise_version_conflict_once:
+            self._raise_version_conflict_once = False
+            raise VersionConflictError("provider version changed before mutation")
         self.state[action.target.resource_id] = action.parameters.get("value")
+        if self._raise_after_effect:
+            raise RuntimeError("provider response failed after the mutation")
         if self._entered is not None:
             self._entered.set()
         if self._release is not None:
@@ -89,6 +107,8 @@ class _StateConnector:
         action: AgentAction,
         result: ExecutionResult,
     ) -> VerificationResult:
+        if self._raise_pre_effect_during_verification:
+            raise PreEffectError("invalid pre-effect signal during verification")
         return VerificationResult(
             action_id=action.action_id,
             verified=self._verify,
@@ -325,6 +345,104 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
         self.assertEqual(retry.actions[0].state, ActionState.REUSED)
         self.assertTrue(retry.successful)
         self.assertEqual(connector.execute_count, 1)
+
+    def test_exception_after_mutation_claim_is_indeterminate(self) -> None:
+        connector = _StateConnector(raise_after_effect=True)
+        action = _write_action("one", "possibly-written", key="claimed-write")
+        plan = _plan(action)
+        approval = _approval(self.authenticator, plan)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            orchestrator = _orchestrator(connector, audit, self.authenticator)
+
+            first = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+            retry = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+
+        self.assertEqual(connector.state["one"], "possibly-written")
+        self.assertEqual(first.actions[0].state, ActionState.INDETERMINATE)
+        self.assertEqual(retry.actions[0].state, ActionState.CONFLICTED)
+        self.assertIn("indeterminate prior side effect", retry.actions[0].message)
+
+    def test_certified_pre_effect_failure_releases_claim_for_retry(self) -> None:
+        connector = _StateConnector(raise_before_effect_once=True)
+        action = _write_action("one", "written-on-retry", key="retryable-write")
+        plan = _plan(action)
+        approval = _approval(self.authenticator, plan)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            orchestrator = _orchestrator(connector, audit, self.authenticator)
+
+            first = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+            retry = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+
+        self.assertEqual(first.actions[0].state, ActionState.FAILED)
+        self.assertEqual(retry.actions[0].state, ActionState.VERIFIED)
+        self.assertEqual(connector.execute_count, 2)
+        self.assertEqual(connector.state["one"], "written-on-retry")
+
+    def test_pre_effect_signal_after_execution_stays_indeterminate(self) -> None:
+        connector = _StateConnector(raise_pre_effect_during_verification=True)
+        action = _write_action("one", "written", key="post-execution-signal")
+        plan = _plan(action)
+        approval = _approval(self.authenticator, plan)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            orchestrator = _orchestrator(connector, audit, self.authenticator)
+
+            first = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+            retry = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+
+        self.assertEqual(first.actions[0].state, ActionState.INDETERMINATE)
+        self.assertEqual(retry.actions[0].state, ActionState.CONFLICTED)
+        self.assertEqual(connector.execute_count, 1)
+
+    def test_version_conflict_releases_exact_claim_for_retry(self) -> None:
+        connector = _StateConnector(raise_version_conflict_once=True)
+        action = _write_action("one", "written-on-retry", key="versioned-write")
+        plan = _plan(action)
+        approval = _approval(self.authenticator, plan)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            orchestrator = _orchestrator(connector, audit, self.authenticator)
+
+            first = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+            retry = orchestrator.run(
+                plan,
+                approvals=(approval,),
+                dry_run=False,
+            )
+
+        self.assertEqual(first.actions[0].state, ActionState.CONFLICTED)
+        self.assertEqual(retry.actions[0].state, ActionState.VERIFIED)
+        self.assertEqual(connector.execute_count, 2)
 
     def test_stale_completed_idempotent_effect_is_not_reused(self) -> None:
         connector = _StateConnector()

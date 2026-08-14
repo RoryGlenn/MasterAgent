@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from master_agent.connectors.base import (
 from master_agent.errors import (
     ConfigurationError,
     ConnectorError,
+    PreEffectError,
     StructuredDataTypeError,
     VersionConflictError,
 )
@@ -514,11 +516,70 @@ class WorkflowOrchestrator:
                             result=result_audit_summary(result),
                         )
             except VersionConflictError as error:
+                claim_released = result is None and claim_token is None
+                if result is None and claim_token is not None:
+                    try:
+                        claim_released = self._audit.release_action_claim(
+                            idempotency_key=action.idempotency_key,
+                            action_fingerprint=action.effect_fingerprint,
+                            claim_token=claim_token,
+                        )
+                    except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
+                        claim_released = False
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
-                    state=ActionState.CONFLICTED,
-                    message=str(error),
+                    state=(
+                        ActionState.CONFLICTED
+                        if claim_released
+                        else ActionState.INDETERMINATE
+                    ),
+                    message=(
+                        str(error)
+                        + (
+                            ""
+                            if claim_released
+                            else (
+                                "; conflict occurred after connector execution"
+                                if result is not None
+                                else "; idempotency claim could not be released"
+                            )
+                        )
+                    ),
+                    result=result,
+                )
+            except PreEffectError as error:
+                claim_released = result is None and claim_token is None
+                if result is None and claim_token is not None:
+                    try:
+                        claim_released = self._audit.release_action_claim(
+                            idempotency_key=action.idempotency_key,
+                            action_fingerprint=action.effect_fingerprint,
+                            claim_token=claim_token,
+                        )
+                    except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
+                        claim_released = False
+                report = ActionReport(
+                    action_id=action.action_id,
+                    capability=action.capability,
+                    state=(
+                        ActionState.FAILED
+                        if claim_released
+                        else ActionState.INDETERMINATE
+                    ),
+                    message=(
+                        f"{type(error).__name__}: {error}"
+                        + (
+                            ""
+                            if claim_released
+                            else (
+                                "; exception occurred after connector execution"
+                                if result is not None
+                                else "; idempotency claim could not be released"
+                            )
+                        )
+                    ),
+                    result=result,
                 )
             except (
                 ConnectorError,
@@ -533,7 +594,7 @@ class WorkflowOrchestrator:
                     capability=action.capability,
                     state=(
                         ActionState.INDETERMINATE
-                        if result is not None
+                        if result is not None or claim_token is not None
                         else ActionState.FAILED
                     ),
                     message=f"{type(error).__name__}: {error}",

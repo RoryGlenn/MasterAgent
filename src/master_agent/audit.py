@@ -280,6 +280,29 @@ class AuditLog:
             if cursor.rowcount != 1:
                 raise RuntimeError("idempotency reservation was lost or replaced")
 
+    def release_action_claim(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        claim_token: str,
+    ) -> bool:
+        """Release an exact reservation after a certified pre-effect failure."""
+
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                DELETE FROM completed_actions
+                WHERE idempotency_key = ?
+                  AND action_fingerprint = ?
+                  AND status = 'pending'
+                  AND claim_token = ?
+                """,
+                (idempotency_key, action_fingerprint, claim_token),
+            )
+        return cursor.rowcount == 1
+
     def completed_result(
         self,
         idempotency_key: str,

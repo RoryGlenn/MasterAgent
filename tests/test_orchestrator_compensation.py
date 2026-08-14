@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
-from master_agent.errors import ConnectorError
+from master_agent.errors import PreEffectError
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -45,7 +45,7 @@ class _CompensatingTestConnector:
 
     def execute(self, action: AgentAction) -> ExecutionResult:
         if action.target.resource_id == "fail":
-            raise ConnectorError("injected failure")
+            raise PreEffectError("injected failure")
         before = {"value": self.state.get(action.target.resource_id)}
         value = str(action.parameters["value"])
         self.state[action.target.resource_id] = value

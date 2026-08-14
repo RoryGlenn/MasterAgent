@@ -31,6 +31,10 @@ class ConnectorError(MasterAgentError):
     """Raised when a connector cannot execute an action."""
 
 
+class PreEffectError(ConnectorError):
+    """Certify that a connector stopped before any observable side effect."""
+
+
 class UnsupportedCapabilityError(ConnectorError):
     """Raised when a connector receives an unregistered capability."""
 

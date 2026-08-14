@@ -15,6 +15,7 @@ from pathlib import Path
 from threading import Event, Thread
 from types import MappingProxyType
 from typing import Any
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from master_agent.config_sources import ConfigSource
@@ -291,10 +292,11 @@ class RecurringStateStore:
         name: str,
         scheduled_at: datetime,
         started_at: datetime,
-    ) -> bool:
-        """Atomically claim one occurrence before invoking its callback."""
+    ) -> UUID | None:
+        """Atomically claim an occurrence and return its attempt owner token."""
 
         self._ensure_initialized()
+        claim_token = uuid4()
         with closing(sqlite3.connect(self._path)) as connection:
             connection.execute("BEGIN IMMEDIATE")
             lease_expires_at = started_at + self._lease_duration
@@ -303,8 +305,8 @@ class RecurringStateStore:
                 INSERT OR IGNORE INTO recurring_runs (
                     workflow_name, scheduled_at, started_at, finished_at,
                     successful, summary_json, status, lease_expires_at,
-                    attempt_count, recovery_reason
-                ) VALUES (?, ?, ?, ?, 0, '{}', ?, ?, 1, NULL)
+                    attempt_count, recovery_reason, claim_token
+                ) VALUES (?, ?, ?, ?, 0, '{}', ?, ?, 1, NULL, ?)
                 """,
                 (
                     name,
@@ -313,6 +315,7 @@ class RecurringStateStore:
                     started_at.isoformat(),
                     str(ClaimStatus.RUNNING),
                     lease_expires_at.isoformat(),
+                    str(claim_token),
                 ),
             )
             if cursor.rowcount != 1:
@@ -322,7 +325,7 @@ class RecurringStateStore:
                     SET started_at = ?, finished_at = ?, successful = 0,
                         summary_json = '{}', status = ?, lease_expires_at = ?,
                         attempt_count = attempt_count + 1,
-                        recovery_reason = NULL
+                        recovery_reason = NULL, claim_token = ?
                     WHERE workflow_name = ? AND scheduled_at = ?
                       AND status = ?
                     """,
@@ -331,19 +334,21 @@ class RecurringStateStore:
                         started_at.isoformat(),
                         str(ClaimStatus.RUNNING),
                         lease_expires_at.isoformat(),
+                        str(claim_token),
                         name,
                         scheduled_at.isoformat(),
                         str(ClaimStatus.RECOVERABLE),
                     ),
                 )
             connection.commit()
-            return cursor.rowcount == 1
+            return claim_token if cursor.rowcount == 1 else None
 
     def renew(
         self,
         *,
         name: str,
         scheduled_at: datetime,
+        claim_token: UUID,
         now: datetime | None = None,
     ) -> bool:
         """Renew a running claim lease while its callback is active."""
@@ -356,12 +361,14 @@ class RecurringStateStore:
                 """
                 UPDATE recurring_runs SET lease_expires_at = ?
                 WHERE workflow_name = ? AND scheduled_at = ? AND status = ?
+                  AND claim_token = ?
                 """,
                 (
                     (current + self._lease_duration).isoformat(),
                     name,
                     scheduled_at.isoformat(),
                     str(ClaimStatus.RUNNING),
+                    str(claim_token),
                 ),
             )
             connection.commit()
@@ -379,7 +386,8 @@ class RecurringStateStore:
             cursor = connection.execute(
                 """
                 UPDATE recurring_runs
-                SET status = ?, recovery_reason = 'lease_expired'
+                SET status = ?, recovery_reason = 'lease_expired',
+                    claim_token = NULL
                 WHERE status = ? AND lease_expires_at IS NOT NULL
                   AND lease_expires_at <= ?
                 """,
@@ -421,6 +429,7 @@ class RecurringStateStore:
         *,
         name: str,
         scheduled_at: datetime,
+        claim_token: UUID,
         finished_at: datetime,
         result: RecurringRunResult,
     ) -> None:
@@ -439,8 +448,9 @@ class RecurringStateStore:
                 """
                 UPDATE recurring_runs
                 SET finished_at = ?, successful = ?, summary_json = ?, status = ?
-                    , lease_expires_at = NULL
+                    , lease_expires_at = NULL, claim_token = NULL
                 WHERE workflow_name = ? AND scheduled_at = ? AND status = 'running'
+                  AND claim_token = ?
                 """,
                 (
                     finished_at.isoformat(),
@@ -453,6 +463,7 @@ class RecurringStateStore:
                     ),
                     name,
                     scheduled_at.isoformat(),
+                    str(claim_token),
                 ),
             )
             if cursor.rowcount != 1:
@@ -468,6 +479,7 @@ class RecurringStateStore:
         *,
         name: str,
         scheduled_at: datetime,
+        claim_token: UUID,
         finished_at: datetime,
         error: BaseException,
     ) -> None:
@@ -476,6 +488,7 @@ class RecurringStateStore:
         self.complete(
             name=name,
             scheduled_at=scheduled_at,
+            claim_token=claim_token,
             finished_at=finished_at,
             result=RecurringRunResult(
                 successful=False,
@@ -489,6 +502,7 @@ class RecurringStateStore:
 
     def _initialize(self) -> None:
         with closing(sqlite3.connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS recurring_runs (
@@ -502,7 +516,8 @@ class RecurringStateStore:
                     status TEXT NOT NULL DEFAULT 'succeeded',
                     lease_expires_at TEXT,
                     attempt_count INTEGER NOT NULL DEFAULT 1,
-                    recovery_reason TEXT
+                    recovery_reason TEXT,
+                    claim_token TEXT
                 )
                 """
             )
@@ -527,6 +542,10 @@ class RecurringStateStore:
             if "recovery_reason" not in columns:
                 connection.execute(
                     "ALTER TABLE recurring_runs ADD COLUMN recovery_reason TEXT"
+                )
+            if "claim_token" not in columns:
+                connection.execute(
+                    "ALTER TABLE recurring_runs ADD COLUMN claim_token TEXT"
                 )
             try:
                 connection.execute(
@@ -621,12 +640,12 @@ class RecurringRunner:
                 summary={"skipped": True, "reason": status.reason},
             )
         started = (now or datetime.now(UTC)).astimezone(UTC)
-        claimed = self._store.claim(
+        claim_token = self._store.claim(
             name=name,
             scheduled_at=status.scheduled_at,
             started_at=started,
         )
-        if not claimed:
+        if claim_token is None:
             return RecurringRunResult(
                 successful=True,
                 summary={
@@ -648,6 +667,7 @@ class RecurringRunner:
                         renewed = self._store.renew(
                             name=name,
                             scheduled_at=status.scheduled_at,
+                            claim_token=claim_token,
                         )
                         if not renewed:
                             raise ConfigurationError(
@@ -673,6 +693,7 @@ class RecurringRunner:
             self._store.fail(
                 name=name,
                 scheduled_at=status.scheduled_at,
+                claim_token=claim_token,
                 finished_at=datetime.now(UTC),
                 error=error,
             )
@@ -680,6 +701,7 @@ class RecurringRunner:
         self._store.complete(
             name=name,
             scheduled_at=status.scheduled_at,
+            claim_token=claim_token,
             finished_at=datetime.now(UTC),
             result=result,
         )

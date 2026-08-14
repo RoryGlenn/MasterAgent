@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import unittest
@@ -11,6 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from master_agent.errors import ConfigurationError
+from master_agent.evidence import content_digest
 from master_agent.retention import (
     RetentionConfig,
     purge_expired_evidence,
@@ -27,6 +29,7 @@ class RetentionTests(unittest.TestCase):
 
     def test_metadata_only_write_excludes_communication_content(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        citation_id = _citation_id("outlook", "message", "m1")
         with TemporaryDirectory() as directory:
             path = Path(directory) / "evidence.json"
             evidence, sidecar = write_retained_json(
@@ -35,7 +38,14 @@ class RetentionTests(unittest.TestCase):
                     "schema": "example@1",
                     "system": "outlook",
                     "messages": [{"id": "m1", "body": "sensitive"}],
-                    "citations": [{"citation_id": "CIT-ONE"}],
+                    "citations": [
+                        {
+                            "citation_id": "CIT-DEADBEEFCAFE",
+                            "system": "outlook",
+                            "resource_type": "message",
+                            "resource_id": "m1",
+                        }
+                    ],
                 },
                 evidence_type="outlook.message.metadata",
                 config=config,
@@ -46,7 +56,7 @@ class RetentionTests(unittest.TestCase):
             manifest = json.loads(sidecar.read_text(encoding="utf-8"))
 
         self.assertNotIn("messages", stored)
-        self.assertEqual(stored["citations"][0]["citation_id"], "CIT-ONE")
+        self.assertEqual(stored["citations"][0]["citation_id"], citation_id)
         self.assertFalse(manifest["content_included"])
         self.assertEqual(manifest["evidence_path"], "evidence.json")
 
@@ -67,13 +77,15 @@ class RetentionTests(unittest.TestCase):
     def test_metadata_only_recursively_removes_retrieved_content(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
         secret = "TOP-SECRET-RETRIEVED-CONTENT"
+        digest = "a" * 64
+        citation_id = _citation_id("outlook", "message", "item-1")
         with TemporaryDirectory() as directory:
             evidence, _ = write_retained_json(
                 Path(directory) / "evidence.json",
                 {
                     "schema": "example@1",
                     "evidence": {
-                        "content_digest": "abc123",
+                        "content_digest": digest,
                         "connector_reference": secret,
                         "nested": {"body": secret},
                     },
@@ -91,7 +103,9 @@ class RetentionTests(unittest.TestCase):
                     },
                     "citations": [
                         {
-                            "citation_id": "CIT-ONE",
+                            "citation_id": citation_id,
+                            "system": "outlook",
+                            "resource_type": "message",
                             "resource_id": "item-1",
                             "title": secret,
                             "url": f"https://example.test/?q={secret}",
@@ -106,14 +120,112 @@ class RetentionTests(unittest.TestCase):
             stored = json.loads(stored_text)
 
         self.assertNotIn(secret, stored_text)
-        self.assertEqual(stored["evidence"], {"content_digest": "abc123"})
+        self.assertNotEqual(stored["evidence"]["content_digest"], digest)
+        self.assertEqual(len(stored["evidence"]["content_digest"]), 64)
         self.assertNotIn(
             "excerpt",
             stored["security"]["prompt_injection_findings"][0],
         )
         self.assertEqual(
             stored["citations"],
-            [{"citation_id": "CIT-ONE", "resource_id": "item-1"}],
+            [
+                {
+                    "citation_id": citation_id,
+                    "system_digest": hashlib.sha256(b"outlook").hexdigest(),
+                    "resource_type_digest": hashlib.sha256(b"message").hexdigest(),
+                    "resource_id_digest": hashlib.sha256(b"item-1").hexdigest(),
+                }
+            ],
+        )
+
+    def test_metadata_only_validates_digests_and_derives_opaque_ids(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        secret = "sk-proj-ABCDEF1234567890"
+        claimed_citation_id = "CIT-DEADBEEFCAFE"
+        claimed_digest = "deadbeef" * 8
+        resource_id = "provider-resource-123"
+        etag = 'W/"provider-version-42"'
+        path = "$.messages[0].body"
+        derived_citation_id = _citation_id(secret, secret, resource_id)
+        payload = {
+            "schema": secret,
+            "system": secret,
+            "deployment": secret,
+            "citation_ids": [claimed_citation_id],
+            "evidence": {
+                "content_digest": claimed_digest,
+                "etag": etag,
+                "version": secret,
+            },
+            "citations": [
+                {
+                    "citation_id": claimed_citation_id,
+                    "system": secret,
+                    "resource_type": secret,
+                    "resource_id": resource_id,
+                    "content_digest": claimed_digest,
+                }
+            ],
+            "security": {
+                "content_is_untrusted": True,
+                "prompt_injection_findings": [
+                    {
+                        "path": path,
+                        "category": "instruction_override",
+                        "severity": "high",
+                        "excerpt": secret,
+                    }
+                ],
+            },
+        }
+        with TemporaryDirectory() as directory:
+            evidence, _ = write_retained_json(
+                Path(directory) / "evidence.json",
+                payload,
+                evidence_type="outlook.message.metadata",
+                config=config,
+                include_content=False,
+            )
+            stored_text = evidence.read_text(encoding="utf-8")
+            stored = json.loads(stored_text)
+
+        self.assertNotIn(secret, stored_text)
+        self.assertNotIn(claimed_citation_id, stored_text)
+        self.assertNotIn(claimed_digest, stored_text)
+        self.assertNotIn(etag, stored_text)
+        self.assertEqual(stored["citation_ids"], [derived_citation_id])
+        identifier_digest = hashlib.sha256(secret.encode()).hexdigest()
+        self.assertEqual(stored["schema_digest"], identifier_digest)
+        self.assertEqual(stored["system_digest"], identifier_digest)
+        self.assertEqual(stored["deployment_digest"], identifier_digest)
+        self.assertEqual(
+            stored["evidence"]["content_digest"],
+            content_digest(payload),
+        )
+        self.assertEqual(
+            stored["evidence"]["etag_digest"],
+            hashlib.sha256(etag.encode()).hexdigest(),
+        )
+        self.assertEqual(
+            stored["evidence"]["version_digest"],
+            hashlib.sha256(secret.encode()).hexdigest(),
+        )
+        self.assertEqual(
+            stored["citations"][0],
+            {
+                "citation_id": derived_citation_id,
+                "system_digest": identifier_digest,
+                "resource_type_digest": identifier_digest,
+                "resource_id_digest": hashlib.sha256(resource_id.encode()).hexdigest(),
+            },
+        )
+        self.assertEqual(
+            stored["security"]["prompt_injection_findings"][0],
+            {
+                "path_digest": hashlib.sha256(path.encode()).hexdigest(),
+                "category": "instruction_override",
+                "severity": "high",
+            },
         )
 
     def test_prohibited_rule_overrides_broad_explicit_content_rule(self) -> None:
@@ -322,6 +434,11 @@ persistence = "explicit_content"
             self.assertTrue(result.errors)
             self.assertTrue(victim.exists())
             victim.unlink()
+
+
+def _citation_id(system: str, resource_type: str, resource_id: str) -> str:
+    identity = f"{system}\0{resource_type}\0{resource_id}".encode()
+    return "CIT-" + hashlib.sha256(identity).hexdigest()[:12].upper()
 
 
 if __name__ == "__main__":

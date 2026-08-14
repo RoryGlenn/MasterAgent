@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -18,6 +19,16 @@ from typing import Any
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.evidence import content_digest
+
+_SECURITY_CATEGORIES = frozenset(
+    {
+        "authority_claim",
+        "credential_request",
+        "external_action_request",
+        "instruction_override",
+    }
+)
+_SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 
 
 class PersistenceMode(StrEnum):
@@ -490,18 +501,12 @@ def _metadata_only(payload: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     output: dict[str, Any] = {}
-    for key in ("schema", "system", "deployment", "returned", "total"):
-        value = payload.get(key)
-        if key in payload and (
-            isinstance(value, (str, int, float, bool)) or value is None
-        ):
+    for key in ("schema", "system", "deployment"):
+        if (digest := _identifier_digest(payload.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    for key in ("returned", "total"):
+        if (value := _nonnegative_integer(payload.get(key))) is not None:
             output[key] = value
-
-    citation_ids = payload.get("citation_ids")
-    if isinstance(citation_ids, (list, tuple)):
-        output["citation_ids"] = [
-            item for item in citation_ids if isinstance(item, str)
-        ]
 
     citations = payload.get("citations")
     if isinstance(citations, (list, tuple)):
@@ -512,30 +517,22 @@ def _metadata_only(payload: Mapping[str, Any]) -> dict[str, Any]:
             if (projected := _project_citation(item))
         ]
         output["citations"] = projected_citations
+        output["citation_ids"] = [
+            str(item["citation_id"])
+            for item in projected_citations
+            if "citation_id" in item
+        ]
 
     evidence = payload.get("evidence")
-    if isinstance(evidence, Mapping):
-        projected_evidence = _project_scalars(
-            evidence,
-            {
-                "content_digest",
-                "retrieved_at",
-                "version",
-                "etag",
-                "count",
-                "returned",
-                "total",
-            },
-        )
-        if projected_evidence:
-            output["evidence"] = projected_evidence
+    projected_evidence = _project_evidence(
+        evidence if isinstance(evidence, Mapping) else {},
+        payload_digest=content_digest(payload),
+    )
+    output["evidence"] = projected_evidence
 
     retention = payload.get("retention")
     if isinstance(retention, Mapping):
-        projected_retention = _project_scalars(
-            retention,
-            {"persistence", "created_at", "expires_at", "content_included"},
-        )
+        projected_retention = _project_retention(retention)
         if projected_retention:
             output["retention"] = projected_retention
 
@@ -550,44 +547,147 @@ def _metadata_only(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _project_citation(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return content-free citation identity and provenance metadata."""
 
-    return _project_scalars(
-        value,
-        {
-            "citation_id",
-            "system",
-            "resource_type",
-            "resource_id",
-            "retrieved_at",
-            "content_digest",
-        },
-    )
+    output: dict[str, Any] = {}
+    if (citation_id := _derived_citation_id(value)) is not None:
+        output["citation_id"] = citation_id
+    for key in ("system", "resource_type"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    if (resource_digest := _identifier_digest(value.get("resource_id"))) is not None:
+        output["resource_id_digest"] = resource_digest
+    if (retrieved_at := _timestamp(value.get("retrieved_at"))) is not None:
+        output["retrieved_at"] = retrieved_at
+    for key in ("version", "etag"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    return output
+
+
+def _project_evidence(
+    value: Mapping[str, Any],
+    *,
+    payload_digest: str,
+) -> dict[str, Any]:
+    """Return validated evidence facts and derived opaque identifiers."""
+
+    output: dict[str, Any] = {"content_digest": payload_digest}
+    if (retrieved_at := _timestamp(value.get("retrieved_at"))) is not None:
+        output["retrieved_at"] = retrieved_at
+    for key in ("version", "etag"):
+        if (digest := _identifier_digest(value.get(key))) is not None:
+            output[f"{key}_digest"] = digest
+    for key in ("count", "returned", "total"):
+        if (count := _nonnegative_integer(value.get(key))) is not None:
+            output[key] = count
+    return output
+
+
+def _project_retention(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return semantically valid retention metadata."""
+
+    output: dict[str, Any] = {}
+    persistence = value.get("persistence")
+    if isinstance(persistence, str):
+        try:
+            output["persistence"] = str(PersistenceMode(persistence))
+        except ValueError:
+            pass
+    for key in ("created_at", "expires_at"):
+        if (timestamp := _timestamp(value.get(key))) is not None:
+            output[key] = timestamp
+    content_included = value.get("content_included")
+    if isinstance(content_included, bool):
+        output["content_included"] = content_included
+    return output
 
 
 def _project_security(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return finding classifications without retrieved-content excerpts."""
 
-    output = _project_scalars(value, {"content_is_untrusted"})
+    output: dict[str, Any] = {}
+    content_is_untrusted = value.get("content_is_untrusted")
+    if isinstance(content_is_untrusted, bool):
+        output["content_is_untrusted"] = content_is_untrusted
     findings = value.get("prompt_injection_findings")
     if isinstance(findings, (list, tuple)):
-        output["prompt_injection_findings"] = [
-            _project_scalars(item, {"path", "category", "severity"})
+        projected_findings = [
+            projected
             for item in findings
             if isinstance(item, Mapping)
+            if (projected := _project_security_finding(item))
         ]
+        output["prompt_injection_findings"] = projected_findings
     return output
 
 
-def _project_scalars(
-    value: Mapping[str, Any],
-    allowed: set[str],
-) -> dict[str, Any]:
-    """Select only JSON scalar values for explicitly allowed keys."""
+def _project_security_finding(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return one finding without its source location or excerpt content."""
 
-    return {
-        key: item
-        for key, item in value.items()
-        if key in allowed and isinstance(item, (str, int, float, bool))
-    }
+    output: dict[str, Any] = {}
+    if (path_digest := _identifier_digest(value.get("path"))) is not None:
+        output["path_digest"] = path_digest
+    category = value.get("category")
+    if isinstance(category, str) and category in _SECURITY_CATEGORIES:
+        output["category"] = category
+    severity = value.get("severity")
+    if isinstance(severity, str) and severity in _SECURITY_SEVERITIES:
+        output["severity"] = severity
+    return output
+
+
+def _derived_citation_id(value: Mapping[str, Any]) -> str | None:
+    """Derive a citation ID from its complete provider resource identity."""
+
+    parts = tuple(
+        _identifier_text(value.get(key))
+        for key in ("system", "resource_type", "resource_id")
+    )
+    if any(part is None for part in parts):
+        return None
+    identity = "\0".join(str(part) for part in parts).encode("utf-8")
+    return "CIT-" + hashlib.sha256(identity).hexdigest()[:12].upper()
+
+
+def _identifier_digest(value: Any) -> str | None:
+    """Derive a bounded digest for an opaque provider identifier."""
+
+    rendered = _identifier_text(value)
+    if rendered is None:
+        return None
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _identifier_text(value: Any) -> str | None:
+    """Return a bounded identifier only for local hashing or derivation."""
+
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    rendered = str(value)
+    if not rendered or len(rendered) > 2_048:
+        return None
+    return rendered
+
+
+def _nonnegative_integer(value: Any) -> int | None:
+    """Return a non-negative count without accepting booleans as integers."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _timestamp(value: Any) -> str | None:
+    """Return a timezone-aware ISO timestamp normalized to UTC."""
+
+    if not isinstance(value, str) or len(value) > 128:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _pattern_specificity(pattern: str) -> tuple[int, int, int]:

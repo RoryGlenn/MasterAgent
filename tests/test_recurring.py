@@ -176,6 +176,162 @@ class RecurringWorkflowTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, (str(ClaimStatus.SUCCEEDED), 2))
 
+    def test_reclaimed_occurrence_rejects_stale_attempt_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "state.sqlite3"
+            scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
+            store = RecurringStateStore(
+                database,
+                lease_duration=timedelta(seconds=1),
+            )
+            stale_token = store.claim(
+                name="weekly",
+                scheduled_at=scheduled,
+                started_at=scheduled,
+            )
+            self.assertIsNotNone(stale_token)
+            self.assertEqual(
+                store.expire_claims(now=scheduled + timedelta(seconds=2)),
+                1,
+            )
+            self.assertTrue(
+                store.mark_recoverable(name="weekly", scheduled_at=scheduled)
+            )
+            current_token = store.claim(
+                name="weekly",
+                scheduled_at=scheduled,
+                started_at=scheduled + timedelta(seconds=2),
+            )
+            self.assertIsNotNone(current_token)
+            self.assertNotEqual(stale_token, current_token)
+            assert stale_token is not None
+            assert current_token is not None
+
+            self.assertFalse(
+                store.renew(
+                    name="weekly",
+                    scheduled_at=scheduled,
+                    claim_token=stale_token,
+                    now=scheduled + timedelta(seconds=3),
+                )
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "not actively claimed",
+            ):
+                store.complete(
+                    name="weekly",
+                    scheduled_at=scheduled,
+                    claim_token=stale_token,
+                    finished_at=scheduled + timedelta(seconds=3),
+                    result=RecurringRunResult(
+                        successful=True,
+                        summary={"completed_by": "stale-attempt"},
+                    ),
+                )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "not actively claimed",
+            ):
+                store.fail(
+                    name="weekly",
+                    scheduled_at=scheduled,
+                    claim_token=stale_token,
+                    finished_at=scheduled + timedelta(seconds=3),
+                    error=RuntimeError("stale attempt failed"),
+                )
+
+            store.complete(
+                name="weekly",
+                scheduled_at=scheduled,
+                claim_token=current_token,
+                finished_at=scheduled + timedelta(seconds=3),
+                result=RecurringRunResult(
+                    successful=True,
+                    summary={"completed_by": "current-attempt"},
+                ),
+            )
+            with closing(sqlite3.connect(database)) as connection:
+                row = connection.execute(
+                    "SELECT status, summary_json, claim_token FROM recurring_runs"
+                ).fetchone()
+
+        self.assertEqual(
+            row,
+            (
+                str(ClaimStatus.SUCCEEDED),
+                '{"completed_by":"current-attempt"}',
+                None,
+            ),
+        )
+
+    def test_concurrent_legacy_state_migration_precedes_attempt_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "state.sqlite3"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE recurring_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workflow_name TEXT NOT NULL,
+                        scheduled_at TEXT NOT NULL,
+                        started_at TEXT NOT NULL,
+                        finished_at TEXT NOT NULL,
+                        successful INTEGER NOT NULL,
+                        summary_json TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'succeeded',
+                        lease_expires_at TEXT,
+                        attempt_count INTEGER NOT NULL DEFAULT 1,
+                        recovery_reason TEXT
+                    )
+                    """
+                )
+            stores: list[RecurringStateStore] = []
+            errors: list[BaseException] = []
+            barrier = threading.Barrier(8)
+
+            def initialize_store() -> None:
+                try:
+                    barrier.wait(timeout=5)
+                    stores.append(RecurringStateStore(database))
+                except (
+                    ConfigurationError,
+                    OSError,
+                    RuntimeError,
+                    sqlite3.Error,
+                ) as error:
+                    errors.append(error)
+
+            threads = [threading.Thread(target=initialize_store) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(len(stores), 8)
+            scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
+            store = stores[0]
+            claim_token = store.claim(
+                name="weekly",
+                scheduled_at=scheduled,
+                started_at=scheduled,
+            )
+            if claim_token is None:
+                self.fail("migrated state did not return an attempt owner")
+            with closing(sqlite3.connect(database)) as connection:
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(recurring_runs)")
+                }
+                stored_token = connection.execute(
+                    "SELECT claim_token FROM recurring_runs"
+                ).fetchone()
+
+        self.assertIn("claim_token", columns)
+        self.assertEqual(stored_token, (str(claim_token),))
+
     def test_scope_and_recipient_allowlists_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
