@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 from urllib.parse import urlsplit
 
 from master_agent.config import (
@@ -15,6 +16,7 @@ from master_agent.config import (
     ResolvedExecutionTarget,
 )
 from master_agent.config_sources import ConfigSource
+from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.models import (
     ChangePlan,
@@ -35,6 +37,38 @@ class CapturedConnectorExecution:
     config: ConnectorConfig
     target: ResolvedExecutionTarget
     binding: ConnectorExecutionBinding
+
+
+@dataclass(slots=True)
+class CapturedRuntimePath:
+    """One exact manifest-bound directory pin retained across an applied run."""
+
+    binding: RuntimePathExecutionBinding
+    publication: bool
+    _anchor: PinnedDirectory
+
+    def validate(self) -> None:
+        """Fail closed unless the captured ancestor remains exact."""
+
+        self._anchor.validate()
+
+    def open_target(self) -> PinnedDirectory:
+        """Return an owned duplicate of the exact approved directory."""
+
+        self.validate()
+        return self._anchor.duplicate()
+
+    def close(self) -> None:
+        """Release the captured ancestor chain."""
+
+        self._anchor.close()
+
+    def __enter__(self) -> Self:
+        self.validate()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
 
 def capture_connector_executions(
@@ -148,42 +182,51 @@ def build_runtime_execution_binding(
     evidence_type: str,
     configuration_sources: Mapping[str, ConfigSource],
     environ: Mapping[str, str] | None = None,
+    captured_paths: Sequence[CapturedRuntimePath] | None = None,
 ) -> RuntimeExecutionBinding:
     """Capture every non-secret runtime input that can alter an applied run."""
 
     source = environ if environ is not None else os.environ
     normalized_workspace = _canonical_path(workspace_root)
-    publication_roots: list[RuntimePathExecutionBinding] = []
-    if connector_mode == "live" and include_writes:
-        for config in integrations.connectors.values():
-            if not config.enabled or config.system != "bitbucket":
-                continue
-            if not (
-                _strict_extra_bool(config.extra, "write_enabled")
-                and _strict_extra_bool(config.extra, "branch_push_enabled")
-            ):
-                continue
-            variable = str(config.extra.get("repository_root_env", "")).strip()
-            if variable:
-                raw_root = source.get(variable, "").strip()
-                if not raw_root:
-                    raise ConfigurationError(
-                        f"Bitbucket branch publication requires environment variable {variable}"
-                    )
-                selected_root = Path(raw_root)
-            elif workspace_root is not None:
-                selected_root = workspace_root
-            else:
-                raise ConfigurationError(
-                    "Bitbucket branch publication requires workspace_root or "
-                    "repository_root_env"
-                )
-            publication_roots.append(
-                RuntimePathExecutionBinding(
-                    name=f"{config.system}.branch_publication",
-                    path=_canonical_path(selected_root) or "",
-                )
-            )
+    owned_paths: tuple[CapturedRuntimePath, ...] = ()
+    if captured_paths is None:
+        owned_paths = capture_runtime_execution_paths(
+            integrations,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            audit_database=audit_database,
+            artifact_root=artifact_root,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            environ=source,
+        )
+        selected_paths = owned_paths
+    else:
+        selected_paths = tuple(captured_paths)
+    expected_specs = _runtime_path_specs(
+        integrations,
+        connector_mode=connector_mode,
+        include_writes=include_writes,
+        audit_database=audit_database,
+        artifact_root=artifact_root,
+        workspace_root=workspace_root,
+        result_json=result_json,
+        environ=source,
+    )
+    expected = {
+        name: (_canonical_path(path) or "", publication)
+        for name, path, publication in expected_specs
+    }
+    observed = {
+        item.binding.name: (item.binding.path, item.publication)
+        for item in selected_paths
+    }
+    if len(observed) != len(selected_paths) or observed != expected:
+        for item in owned_paths:
+            item.close()
+        raise ConfigurationError(
+            "captured runtime directory set differs from selected runtime paths"
+        )
 
     configurations = tuple(
         ConfigurationExecutionBinding(
@@ -193,18 +236,92 @@ def build_runtime_execution_binding(
         for name, config_source in configuration_sources.items()
     )
     normalized_result = _canonical_path(result_json)
-    return RuntimeExecutionBinding(
-        connector_mode=connector_mode,
-        include_writes=include_writes,
-        include_communications=include_communications,
-        audit_database=_canonical_path(audit_database) or "",
-        artifact_root=_canonical_path(artifact_root) or "",
-        workspace_root=normalized_workspace,
-        result_json=normalized_result,
-        evidence_type=evidence_type if normalized_result is not None else None,
-        configurations=configurations,
-        publication_roots=tuple(publication_roots),
-    )
+    try:
+        return RuntimeExecutionBinding(
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            audit_database=_canonical_path(audit_database) or "",
+            artifact_root=_canonical_path(artifact_root) or "",
+            workspace_root=normalized_workspace,
+            result_json=normalized_result,
+            evidence_type=evidence_type if normalized_result is not None else None,
+            configurations=configurations,
+            runtime_paths=tuple(
+                item.binding for item in selected_paths if not item.publication
+            ),
+            publication_roots=tuple(
+                item.binding for item in selected_paths if item.publication
+            ),
+        )
+    finally:
+        for item in owned_paths:
+            item.close()
+
+
+def capture_runtime_execution_paths(
+    integrations: IntegrationConfig,
+    *,
+    connector_mode: str,
+    include_writes: bool,
+    audit_database: Path,
+    artifact_root: Path,
+    workspace_root: Path | None,
+    result_json: Path | None,
+    environ: Mapping[str, str] | None = None,
+    approved_bindings: Sequence[RuntimePathExecutionBinding] | None = None,
+) -> tuple[CapturedRuntimePath, ...]:
+    """Capture and retain exact ancestor identities for every writable root."""
+
+    source = environ if environ is not None else os.environ
+    captured: list[CapturedRuntimePath] = []
+    try:
+        specifications = _runtime_path_specs(
+            integrations,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            audit_database=audit_database,
+            artifact_root=artifact_root,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            environ=source,
+        )
+        if approved_bindings is None:
+            approved = None
+        else:
+            approved = {item.name: item for item in approved_bindings}
+            if len(approved) != len(approved_bindings):
+                raise ConfigurationError("approved runtime path names are not unique")
+        if approved is not None and set(approved) != {
+            name for name, _, _ in specifications
+        }:
+            raise ConfigurationError(
+                "applied execution context differs from the approved plan: "
+                "runtime policy, principal, gate, or path binding"
+            )
+        for name, path, publication in specifications:
+            if approved is not None:
+                captured.append(
+                    _capture_approved_runtime_path(
+                        name,
+                        path,
+                        publication=publication,
+                        approved=approved[name],
+                    )
+                )
+                continue
+            captured.append(
+                _capture_runtime_path(
+                    name,
+                    path,
+                    publication=publication,
+                )
+            )
+        return tuple(captured)
+    except BaseException:
+        for item in captured:
+            item.close()
+        raise
 
 
 def enforce_execution_context(plan: ChangePlan, observed: ExecutionContext) -> None:
@@ -262,6 +379,150 @@ def _canonical_path(path: Path | None) -> str | None:
     if not selected.is_absolute():
         selected = Path.cwd() / selected
     return str(selected.resolve(strict=False))
+
+
+def _runtime_path_specs(
+    integrations: IntegrationConfig,
+    *,
+    connector_mode: str,
+    include_writes: bool,
+    audit_database: Path,
+    artifact_root: Path,
+    workspace_root: Path | None,
+    result_json: Path | None,
+    environ: Mapping[str, str],
+) -> tuple[tuple[str, Path, bool], ...]:
+    """Return named writable directories and publication-root requirements."""
+
+    specifications: list[tuple[str, Path, bool]] = [
+        ("audit.parent", audit_database.parent, False),
+        ("artifact.root", artifact_root, False),
+    ]
+    if workspace_root is not None:
+        specifications.append(("workspace.root", workspace_root, False))
+    if result_json is not None:
+        specifications.append(("result.parent", result_json.parent, False))
+    if connector_mode == "live" and include_writes:
+        for config in integrations.connectors.values():
+            if not config.enabled or config.system != "bitbucket":
+                continue
+            if not (
+                _strict_extra_bool(config.extra, "write_enabled")
+                and _strict_extra_bool(config.extra, "branch_push_enabled")
+            ):
+                continue
+            variable = str(config.extra.get("repository_root_env", "")).strip()
+            if variable:
+                raw_root = environ.get(variable, "").strip()
+                if not raw_root:
+                    raise ConfigurationError(
+                        "Bitbucket branch publication requires environment variable "
+                        f"{variable}"
+                    )
+                selected_root = Path(raw_root)
+            elif workspace_root is not None:
+                selected_root = workspace_root
+            else:
+                raise ConfigurationError(
+                    "Bitbucket branch publication requires workspace_root or "
+                    "repository_root_env"
+                )
+            specifications.append(
+                (
+                    f"{config.system}.branch_publication",
+                    selected_root,
+                    True,
+                )
+            )
+    return tuple(specifications)
+
+
+def _capture_runtime_path(
+    name: str,
+    path: Path,
+    *,
+    publication: bool,
+) -> CapturedRuntimePath:
+    """Pin an exact pre-existing canonical runtime directory."""
+
+    canonical_value = _canonical_path(path)
+    if canonical_value is None:  # pragma: no cover - non-optional invariant.
+        raise ConfigurationError("runtime directory path is missing")
+    target = Path(canonical_value)
+    try:
+        anchor = PinnedDirectory.open(target)
+    except ConfigurationError as error:
+        raise ConfigurationError(
+            f"runtime directory must already exist and be private: {name}"
+        ) from error
+    try:
+        identity: DirectoryIdentity = anchor.identity
+        return CapturedRuntimePath(
+            binding=RuntimePathExecutionBinding(
+                name=name,
+                path=str(target),
+                anchor_path=str(anchor.path),
+                device=identity.device,
+                inode=identity.inode,
+                owner=identity.owner,
+                mode=identity.mode,
+            ),
+            publication=publication,
+            _anchor=anchor,
+        )
+    except BaseException:
+        anchor.close()
+        raise
+
+
+def _capture_approved_runtime_path(
+    name: str,
+    path: Path,
+    *,
+    publication: bool,
+    approved: RuntimePathExecutionBinding,
+) -> CapturedRuntimePath:
+    """Reopen the plan's exact ancestor rather than selecting a newer leaf."""
+
+    target_value = _canonical_path(path)
+    if target_value is None:  # pragma: no cover - non-optional invariant.
+        raise ConfigurationError("runtime directory path is missing")
+    if approved.name != name or approved.path != target_value:
+        raise ConfigurationError(
+            "applied execution context differs from the approved plan: "
+            "runtime policy, principal, gate, or path binding"
+        )
+    if approved.anchor_path != approved.path:
+        raise ConfigurationError(
+            f"approved runtime directory does not pin its exact path: {name}"
+        )
+    expected = DirectoryIdentity(
+        device=approved.device,
+        inode=approved.inode,
+        owner=approved.owner,
+        mode=approved.mode,
+    )
+    anchor = PinnedDirectory.open(
+        Path(approved.path),
+        expected_identity=expected,
+    )
+    try:
+        return CapturedRuntimePath(
+            binding=RuntimePathExecutionBinding(
+                name=name,
+                path=target_value,
+                anchor_path=str(anchor.path),
+                device=expected.device,
+                inode=expected.inode,
+                owner=expected.owner,
+                mode=expected.mode,
+            ),
+            publication=publication,
+            _anchor=anchor,
+        )
+    except BaseException:
+        anchor.close()
+        raise
 
 
 def _strict_extra_bool(extra: Mapping[str, object], key: str) -> bool:

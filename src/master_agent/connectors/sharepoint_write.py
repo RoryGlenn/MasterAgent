@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -15,7 +17,8 @@ from master_agent.connectors.utils import (
     quote_segment,
     string_parameter,
 )
-from master_agent.errors import ConnectorError, VersionConflictError
+from master_agent.directory_safety import PinnedDirectory, pin_directory
+from master_agent.errors import ConfigurationError, ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport
 from master_agent.models import (
     ActionState,
@@ -53,7 +56,7 @@ class SharePointWriteConnector:
         self,
         config: ResolvedConnectorConfig,
         *,
-        artifact_root: Path,
+        artifact_root: Path | PinnedDirectory,
         transport: HttpTransport | None = None,
     ) -> None:
         if config.max_pages < 12:
@@ -72,9 +75,8 @@ class SharePointWriteConnector:
             raise ConnectorError(
                 "SharePoint upload and response limits must be positive"
             )
-        root = artifact_root.expanduser().resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        self._artifact_root = root
+        self._artifact_directory = pin_directory(artifact_root)
+        self._artifact_root = self._artifact_directory.path
         self._config = config
         self._client = graph_client(
             config,
@@ -96,14 +98,18 @@ class SharePointWriteConnector:
 
         return self._CAPABILITIES
 
+    def close(self) -> None:
+        """Release the connector-owned artifact-directory pin."""
+
+        self._artifact_directory.close()
+
     def execute(self, action: AgentAction) -> ExecutionResult:
         """Replace one existing file after an exact eTag precondition check."""
 
         self._validate(action)
         drive_id = string_parameter(action.parameters, "drive_id", required=True)
         item_id = action.target.resource_id
-        local_path = self._local_path(action.parameters)
-        content = local_path.read_bytes()
+        local_path, content = self._local_artifact(action.parameters)
         approved_digest = str(action.parameters.get("local_sha256", "")).strip().lower()
         observed_digest = hashlib.sha256(content).hexdigest()
         if len(approved_digest) != 64 or approved_digest != observed_digest:
@@ -322,18 +328,60 @@ class SharePointWriteConnector:
             ),
         )
 
-    def _local_path(self, parameters: Mapping[str, Any]) -> Path:
+    def _local_artifact(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> tuple[Path, bytes]:
         value = string_parameter(parameters, "local_path", required=True)
-        path = Path(value).expanduser().resolve()
+        selected = Path(value).expanduser()
+        if not selected.is_absolute():
+            selected = Path.cwd() / selected
+        # Canonicalize only the parent so macOS's /var -> /private/var alias is
+        # normalized without following or accepting a symlinked final file.
+        path = Path(os.path.realpath(os.fspath(selected.parent))) / selected.name
         try:
-            path.relative_to(self._artifact_root)
+            relative = path.relative_to(self._artifact_root)
         except ValueError as error:
             raise ConnectorError(
                 "local_path is outside the approved artifact root"
             ) from error
-        if not path.is_file():
+        if not relative.parts or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
             raise ConnectorError("SharePoint local_path is not a file")
-        return path
+        try:
+            parent = (
+                self._artifact_directory.duplicate()
+                if len(relative.parts) == 1
+                else self._artifact_directory.pin_child(relative.parent)
+            )
+            try:
+                descriptor = os.open(
+                    relative.name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent.fileno(),
+                )
+                try:
+                    metadata = os.fstat(descriptor)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise ConnectorError("SharePoint local_path is not a file")
+                    chunks: list[bytes] = []
+                    remaining = self._max_upload_bytes + 1
+                    while remaining:
+                        chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    parent.validate()
+                    self._artifact_directory.validate()
+                    return path, b"".join(chunks)
+                finally:
+                    os.close(descriptor)
+            finally:
+                parent.close()
+        except (ConfigurationError, OSError) as error:
+            raise ConnectorError("SharePoint local artifact path changed") from error
 
     def _read_metadata(self, item_path: str) -> dict[str, Any]:
         data, response = self._client.request_json("GET", item_path)

@@ -2,7 +2,11 @@
 
 ## Scope
 
-Phase 2A connects the governed runtime to real enterprise APIs without granting write authority. It supports deployment discovery, bounded reads, normalized evidence, independent verification, and local weekly-status generation.
+Phase 2A connects the governed runtime to real enterprise APIs without granting
+write authority. It supports deployment discovery, bounded reads, normalized
+evidence, independent verification, and weekly-status plan generation. The
+legacy direct weekly-status execution/package command is disabled until it uses
+the immutable manifest and descriptor-pinned output boundary.
 
 This release does not acquire credentials. It consumes already-issued credentials supplied through environment variables at process start.
 
@@ -147,8 +151,9 @@ The run report returned to the explicit caller may contain full normalized evide
 
 A full run result is written only when the user supplies `--apply` and a
 manifest-bound `--result-json`. Policy-only dry runs use a temporary audit chain
-that is removed before exit and cannot persist a result. Weekly-status evidence
-is written only to the explicitly selected output directory.
+that is removed before exit and cannot persist a result. Weekly-status plan
+generation is non-executing; the direct package command is disabled and writes
+no provider-derived evidence.
 
 ## Verification model
 

@@ -2,7 +2,10 @@
 
 ## Overall status
 
-The v1 software roadmap is complete. Organization-specific production activation remains a deployment and governance gate, because it requires real administrators, tenant/server access, approved applications, and credentials that are intentionally not part of the source release.
+The v1 governed core and provider connectors are implemented. Release-hardening
+gates keep incomplete local-Git metadata mutation, non-manifest package
+execution, recurring execution, and destructive retention maintenance
+non-routable.
 
 | Phase | Software status | Operational status |
 |---|---|---|
@@ -12,9 +15,9 @@ The v1 software roadmap is complete. Organization-specific production activation
 | 2B — Outlook/Teams/identity/citations/retention | Complete | Contract-tested; target deployment requires approved credentials |
 | 2C — authentication/readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
-| 4 — approved reversible writes | Complete | Disabled until provider-specific gates and approvals are configured |
+| 4 — approved reversible writes | Provider writes complete; local Git disabled | Provider-specific gates and approvals required |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
-| 6 — recurring autonomy | Complete | Registered schedules remain disabled by default |
+| 6 — recurring autonomy | Registration/status only | Execution disabled pending exact target/config/runtime binding |
 
 ## Phase acceptance criteria
 
@@ -60,14 +63,13 @@ The v1 software roadmap is complete. Organization-specific production activation
 - Teams response is re-read after posting;
 - sends are labeled non-reversible and correction is a new approved action.
 
-### Phase 6
+### Phase 6 release boundary
 
-- only registered built-in workflows run;
+- registered built-in workflows and due state can be inspected;
 - timezone-aware due calculation and maximum lateness;
-- durable occurrence state prevents duplicate runs;
-- per-workflow locks prevent overlap;
-- capability/recipient/source allowlists fail closed;
-- packaged workflows disabled and local/draft-only.
+- execution is disabled before config, credentials, connectors, or audit access;
+- reactivation requires exact target, source, delivery, config, and runtime
+  manifest binding rather than capability-name-only scope checks.
 
 ## Deployment work that cannot be completed generically
 

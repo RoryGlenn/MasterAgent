@@ -2,12 +2,12 @@
 # in packaged integration defaults; enabling a capability does not grant credentials.
 
 [capabilities."bitbucket.branch.push"]
-enabled = true
+enabled = false
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Push only a new agent-prefixed branch and delete only that exact unchanged ref during rollback."
+description = "Disabled until every local Git metadata transaction is descriptor-bound."
 
 [capabilities."bitbucket.build_status.read"]
 enabled = true
@@ -269,12 +269,12 @@ authentication = "local"
 risk = "local_generation"
 
 [capabilities."repository.branch.create"]
-enabled = true
+enabled = false
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Create a non-protected local Git branch at the checked-out HEAD."
+description = "Disabled until every local Git metadata transaction is descriptor-bound."
 
 [capabilities."repository.branch.plan"]
 enabled = true
@@ -283,28 +283,28 @@ risk = "local_generation"
 description = "Generate a local branch-operation plan."
 
 [capabilities."repository.branch.push"]
-enabled = true
+enabled = false
 authentication = "local_git"
 risk = "reversible_write"
 reversible = false
 requires_expected_version = true
-description = "Push only the current non-protected branch without force."
+description = "Disabled until every local Git metadata transaction is descriptor-bound."
 
 [capabilities."repository.commit.create"]
-enabled = true
+enabled = false
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Create a local commit from an explicit path allowlist."
+description = "Disabled until every local Git metadata transaction is descriptor-bound."
 
 [capabilities."repository.patch.apply"]
-enabled = true
+enabled = false
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Apply a bounded approved patch with exact HEAD preconditions."
+description = "Disabled until every local Git metadata transaction is descriptor-bound."
 
 [capabilities."repository.patch.generate"]
 enabled = true

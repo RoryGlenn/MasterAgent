@@ -14,6 +14,7 @@ from master_agent import retention
 from master_agent.errors import ConfigurationError
 from master_agent.evidence import content_digest
 from master_agent.retention import (
+    RetainedJSONReservation,
     RetentionConfig,
     purge_expired_evidence,
     repair_orphaned_evidence,
@@ -375,6 +376,47 @@ persistence = "explicit_content"
             self.assertEqual(first_evidence.read_bytes(), evidence_before)
             self.assertEqual(first_sidecar.read_bytes(), sidecar_before)
 
+    def test_result_reservation_rejects_stale_name_before_commit(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "result.json"
+            evidence.write_bytes(b"peer-result")
+            evidence.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigurationError, "already exists"):
+                RetainedJSONReservation(
+                    evidence,
+                    evidence_type="run-result/full",
+                    config=config,
+                    include_content=True,
+                )
+
+            self.assertEqual(evidence.read_bytes(), b"peer-result")
+            self.assertFalse((root / "result.json.retention.json").exists())
+
+    def test_result_reservation_exposes_no_partial_pair_to_repair_preview(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "result.json"
+            with RetainedJSONReservation(
+                evidence,
+                evidence_type="run-result/full",
+                config=config,
+                include_content=True,
+            ) as reservation:
+                preview = repair_orphaned_evidence(root, dry_run=True)
+                self.assertEqual(preview.orphaned_files, ())
+                self.assertFalse(evidence.exists())
+                self.assertFalse((root / "result.json.retention.json").exists())
+                reservation.commit({"schema": "run-result@1"})
+
+            repair = repair_orphaned_evidence(root, dry_run=True)
+            self.assertEqual(repair.orphaned_files, ())
+            self.assertTrue(evidence.is_file())
+            self.assertTrue((root / "result.json.retention.json").is_file())
+
     def test_digest_mismatch_is_repaired_and_never_purged_as_valid(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
         created = datetime(2026, 8, 13, tzinfo=UTC)
@@ -392,7 +434,7 @@ persistence = "explicit_content"
             purge = purge_expired_evidence(
                 root,
                 now=created + timedelta(hours=25),
-                dry_run=False,
+                dry_run=True,
             )
             repair = repair_orphaned_evidence(root, dry_run=True)
 
@@ -420,21 +462,19 @@ persistence = "explicit_content"
 
             self.assertFalse(missing.exists())
 
-    def test_orphaned_evidence_is_detected_and_quarantined(self) -> None:
+    def test_orphaned_evidence_is_detected_but_quarantine_is_disabled(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             orphan = root / "orphan.json"
             orphan.write_text('{"secret":"TOP-SECRET"}\n', encoding="utf-8")
 
             preview = repair_orphaned_evidence(root, dry_run=True)
-            applied = repair_orphaned_evidence(root, dry_run=False)
+            with self.assertRaisesRegex(ConfigurationError, "repair is disabled"):
+                repair_orphaned_evidence(root, dry_run=False)
 
             self.assertEqual(preview.orphaned_files, (str(orphan),))
-            self.assertFalse(orphan.exists())
-            self.assertEqual(len(applied.quarantined_files), 1)
-            quarantined = Path(applied.quarantined_files[0])
-            self.assertTrue(quarantined.is_file())
-            self.assertIn("TOP-SECRET", quarantined.read_text(encoding="utf-8"))
+            self.assertTrue(orphan.exists())
+            self.assertFalse((root / ".retention-quarantine").exists())
 
     def test_retained_text_receives_sidecar_and_expiration_cleanup(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
@@ -459,14 +499,14 @@ persistence = "explicit_content"
             self.assertEqual(preview.expired_manifests, 1)
             self.assertEqual(len(preview.removed_files), 2)
 
-            applied = purge_expired_evidence(
-                root,
-                now=created + timedelta(hours=73),
-                dry_run=False,
-            )
-            self.assertEqual(applied.errors, ())
-            self.assertFalse(evidence.exists())
-            self.assertFalse(sidecar.exists())
+            with self.assertRaisesRegex(ConfigurationError, "pruning is disabled"):
+                purge_expired_evidence(
+                    root,
+                    now=created + timedelta(hours=73),
+                    dry_run=False,
+                )
+            self.assertTrue(evidence.exists())
+            self.assertTrue(sidecar.exists())
 
     def test_prohibited_evidence_cannot_be_persisted(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
@@ -501,12 +541,29 @@ persistence = "explicit_content"
             result = purge_expired_evidence(
                 root,
                 now=datetime(2026, 8, 13, tzinfo=UTC),
-                dry_run=False,
+                dry_run=True,
             )
 
             self.assertTrue(result.errors)
             self.assertTrue(victim.exists())
             victim.unlink()
+
+    def test_destructive_maintenance_rejects_before_traversal(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch.object(retention, "_purge_expired_evidence_locked") as purge,
+                self.assertRaisesRegex(ConfigurationError, "pruning is disabled"),
+            ):
+                purge_expired_evidence(root, dry_run=False)
+            purge.assert_not_called()
+
+            with (
+                patch.object(retention, "_repair_orphaned_evidence_locked") as repair,
+                self.assertRaisesRegex(ConfigurationError, "repair is disabled"),
+            ):
+                repair_orphaned_evidence(root, dry_run=False)
+            repair.assert_not_called()
 
 
 def _citation_id(system: str, resource_type: str, resource_id: str) -> str:

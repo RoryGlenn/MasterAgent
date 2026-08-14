@@ -42,8 +42,9 @@
 - Access tokens should be short-lived.
 - Token-file mode rejects group/world-readable files and expired tokens.
 - Approval TTLs should be minutes, not days.
-- Evidence cleanup should run independently of workflow execution.
-- Recurring locks left after a crash require operator investigation before removal.
+- Evidence expiry and orphan checks are preview-only. Destructive pruning and
+  quarantine are disabled pending descriptor-relative recursive maintenance.
+- Recurring execution is disabled; do not install or repair scheduler locks.
 
 ## Monitoring
 
@@ -55,6 +56,6 @@ Track:
 - provider throttling and retry exhaustion;
 - evidence nearing expiry;
 - audit-chain verification;
-- recurring lateness and duplicate-run prevention;
+- recurring registration and due-state drift;
 - plugin inventory changes, while keeping plugin execution disabled;
 - capability/governance configuration changes.

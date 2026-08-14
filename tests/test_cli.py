@@ -44,11 +44,16 @@ class CliTests(unittest.TestCase):
                         str(ROOT / "config/integrations.toml"),
                         "--database",
                         str(root / "audit.sqlite3"),
+                        "--draft-output-dir",
+                        str(root / "persistent/drafts"),
+                        "--workspace-root",
+                        str(root / "persistent/workspaces"),
                     ]
                 )
             self.assertEqual(status, 0, stderr.getvalue())
             self.assertIn("mode: dry-run", stdout.getvalue())
             self.assertFalse((root / "audit.sqlite3").exists())
+            self.assertFalse((root / "persistent").exists())
 
     def test_dry_run_cannot_persist_an_unbound_result(self) -> None:
         """Review mode must not write audit or result files outside a manifest."""

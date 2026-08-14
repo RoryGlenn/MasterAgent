@@ -39,6 +39,14 @@ class Connector(Protocol):
 
 
 @runtime_checkable
+class ClosableConnector(Protocol):
+    """Optional connector contract for releasing pinned runtime resources."""
+
+    def close(self) -> None:
+        """Release connector-owned runtime resources."""
+
+
+@runtime_checkable
 class IdempotencyVerifyingConnector(Protocol):
     """Optional contract for independently verifying a completed retry."""
 

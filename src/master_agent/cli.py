@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
 import tempfile
 from collections.abc import Sequence
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +23,7 @@ from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
 from master_agent.config import IntegrationConfig
 from master_agent.config_sources import ConfigSource, resolve_config_source
+from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
@@ -28,6 +31,7 @@ from master_agent.connectors.factory import (
 )
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.discovery import DiscoveryStatus, discover_integrations
 from master_agent.errors import (
     ConfigurationError,
@@ -37,6 +41,7 @@ from master_agent.errors import (
 from master_agent.execution_context import (
     build_execution_context,
     build_runtime_execution_binding,
+    capture_runtime_execution_paths,
     enforce_execution_context,
 )
 from master_agent.governance import GovernanceProfile
@@ -63,6 +68,7 @@ from master_agent.recurring import (
 )
 from master_agent.registry import ConnectorRegistry
 from master_agent.retention import (
+    RetainedJSONReservation,
     RetentionConfig,
     purge_expired_evidence,
     write_retained_json,
@@ -82,6 +88,20 @@ from master_agent.workflows.weekly_status import (
     WeeklyStatusSettings,
     build_weekly_status_read_plan,
     render_weekly_status_package,
+)
+
+_DISABLED_LOCAL_GIT_MUTATIONS = frozenset(
+    {
+        "bitbucket.branch.push",
+        "repository.branch.create",
+        "repository.branch.push",
+        "repository.commit.create",
+        "repository.patch.apply",
+    }
+)
+
+_DISABLED_NON_MANIFEST_EXECUTIONS = frozenset(
+    {"communication-context", "recurring-run", "weekly-status"}
 )
 
 
@@ -468,7 +488,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     recurring_run = subparsers.add_parser(
         "recurring-run",
-        help="run one registered narrow workflow",
+        help="disabled pending exact recurring target and runtime binding",
     )
     recurring_run.add_argument("name")
     recurring_run.add_argument("--recurring", type=Path, default=None)
@@ -502,7 +522,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     weekly = subparsers.add_parser(
         "weekly-status",
-        help="collect live evidence and render a local status package",
+        help="disabled pending manifest-bound descriptor-safe rendering",
     )
     weekly.add_argument("--integrations", type=Path, default=None)
     weekly.add_argument("--workflow", type=Path, default=None)
@@ -538,7 +558,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     prune = subparsers.add_parser(
         "evidence-prune",
-        help="preview or delete expired retained evidence",
+        help="preview expired evidence; destructive apply is disabled",
     )
     prune.add_argument("--root", type=Path, default=Path(".master-agent"))
     prune.add_argument("--apply", action="store_true")
@@ -565,7 +585,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     communication = subparsers.add_parser(
         "communication-context",
-        help="collect Outlook and Teams context and render retained local evidence",
+        help="disabled pending manifest-bound descriptor-safe rendering",
     )
     communication.add_argument("--integrations", type=Path, default=None)
     communication.add_argument("--workflow", type=Path, default=None)
@@ -804,12 +824,61 @@ def _run(
                 configuration_sources["approval_authorities"],
                 environ=os.environ,
             )
-    else:
+        # Policy preview is intentionally non-persistent. This prevents an
+        # unbound review command from selecting an arbitrary audit/evidence
+        # destination while preserving credential-free plan inspection.
+        with tempfile.TemporaryDirectory(prefix="master-agent-dry-run-") as directory:
+            ephemeral_audit = AuditLog(Path(directory) / "audit.sqlite3")
+            try:
+                report = _orchestrator(
+                    connectors,
+                    Path(directory) / "audit.sqlite3",
+                    capabilities_path=capabilities_path,
+                    governance_path=governance_path,
+                    policy_source=configuration_sources["policy"],
+                    sources_of_truth_source=configuration_sources["sources_of_truth"],
+                    capabilities_source=configuration_sources["capabilities"],
+                    governance_source=configuration_sources["governance"],
+                    approval_authenticator=approval_authenticator,
+                    audit=ephemeral_audit,
+                ).run(
+                    plan,
+                    approvals=approvals,
+                    dry_run=True,
+                )
+            finally:
+                ephemeral_audit.close()
+        _print_report(report)
+        return 0 if report.successful else 2
+
+    with ExitStack() as runtime_resources:
         execution_environ = dict(os.environ)
         integrations_source = resolve_config_source(
             integrations_path, "integrations.toml"
         )
         integration_config = IntegrationConfig.from_toml(integrations_source)
+        approved_context = plan.execution_context
+        if approved_context is None or approved_context.runtime is None:
+            raise ConfigurationError(
+                "applied execution requires an approval-bound runtime path identity"
+            )
+        approved_path_bindings = (
+            *approved_context.runtime.runtime_paths,
+            *approved_context.runtime.publication_roots,
+        )
+        captured_paths = capture_runtime_execution_paths(
+            integration_config,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            audit_database=database,
+            artifact_root=draft_output_dir,
+            workspace_root=workspace_root,
+            result_json=result_json,
+            environ=execution_environ,
+            approved_bindings=approved_path_bindings,
+        )
+        for captured in captured_paths:
+            runtime_resources.callback(captured.close)
         observed_context = build_execution_context(
             integration_config,
             environ=execution_environ,
@@ -825,6 +894,7 @@ def _run(
                 evidence_type=evidence_type,
                 configuration_sources=configuration_sources,
                 environ=execution_environ,
+                captured_paths=captured_paths,
             ),
             include_connectors=connector_mode == "live",
         )
@@ -832,6 +902,71 @@ def _run(
             plan,
             observed_context,
         )
+        disabled_git_actions = sorted(
+            {
+                action.capability
+                for action in plan.actions
+                if action.capability in _DISABLED_LOCAL_GIT_MUTATIONS
+            }
+        )
+        if disabled_git_actions:
+            raise ConfigurationError(
+                "local Git mutation capabilities are disabled until all Git "
+                "metadata transactions are descriptor-bound: "
+                + ", ".join(disabled_git_actions)
+            )
+        approved_runtime = observed_context.runtime
+        if approved_runtime is None:
+            raise ConfigurationError(
+                "applied execution context is missing its runtime path binding"
+            )
+        # The equality gate above proves these canonical paths are the exact
+        # approved values. Never pass the original CLI spellings downstream:
+        # they may contain a symlinked ancestor that can be rebound after this
+        # check while still resolving to the approved path during comparison.
+        database = Path(approved_runtime.audit_database)
+        draft_output_dir = Path(approved_runtime.artifact_root)
+        workspace_root = (
+            Path(approved_runtime.workspace_root)
+            if approved_runtime.workspace_root is not None
+            else None
+        )
+        result_json = (
+            Path(approved_runtime.result_json)
+            if approved_runtime.result_json is not None
+            else None
+        )
+        if approved_runtime.evidence_type is not None:
+            evidence_type = approved_runtime.evidence_type
+
+        pinned_paths = {
+            captured.binding.name: runtime_resources.enter_context(
+                captured.open_target()
+            )
+            for captured in captured_paths
+        }
+        for captured in captured_paths:
+            captured.validate()
+        for pinned in pinned_paths.values():
+            pinned.validate()
+        audit_parent = pinned_paths["audit.parent"]
+        artifact_directory = pinned_paths["artifact.root"]
+        result_parent = pinned_paths.get("result.parent")
+        result_reservation: RetainedJSONReservation | None = None
+        if result_json is not None:
+            if result_parent is None:  # pragma: no cover - manifest invariant.
+                raise ConfigurationError("applied result path has no pinned parent")
+            retention = RetentionConfig.from_toml(configuration_sources["retention"])
+            result_reservation = runtime_resources.enter_context(
+                RetainedJSONReservation(
+                    result_json,
+                    evidence_type=evidence_type,
+                    config=retention,
+                    include_content=True,
+                    parent_directory=result_parent,
+                )
+            )
+
         if approval_authorities is not None:
             approval_authenticator = HmacApprovalAuthenticator.from_toml(
                 configuration_sources["approval_authorities"],
@@ -839,7 +974,7 @@ def _run(
             )
         if connector_mode == "mock":
             connectors = _mock_registry()
-            register_draft_connectors(connectors, draft_output_dir)
+            register_draft_connectors(connectors, artifact_directory)
         else:
             connectors = build_live_registry(
                 integration_config,
@@ -848,12 +983,16 @@ def _run(
                 include_communications=include_communications,
                 workspace_root=workspace_root,
                 artifact_root=draft_output_dir,
+                artifact_directory=artifact_directory,
                 approved_execution_context=plan.execution_context,
             )
-            register_draft_connectors(connectors, draft_output_dir)
+            register_draft_connectors(connectors, artifact_directory)
             identities = IdentityRegistry.from_toml(configuration_sources["identities"])
             if "identity" not in connectors.systems():
                 connectors.register(IdentityMapConnector(identities))
+        for connector in connectors.connectors():
+            if isinstance(connector, ClosableConnector):
+                runtime_resources.callback(connector.close)
 
         # Re-capture every path-backed policy input and non-secret environment
         # identity after connector construction. Connector clients use the
@@ -889,65 +1028,46 @@ def _run(
                     evidence_type=evidence_type,
                     configuration_sources=current_configuration_sources,
                     environ=current_environ,
+                    captured_paths=captured_paths,
                 ),
                 include_connectors=connector_mode == "live",
             ),
         )
+        for captured in captured_paths:
+            captured.validate()
+        for pinned in pinned_paths.values():
+            pinned.validate()
 
-    if apply:
-        report = _orchestrator(
-            connectors,
-            database,
-            capabilities_path=capabilities_path,
-            governance_path=governance_path,
-            policy_source=configuration_sources["policy"],
-            sources_of_truth_source=configuration_sources["sources_of_truth"],
-            capabilities_source=configuration_sources["capabilities"],
-            governance_source=configuration_sources["governance"],
-            approval_authenticator=approval_authenticator,
-        ).run(
-            plan,
-            approvals=approvals,
-            dry_run=False,
-        )
-    else:
-        # Policy preview is intentionally non-persistent. This prevents an
-        # unbound review command from selecting an arbitrary audit/evidence
-        # destination while preserving credential-free plan inspection.
-        with tempfile.TemporaryDirectory(prefix="master-agent-dry-run-") as directory:
-            ephemeral_audit = AuditLog(Path(directory) / "audit.sqlite3")
-            try:
-                report = _orchestrator(
-                    connectors,
-                    Path(directory) / "audit.sqlite3",
-                    capabilities_path=capabilities_path,
-                    governance_path=governance_path,
-                    policy_source=configuration_sources["policy"],
-                    sources_of_truth_source=configuration_sources["sources_of_truth"],
-                    capabilities_source=configuration_sources["capabilities"],
-                    governance_source=configuration_sources["governance"],
-                    approval_authenticator=approval_authenticator,
-                    audit=ephemeral_audit,
-                ).run(
-                    plan,
-                    approvals=approvals,
-                    dry_run=True,
-                )
-            finally:
-                ephemeral_audit.close()
-    _print_report(report)
-    if result_json is not None:
-        retention = RetentionConfig.from_toml(configuration_sources["retention"])
-        evidence, sidecar = write_retained_json(
-            result_json,
-            report.to_dict(),
-            evidence_type=evidence_type,
-            config=retention,
-            include_content=True,
-        )
-        print(f"full result written to {evidence}")
-        print(f"retention sidecar written to {sidecar}")
-    return 0 if report.successful else 2
+        applied_audit = AuditLog(database, parent_directory=audit_parent)
+        try:
+            report = _orchestrator(
+                connectors,
+                database,
+                capabilities_path=capabilities_path,
+                governance_path=governance_path,
+                policy_source=configuration_sources["policy"],
+                sources_of_truth_source=configuration_sources["sources_of_truth"],
+                capabilities_source=configuration_sources["capabilities"],
+                governance_source=configuration_sources["governance"],
+                approval_authenticator=approval_authenticator,
+                audit=applied_audit,
+            ).run(
+                plan,
+                approvals=approvals,
+                dry_run=False,
+            )
+        finally:
+            applied_audit.close()
+
+        if result_json is not None:
+            if result_reservation is None:  # pragma: no cover - branch invariant.
+                raise ConfigurationError("applied result path was not reserved")
+            evidence, sidecar = result_reservation.commit(report.to_dict())
+        _print_report(report)
+        if result_json is not None:
+            print(f"full result written to {evidence}")
+            print(f"retention sidecar written to {sidecar}")
+        return 0 if report.successful else 2
 
 
 def _plugins(*, output: Path | None) -> int:
@@ -1063,17 +1183,41 @@ def _draft_package(
 ) -> int:
     """Generate all Phase 3 artifacts locally without provider writes."""
 
-    settings = DraftPackageSettings.from_toml(
-        resolve_config_source(workflow_path, "draft-package.toml")
-    )
-    plan = build_draft_package_plan(settings)
-    registry = build_draft_registry(output_dir)
-    report = _orchestrator(registry, database).run(plan, dry_run=False)
-    _print_report(report)
-    artifacts = render_draft_package(report, output_dir=output_dir)
-    print(f"summary: {artifacts.summary_markdown}")
-    print(f"manifest: {artifacts.manifest_json}")
-    return 0 if report.successful else 2
+    with ExitStack() as resources:
+        output_directory = resources.enter_context(PinnedDirectory.open(output_dir))
+        database_parent = resources.enter_context(
+            PinnedDirectory.open(database.expanduser().absolute().parent)
+        )
+        if output_directory.identity == database_parent.identity:
+            raise ConfigurationError(
+                "draft artifact and audit database directories must be distinct"
+            )
+        fcntl.flock(output_directory.fileno(), fcntl.LOCK_EX)
+        if os.listdir(output_directory.fileno()):
+            raise ConfigurationError(
+                "draft artifact directory must be empty; use a fresh directory"
+            )
+        canonical_database = database_parent.path / database.name
+        settings = DraftPackageSettings.from_toml(
+            resolve_config_source(workflow_path, "draft-package.toml")
+        )
+        plan = build_draft_package_plan(settings)
+        registry = build_draft_registry(output_directory)
+        for connector in registry.connectors():
+            if isinstance(connector, ClosableConnector):
+                resources.callback(connector.close)
+        audit = AuditLog(canonical_database, parent_directory=database_parent)
+        resources.callback(audit.close)
+        report = _orchestrator(
+            registry,
+            canonical_database,
+            audit=audit,
+        ).run(plan, dry_run=False)
+        artifacts = render_draft_package(report, output_dir=output_directory)
+        _print_report(report)
+        print(f"summary: {artifacts.summary_markdown}")
+        print(f"manifest: {artifacts.manifest_json}")
+        return 0 if report.successful else 2
 
 
 def _compensation_plan(
@@ -1140,6 +1284,8 @@ def _recurring_run(
 ) -> int:
     """Execute one immutable, registered, local-output recurring workflow."""
 
+    _reject_non_manifest_execution("recurring-run")
+
     config = RecurringConfig.from_toml(
         resolve_config_source(recurring_path, "recurring.toml")
     )
@@ -1163,6 +1309,8 @@ def _execute_registered_workflow(
     connector_mode: str,
 ) -> tuple[bool, dict[str, object]]:
     """Execute one allowlisted built-in recurring workflow implementation."""
+
+    _reject_non_manifest_execution("recurring-run")
 
     if workflow.kind is WorkflowKind.WEEKLY_STATUS_PACKAGE:
         integrations = IntegrationConfig.from_toml(workflow.integration_config)
@@ -1380,6 +1528,7 @@ def _weekly_status(
     output_dir: Path,
     database: Path,
 ) -> int:
+    _reject_non_manifest_execution("weekly-status")
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -1528,6 +1677,7 @@ def _communication_context(
     output_dir: Path,
     database: Path,
 ) -> int:
+    _reject_non_manifest_execution("communication-context")
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -1564,6 +1714,18 @@ def _communication_context(
     print(f"markdown retention: {artifacts.markdown_retention_sidecar}")
     print(f"manifest: {artifacts.manifest_json}")
     return 0 if report.successful else 2
+
+
+def _reject_non_manifest_execution(command: str) -> None:
+    """Fail closed for workflows that bypass the bound execution manifest."""
+
+    if command not in _DISABLED_NON_MANIFEST_EXECUTIONS:
+        raise ValueError(f"unknown disabled execution command: {command}")
+    raise ConfigurationError(
+        f"{command} execution is disabled until its inputs, provider identity, "
+        "targets, audit database, and output package are bound to one immutable "
+        "execution manifest and descriptor-pinned for the full run"
+    )
 
 
 def _scan(*, text: str | None, file: Path | None) -> int:

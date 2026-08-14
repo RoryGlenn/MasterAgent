@@ -47,11 +47,23 @@ used for applied execution.
 
 `bind-context` must receive the same execution arguments later supplied to
 `run --apply`. Its plan fingerprint covers connector mode and write/send gates,
-canonical workspace and artifact roots, effective Bitbucket publication roots,
+canonical workspace and artifact roots, configured Bitbucket publication roots,
 the audit database, optional result path and evidence type, and SHA-256 digests
 of policy, source-of-truth, capability, governance, identity, retention, and
 approval-authority snapshots. A missing legacy binding or any mismatch is
 rejected before connector construction.
+
+All runtime directories (the audit database parent, artifact root, optional
+workspace root, optional result parent, and any configured publication root)
+must preexist, be owned by the current account, and not be writable by group or
+world. Create reviewed boundaries explicitly before binding, for example with
+`mkdir -m 700 PATH`. Binding and apply never create runtime directories.
+The audit parent, artifact root, and result parent must be pairwise distinct by
+both canonical path and filesystem identity; use dedicated directories for
+each writer.
+Draft and retained-evidence publication is create-only, so each run must bind
+fresh output filenames or a fresh private output directory. Existing and
+concurrently created files are preserved and cause the run to fail closed.
 
 An unbound policy dry run remains free of live connector credential resolution
 and is non-persistent: its audit chain exists only in a temporary directory
@@ -78,12 +90,18 @@ capability enabled
 Examples of granular flags:
 
 - Jira/Confluence: `writes_enabled`;
-- Bitbucket: `pull_request_writes_enabled`, `branch_push_enabled`;
+- Bitbucket: `pull_request_writes_enabled`; `branch_push_enabled` is retained
+  only to reject attempted local-Git publication explicitly;
 - Microsoft: `sharepoint_writes_enabled`, `onenote_read_enabled`, `outlook_send_enabled`, `teams_send_enabled`.
 
 OneNote write flags are intentionally not part of the runtime surface. Legacy
 `onenote_writes_enabled` values are ignored; page create/update remain disabled
 in the catalog, governance profile, connector capabilities, and live registry.
+
+Local Git patch, branch, commit, and push capabilities are likewise disabled in
+the catalog and governance profile and are not registered by the live factory.
+They remain unavailable until repository metadata, ref, reflog, index, lock,
+and publication transactions share one descriptor-bound repository identity.
 
 The broad generic flag is retained as a compatibility gate, not as permission to enable every mutation.
 
@@ -145,7 +163,12 @@ preview artifacts must not masquerade as the exact governed projections above.
 
 ## Recurring workflows
 
-A recurring workflow must be enabled explicitly and may execute only capabilities, recipients, and canonical sources in its registration. `--force` changes due-time evaluation only; it cannot enable a disabled registration.
+Recurring definitions and due-state reporting remain available, but
+`recurring-run` is disabled. The prior capability-only scope check did not bind
+exact targets, canonical sources, delivery mode, and configuration snapshots to
+one execution manifest. `weekly-status` and `communication-context` execution
+are disabled for the same reason; their plan-generation commands remain
+available.
 
 ## Safe validation
 

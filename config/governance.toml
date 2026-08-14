@@ -117,6 +117,51 @@ environments = ["development", "non_production", "production"]
 enabled = false
 
 [[rules]]
+pattern = "bitbucket.branch.push"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.branch.create"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.branch.push"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.commit.create"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "repository.patch.apply"
+owner = "source-control-owner"
+authentication = "local_git"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
 pattern = "*.create"
 owner = "system-owner"
 authentication = "provider_specific"

@@ -2,7 +2,8 @@
 
 ## Scope
 
-Phase 6 schedules only registered built-in workflows. It is not a general autonomous loop.
+Phase 6 retains registered workflow definitions and due-state inspection. It is
+not an active autonomous loop in this release.
 
 Current workflow kinds:
 
@@ -21,13 +22,18 @@ Each registration defines:
 - canonical-source allowlist;
 - output directory and config paths.
 
-The runner records each scheduled occurrence in SQLite and holds a per-workflow lock. It will not run the same occurrence twice. `--force` bypasses only the due calculation and never enables a disabled workflow.
+The scheduler state/locking implementation is retained as a non-routable
+internal. Capability names alone cannot prove that exact targets, canonical
+sources, delivery mode, config snapshots, and runtime output paths match the
+reviewed registration, so execution fails closed.
 
 ## Operation
 
 ```bash
 master-agent recurring-status
-master-agent recurring-run weekly_status --connector-mode mock --force
 ```
 
-For production, invoke the same command from an organization scheduler under a narrowly permissioned service account. The runtime atomically claims the exact `(workflow, scheduled_at)` occurrence before invoking its callback; concurrent or repeated invocations skip an existing running, succeeded, or failed claim. A failed claim is not retried automatically because the runtime cannot prove whether an interrupted callback produced an observable result. Current recurring workflows produce local packages and do not invoke Phase 4 or Phase 5 side effects.
+`recurring-run` is disabled before workflow configuration, credentials,
+connectors, or audit state are opened. Do not install a scheduler invocation.
+Reactivation requires exact immutable target/config/source binding plus the
+same descriptor-pinned runtime boundary used by ordinary applied plans.

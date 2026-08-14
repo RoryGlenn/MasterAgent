@@ -21,6 +21,17 @@
 - provider responses are untrusted until normalized and verified;
 - local artifact/workspace roots are explicit security boundaries.
 
+The operating-system service account, installed Master Agent runtime, and
+private runtime directories are part of the trusted computing base. Descriptor
+pins, restrictive ownership/modes, create-only publication, and transaction
+locks guard common pathname-substitution and concurrency attacks. A local,
+unkeyed SQLite database cannot authenticate a malicious same-UID process that
+replaces the complete database, ledger, and lock state with a different
+self-consistent set. Production readiness therefore still requires an external
+tamper-resistant audit sink and isolated or broker-attested credentials; local
+SQLite is a development boundary, not protection from a compromised service
+account.
+
 ## Threats and controls
 
 ### Prompt injection and instruction laundering
@@ -81,10 +92,8 @@ A resource may change between planning and execution.
 Controls:
 
 - expected version/eTag/commit preconditions;
-- exact commit-object push sources instead of mutable local branch ref sources;
-- raw-byte Git diff/status hashes with text conversion and external diff disabled;
-- safe-open raw-blob staging, isolated Git indexes, immutable reviewed trees, and symbolic-HEAD/branch compare-and-swap publication with exact reflog validation;
-- config-isolated remote publication that ignores repository URL rewrites and push URLs;
+- local Git patch/branch/commit/push definitions remain disabled and
+  non-routable until every metadata transaction is descriptor-bound;
 - independent provider re-read;
 - fail-closed conflict states;
 - no automatic overwrite/rebase after conflict.
@@ -98,7 +107,7 @@ Controls:
 - idempotency records for side effects;
 - unsafe POST/PUT retry disabled;
 - provider draft/content preflight for Outlook;
-- recurring completion state and exclusive locks;
+- recurring execution disabled pending exact target/config/runtime binding;
 - explicit correction instead of automatic resend.
 
 ### Partial multi-system failure
@@ -122,7 +131,8 @@ Controls:
 
 - restore captured versions where the provider supports them;
 - delete only resources created by the exact action;
-- delete remote Git branches only when still pointing to the exact created commit;
+- keep local Git mutation and compensation unavailable until all metadata access
+  is descriptor-bound;
 - refuse rollback when current state advanced;
 - sent communications never use fake rollback.
 
@@ -160,9 +170,7 @@ Controls:
 
 - no generic HTTP connector;
 - no generic shell connector;
-- fixed Git executable and argument templates;
-- approved workspace/repository roots;
-- patch and path validation;
+- no routable local Git mutation or generic repository command surface;
 - CLI plugin execution is disabled pending an isolated worker.
 
 ### Malicious connector plugin
@@ -206,7 +214,8 @@ Controls:
   databases without creating them;
 - evidence SHA-256 digests and manifests;
 - mode-`0600` retained files where supported;
-- path-safe expiry cleanup;
+- read-only expiry/orphan previews; destructive recursive maintenance remains
+  disabled until every traversal and deletion is descriptor-relative;
 - production readiness that requires an implemented typed external,
   tamper-resistant audit sink rather than trusting a configured product name.
 
@@ -224,6 +233,9 @@ external compliance record.
 - arbitrary deletion;
 - arbitrary HTTP;
 - arbitrary shell execution;
+- local Git patch, branch, commit, and push execution;
+- non-manifest weekly-status, communication-context, and recurring execution;
+- destructive recursive evidence pruning or quarantine;
 - automatic Teams attachment download;
 - autonomous external communication from recurring workflows;
 - automatic refresh-token persistence.
@@ -233,6 +245,8 @@ external compliance record.
 - provider APIs and permissions differ by tenant/version;
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
+- expiry/orphan maintenance is preview-only pending descriptor-relative
+  recursive traversal;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;
 - provider acceptance does not guarantee human receipt or downstream interpretation;

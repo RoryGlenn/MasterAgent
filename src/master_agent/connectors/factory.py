@@ -24,8 +24,6 @@ from master_agent.connectors.drafts import (
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
-from master_agent.connectors.git_remote import GitBranchPushConnector
-from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.microsoft import (
@@ -36,6 +34,7 @@ from master_agent.connectors.onenote import OneNoteReadConnector
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
+from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError
 from master_agent.execution_context import (
     CapturedConnectorExecution,
@@ -69,6 +68,7 @@ def build_live_connectors(
     include_communications: bool = False,
     workspace_root: Path | None = None,
     artifact_root: Path | None = None,
+    artifact_directory: PinnedDirectory | None = None,
     approved_execution_context: ExecutionContext | None = None,
 ) -> tuple[Connector, ...]:
     """Construct explicitly enabled live connectors.
@@ -92,10 +92,12 @@ def build_live_connectors(
     include_communications
         Permit construction of non-reversible communication connectors.
     workspace_root
-        Root beneath which local Git workspaces and branch publication are
-        permitted.
+        Manifest-bound compatibility input. Local Git mutation connectors are
+        not registered.
     artifact_root
         Root containing generated files eligible for SharePoint publication.
+    artifact_directory
+        Optional descriptor-pinned form of the approved artifact root.
     approved_execution_context
         Optional plan-bound live identity. When supplied, every captured
         connector destination and CA snapshot must match it exactly.
@@ -121,6 +123,19 @@ def build_live_connectors(
             approved_execution_context,
         )
     targets = {item.binding.system: item.target for item in captured}
+
+    if include_writes:
+        for unresolved in config.connectors.values():
+            if (
+                unresolved.enabled
+                and unresolved.system == "bitbucket"
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "branch_push_enabled")
+            ):
+                raise ConfigurationError(
+                    "Bitbucket local-Git branch publication is disabled until all "
+                    "Git metadata transactions are descriptor-bound"
+                )
 
     for name in sorted(config.connectors):
         unresolved = config.connectors[name]
@@ -166,20 +181,6 @@ def build_live_connectors(
                 connectors.append(
                     BitbucketWriteConnector(resolved, transport=transport)
                 )
-            if (
-                include_writes
-                and _feature_enabled(unresolved, "write_enabled")
-                and _feature_enabled(unresolved, "branch_push_enabled")
-            ):
-                root = _repository_root(unresolved, source, workspace_root)
-                connectors.append(
-                    GitBranchPushConnector(
-                        repository_root=root,
-                        branch_prefix=str(
-                            unresolved.extra.get("branch_prefix", "agent/")
-                        ),
-                    )
-                )
             continue
 
         if name != "microsoft":
@@ -201,7 +202,7 @@ def build_live_connectors(
                 connectors.append(
                     SharePointWriteConnector(
                         resolved,
-                        artifact_root=artifact_root,
+                        artifact_root=artifact_directory or artifact_root,
                         transport=transport,
                     )
                 )
@@ -226,14 +227,6 @@ def build_live_connectors(
             "onenote_read_enabled",
         ):
             connectors.append(OneNoteReadConnector(resolved, transport=transport))
-    if include_writes and workspace_root is not None and "repository" in selected:
-        connectors.append(
-            GitWorkspaceConnector(
-                workspace_root=workspace_root,
-                allowed_remotes=("origin",),
-            )
-        )
-
     return tuple(connectors)
 
 
@@ -247,6 +240,7 @@ def build_live_registry(
     include_communications: bool = False,
     workspace_root: Path | None = None,
     artifact_root: Path | None = None,
+    artifact_directory: PinnedDirectory | None = None,
     approved_execution_context: ExecutionContext | None = None,
 ) -> ConnectorRegistry:
     """Build a registry containing explicitly scoped live connectors."""
@@ -261,6 +255,7 @@ def build_live_registry(
         include_communications=include_communications,
         workspace_root=workspace_root,
         artifact_root=artifact_root,
+        artifact_directory=artifact_directory,
         approved_execution_context=approved_execution_context,
     ):
         registry.register(connector)
@@ -269,25 +264,27 @@ def build_live_registry(
 
 def register_draft_connectors(
     registry: ConnectorRegistry,
-    output_root: Path,
+    output_root: Path | PinnedDirectory,
 ) -> ConnectorRegistry:
     """Register all local, non-publishing Phase 3 generators."""
 
-    root = output_root.expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    for connector in (
-        JiraDraftConnector(root),
-        ConfluenceDraftConnector(root),
-        OutlookDraftConnector(root),
-        TeamsDraftConnector(root),
-        PowerPointDraftConnector(root),
-        RepositoryDraftConnector(root),
-    ):
-        registry.register(connector)
+    root = pin_directory(output_root)
+    try:
+        for connector in (
+            JiraDraftConnector(root),
+            ConfluenceDraftConnector(root),
+            OutlookDraftConnector(root),
+            TeamsDraftConnector(root),
+            PowerPointDraftConnector(root),
+            RepositoryDraftConnector(root),
+        ):
+            registry.register(connector)
+    finally:
+        root.close()
     return registry
 
 
-def build_draft_registry(output_root: Path) -> ConnectorRegistry:
+def build_draft_registry(output_root: Path | PinnedDirectory) -> ConnectorRegistry:
     """Build a registry containing only local draft generators."""
 
     return register_draft_connectors(ConnectorRegistry(), output_root)
@@ -340,24 +337,3 @@ def _verify_approved_execution_context(
             f"captured connector {system} {detail} differs from the approved "
             "execution context"
         )
-
-
-def _repository_root(
-    config: ConnectorConfig,
-    environ: Mapping[str, str],
-    fallback: Path | None,
-) -> Path:
-    variable = str(config.extra.get("repository_root_env", "")).strip()
-    if variable:
-        value = environ.get(variable)
-        if not value:
-            raise ConfigurationError(
-                f"Bitbucket branch publication requires environment variable {variable}"
-            )
-        return Path(value)
-    if fallback is None:
-        raise ConfigurationError(
-            "Bitbucket branch publication requires workspace_root or "
-            "repository_root_env"
-        )
-    return fallback

@@ -149,7 +149,10 @@ Recurring workflows are immutable registrations with:
 - persistent occurrence state;
 - a per-workflow lock.
 
-The current built-in recurring workflows generate local weekly-status or communication-context packages. They do not send messages or publish changes.
+Built-in recurring definitions can be inspected for due state, but execution is
+disabled. Weekly-status and communication-context plans can be generated for
+review; their legacy direct execution/package commands are not routable until
+they share the immutable manifest and descriptor-pinned runtime boundary.
 
 ## Trust boundary
 

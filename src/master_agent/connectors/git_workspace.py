@@ -543,7 +543,8 @@ class GitWorkspaceConnector(CompensatingConnector):
         allow_file_remotes: bool = False,
     ) -> None:
         self._workspace_root = workspace_root.expanduser().resolve()
-        self._workspace_root.mkdir(parents=True, exist_ok=True)
+        if not self._workspace_root.is_dir():
+            raise ConnectorError("workspace_root must be an existing directory")
         self._allowed_remotes = frozenset(allowed_remotes)
         self._protected = frozenset(protected_branches)
         self._allow_file_remotes = allow_file_remotes

@@ -34,12 +34,14 @@ because their complete poststate and rollback cannot yet be derived exactly.
 
 ### Bitbucket and Git
 
-- apply a bounded patch in an approved workspace;
-- create a non-protected branch;
-- create a commit from explicit paths;
-- push a new approved branch without force;
 - create a pull request;
-- restore or decline/delete only resources created by the workflow under exact preconditions.
+- decline the exact pull request created by the workflow under exact
+  preconditions.
+
+Local Git patch, branch, commit, push, and compensation definitions are
+disabled and absent from the live registry. They remain quarantined internals
+until every repository metadata/ref/reflog/index/object/lock transaction is
+descriptor-bound to one approved repository identity.
 
 ### SharePoint
 

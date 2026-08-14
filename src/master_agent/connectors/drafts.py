@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import difflib
+import fnmatch
 import hashlib
 import json
+import os
 import re
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from master_agent.errors import ConnectorError
+from master_agent.directory_safety import PinnedDirectory, pin_directory
+from master_agent.errors import ConfigurationError, ConnectorError
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -52,12 +57,12 @@ class _LocalDraftConnector:
         *,
         system: str,
         capabilities: frozenset[str],
-        output_root: Path,
+        output_root: Path | PinnedDirectory,
     ) -> None:
         self._system = system
         self._capabilities = capabilities
-        self._output_root = output_root.expanduser().resolve()
-        self._output_root.mkdir(parents=True, exist_ok=True)
+        self._output_directory = pin_directory(output_root)
+        self._output_root = self._output_directory.path
 
     @property
     def system(self) -> str:
@@ -71,19 +76,31 @@ class _LocalDraftConnector:
 
         return self._capabilities
 
+    def close(self) -> None:
+        """Release the connector-owned output-directory pin."""
+
+        self._output_directory.close()
+
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
         """Read generated artifact metadata by resource identifier."""
 
+        self._output_directory.validate()
         matches = sorted(
-            self._output_root.glob(f"{_safe_name(resource.resource_id)}.*")
+            name
+            for name in os.listdir(self._output_directory.fileno())
+            if fnmatch.fnmatchcase(
+                name,
+                f"{_safe_name(resource.resource_id)}.*",
+            )
         )
         if not matches:
             return None
-        path = matches[0]
+        path = self._output_root / matches[0]
+        payload = _read_bytes(self._output_directory, path)
         return {
             "path": str(path),
-            "sha256": _sha256(path),
-            "size": path.stat().st_size,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
         }
 
     def verify(
@@ -104,15 +121,18 @@ class _LocalDraftConnector:
                 message="generated artifact metadata was incomplete",
             )
         path = Path(path_value)
-        verified = (
-            path.is_file()
-            and _contained(path, self._output_root)
-            and _sha256(path) == digest
+        try:
+            payload = _read_bytes(self._output_directory, path)
+        except ConnectorError:
+            payload = None
+        observed_digest = (
+            hashlib.sha256(payload).hexdigest() if payload is not None else None
         )
+        verified = payload is not None and observed_digest == digest
         observed = {
             "path": str(path),
-            "sha256": _sha256(path) if path.is_file() else None,
-            "size": path.stat().st_size if path.is_file() else None,
+            "sha256": observed_digest,
+            "size": len(payload) if payload is not None else None,
         }
         return VerificationResult(
             action_id=action.action_id,
@@ -141,10 +161,42 @@ class _LocalDraftConnector:
             name = f"{_safe_name(action.target.resource_id)}{default_suffix}"
         if not name:
             raise ConnectorError("generated artifact filename is empty")
-        path = (self._output_root / name).resolve()
-        if not _contained(path, self._output_root):
-            raise ConnectorError("generated artifact escaped the output root")
-        return path
+        try:
+            self._output_directory.validate()
+        except ConfigurationError as error:
+            raise ConnectorError("generated artifact destination changed") from error
+        return self._output_root / name
+
+    def _write_json(
+        self,
+        path: Path,
+        payload: Mapping[str, Any],
+    ) -> GeneratedArtifact:
+        return _write_json(self._output_directory, path, payload)
+
+    def _write_text(
+        self,
+        path: Path,
+        text: str,
+        media_type: str,
+    ) -> GeneratedArtifact:
+        return _write_text(self._output_directory, path, text, media_type)
+
+    def _write_bytes(
+        self,
+        path: Path,
+        payload: bytes,
+        media_type: str,
+    ) -> GeneratedArtifact:
+        return _write_bytes(self._output_directory, path, payload, media_type)
+
+    def _write_bundle(
+        self,
+        files: Sequence[tuple[Path, bytes, str]],
+    ) -> tuple[GeneratedArtifact, ...]:
+        """Create a companion-file bundle with transaction-owned rollback."""
+
+        return _write_bundle(self._output_directory, files)
 
     def _result(
         self,
@@ -178,7 +230,7 @@ class JiraDraftConnector(_LocalDraftConnector):
         }
     )
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="jira",
             capabilities=self._CAPABILITIES,
@@ -219,14 +271,18 @@ class JiraDraftConnector(_LocalDraftConnector):
             "publish": False,
         }
         path = self._artifact_path(action, default_suffix=".jira-draft.json")
-        artifact = _write_json(path, payload)
         preview_path = path.with_suffix(".md")
         preview = _render_preview(
             title=f"Jira {operation} draft — {action.target.resource_id}",
             before=before,
             after=after,
         )
-        preview_artifact = _write_text(preview_path, preview, "text/markdown")
+        artifact, preview_artifact = self._write_bundle(
+            (
+                (path, _json_bytes(payload), "application/json"),
+                (preview_path, preview.encode("utf-8"), "text/markdown"),
+            )
+        )
         return self._result(
             action,
             artifact,
@@ -242,7 +298,7 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
         {"confluence.page.create.draft", "confluence.page.update.draft"}
     )
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="confluence",
             capabilities=self._CAPABILITIES,
@@ -280,15 +336,16 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
             "publish": False,
         }
         path = self._artifact_path(action, default_suffix=".confluence-draft.json")
-        artifact = _write_json(path, payload)
-        preview_artifact = _write_text(
-            path.with_suffix(".md"),
-            _render_preview(
-                title=f"Confluence {operation} draft — {title}",
-                before=before,
-                after=after,
-            ),
-            "text/markdown",
+        preview = _render_preview(
+            title=f"Confluence {operation} draft — {title}",
+            before=before,
+            after=after,
+        )
+        artifact, preview_artifact = self._write_bundle(
+            (
+                (path, _json_bytes(payload), "application/json"),
+                (path.with_suffix(".md"), preview.encode("utf-8"), "text/markdown"),
+            )
         )
         return self._result(
             action,
@@ -303,7 +360,7 @@ class OutlookDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"outlook.email.draft"})
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="outlook",
             capabilities=self._CAPABILITIES,
@@ -328,7 +385,6 @@ class OutlookDraftConnector(_LocalDraftConnector):
         message["Subject"] = subject
         message.set_content(body)
         path = self._artifact_path(action, default_suffix=".eml")
-        artifact = _write_bytes(path, message.as_bytes(), "message/rfc822")
         metadata = {
             "schema": "master-agent/outlook-draft@1",
             "to": list(to),
@@ -338,7 +394,12 @@ class OutlookDraftConnector(_LocalDraftConnector):
             "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
             "send": False,
         }
-        manifest = _write_json(path.with_suffix(".json"), metadata)
+        artifact, manifest = self._write_bundle(
+            (
+                (path, message.as_bytes(), "message/rfc822"),
+                (path.with_suffix(".json"), _json_bytes(metadata), "application/json"),
+            )
+        )
         return self._result(
             action,
             artifact,
@@ -355,7 +416,7 @@ class TeamsDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"teams.message.draft"})
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="teams",
             capabilities=self._CAPABILITIES,
@@ -379,16 +440,18 @@ class TeamsDraftConnector(_LocalDraftConnector):
             f"- Posted: **no**\n\n"
             f"## Message\n\n{body}\n"
         )
-        artifact = _write_text(path, header, "text/markdown")
-        manifest = _write_json(
-            path.with_suffix(".json"),
-            {
-                "schema": "master-agent/teams-draft@1",
-                "recipient_type": recipient_type,
-                "recipient_id": recipient_id,
-                "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                "post": False,
-            },
+        metadata = {
+            "schema": "master-agent/teams-draft@1",
+            "recipient_type": recipient_type,
+            "recipient_id": recipient_id,
+            "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "post": False,
+        }
+        artifact, manifest = self._write_bundle(
+            (
+                (path, header.encode("utf-8"), "text/markdown"),
+                (path.with_suffix(".json"), _json_bytes(metadata), "application/json"),
+            )
         )
         return self._result(
             action,
@@ -403,7 +466,7 @@ class PowerPointDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"powerpoint.presentation.generate"})
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="powerpoint",
             capabilities=self._CAPABILITIES,
@@ -472,13 +535,12 @@ class PowerPointDraftConnector(_LocalDraftConnector):
         path = self._artifact_path(action, default_suffix=".pptx")
         if path.suffix.lower() != ".pptx":
             path = path.with_suffix(".pptx")
-        presentation.save(str(path))
-        _restrict(path)
-        artifact = GeneratedArtifact(
-            path=path,
-            sha256=_sha256(path),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            size=path.stat().st_size,
+        output = BytesIO()
+        presentation.save(output)
+        artifact = self._write_bytes(
+            path,
+            output.getvalue(),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
         return self._result(
             action,
@@ -493,7 +555,7 @@ class RepositoryDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"repository.patch.generate", "repository.branch.plan"})
 
-    def __init__(self, output_root: Path) -> None:
+    def __init__(self, output_root: Path | PinnedDirectory) -> None:
         super().__init__(
             system="repository",
             capabilities=self._CAPABILITIES,
@@ -521,7 +583,7 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             if not diff:
                 raise ConnectorError("patch generation produced no changes")
             path = self._artifact_path(action, default_suffix=".patch")
-            artifact = _write_text(path, diff, "text/x-diff")
+            artifact = self._write_text(path, diff, "text/x-diff")
             return self._result(
                 action,
                 artifact,
@@ -542,7 +604,7 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             "push": False,
         }
         path = self._artifact_path(action, default_suffix=".branch-plan.json")
-        artifact = _write_json(path, payload)
+        artifact = self._write_json(path, payload)
         return self._result(
             action,
             artifact,
@@ -583,51 +645,222 @@ def _render_preview(
     )
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> GeneratedArtifact:
-    return _write_text(
-        path,
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        "application/json",
+def _write_json(
+    directory: PinnedDirectory,
+    path: Path,
+    payload: Mapping[str, Any],
+) -> GeneratedArtifact:
+    return _write_bytes(directory, path, _json_bytes(payload), "application/json")
+
+
+def _write_text(
+    directory: PinnedDirectory,
+    path: Path,
+    text: str,
+    media_type: str,
+) -> GeneratedArtifact:
+    return _write_bytes(directory, path, text.encode("utf-8"), media_type)
+
+
+def _write_bytes(
+    directory: PinnedDirectory,
+    path: Path,
+    payload: bytes,
+    media_type: str,
+) -> GeneratedArtifact:
+    return _write_bundle(directory, ((path, payload, media_type),))[0]
+
+
+def _write_bundle(
+    directory: PinnedDirectory,
+    files: Sequence[tuple[Path, bytes, str]],
+) -> tuple[GeneratedArtifact, ...]:
+    """Create all files or remove only earlier transaction-owned files."""
+
+    if not files:
+        raise ConnectorError("generated artifact bundle must not be empty")
+    descriptor = directory.fileno()
+    owned: list[tuple[str, tuple[int, int, int, int, int], GeneratedArtifact]] = []
+    try:
+        for path, payload, media_type in files:
+            name = _pinned_name(directory, path)
+            artifact, identity = _create_bytes(
+                directory,
+                name,
+                path,
+                payload,
+                media_type,
+            )
+            owned.append((name, identity, artifact))
+        return tuple(item[2] for item in owned)
+    except BaseException:
+        for name, identity, _ in reversed(owned):
+            _unlink_if_identity(descriptor, name, identity)
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def write_artifact_bundle(
+    output_root: Path | PinnedDirectory,
+    files: Sequence[tuple[Path, bytes, str]],
+) -> tuple[GeneratedArtifact, ...]:
+    """Create a local artifact bundle through one pinned output directory.
+
+    Every final name is created with ``O_EXCL``. If a later companion cannot
+    be created, only earlier files whose exact identities belong to this
+    transaction are removed.
+    """
+
+    with pin_directory(output_root) as directory:
+        return _write_bundle(directory, files)
+
+
+def _create_bytes(
+    directory: PinnedDirectory,
+    name: str,
+    path: Path,
+    payload: bytes,
+    media_type: str,
+) -> tuple[GeneratedArtifact, tuple[int, int, int, int, int]]:
+    """Create and verify one final-name file without overwrite or rename."""
+
+    descriptor = directory.fileno()
+    file_descriptor = -1
+    created_identity: tuple[int, int, int, int, int] | None = None
+    completed = False
+    try:
+        file_descriptor = os.open(
+            name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=descriptor,
+        )
+        os.fchmod(file_descriptor, 0o600)
+        created_identity = _restricted_identity(os.fstat(file_descriptor))
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(file_descriptor, remaining)
+            if written <= 0:
+                raise OSError("short generated artifact write")
+            remaining = remaining[written:]
+        os.fsync(file_descriptor)
+        directory.validate()
+        published = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if _restricted_identity(published) != created_identity:
+            raise ConfigurationError("generated artifact publication was replaced")
+        os.lseek(file_descriptor, 0, os.SEEK_SET)
+        observed = bytearray()
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            observed.extend(chunk)
+        if bytes(observed) != payload:
+            raise ConfigurationError("generated artifact bytes changed during write")
+        os.fsync(descriptor)
+        directory.validate()
+        completed = True
+    except FileExistsError as error:
+        raise ConnectorError(
+            "generated artifact already exists; use a fresh output name or directory"
+        ) from error
+    except (OSError, ConfigurationError) as error:
+        raise ConnectorError("generated artifact destination changed") from error
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if not completed and created_identity is not None:
+            _unlink_if_identity(descriptor, name, created_identity)
+    if created_identity is None:  # pragma: no cover - successful open invariant.
+        raise ConnectorError("generated artifact identity is missing")
+    return (
+        GeneratedArtifact(
+            path=path,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            media_type=media_type,
+            size=len(payload),
+        ),
+        created_identity,
     )
 
 
-def _write_text(path: Path, text: str, media_type: str) -> GeneratedArtifact:
-    return _write_bytes(path, text.encode("utf-8"), media_type)
+def _json_bytes(payload: Mapping[str, Any]) -> bytes:
+    """Render deterministic pretty JSON bytes for draft bundles."""
+
+    return (
+        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
 
 
-def _write_bytes(path: Path, payload: bytes, media_type: str) -> GeneratedArtifact:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
-    _restrict(path)
-    return GeneratedArtifact(
-        path=path,
-        sha256=hashlib.sha256(payload).hexdigest(),
-        media_type=media_type,
-        size=len(payload),
+def _read_bytes(directory: PinnedDirectory, path: Path) -> bytes:
+    name = _pinned_name(directory, path)
+    descriptor = directory.fileno()
+    try:
+        file_descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=descriptor,
+        )
+    except OSError as error:
+        raise ConnectorError("generated artifact destination changed") from error
+    try:
+        metadata = os.fstat(file_descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ConnectorError("generated artifact is not a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        directory.validate()
+        return b"".join(chunks)
+    finally:
+        os.close(file_descriptor)
+
+
+def _pinned_name(directory: PinnedDirectory, path: Path) -> str:
+    if path.parent != directory.path or path.name in {"", ".", ".."}:
+        raise ConnectorError("generated artifact escaped the output root")
+    try:
+        directory.validate()
+    except ConfigurationError as error:
+        raise ConnectorError("generated artifact destination changed") from error
+    return path.name
+
+
+def _restricted_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int]:
+    identity = (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        stat.S_IMODE(metadata.st_mode),
+        metadata.st_nlink,
     )
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+    ):
+        raise ConfigurationError("generated artifact file is unsafe")
+    return identity
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _restrict(path: Path) -> None:
+def _unlink_if_identity(
+    parent_descriptor: int,
+    name: str,
+    expected: tuple[int, int, int, int, int],
+) -> None:
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-
-
-def _contained(path: Path, root: Path) -> bool:
+        current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
     try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+        if _restricted_identity(current) != expected:
+            return
+        os.unlink(name, dir_fd=parent_descriptor)
+    except (ConfigurationError, FileNotFoundError):
+        return
 
 
 def _safe_name(value: str) -> str:

@@ -100,15 +100,40 @@ class ConnectorFactoryTests(unittest.TestCase):
                 "jira.issue.update",
                 "confluence.page.update",
                 "bitbucket.pull_request.create",
-                "bitbucket.branch.push",
                 "sharepoint.file.upload",
                 "outlook.email.send",
                 "teams.chat.message.send",
-                "repository.patch.apply",
             ):
                 self.assertIn(capability, capabilities)
+            self.assertNotIn("bitbucket.branch.push", capabilities)
+            self.assertNotIn("repository.patch.apply", capabilities)
             self.assertNotIn("onenote.page.create", capabilities)
             self.assertNotIn("onenote.page.update", capabilities)
+
+    def test_bitbucket_local_git_publication_is_explicitly_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "integrations.toml"
+            config_path.write_text(
+                _integration_text(
+                    enable_mutations=True,
+                    enable_git_mutations=True,
+                ),
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(config_path)
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "branch publication is disabled",
+            ):
+                build_live_connectors(
+                    config,
+                    environ={},
+                    include_writes=True,
+                    workspace_root=root,
+                    artifact_root=root,
+                )
 
     def test_sharepoint_write_requires_artifact_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +196,19 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         self.assertFalse(catalog.definitions["onenote.page.update"].enabled)
         self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
 
+    def test_local_git_mutations_are_disabled_in_catalog(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+
+        for capability in (
+            "bitbucket.branch.push",
+            "repository.branch.create",
+            "repository.branch.push",
+            "repository.commit.create",
+            "repository.patch.apply",
+        ):
+            with self.subTest(capability=capability):
+                self.assertFalse(catalog.definitions[capability].enabled)
+
 
 def _capabilities(connectors: tuple[object, ...]) -> set[str]:
     return {
@@ -178,8 +216,13 @@ def _capabilities(connectors: tuple[object, ...]) -> set[str]:
     }
 
 
-def _integration_text(*, enable_mutations: bool) -> str:
+def _integration_text(
+    *,
+    enable_mutations: bool,
+    enable_git_mutations: bool = False,
+) -> str:
     value = "true" if enable_mutations else "false"
+    git_value = "true" if enable_git_mutations else "false"
     return textwrap.dedent(
         f"""
         [connectors.jira]
@@ -205,7 +248,7 @@ def _integration_text(*, enable_mutations: bool) -> str:
         auth_mode = "none"
         write_enabled = {value}
         pull_request_writes_enabled = {value}
-        branch_push_enabled = {value}
+        branch_push_enabled = {git_value}
         branch_prefix = "agent/"
 
         [connectors.microsoft]

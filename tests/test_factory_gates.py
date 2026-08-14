@@ -62,6 +62,7 @@ class ConnectorFactoryGateTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "artifacts").mkdir(mode=0o700)
             path = root / "integrations.toml"
             path.write_text(
                 _microsoft_config(

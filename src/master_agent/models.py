@@ -370,10 +370,15 @@ class ConfigurationExecutionBinding:
 
 @dataclass(frozen=True, slots=True)
 class RuntimePathExecutionBinding:
-    """Canonical path selected for a named execution-time side effect."""
+    """Canonical path plus the exact directory identity approved for one effect."""
 
     name: str
     path: str
+    anchor_path: str
+    device: int
+    inode: int
+    owner: int
+    mode: int
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -382,17 +387,49 @@ class RuntimePathExecutionBinding:
             raise ValidationError(
                 f"runtime path execution binding {self.name} must be absolute"
             )
+        if not self.anchor_path.strip() or not Path(self.anchor_path).is_absolute():
+            raise ValidationError(
+                f"runtime path execution binding {self.name} anchor must be absolute"
+            )
+        if self.anchor_path != self.path:
+            raise ValidationError(
+                f"runtime path execution binding {self.name} must pin its exact path"
+            )
+        if min(self.device, self.inode, self.owner, self.mode) < 0:
+            raise ValidationError(
+                f"runtime path execution binding {self.name} identity is invalid"
+            )
+        if self.mode > 0o7777:
+            raise ValidationError(
+                f"runtime path execution binding {self.name} mode is invalid"
+            )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int]:
         """Serialize the path binding."""
 
-        return {"name": self.name, "path": self.path}
+        return {
+            "name": self.name,
+            "path": self.path,
+            "anchor_path": self.anchor_path,
+            "device": self.device,
+            "inode": self.inode,
+            "owner": self.owner,
+            "mode": self.mode,
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> RuntimePathExecutionBinding:
         """Parse a path binding."""
 
-        return cls(name=str(data["name"]), path=str(data["path"]))
+        return cls(
+            name=str(data["name"]),
+            path=str(data["path"]),
+            anchor_path=str(data.get("anchor_path", "")),
+            device=int(data.get("device", -1)),
+            inode=int(data.get("inode", -1)),
+            owner=int(data.get("owner", -1)),
+            mode=int(data.get("mode", -1)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,11 +445,12 @@ class RuntimeExecutionBinding:
     result_json: str | None
     evidence_type: str | None
     configurations: tuple[ConfigurationExecutionBinding, ...]
+    runtime_paths: tuple[RuntimePathExecutionBinding, ...]
     publication_roots: tuple[RuntimePathExecutionBinding, ...] = ()
-    schema: str = "master-agent/runtime-execution-binding@1"
+    schema: str = "master-agent/runtime-execution-binding@2"
 
     def __post_init__(self) -> None:
-        if self.schema != "master-agent/runtime-execution-binding@1":
+        if self.schema != "master-agent/runtime-execution-binding@2":
             raise ValidationError("unsupported runtime execution binding schema")
         if self.connector_mode not in {"mock", "live"}:
             raise ValidationError("runtime connector_mode must be mock or live")
@@ -440,15 +478,53 @@ class RuntimeExecutionBinding:
             )
         if self.evidence_type is not None and not self.evidence_type.strip():
             raise ValidationError("runtime evidence_type is empty")
+        writable_directories = {
+            "audit.parent": str(Path(self.audit_database).parent),
+            "artifact.root": self.artifact_root,
+        }
+        if self.result_json is not None:
+            writable_directories["result.parent"] = str(Path(self.result_json).parent)
+        if len(set(writable_directories.values())) != len(writable_directories):
+            raise ValidationError(
+                "runtime audit, artifact, and result directories must be "
+                "pairwise distinct"
+            )
         configurations = tuple(sorted(self.configurations, key=lambda item: item.name))
+        runtime_paths = tuple(sorted(self.runtime_paths, key=lambda item: item.name))
         publication_roots = tuple(
             sorted(self.publication_roots, key=lambda item: item.name)
         )
         if len({item.name for item in configurations}) != len(configurations):
             raise ValidationError("runtime configuration binding names must be unique")
+        if len({item.name for item in runtime_paths}) != len(runtime_paths):
+            raise ValidationError("runtime path identity names must be unique")
         if len({item.name for item in publication_roots}) != len(publication_roots):
             raise ValidationError("runtime publication root names must be unique")
+        expected_runtime_paths = {
+            "audit.parent": str(Path(self.audit_database).parent),
+            "artifact.root": self.artifact_root,
+        }
+        if self.workspace_root is not None:
+            expected_runtime_paths["workspace.root"] = self.workspace_root
+        if self.result_json is not None:
+            expected_runtime_paths["result.parent"] = str(Path(self.result_json).parent)
+        observed_runtime_paths = {item.name: item.path for item in runtime_paths}
+        if observed_runtime_paths != expected_runtime_paths:
+            raise ValidationError(
+                "runtime path identities must exactly cover selected writable roots"
+            )
+        writable_identities = [
+            (item.device, item.inode)
+            for item in runtime_paths
+            if item.name in {"audit.parent", "artifact.root", "result.parent"}
+        ]
+        if len(set(writable_identities)) != len(writable_identities):
+            raise ValidationError(
+                "runtime audit, artifact, and result directory identities must be "
+                "pairwise distinct"
+            )
         object.__setattr__(self, "configurations", configurations)
+        object.__setattr__(self, "runtime_paths", runtime_paths)
         object.__setattr__(self, "publication_roots", publication_roots)
 
     def to_dict(self) -> dict[str, Any]:
@@ -465,6 +541,7 @@ class RuntimeExecutionBinding:
             "result_json": self.result_json,
             "evidence_type": self.evidence_type,
             "configurations": [item.to_dict() for item in self.configurations],
+            "runtime_paths": [item.to_dict() for item in self.runtime_paths],
             "publication_roots": [item.to_dict() for item in self.publication_roots],
         }
 
@@ -473,6 +550,7 @@ class RuntimeExecutionBinding:
         """Parse a runtime binding."""
 
         configurations = data.get("configurations")
+        runtime_paths = data.get("runtime_paths")
         publication_roots = data.get("publication_roots", [])
         if not isinstance(configurations, list) or not all(
             isinstance(item, Mapping) for item in configurations
@@ -482,6 +560,10 @@ class RuntimeExecutionBinding:
             isinstance(item, Mapping) for item in publication_roots
         ):
             raise ValidationError("runtime publication_roots must be a list of objects")
+        if not isinstance(runtime_paths, list) or not all(
+            isinstance(item, Mapping) for item in runtime_paths
+        ):
+            raise ValidationError("runtime runtime_paths must be a list of objects")
         return cls(
             schema=str(data.get("schema", "")),
             connector_mode=str(data["connector_mode"]),
@@ -511,6 +593,9 @@ class RuntimeExecutionBinding:
             ),
             configurations=tuple(
                 ConfigurationExecutionBinding.from_dict(item) for item in configurations
+            ),
+            runtime_paths=tuple(
+                RuntimePathExecutionBinding.from_dict(item) for item in runtime_paths
             ),
             publication_roots=tuple(
                 RuntimePathExecutionBinding.from_dict(item)

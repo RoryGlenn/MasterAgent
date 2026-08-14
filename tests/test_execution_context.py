@@ -12,6 +12,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import master_agent.cli as cli_module
+import master_agent.execution_context as execution_context_module
 from master_agent.cli import main
 from master_agent.config import IntegrationConfig
 from master_agent.config_sources import (
@@ -19,8 +21,9 @@ from master_agent.config_sources import (
     ConfigSource,
     resolve_config_source,
 )
-from master_agent.connectors.factory import build_live_registry
-from master_agent.errors import ConfigurationError
+from master_agent.connectors.drafts import JiraDraftConnector
+from master_agent.connectors.factory import build_live_connectors, build_live_registry
+from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.execution_context import (
     build_execution_context,
     build_runtime_execution_binding,
@@ -35,6 +38,7 @@ from master_agent.models import (
     ExecutionContext,
     ResourceRef,
     RiskLevel,
+    RuntimePathExecutionBinding,
 )
 from master_agent.registry import ConnectorRegistry
 
@@ -55,6 +59,15 @@ class ExecutionContextTests(unittest.TestCase):
                 encoding="utf-8",
             )
             bound_plan = root / "bound-plan.json"
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            _mkdir_private(drafts)
+            runtime_arguments = [
+                "--database",
+                str(database),
+                "--draft-output-dir",
+                str(drafts),
+            ]
 
             with (
                 patch.dict(
@@ -69,6 +82,7 @@ class ExecutionContextTests(unittest.TestCase):
                         str(source_plan),
                         "--integrations",
                         str(integrations_path),
+                        *runtime_arguments,
                         "--output",
                         str(bound_plan),
                     ]
@@ -93,6 +107,7 @@ class ExecutionContextTests(unittest.TestCase):
                         "live",
                         "--integrations",
                         str(integrations_path),
+                        *runtime_arguments,
                     ]
                 )
 
@@ -139,6 +154,9 @@ class ExecutionContextTests(unittest.TestCase):
             source_plan = root / "plan.json"
             source_plan.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
             bound_plan = root / "bound-plan.json"
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            _mkdir_private(drafts)
 
             with patch.dict(
                 os.environ,
@@ -152,8 +170,10 @@ class ExecutionContextTests(unittest.TestCase):
                                 str(source_plan),
                                 "--integrations",
                                 str(integrations_path),
+                                "--database",
+                                str(database),
                                 "--draft-output-dir",
-                                str(root / "drafts"),
+                                str(drafts),
                                 "--output",
                                 str(bound_plan),
                             ]
@@ -186,8 +206,10 @@ class ExecutionContextTests(unittest.TestCase):
                             "live",
                             "--integrations",
                             str(integrations_path),
+                            "--database",
+                            str(database),
                             "--draft-output-dir",
-                            str(root / "drafts"),
+                            str(drafts),
                         ]
                     )
 
@@ -340,15 +362,21 @@ class ExecutionContextTests(unittest.TestCase):
             integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
             integrations = IntegrationConfig.from_toml(integrations_path)
             sources = _runtime_sources(root, suffix="approved")
+            _mkdir_private(
+                root / "approved-artifacts",
+                root / "approved-results",
+                root / "approved-state",
+                root / "approved-workspaces",
+            )
             approved_runtime = build_runtime_execution_binding(
                 integrations,
                 connector_mode="live",
                 include_writes=True,
                 include_communications=False,
-                audit_database=root / "approved-audit.sqlite3",
+                audit_database=root / "approved-state/audit.sqlite3",
                 artifact_root=root / "approved-artifacts",
                 workspace_root=root / "approved-workspaces",
-                result_json=root / "approved-result.json",
+                result_json=root / "approved-results/result.json",
                 evidence_type="run-result/approved",
                 configuration_sources=sources,
                 environ={
@@ -375,20 +403,43 @@ class ExecutionContextTests(unittest.TestCase):
                 runtime=approved_runtime,
             )
             bound_plan = replace(_plan(), execution_context=approved)
+            other_workspaces = (root / "other-workspaces").resolve(strict=False)
+            other_artifacts = (root / "other-artifacts").resolve(strict=False)
 
             variants = {
                 "workspace root": replace(
-                    approved_runtime, workspace_root=str(root / "other-workspaces")
+                    approved_runtime,
+                    workspace_root=str(other_workspaces),
+                    runtime_paths=_replace_runtime_path(
+                        approved_runtime.runtime_paths,
+                        "workspace.root",
+                        other_workspaces,
+                    ),
                 ),
                 "artifact root": replace(
-                    approved_runtime, artifact_root=str(root / "other-artifacts")
+                    approved_runtime,
+                    artifact_root=str(other_artifacts),
+                    runtime_paths=_replace_runtime_path(
+                        approved_runtime.runtime_paths,
+                        "artifact.root",
+                        other_artifacts,
+                    ),
                 ),
                 "audit database": replace(
                     approved_runtime,
-                    audit_database=str(root / "other-audit.sqlite3"),
+                    audit_database=str(
+                        (root / "approved-state/other-audit.sqlite3").resolve(
+                            strict=False
+                        )
+                    ),
                 ),
                 "result destination": replace(
-                    approved_runtime, result_json=str(root / "other-result.json")
+                    approved_runtime,
+                    result_json=str(
+                        (root / "approved-results/other-result.json").resolve(
+                            strict=False
+                        )
+                    ),
                 ),
                 "retention evidence type": replace(
                     approved_runtime, evidence_type="run-result/other"
@@ -399,10 +450,10 @@ class ExecutionContextTests(unittest.TestCase):
                     connector_mode="live",
                     include_writes=True,
                     include_communications=False,
-                    audit_database=root / "approved-audit.sqlite3",
+                    audit_database=root / "approved-state/audit.sqlite3",
                     artifact_root=root / "approved-artifacts",
                     workspace_root=root / "approved-workspaces",
-                    result_json=root / "approved-result.json",
+                    result_json=root / "approved-results/result.json",
                     evidence_type="run-result/approved",
                     configuration_sources=_runtime_sources(root, suffix="changed"),
                     environ={
@@ -447,6 +498,12 @@ class ExecutionContextTests(unittest.TestCase):
             path.write_text(_BITBUCKET_PUBLICATION_CONFIG, encoding="utf-8")
             integrations = IntegrationConfig.from_toml(path)
             sources = _runtime_sources(root, suffix="same")
+            _mkdir_private(
+                root / "artifacts",
+                root / "fallback",
+                root / "repo-a",
+                root / "repo-b",
+            )
             first = build_runtime_execution_binding(
                 integrations,
                 connector_mode="live",
@@ -514,6 +571,9 @@ class ExecutionContextTests(unittest.TestCase):
             source_plan = root / "plan.json"
             source_plan.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
             bound_plan = root / "bound.json"
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            _mkdir_private(drafts)
             stderr = io.StringIO()
             with (
                 patch.dict(
@@ -530,6 +590,10 @@ class ExecutionContextTests(unittest.TestCase):
                         "live",
                         "--integrations",
                         str(integrations_path),
+                        "--database",
+                        str(database),
+                        "--draft-output-dir",
+                        str(drafts),
                         "--output",
                         str(bound_plan),
                     ]
@@ -556,6 +620,7 @@ class ExecutionContextTests(unittest.TestCase):
             assert integrations_sha256 is not None
             database = root / "audit.sqlite3"
             drafts = root / "drafts"
+            _mkdir_private(drafts)
             runtime = build_runtime_execution_binding(
                 integrations,
                 connector_mode="live",
@@ -709,6 +774,100 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             "entra-application:tenant=tenant-a;client=client-a",
         )
 
+    def test_cli_rejects_principal_swaps_before_secrets_connectors_or_audit(
+        self,
+    ) -> None:
+        scenarios = {
+            "basic username": (
+                _JIRA_BASIC_CONFIG,
+                {"MASTER_AGENT_JIRA_USERNAME": "alice@example.test"},
+                {
+                    "MASTER_AGENT_JIRA_USERNAME": "bob@example.test",
+                    "MASTER_AGENT_JIRA_TOKEN": "basic-secret-canary",
+                },
+                "basic-secret-canary",
+            ),
+            "Entra tenant": (
+                _MICROSOFT_CLIENT_CREDENTIAL_CONFIG,
+                {
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-a",
+                },
+                {
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-b",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET": "entra-secret-canary",
+                },
+                "entra-secret-canary",
+            ),
+            "Entra client": (
+                _MICROSOFT_CLIENT_CREDENTIAL_CONFIG,
+                {
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-a",
+                },
+                {
+                    "MASTER_AGENT_ENTRA_TENANT_ID": "tenant-a",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-b",
+                    "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET": "entra-secret-canary",
+                },
+                "entra-secret-canary",
+            ),
+        }
+        for name, (configuration, approved, changed, canary) in scenarios.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                integrations_path = root / "integrations.toml"
+                integrations_path.write_text(configuration, encoding="utf-8")
+                plan_path = root / "plan.json"
+                plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+                bound_path = root / "bound.json"
+                database = root / "audit.sqlite3"
+                drafts = root / "drafts"
+                _mkdir_private(drafts)
+                arguments = [
+                    "--connector-mode",
+                    "live",
+                    "--integrations",
+                    str(integrations_path),
+                    "--database",
+                    str(database),
+                    "--draft-output-dir",
+                    str(drafts),
+                ]
+                with (
+                    patch.dict(os.environ, approved, clear=True),
+                    redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "bind-context",
+                                str(plan_path),
+                                *arguments,
+                                "--output",
+                                str(bound_path),
+                            ]
+                        ),
+                        0,
+                    )
+
+                stderr = io.StringIO()
+                with (
+                    patch.dict(os.environ, changed, clear=True),
+                    patch("master_agent.cli.build_live_registry") as build_registry,
+                    patch("master_agent.cli.AuditLog") as audit_log,
+                    redirect_stderr(stderr),
+                ):
+                    result = main(["run", str(bound_path), "--apply", *arguments])
+
+                self.assertEqual(result, 1)
+                self.assertIn("connector origin or CA identity", stderr.getvalue())
+                self.assertNotIn(canary, stderr.getvalue())
+                build_registry.assert_not_called()
+                audit_log.assert_not_called()
+                self.assertFalse(database.exists())
+
     def test_cli_rejects_changed_runtime_input_before_connector_construction(
         self,
     ) -> None:
@@ -718,9 +877,11 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
             bound_path = root / "bound.json"
             approved_workspace = root / "approved-workspace"
-            database = root / "audit.sqlite3"
+            state = root / "state"
+            results = root / "results"
+            database = state / "audit.sqlite3"
             drafts = root / "drafts"
-            result_path = root / "result.json"
+            result_path = results / "result.json"
             retention = root / "retention.toml"
             changed_retention = root / "changed-retention.toml"
             retention_payload = (
@@ -728,6 +889,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             ).read_bytes()
             retention.write_bytes(retention_payload)
             changed_retention.write_bytes(retention_payload + b"\n")
+            _mkdir_private(approved_workspace, drafts, results, state)
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(
                     main(
@@ -823,66 +985,771 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             self.assertFalse((root / "changed-audit.sqlite3").exists())
             self.assertFalse((root / "changed-result.json").exists())
 
-    def test_cli_rejects_changed_capability_snapshot_before_execution(self) -> None:
+    def test_cli_rejects_each_changed_policy_snapshot_before_effects(self) -> None:
+        configurations = {
+            "policy": "--policy",
+            "sources_of_truth": "--sources-of-truth",
+            "capabilities": "--capabilities",
+            "governance": "--governance",
+            "identities": "--identities",
+            "retention": "--retention",
+        }
+        repository_root = Path(__file__).resolve().parents[1]
+        for name, option in configurations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                plan_path = root / "plan.json"
+                plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+                bound_path = root / "bound.json"
+                selected = root / f"{name}.toml"
+                selected.write_bytes(
+                    (repository_root / f"config/{name}.toml").read_bytes()
+                )
+                database = root / "audit.sqlite3"
+                drafts = root / "drafts"
+                _mkdir_private(drafts)
+                arguments = [
+                    "--connector-mode",
+                    "mock",
+                    option,
+                    str(selected),
+                    "--database",
+                    str(database),
+                    "--draft-output-dir",
+                    str(drafts),
+                ]
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(
+                        main(
+                            [
+                                "bind-context",
+                                str(plan_path),
+                                *arguments,
+                                "--output",
+                                str(bound_path),
+                            ]
+                        ),
+                        0,
+                    )
+                selected.write_bytes(selected.read_bytes() + b"\n")
+
+                stderr = io.StringIO()
+                with (
+                    patch("master_agent.cli._mock_registry") as mock_registry,
+                    patch("master_agent.cli.AuditLog") as audit_log,
+                    redirect_stderr(stderr),
+                ):
+                    result = main(["run", str(bound_path), "--apply", *arguments])
+
+                self.assertEqual(result, 1)
+                self.assertIn(
+                    "runtime policy, principal, gate, or path", stderr.getvalue()
+                )
+                mock_registry.assert_not_called()
+                audit_log.assert_not_called()
+                self.assertFalse(database.exists())
+
+    def test_apply_uses_canonical_paths_after_final_ancestor_alias_swap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            approved = root / "approved"
+            redirected = root / "redirected"
+            for destination in (approved, redirected):
+                for name in ("artifacts", "results", "state", "workspaces"):
+                    (destination / name).mkdir(parents=True, mode=0o700)
+            selected = root / "selected"
+            selected.symlink_to(approved, target_is_directory=True)
             plan_path = root / "plan.json"
-            plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
-            bound_path = root / "bound.json"
-            capabilities = root / "capabilities.toml"
-            capabilities.write_bytes(
-                (
-                    Path(__file__).resolve().parents[1] / "config/capabilities.toml"
-                ).read_bytes()
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
             )
-            database = root / "audit.sqlite3"
-            drafts = root / "drafts"
+            bound_path = root / "bound.json"
+            database = selected / "state" / "audit.sqlite3"
+            artifacts = selected / "artifacts"
+            workspaces = selected / "workspaces"
+            result_path = selected / "results" / "report.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(database),
+                "--draft-output-dir",
+                str(artifacts),
+                "--workspace-root",
+                str(workspaces),
+                "--result-json",
+                str(result_path),
+            ]
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(
                     main(
                         [
                             "bind-context",
                             str(plan_path),
-                            "--connector-mode",
-                            "mock",
-                            "--capabilities",
-                            str(capabilities),
-                            "--database",
-                            str(database),
-                            "--draft-output-dir",
-                            str(drafts),
+                            *arguments,
                             "--output",
                             str(bound_path),
                         ]
                     ),
                     0,
                 )
-            capabilities.write_bytes(capabilities.read_bytes() + b"\n")
+            real_orchestrator = cli_module._orchestrator
+
+            def swap_alias_after_final_gate(
+                *args: object,
+                **kwargs: object,
+            ) -> object:
+                selected.unlink()
+                selected.symlink_to(redirected, target_is_directory=True)
+                return real_orchestrator(*args, **kwargs)
+
+            with (
+                patch.object(
+                    cli_module,
+                    "_orchestrator",
+                    side_effect=swap_alias_after_final_gate,
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 0)
+            self.assertTrue((approved / "state" / "audit.sqlite3").is_file())
+            self.assertTrue((approved / "artifacts" / "jira-draft.json").is_file())
+            self.assertTrue((approved / "results" / "report.json").is_file())
+            self.assertEqual(tuple((redirected / "state").iterdir()), ())
+            self.assertEqual(tuple((redirected / "artifacts").iterdir()), ())
+            self.assertEqual(tuple((redirected / "results").iterdir()), ())
+
+    def test_runtime_directories_must_preexist_before_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_root = root / "runtime"
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(runtime_root / "state/audit.sqlite3"),
+                "--draft-output-dir",
+                str(runtime_root / "artifacts"),
+                "--workspace-root",
+                str(runtime_root / "workspaces"),
+                "--result-json",
+                str(runtime_root / "results/report.json"),
+            ]
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    1,
+                )
+            self.assertFalse(runtime_root.exists())
+            self.assertIn("must already exist and be private", stderr.getvalue())
+
+            _mkdir_private(
+                runtime_root / "state",
+                runtime_root / "artifacts",
+                runtime_root / "workspaces",
+                runtime_root / "results",
+            )
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(["run", str(bound_path), "--apply", *arguments]),
+                    0,
+                )
+
+            self.assertTrue((runtime_root / "state/audit.sqlite3").is_file())
+            self.assertTrue((runtime_root / "artifacts/jira-draft.json").is_file())
+            self.assertTrue((runtime_root / "results/report.json").is_file())
+
+    def test_binding_rejects_aliased_writable_runtime_directories(self) -> None:
+        scenarios = {
+            "audit-artifact": ("shared/audit.sqlite3", "shared", "results/report.json"),
+            "audit-result": ("shared/audit.sqlite3", "artifacts", "shared/report.json"),
+            "artifact-result": ("state/audit.sqlite3", "shared", "shared/report.json"),
+        }
+        for name, (database_name, artifacts_name, result_name) in scenarios.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _mkdir_private(
+                    root / "artifacts",
+                    root / "results",
+                    root / "shared",
+                    root / "state",
+                )
+                plan_path = root / "plan.json"
+                plan_path.write_text(
+                    json.dumps(_draft_plan().to_dict()),
+                    encoding="utf-8",
+                )
+                bound_path = root / "bound.json"
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            "--connector-mode",
+                            "mock",
+                            "--database",
+                            str(root / database_name),
+                            "--draft-output-dir",
+                            str(root / artifacts_name),
+                            "--result-json",
+                            str(root / result_name),
+                            "--output",
+                            str(bound_path),
+                        ]
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIn("pairwise distinct", stderr.getvalue())
+                self.assertFalse(bound_path.exists())
+
+    def test_runtime_binding_rejects_distinct_spellings_of_same_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state"
+            artifacts = root / "artifacts"
+            _mkdir_private(state, artifacts)
+            runtime = build_runtime_execution_binding(
+                IntegrationConfig.from_toml(
+                    resolve_config_source(None, "integrations.toml")
+                ),
+                connector_mode="mock",
+                include_writes=False,
+                include_communications=False,
+                audit_database=state / "audit.sqlite3",
+                artifact_root=artifacts,
+                workspace_root=None,
+                result_json=None,
+                evidence_type=None,
+                configuration_sources=_runtime_sources(root, suffix="same-inode"),
+            )
+            audit_binding = next(
+                item for item in runtime.runtime_paths if item.name == "audit.parent"
+            )
+            artifact_binding = next(
+                item for item in runtime.runtime_paths if item.name == "artifact.root"
+            )
+            forged_artifact = replace(
+                artifact_binding,
+                path=str(root / "different-spelling"),
+                anchor_path=str(root / "different-spelling"),
+                device=audit_binding.device,
+                inode=audit_binding.inode,
+            )
+            with self.assertRaisesRegex(ValidationError, "identities.*distinct"):
+                replace(
+                    runtime,
+                    artifact_root=forged_artifact.path,
+                    runtime_paths=(audit_binding, forged_artifact),
+                )
+
+    def test_local_git_mutation_is_rejected_before_registry_or_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            drafts = root / "drafts"
+            _mkdir_private(drafts)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_git_mutation_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(root / "audit.sqlite3"),
+                "--draft-output-dir",
+                str(drafts),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
 
             stderr = io.StringIO()
             with (
                 patch("master_agent.cli._mock_registry") as mock_registry,
+                patch("master_agent.cli.AuditLog") as audit_log,
                 redirect_stderr(stderr),
             ):
-                result = main(
-                    [
-                        "run",
-                        str(bound_path),
-                        "--apply",
-                        "--connector-mode",
-                        "mock",
-                        "--capabilities",
-                        str(capabilities),
-                        "--database",
-                        str(database),
-                        "--draft-output-dir",
-                        str(drafts),
-                    ]
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertIn(
+                "local Git mutation capabilities are disabled", stderr.getvalue()
+            )
+            mock_registry.assert_not_called()
+            audit_log.assert_not_called()
+
+    def test_apply_fails_closed_if_canonical_ancestor_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved"
+            redirected = root / "redirected"
+            saved = root / "approved.saved"
+            for destination in (approved, redirected):
+                for name in ("artifacts", "results", "state", "workspaces"):
+                    (destination / name).mkdir(parents=True, mode=0o700)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(approved / "state/audit.sqlite3"),
+                "--draft-output-dir",
+                str(approved / "artifacts"),
+                "--workspace-root",
+                str(approved / "workspaces"),
+                "--result-json",
+                str(approved / "results/report.json"),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+            real_orchestrator = cli_module._orchestrator
+
+            def replace_approved_ancestor(
+                *args: object,
+                **kwargs: object,
+            ) -> object:
+                approved.rename(saved)
+                approved.symlink_to(redirected, target_is_directory=True)
+                return real_orchestrator(*args, **kwargs)
+
+            stderr = io.StringIO()
+            with (
+                patch.object(
+                    cli_module,
+                    "_orchestrator",
+                    side_effect=replace_approved_ancestor,
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertIn("runtime directory path was replaced", stderr.getvalue())
+            self.assertTrue((saved / "state/audit.sqlite3").is_file())
+            self.assertEqual(tuple((redirected / "state").iterdir()), ())
+            self.assertEqual(tuple((redirected / "artifacts").iterdir()), ())
+            self.assertEqual(tuple((redirected / "results").iterdir()), ())
+
+    def test_apply_pins_approved_identity_before_first_context_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved"
+            saved = root / "approved.saved"
+            for name in ("artifacts", "results", "state", "workspaces"):
+                (approved / name).mkdir(parents=True, mode=0o700)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(approved / "state/audit.sqlite3"),
+                "--draft-output-dir",
+                str(approved / "artifacts"),
+                "--workspace-root",
+                str(approved / "workspaces"),
+                "--result-json",
+                str(approved / "results/report.json"),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+            real_open = execution_context_module.PinnedDirectory.open
+            swapped = False
+
+            def replace_before_pin(*args: object, **kwargs: object) -> object:
+                nonlocal swapped
+                if not swapped:
+                    approved.rename(saved)
+                    for name in ("artifacts", "results", "state", "workspaces"):
+                        (approved / name).mkdir(parents=True, mode=0o700)
+                    swapped = True
+                return real_open(*args, **kwargs)
+
+            stderr = io.StringIO()
+            with (
+                patch.object(
+                    execution_context_module.PinnedDirectory,
+                    "open",
+                    side_effect=replace_before_pin,
+                ),
+                patch("master_agent.cli._mock_registry") as mock_registry,
+                patch("master_agent.cli.AuditLog") as audit_log,
+                redirect_stderr(stderr),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertIn("approved identity", stderr.getvalue())
+            mock_registry.assert_not_called()
+            audit_log.assert_not_called()
+            self.assertEqual(tuple((approved / "state").iterdir()), ())
+            self.assertEqual(tuple((approved / "artifacts").iterdir()), ())
+            self.assertEqual(tuple((approved / "results").iterdir()), ())
+
+    def test_draft_fails_closed_if_canonical_artifact_root_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            redirected = root / "redirected"
+            saved = root / "artifacts.saved"
+            artifacts.mkdir(mode=0o700)
+            redirected.mkdir(mode=0o700)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(root / "audit.sqlite3"),
+                "--draft-output-dir",
+                str(artifacts),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+            real_execute = JiraDraftConnector.execute
+
+            def replace_artifact_root(
+                connector: JiraDraftConnector,
+                action: AgentAction,
+            ) -> object:
+                artifacts.rename(saved)
+                artifacts.symlink_to(redirected, target_is_directory=True)
+                return real_execute(connector, action)
+
+            with (
+                patch.object(JiraDraftConnector, "execute", new=replace_artifact_root),
+                redirect_stdout(io.StringIO()),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 2)
+            self.assertEqual(tuple(saved.iterdir()), ())
+            self.assertEqual(tuple(redirected.iterdir()), ())
+
+    def test_result_fails_closed_if_canonical_parent_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            results = root / "results"
+            redirected = root / "redirected"
+            saved = root / "results.saved"
+            results.mkdir(mode=0o700)
+            redirected.mkdir(mode=0o700)
+            _mkdir_private(root / "artifacts")
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(root / "audit.sqlite3"),
+                "--draft-output-dir",
+                str(root / "artifacts"),
+                "--result-json",
+                str(results / "report.json"),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+            real_commit = cli_module.RetainedJSONReservation.commit
+
+            def replace_result_parent(
+                reservation: object,
+                payload: object,
+            ) -> object:
+                results.rename(saved)
+                results.symlink_to(redirected, target_is_directory=True)
+                return real_commit(reservation, payload)  # type: ignore[arg-type]
+
+            stderr = io.StringIO()
+            with (
+                patch.object(
+                    cli_module.RetainedJSONReservation,
+                    "commit",
+                    new=replace_result_parent,
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertIn("runtime directory path was replaced", stderr.getvalue())
+            self.assertFalse((saved / "report.json").exists())
+            self.assertFalse((saved / "report.json.retention.json").exists())
+            self.assertEqual(tuple(redirected.iterdir()), ())
+
+    def test_stale_result_names_reject_before_registry_audit_or_effects(self) -> None:
+        for stale_name in ("report.json", "report.json.retention.json"):
+            with (
+                self.subTest(stale_name=stale_name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                artifacts = root / "artifacts"
+                results = root / "results"
+                _mkdir_private(artifacts, results)
+                plan_path = root / "plan.json"
+                plan_path.write_text(
+                    json.dumps(_draft_plan().to_dict()),
+                    encoding="utf-8",
+                )
+                bound_path = root / "bound.json"
+                database = root / "audit.sqlite3"
+                result_path = results / "report.json"
+                arguments = [
+                    "--connector-mode",
+                    "mock",
+                    "--database",
+                    str(database),
+                    "--draft-output-dir",
+                    str(artifacts),
+                    "--result-json",
+                    str(result_path),
+                ]
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(
+                        main(
+                            [
+                                "bind-context",
+                                str(plan_path),
+                                *arguments,
+                                "--output",
+                                str(bound_path),
+                            ]
+                        ),
+                        0,
+                    )
+                stale = results / stale_name
+                stale.write_bytes(b"peer-owned")
+                stale.chmod(0o600)
+
+                stderr = io.StringIO()
+                with (
+                    patch("master_agent.cli._mock_registry") as registry,
+                    patch("master_agent.cli.AuditLog") as audit,
+                    patch("master_agent.cli._orchestrator") as orchestrator,
+                    redirect_stderr(stderr),
+                ):
+                    status = main(["run", str(bound_path), "--apply", *arguments])
+
+                self.assertEqual(status, 1)
+                self.assertIn("already exists", stderr.getvalue())
+                registry.assert_not_called()
+                audit.assert_not_called()
+                orchestrator.assert_not_called()
+                self.assertEqual(stale.read_bytes(), b"peer-owned")
+                self.assertFalse(database.exists())
+                self.assertEqual(tuple(artifacts.iterdir()), ())
+
+    def test_result_is_committed_before_human_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            results = root / "results"
+            _mkdir_private(artifacts, results)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            result_path = results / "report.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(root / "audit.sqlite3"),
+                "--draft-output-dir",
+                str(artifacts),
+                "--result-json",
+                str(result_path),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
                 )
 
-        self.assertEqual(result, 1)
-        self.assertIn("runtime policy, principal, gate, or path", stderr.getvalue())
-        mock_registry.assert_not_called()
+            with (
+                patch.object(
+                    cli_module,
+                    "_print_report",
+                    side_effect=BrokenPipeError("closed output"),
+                ),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertTrue(result_path.is_file())
+            self.assertTrue((results / "report.json.retention.json").is_file())
+
+    def test_factory_rejects_bitbucket_local_git_publication(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved"
+            redirected = root / "redirected"
+            for destination in (approved, redirected):
+                (destination / "repositories").mkdir(parents=True, mode=0o700)
+            selected = root / "selected"
+            selected.symlink_to(approved, target_is_directory=True)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(
+                _BITBUCKET_PUBLICATION_CONFIG,
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(integrations_path)
+            environ = {"MASTER_AGENT_REPOSITORY_ROOT": str(selected / "repositories")}
+            _mkdir_private(root / "artifacts", root / "workspaces")
+            runtime = build_runtime_execution_binding(
+                integrations,
+                connector_mode="live",
+                include_writes=True,
+                include_communications=False,
+                audit_database=root / "audit.sqlite3",
+                artifact_root=root / "artifacts",
+                workspace_root=root / "workspaces",
+                result_json=None,
+                evidence_type="unused",
+                configuration_sources=_runtime_sources(root, suffix="same"),
+                environ=environ,
+            )
+            approved_context = build_execution_context(
+                integrations,
+                environ=environ,
+                runtime=runtime,
+            )
+            selected.unlink()
+            selected.symlink_to(redirected, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "branch publication is disabled",
+            ):
+                build_live_connectors(
+                    integrations,
+                    environ=environ,
+                    systems={"bitbucket"},
+                    include_writes=True,
+                    workspace_root=root / "workspaces",
+                    approved_execution_context=approved_context,
+                )
 
 
 def _plan() -> ChangePlan:
@@ -904,6 +1771,78 @@ def _plan() -> ChangePlan:
     return ChangePlan(
         goal="test execution context", actions=(action,), created_by="test"
     )
+
+
+def _draft_plan() -> ChangePlan:
+    action = AgentAction(
+        capability="jira.issue.update.draft",
+        target=ResourceRef(
+            system="jira",
+            resource_type="issue",
+            resource_id="ENG-1",
+        ),
+        parameters={
+            "before": {"summary": "Before"},
+            "fields": {"summary": "After"},
+            "output_name": "jira-draft.json",
+        },
+        risk=RiskLevel.LOCAL_GENERATION,
+        data_classification=DataClassification.INTERNAL,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key="execution-context-draft-test",
+        justification="test canonical draft execution paths",
+    )
+    return ChangePlan(
+        goal="test canonical execution paths",
+        actions=(action,),
+        created_by="test",
+    )
+
+
+def _git_mutation_plan() -> ChangePlan:
+    action = AgentAction(
+        capability="repository.patch.apply",
+        target=ResourceRef(
+            system="repository",
+            resource_type="workspace",
+            resource_id="example",
+            expected_version="0" * 40,
+        ),
+        parameters={"patch": "diff --git a/a b/a\n"},
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        data_classification=DataClassification.INTERNAL,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=True,
+        idempotency_key="disabled-git-mutation",
+        justification="prove local Git mutations are not routable",
+    )
+    return ChangePlan(
+        goal="test disabled Git mutation",
+        actions=(action,),
+        created_by="test",
+    )
+
+
+def _replace_runtime_path(
+    bindings: tuple[RuntimePathExecutionBinding, ...],
+    name: str,
+    path: Path,
+) -> tuple[RuntimePathExecutionBinding, ...]:
+    return tuple(
+        replace(item, path=str(path), anchor_path=str(path))
+        if item.name == name
+        else item
+        for item in bindings
+    )
+
+
+def _mkdir_private(*paths: Path) -> None:
+    """Create explicit private runtime directories for binding tests."""
+
+    for path in paths:
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        path.chmod(0o700)
 
 
 _JIRA_ENV_CONFIG = """

@@ -72,6 +72,12 @@ Attachment content URLs and thumbnails are never fetched by the Teams connector 
 
 ## Registered communication-context workflow
 
+The deterministic plan generator remains available. The direct
+`communication-context` execution/package command is disabled before config,
+credentials, connectors, or audit access until its provider identities,
+targets, retention inputs, audit database, and output package are bound to one
+immutable execution manifest.
+
 The default workflow performs four actions:
 
 ```text
@@ -134,7 +140,9 @@ Every retained evidence file receives a sibling `*.retention.json` sidecar conta
 - citation IDs;
 - sibling evidence filename.
 
-Expiry cleanup resolves both sidecar and target inside the selected root, rejects path traversal, and reports errors rather than deleting suspicious paths.
+Expiry cleanup is preview-only. Destructive pruning and orphan quarantine are
+disabled until recursive traversal, validation, and deletion are fully
+descriptor-relative; `evidence-prune --apply` fails before traversal.
 
 ## Audit boundary
 
@@ -148,7 +156,9 @@ The durable audit database stores action state, schema, item counts, content dig
 - temporary attachment URLs;
 - Outlook/Teams search terms.
 
-Full communication evidence appears only in the explicitly selected output directory and is governed by retention sidecars.
+The disabled direct package command writes no communication evidence. Applied
+manifest-bound plans may retain explicit results only through a fresh,
+descriptor-pinned create-only result destination.
 
 ## Prompt-injection boundary
 
@@ -172,7 +182,7 @@ This is intentionally conservative. Later production deployments may use vendor-
 
 ## Phase boundary
 
-Phase 2B itself remains read-only. Later phases in version 1.0.0 add delegated OneNote access, OAuth/device-code primitives, and exact-approval Outlook/Teams sends as separately gated capabilities. The following remain excluded from the complete runtime:
+Phase 2B itself remains read-only. Later phases in version 1.0.0 add delegated OneNote access, OAuth/device-code primitives, and exact-approval Outlook/Teams sends as separately gated capabilities. The following remain excluded from the routable runtime:
 
 - automatic Teams bot installation or unrestricted proactive messaging;
 - binary attachment parsing inside live connectors;

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — Complete governed enterprise-agent runtime
+## 1.0.0 — Governed enterprise-agent runtime
 
 ### Added
 
@@ -10,14 +10,16 @@
 - Phase 3 complete local draft packages containing Jira and Confluence proposals, Outlook `.eml`, Teams draft, PowerPoint, repository patch, summary, and integrity manifest;
 - approved Jira field updates, comments, transitions, version checks, and compensation;
 - approved Confluence page creation/update and compensation for Cloud and Data Center contracts;
-- controlled Git workspace patch, branch, commit, push, and content-preserving in-process rollback;
-- Bitbucket branch publishing and pull-request creation with decline/delete-ref compensation where safe;
+- quarantined Git mutation internals; patch, branch, commit, push, and local
+  Bitbucket branch publication are disabled and absent from the live registry;
+- Bitbucket pull-request creation with exact decline compensation;
 - SharePoint bounded file upload with previous-version restoration;
 - delegated OneNote notebook/section/page reads; page writes remain disabled until exact DOM-aware post-state verification is available;
 - exact-plan Outlook send with provider-draft content verification;
 - exact-plan Teams chat/channel message send and channel reply with provider re-read verification;
 - compensation-plan generation bound to the original immutable plan and run report;
-- disabled-by-default recurring workflows with timezone-aware scheduling, durable occurrence state, lock directories, scope/recipient/source allowlists, and local/draft-only delivery modes;
+- recurring workflow registration and due-state inspection; execution is
+  disabled pending exact target/config/source and runtime-manifest binding;
 - metadata-only connector plugin discovery, locking, and plan binding through the `master_agent.connectors` entry-point group; in-process apply remains disabled pending an isolated dependency-closure worker;
 - command-level and factory-gate tests proving broad runtime flags cannot bypass provider-specific gates.
 
@@ -26,7 +28,15 @@
 - live read, write, and communication connectors are constructed independently;
 - configuration now requires granular provider gates in addition to runtime flags;
 - policy evaluation now combines the capability catalog, organization governance, source-of-truth rules, immutable approvals, and risk rules;
-- the CLI now exposes `readiness`, `oauth-device-code`, `draft-package`, `compensation-plan`, `recurring-status`, `recurring-run`, and `plugins` commands;
+- the CLI exposes `readiness`, `oauth-device-code`, `draft-package`,
+  `compensation-plan`, `recurring-status`, and `plugins`; `recurring-run`,
+  `weekly-status`, and `communication-context` are retained as fail-closed
+  command names but do not execute;
+- applied result names are reserved before connector/audit effects and committed
+  create-only before human-readable output; audit, artifact, and result
+  directories must be pairwise distinct;
+- evidence expiry/orphan maintenance is preview-only; destructive pruning and
+  quarantine are disabled pending descriptor-relative recursive traversal;
 - packaged defaults include every v1 configuration file while keeping all live access, mutations, sends, and schedules disabled;
 - HTTP user agent and package version are now `1.0.0`.
 
@@ -38,11 +48,14 @@
 - plugin discovery never imports plugin code, and CLI plugin apply fails closed before import;
 - provider mutation connectors require runtime, generic, and granular provider gates;
 - PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
-- standalone Git worktree restore is not exposed because a status precheck followed by `reset --hard` cannot preserve edits made between check and use.
-- local Git diff and status bindings hash the exact stdout bytes, disable text conversion/external diff drivers, and reject executable diff/filter or URL-rewrite configuration;
-- local Git commits safe-open regular worktree files without following links, stage raw blobs through an isolated index, lock symbolic HEAD through compare-and-swap publication, and verify matching HEAD/branch reflog records before installing the reviewed index;
-- Git publication uses a trusted config-isolated repository and the exact approved commit object rather than a mutable branch source, so local branch races and repository URL rewrites cannot change the published content or destination;
-- explicit-path commit creation intentionally refuses symlink, submodule, and tracked mode changes, linked-worktree metadata, and unsafe/missing/hard-linked reflogs instead of weakening content or recovery guarantees.
+- all local Git mutation definitions are catalog-disabled,
+  governance-prohibited, and non-routable because descriptor-pinning a Git child
+  working directory does not bind every ref, reflog, index, object, and lock
+  helper to one repository identity;
+- direct weekly-status, communication-context, and recurring execution reject
+  before config, credentials, connectors, or audit access;
+- draft package summaries/manifests and retained results use pinned,
+  create-only final names with transaction-owned rollback.
 
 ## 0.3.0 — Read-only communication context
 

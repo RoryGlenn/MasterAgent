@@ -1,6 +1,6 @@
 # Master Agent
 
-**Version 1.0.0 — complete governed enterprise-agent runtime**
+**Version 1.0.0 — governed enterprise-agent runtime**
 
 Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
 
@@ -34,11 +34,15 @@ All planned software phases are implemented:
 | 1 — governed runtime | Immutable plans, approvals, policy, source-of-truth validation, audit, idempotency, verification, and prompt-injection controls |
 | 2 — read-only context | Jira, Confluence, Bitbucket, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
 | 3 — draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests |
-| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, byte-verified SharePoint files, and controlled local/remote Git operations with compensation; unsafe OneNote writes are disabled |
+| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, and byte-verified SharePoint files; local/remote Git and unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
-| 6 — narrow recurring autonomy | Registered, allowlisted, local-output recurring workflows with durable scheduling state and overlap locks |
+| 6 — recurring workflow registration | Status and plan-generation surfaces; recurring execution is disabled pending exact target/config and runtime-path binding |
 
-The implementation is complete, but a particular company deployment is not activated until its administrators approve applications, scopes, retention, data handling, Conditional Access, secrets, connector URLs, and production governance. Packaged defaults keep all live connectors, writes, sends, and schedules disabled.
+The implemented runtime surfaces remain fail closed until a particular company
+deployment approves applications, scopes, retention, data handling, Conditional
+Access, secrets, connector URLs, and production governance. Packaged defaults
+keep all live connectors, writes, sends, and schedules disabled. Non-manifest
+weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
@@ -46,7 +50,8 @@ The catalog contains **70 typed capabilities**:
 
 - 39 read-only capabilities;
 - 10 local-generation capabilities;
-- 16 reversible-write definitions, including 2 disabled OneNote writes;
+- 16 reversible-write definitions, including 2 disabled OneNote writes and 5
+  disabled local-Git mutations;
 - 4 external-communication capabilities;
 - 1 high-impact capability, `bitbucket.pull_request.merge`, deliberately disabled.
 
@@ -56,13 +61,13 @@ Supported domains:
 |---|---|---|---|
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
-| Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | new agent branch push, PR creation/decline compensation |
+| Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
 | OneNote | notebooks, sections, pages | generated HTML/proposals | disabled pending exact target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
-| Git workspace | repository state | branch/patch plan | bounded patch, branch, commit, and push; verified in-process rollback for local changes, manual recovery for remote pushes |
+| Git workspace | repository state | branch/patch plan | mutation disabled until all Git metadata transactions are descriptor-bound |
 | Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
 ## Core safety properties
@@ -71,7 +76,7 @@ Supported domains:
 - **Three independent live gates:** runtime flag, provider-specific TOML flag, and capability/governance permission.
 - **Immutable approvals:** approvals bind to a SHA-256 plan fingerprint and exact action IDs; any mutation invalidates them.
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
-- **Version preconditions:** Jira, Confluence, SharePoint, and Git operations stop on stale state.
+- **Version preconditions:** Jira, Confluence, and SharePoint operations stop on stale state.
 - **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.
@@ -85,7 +90,8 @@ Supported domains:
 - Python 3.12 or newer.
 - Ubuntu 24.04 LTS or macOS for the provided setup commands.
 - `python-pptx`, installed automatically.
-- Git for repository workflows.
+- Git only for repository inspection and quarantined internal mutation tests;
+  no local Git mutation capability is routable.
 - Organization-approved HTTPS API endpoints and credentials for live use.
 
 ## Install from the complete source ZIP
@@ -132,16 +138,18 @@ repository-local files must be selected explicitly.
 Generate the complete Phase 3 review package without credentials or provider writes:
 
 ```bash
+mkdir -p .master-agent/draft-package-001
+chmod 700 .master-agent .master-agent/draft-package-001
 master-agent draft-package \
   --workflow config/draft-package.toml \
-  --output-dir .master-agent/draft-package \
+  --output-dir .master-agent/draft-package-001 \
   --database .master-agent/audit.sqlite3
 ```
 
 The package contains:
 
 ```text
-.master-agent/draft-package/
+.master-agent/draft-package-001/
 ├── change-package.pptx
 ├── confluence-update-draft.json
 ├── confluence-update-draft.md
@@ -209,6 +217,22 @@ The manifest covers integrations and flow-enforced credential identities, resolv
 destinations and CA bundles, policy/source/capability/governance/identity and
 retention snapshots, connector gates, filesystem roots, audit database, and
 retained-result destination:
+
+Every runtime directory must already exist, be owned by the current account,
+and be non-writable by group or world. The binding records the exact directory
+identity; neither binding nor apply creates these security boundaries. For
+example:
+
+```bash
+mkdir -m 700 /absolute/state/audit /absolute/state/results /absolute/state/drafts
+mkdir -m 700 /absolute/path/to/approved/workspaces
+```
+
+Draft artifacts and retained result/evidence files are create-only. Use fresh
+filenames or a fresh private output directory for each applied run; the runtime
+will not overwrite a prior or concurrently created file.
+`draft-package` additionally requires its dedicated output directory to be
+empty before it reads workflow configuration.
 
 ```bash
 master-agent bind-context change-plan.json \
@@ -295,9 +319,10 @@ master-agent run bound-change-plan.json \
   --retention /trusted/config/retention.toml
 ```
 
-For local Git actions, the same canonical `--workspace-root` must appear in
-both binding and execution. Bitbucket branch-publication roots selected through
-`MASTER_AGENT_REPOSITORY_ROOT` are captured separately in the manifest.
+Local Git patch, branch, commit, and push capabilities are catalog-disabled,
+governance-prohibited, and absent from the live registry until every Git
+metadata transaction is descriptor-bound. `--workspace-root` remains
+manifest-bound but does not enable repository mutation.
 
 Build a separately reviewable compensation plan from a completed run:
 
@@ -335,15 +360,20 @@ master-agent recurring-status \
   --recurring config/recurring.toml
 ```
 
-After editing and approving the workflow's allowlists, enable one workflow and invoke it from a scheduler such as systemd:
+`recurring-status`, `weekly-status-plan`, and `communication-context-plan` remain
+available for offline review. `recurring-run`, `weekly-status`, and
+`communication-context` execution fail before configuration, credentials,
+connectors, or audit state are opened. Exact registered targets and every
+runtime/config identity must first be covered by the same immutable execution
+manifest.
 
 ```bash
-master-agent recurring-run weekly_status \
-  --recurring config/recurring.toml \
-  --connector-mode live
+master-agent weekly-status-plan --output weekly-plan.json
+master-agent communication-context-plan --output communication-plan.json
 ```
 
-`--force` ignores the due-time calculation but **does not enable a disabled workflow**. Recurring workflows cannot expand their capability, recipient, or canonical-source allowlists at runtime.
+`evidence-prune` is preview-only. `--apply` and destructive orphan quarantine
+are disabled until recursive traversal and deletion are descriptor-bound.
 
 ## Connector plugins
 
