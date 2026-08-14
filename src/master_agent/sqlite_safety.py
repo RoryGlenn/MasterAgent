@@ -131,6 +131,7 @@ class PinnedSQLiteDatabase:
         database_descriptor: int | None = None
         database_identity: _FileIdentity | None = None
         ledger_identity: _FileIdentity | None = None
+        cleanup_generation_ref: _GenerationRef | None = None
         try:
             self._parent_identity = _validated_parent_identity(
                 os.fstat(parent_descriptor)
@@ -178,6 +179,10 @@ class PinnedSQLiteDatabase:
                         ledger,
                     )
                     ledger_identity = reconciled.identity
+                    if self._created:
+                        cleanup_generation_ref = _GenerationRef.from_generation(
+                            generation
+                        )
         except BaseException:
             ledger_publication_is_indeterminate = (
                 self._ledger_created and ledger_identity is None
@@ -254,6 +259,7 @@ class PinnedSQLiteDatabase:
         self._parent_descriptor = parent_descriptor
         self._lock_descriptor = lock_descriptor
         self._lock_identity = lock_identity
+        self._cleanup_generation_ref = cleanup_generation_ref
         self._finalizer = weakref.finalize(
             self,
             _close_descriptors,
@@ -306,7 +312,12 @@ class PinnedSQLiteDatabase:
 
         with self._lock:
             try:
-                if remove_created and self._created and self._finalizer.alive:
+                if (
+                    remove_created
+                    and self._created
+                    and self._cleanup_generation_ref is not None
+                    and self._finalizer.alive
+                ):
                     with (
                         _file_lock(self._parent_descriptor, exclusive=True),
                         _file_lock(self._lock_descriptor, exclusive=True),
@@ -317,28 +328,36 @@ class PinnedSQLiteDatabase:
                         except (ConfigurationError, OSError):
                             pass
                         else:
-                            removed = _unlink_if_identity(
+                            current_ref = _GenerationRef.from_generation(generation)
+                            ledger = _read_ledger_generation(
                                 self._parent_descriptor,
-                                self._name,
-                                generation.identity,
+                                self._ledger_name,
+                                missing_ok=False,
                             )
-                            if removed and self._ledger_created:
-                                ledger = _read_ledger_generation(
+                            removed = False
+                            if (
+                                ledger is not None
+                                and current_ref == self._cleanup_generation_ref
+                                and ledger.state
+                                == _LedgerState(committed=self._cleanup_generation_ref)
+                            ):
+                                removed = _unlink_if_identity(
                                     self._parent_descriptor,
-                                    self._ledger_name,
-                                    missing_ok=True,
+                                    self._name,
+                                    generation.identity,
                                 )
-                                _unlink_if_identity(
-                                    self._parent_descriptor,
-                                    self._ledger_name,
-                                    ledger.identity if ledger is not None else None,
-                                )
-                            if removed and self._lock_created:
-                                _unlink_if_identity(
-                                    self._parent_descriptor,
-                                    self._lock_name,
-                                    self._lock_identity,
-                                )
+                                if removed and self._ledger_created:
+                                    _unlink_if_identity(
+                                        self._parent_descriptor,
+                                        self._ledger_name,
+                                        ledger.identity,
+                                    )
+                                if removed and self._lock_created:
+                                    _unlink_if_identity(
+                                        self._parent_descriptor,
+                                        self._lock_name,
+                                        self._lock_identity,
+                                    )
                             if removed:
                                 os.fsync(self._parent_descriptor)
             finally:
@@ -502,6 +521,8 @@ class PinnedSQLiteDatabase:
                 expected=prepared_ledger,
                 state=_LedgerState(committed=updated_ref),
             )
+            if self._cleanup_generation_ref is not None:
+                self._cleanup_generation_ref = updated_ref
         except BaseException:
             if prepared:
                 # PREPARE may be durable or replacement may have occurred. A

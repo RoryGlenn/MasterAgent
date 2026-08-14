@@ -123,6 +123,86 @@ class SQLiteSafetyTests(unittest.TestCase):
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
             replacement.close()
 
+    def test_cleanup_does_not_remove_a_generation_committed_by_a_peer(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            creator = PinnedSQLiteDatabase(database_path)
+            with creator.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            peer = PinnedSQLiteDatabase(database_path)
+            with peer.connect() as connection:
+                connection.execute("INSERT INTO values_for_test VALUES (1)")
+            paths = (database_path, ledger_path, lock_path)
+            before = {
+                path.name: (path.read_bytes(), path.stat().st_ino) for path in paths
+            }
+
+            creator.close(remove_created=True)
+
+            after = {
+                path.name: (path.read_bytes(), path.stat().st_ino) for path in paths
+            }
+            self.assertEqual(after, before)
+            with peer.connect() as connection:
+                rows = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            self.assertEqual(rows, [(1,)])
+            peer.close()
+
+    def test_read_only_peer_does_not_take_created_state_cleanup_ownership(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            creator = PinnedSQLiteDatabase(database_path)
+            with creator.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            peer = PinnedSQLiteDatabase(database_path)
+            with peer.connect() as connection:
+                self.assertEqual(
+                    connection.execute("SELECT * FROM values_for_test").fetchall(),
+                    [],
+                )
+
+            creator.close(remove_created=True)
+
+            self.assertFalse(database_path.exists())
+            self.assertFalse(ledger_path.exists())
+            self.assertFalse(lock_path.exists())
+            peer.close()
+
+    def test_cleanup_refuses_same_content_on_a_replacement_inode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            lock_path = root / ".state.sqlite3.master-agent.flock"
+            replacement = root / "replacement.sqlite3"
+            creator = PinnedSQLiteDatabase(database_path)
+            with creator.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            original_content = database_path.read_bytes()
+            original_inode = database_path.stat().st_ino
+            replacement.write_bytes(original_content)
+            replacement.chmod(0o600)
+            replacement.replace(database_path)
+            replacement_inode = database_path.stat().st_ino
+            self.assertNotEqual(replacement_inode, original_inode)
+
+            creator.close(remove_created=True)
+
+            self.assertEqual(database_path.read_bytes(), original_content)
+            self.assertEqual(database_path.stat().st_ino, replacement_inode)
+            self.assertTrue(ledger_path.exists())
+            self.assertTrue(lock_path.exists())
+
     def test_ledger_snapshots_remain_compact_and_lock_remains_content_free(
         self,
     ) -> None:
