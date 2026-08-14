@@ -101,36 +101,53 @@ class GitBranchPushConnector:
         if remote not in self._allowed_remotes:
             raise ConnectorError("Git remote is not allowlisted")
 
-        current_branch = self._run(
-            repository, "branch", "--show-current"
-        ).stdout.strip()
-        if current_branch != branch:
-            raise ConnectorError("only the current checked-out branch may be pushed")
-        commit = self._run(repository, "rev-parse", "HEAD").stdout.strip()
-        if not action.target.expected_version:
-            raise ConnectorError("branch publication requires an approved commit hash")
-        if action.target.expected_version != commit:
-            raise VersionConflictError(
-                "repository HEAD changed since approval: "
-                f"expected {action.target.expected_version}, observed {commit}"
-            )
-        if self._run(repository, "status", "--porcelain").stdout.strip():
-            raise ConnectorError("repository worktree must be clean before publication")
+        with self._sandbox.lock_repository_config(repository) as config_guard:
+            self._sandbox.validate_repository_config(repository)
+            current_branch = self._run(
+                repository, "branch", "--show-current"
+            ).stdout.strip()
+            if current_branch != branch:
+                raise ConnectorError(
+                    "only the current checked-out branch may be pushed"
+                )
+            commit = self._run(repository, "rev-parse", "HEAD").stdout.strip()
+            if not action.target.expected_version:
+                raise ConnectorError(
+                    "branch publication requires an approved commit hash"
+                )
+            if action.target.expected_version != commit:
+                raise VersionConflictError(
+                    "repository HEAD changed since approval: "
+                    f"expected {action.target.expected_version}, observed {commit}"
+                )
+            if self._run_worktree(
+                repository,
+                "status",
+                "--porcelain",
+                "--ignore-submodules=all",
+            ).stdout.strip():
+                raise ConnectorError(
+                    "repository worktree must be clean before publication"
+                )
 
-        remote_url = self._approved_remote_url(action, repository, remote)
-        existing = self._remote_hash(repository, remote_url, branch)
-        if existing is not None:
-            raise VersionConflictError(
-                "remote branch already exists; overwrite is prohibited"
-            )
+            remote_url = self._approved_remote_url(action, repository, remote)
+            config_guard.validate()
+            existing = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
+            if existing is not None:
+                raise VersionConflictError(
+                    "remote branch already exists; overwrite is prohibited"
+                )
 
-        self._run(
-            repository,
-            "push",
-            remote_url,
-            f"refs/heads/{branch}:refs/heads/{branch}",
-        )
-        observed = self._remote_hash(repository, remote_url, branch)
+            self._run_publication(
+                repository,
+                "push",
+                remote_url,
+                f"{commit}:refs/heads/{branch}",
+            )
+            config_guard.validate()
+            observed = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
         if observed != commit:
             raise ConnectorError("remote branch does not point to the approved commit")
 
@@ -184,7 +201,11 @@ class GitBranchPushConnector:
         )
         branch = str(after.get("branch", ""))
         expected = str(after.get("commit", ""))
-        observed_hash = self._remote_hash(repository, remote_url, branch)
+        with self._sandbox.lock_repository_config(repository) as config_guard:
+            self._sandbox.validate_repository_config(repository)
+            config_guard.validate()
+            observed_hash = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
         observed = {"remote": remote, "branch": branch, "commit": observed_hash}
         verified = bool(expected and observed_hash == expected)
         return VerificationResult(
@@ -218,20 +239,27 @@ class GitBranchPushConnector:
         if remote not in self._allowed_remotes:
             raise ConnectorError("rollback remote is not allowlisted")
         self._validate_branch(branch)
-        observed = self._remote_hash(repository, remote_url, branch)
-        if not observed:
-            raise VersionConflictError("remote branch is already absent")
-        if observed != expected:
-            raise VersionConflictError(
-                "remote branch advanced after publication; automatic deletion is prohibited"
+        with self._sandbox.lock_repository_config(repository) as config_guard:
+            self._sandbox.validate_repository_config(repository)
+            config_guard.validate()
+            observed = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
+            if not observed:
+                raise VersionConflictError("remote branch is already absent")
+            if observed != expected:
+                raise VersionConflictError(
+                    "remote branch advanced after publication; automatic deletion "
+                    "is prohibited"
+                )
+            self._run_publication(
+                repository,
+                "push",
+                remote_url,
+                f":refs/heads/{branch}",
             )
-        self._run(
-            repository,
-            "push",
-            remote_url,
-            f":refs/heads/{branch}",
-        )
-        remaining = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
+            remaining = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
         compensation = ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -267,7 +295,11 @@ class GitBranchPushConnector:
             allow_file=self._allow_file_remotes,
         )
         branch = str(after.get("branch", ""))
-        observed_hash = self._remote_hash(repository, remote_url, branch)
+        with self._sandbox.lock_repository_config(repository) as config_guard:
+            self._sandbox.validate_repository_config(repository)
+            config_guard.validate()
+            observed_hash = self._remote_hash(repository, remote_url, branch)
+            config_guard.validate()
         verified = observed_hash is None
         return VerificationResult(
             action_id=action.action_id,
@@ -327,7 +359,7 @@ class GitBranchPushConnector:
     def _remote_hash(
         self, repository: Path, remote_url: str, branch: str
     ) -> str | None:
-        result = self._run(
+        result = self._run_publication(
             repository,
             "ls-remote",
             "--heads",
@@ -356,3 +388,34 @@ class GitBranchPushConnector:
 
     def _run(self, repository: Path, *arguments: str) -> SandboxedGitResult:
         return self._sandbox.run(repository, arguments)
+
+    def _run_worktree(
+        self,
+        repository: Path,
+        *arguments: str,
+    ) -> SandboxedGitResult:
+        head = self._run(repository, "rev-parse", "HEAD").stdout.strip()
+        with self._sandbox.isolated_worktree_snapshot(
+            repository,
+            head=head,
+        ) as snapshot:
+            return self._sandbox.run(
+                snapshot.git_dir,
+                arguments,
+                index_file=snapshot.index_file,
+                worktree=repository,
+            )
+
+    def _run_publication(
+        self,
+        repository: Path,
+        *arguments: str,
+    ) -> SandboxedGitResult:
+        with self._sandbox.isolated_publication_repository(
+            repository
+        ) as publication_repository:
+            return self._sandbox.run(
+                publication_repository,
+                arguments,
+                bare_repository=True,
+            )

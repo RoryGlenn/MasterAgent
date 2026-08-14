@@ -22,12 +22,26 @@ Read results are normalized into stable schemas, marked as untrusted content, sc
 
 Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects.
 
-Local Git commits are assembled in a private alternate index while the standard
-index lock is held. The reviewed diff becomes an immutable tree, the branch ref
-is updated by compare-and-swap, and the reviewed index is installed atomically;
-worktree edits made after the snapshot remain unstaged and are not discarded.
-Branch publication uses the exact approved commit object ID as the push source,
-so a concurrently advanced local branch cannot change the published content.
+Local Git commits safe-open approved regular files without following links and
+stage their raw bytes in a private alternate index while the standard index and
+symbolic HEAD locks are held. The reviewed raw-byte diff becomes an immutable
+tree. A private per-worktree Git directory performs the branch compare-and-swap
+without releasing the real HEAD lock; exact matching HEAD and branch reflog
+records are required before the reviewed index is installed atomically.
+Worktree edits made after the snapshot remain unstaged and are not discarded.
+
+Diff bindings use raw Git stdout bytes with text conversion and external diff
+drivers disabled. Executable diff/filter configuration, URL rewrites, and remote
+push URLs are rejected. Network publication runs from trusted temporary Git
+metadata with the source object database exposed only as an alternate, and uses
+the exact approved commit object ID as the push source. A concurrently advanced
+local branch or a changed repository config therefore cannot select different
+content or redirect the approved literal remote URL.
+
+The explicit-path commit contract covers regular-file content updates, new
+regular files, and tracked deletions. It fails closed for symlink, submodule, and
+tracked mode changes, linked-worktree metadata, and missing, non-owned, symlinked,
+or hard-linked reflogs.
 
 ## Compensation
 

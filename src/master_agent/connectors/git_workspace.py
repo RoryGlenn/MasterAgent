@@ -31,17 +31,23 @@ from master_agent.models import (
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _MAX_INDEX_BYTES = 128 * 1024 * 1024
+_MAX_BLOB_BYTES = 128 * 1024 * 1024
 
 
 class _LockedRepositoryIndex:
-    """Hold Git's standard index lock and install one reviewed index atomically."""
+    """Hold Git's index and HEAD locks through atomic commit publication."""
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, *, expected_branch: str) -> None:
         self._git_path = workspace / ".git"
+        self._expected_head = f"ref: refs/heads/{expected_branch}\n".encode("ascii")
         self._directory_fd = -1
         self._lock_fd = -1
+        self._head_fd = -1
+        self._head_lock_fd = -1
         self._directory_identity: tuple[int, int] | None = None
         self._lock_identity: tuple[int, int] | None = None
+        self._head_identity: tuple[int, int] | None = None
+        self._head_lock_identity: tuple[int, int] | None = None
         self._prepared = False
         self._installed = False
 
@@ -75,6 +81,38 @@ class _LockedRepositoryIndex:
             self._lock_identity = _identity(lock_metadata)
             if not stat.S_ISREG(lock_metadata.st_mode):
                 raise VersionConflictError("repository index lock is not a file")
+            self._head_lock_fd = os.open(
+                "HEAD.lock",
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=self._directory_fd,
+            )
+            head_lock_metadata = os.fstat(self._head_lock_fd)
+            self._head_lock_identity = _identity(head_lock_metadata)
+            if not stat.S_ISREG(head_lock_metadata.st_mode):
+                raise VersionConflictError("repository HEAD lock is not a file")
+            self._head_fd = os.open(
+                "HEAD",
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=self._directory_fd,
+            )
+            head_metadata = os.fstat(self._head_fd)
+            self._head_identity = _identity(head_metadata)
+            if (
+                not stat.S_ISREG(head_metadata.st_mode)
+                or head_metadata.st_size != len(self._expected_head)
+                or _read_fd(self._head_fd, len(self._expected_head) + 1)
+                != self._expected_head
+            ):
+                raise VersionConflictError(
+                    "repository HEAD is not the approved symbolic branch"
+                )
             return self
         except FileExistsError as error:
             self.close()
@@ -157,14 +195,52 @@ class _LockedRepositoryIndex:
         self._installed = True
         os.fsync(self._directory_fd)
 
+    def validate_head(self) -> None:
+        """Prove HEAD still names the exact branch pinned at lock acquisition."""
+
+        if (
+            self._head_fd < 0
+            or self._head_identity is None
+            or not self._path_is_ours("HEAD.lock", self._head_lock_identity)
+        ):
+            raise VersionConflictError("repository HEAD lock identity changed")
+        try:
+            metadata = os.stat(
+                "HEAD",
+                dir_fd=self._directory_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError as error:
+            raise VersionConflictError("repository HEAD changed") from error
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or _identity(metadata) != self._head_identity
+            or _read_fd(self._head_fd, len(self._expected_head) + 1)
+            != self._expected_head
+        ):
+            raise VersionConflictError("repository HEAD changed")
+
     def close(self) -> None:
         """Release the lock without touching the original index on failure."""
 
+        if self._head_fd >= 0:
+            os.close(self._head_fd)
+            self._head_fd = -1
+        if self._head_lock_fd >= 0:
+            os.close(self._head_lock_fd)
+            self._head_lock_fd = -1
         if self._lock_fd >= 0:
             os.close(self._lock_fd)
             self._lock_fd = -1
         if self._directory_fd >= 0:
-            if not self._installed and self._lock_path_is_ours():
+            if self._path_is_ours("HEAD.lock", self._head_lock_identity):
+                try:
+                    os.unlink("HEAD.lock", dir_fd=self._directory_fd)
+                except FileNotFoundError:
+                    pass
+            if not self._installed and self._path_is_ours(
+                "index.lock", self._lock_identity
+            ):
                 try:
                     os.unlink("index.lock", dir_fd=self._directory_fd)
                 except FileNotFoundError:
@@ -180,22 +256,27 @@ class _LockedRepositoryIndex:
         if (
             self._directory_identity is None
             or _identity(metadata) != self._directory_identity
-            or not self._lock_path_is_ours()
+            or not self._path_is_ours("index.lock", self._lock_identity)
         ):
             raise VersionConflictError("repository index identity changed")
+        self.validate_head()
 
-    def _lock_path_is_ours(self) -> bool:
-        if self._directory_fd < 0 or self._lock_identity is None:
+    def _path_is_ours(
+        self,
+        name: str,
+        identity: tuple[int, int] | None,
+    ) -> bool:
+        if self._directory_fd < 0 or identity is None:
             return False
         try:
             metadata = os.stat(
-                "index.lock",
+                name,
                 dir_fd=self._directory_fd,
                 follow_symlinks=False,
             )
         except FileNotFoundError:
             return False
-        return _identity(metadata) == self._lock_identity
+        return _identity(metadata) == identity
 
     @staticmethod
     def _copy_index(source_fd: int, destination_fd: int) -> None:
@@ -222,6 +303,11 @@ class _LockedRepositoryIndex:
 
 def _identity(metadata: os.stat_result) -> tuple[int, int]:
     return (metadata.st_dev, metadata.st_ino)
+
+
+def _read_fd(file_descriptor: int, maximum_bytes: int) -> bytes:
+    os.lseek(file_descriptor, 0, os.SEEK_SET)
+    return os.read(file_descriptor, maximum_bytes)
 
 
 class GitWorkspaceConnector(CompensatingConnector):
@@ -322,12 +408,14 @@ class GitWorkspaceConnector(CompensatingConnector):
             observed = {
                 "head": self._git(workspace, "rev-parse", "HEAD").stdout.strip(),
                 "diff_sha256": hashlib.sha256(
-                    self._git(
+                    self._git_worktree(
                         workspace,
                         "diff",
+                        "--no-textconv",
                         "--binary",
                         "--no-ext-diff",
-                    ).stdout.encode("utf-8")
+                        "--ignore-submodules=all",
+                    ).stdout_bytes
                 ).hexdigest(),
                 "worktree_status_sha256": self._status_digest(workspace),
             }
@@ -441,7 +529,12 @@ class GitWorkspaceConnector(CompensatingConnector):
             "branch": self._current_branch(workspace),
             "worktree_status_sha256": observed_status,
             "worktree_clean": not bool(
-                self._git(workspace, "status", "--porcelain").stdout.strip()
+                self._git_worktree(
+                    workspace,
+                    "status",
+                    "--porcelain",
+                    "--ignore-submodules=all",
+                ).stdout.strip()
             ),
             "deleted_branch": created_branch or None,
         }
@@ -620,17 +713,29 @@ class GitWorkspaceConnector(CompensatingConnector):
             ("apply", "--whitespace=error-all", "-"),
             payload,
         )
-        diff = self._git(workspace, "diff", "--binary").stdout
+        diff = self._git_worktree(
+            workspace,
+            "diff",
+            "--no-textconv",
+            "--binary",
+            "--no-ext-diff",
+            "--ignore-submodules=all",
+        ).stdout_bytes
         post_status = self._status_digest(workspace)
         after = {
             "head": current_head,
             "branch": self._current_branch(workspace),
-            "diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+            "diff_sha256": hashlib.sha256(diff).hexdigest(),
             "worktree_status_sha256": post_status,
             "changed_files": tuple(
                 line
-                for line in self._git(
-                    workspace, "diff", "--name-only"
+                for line in self._git_worktree(
+                    workspace,
+                    "diff",
+                    "--no-textconv",
+                    "--no-ext-diff",
+                    "--ignore-submodules=all",
+                    "--name-only",
                 ).stdout.splitlines()
                 if line
             ),
@@ -669,141 +774,195 @@ class GitWorkspaceConnector(CompensatingConnector):
         if not branch:
             raise ConnectorError("commit creation requires a checked-out branch")
         _branch(branch, allow_protected=True)
-        if self._git(
-            workspace,
-            "diff",
-            "--cached",
-            "--name-only",
-            current_head,
-            "--",
-        ).stdout.strip():
-            raise ConnectorError(
-                "repository index contains pre-existing staged changes"
-            )
-        self._sandbox.reject_path_filters(workspace, normalized)
         expected_diff_digest = _sha256_parameter(
             action.parameters,
             "expected_diff_sha256",
         )
-        before = {
-            "head": current_head,
-            "branch": branch,
-            "diff_sha256": self._diff_digest(workspace),
-            "worktree_status_sha256": self._status_digest(workspace),
-        }
-        with _LockedRepositoryIndex(workspace) as shared_index:
-            if (
-                self._head(workspace) != current_head
-                or self._current_branch(workspace) != branch
-            ):
-                raise VersionConflictError(
-                    "repository branch or HEAD changed before commit isolation"
-                )
+        with self._sandbox.lock_repository_config(workspace) as config_guard:
+            self._sandbox.validate_repository_config(workspace)
+            config_guard.validate()
             if self._git(
                 workspace,
                 "diff",
+                "--no-textconv",
+                "--no-ext-diff",
                 "--cached",
                 "--name-only",
                 current_head,
                 "--",
             ).stdout.strip():
-                raise VersionConflictError(
-                    "repository index changed before the commit lock was acquired"
+                raise ConnectorError(
+                    "repository index contains pre-existing staged changes"
                 )
-            with self._sandbox.isolated_index() as isolated_index:
-                if not shared_index.seed_isolated(isolated_index):
-                    self._git_index(
-                        workspace,
-                        isolated_index,
-                        "read-tree",
-                        current_head,
+            self._sandbox.reject_path_filters(workspace, normalized)
+            before = {
+                "head": current_head,
+                "branch": branch,
+                "diff_sha256": expected_diff_digest,
+                "worktree_status_sha256": self._status_digest(workspace),
+            }
+            with _LockedRepositoryIndex(
+                workspace,
+                expected_branch=branch,
+            ) as shared_index:
+                if (
+                    self._head(workspace) != current_head
+                    or self._current_branch(workspace) != branch
+                ):
+                    raise VersionConflictError(
+                        "repository branch or HEAD changed before commit isolation"
                     )
-                self._git_index(
+                if self._git(
                     workspace,
-                    isolated_index,
-                    "add",
-                    "--",
-                    *normalized,
-                )
-                staged = self._git_index(
-                    workspace,
-                    isolated_index,
                     "diff",
+                    "--no-textconv",
+                    "--no-ext-diff",
                     "--cached",
                     "--name-only",
                     current_head,
                     "--",
-                ).stdout.splitlines()
-                if not staged:
-                    raise ConnectorError("no approved changes were staged for commit")
-                if set(staged) != set(normalized):
-                    raise ConnectorError(
-                        "staged paths differ from the exact approved path set"
+                ).stdout.strip():
+                    raise VersionConflictError(
+                        "repository index changed before the commit lock was acquired"
                     )
-                observed_diff_digest = hashlib.sha256(
-                    self._git_index(
+                with self._sandbox.isolated_index() as isolated_index:
+                    if not shared_index.seed_isolated(isolated_index):
+                        self._git_index(
+                            workspace,
+                            isolated_index,
+                            "read-tree",
+                            current_head,
+                        )
+                    self._stage_raw_paths(
+                        workspace,
+                        isolated_index,
+                        normalized,
+                    )
+                    staged = self._git_index(
                         workspace,
                         isolated_index,
                         "diff",
-                        "--cached",
-                        "--binary",
+                        "--no-textconv",
                         "--no-ext-diff",
+                        "--cached",
+                        "--name-only",
                         current_head,
                         "--",
-                    ).stdout.encode("utf-8")
-                ).hexdigest()
-                if observed_diff_digest != expected_diff_digest:
+                    ).stdout.splitlines()
+                    if not staged:
+                        raise ConnectorError(
+                            "no approved changes were staged for commit"
+                        )
+                    if set(staged) != set(normalized):
+                        raise ConnectorError(
+                            "staged paths differ from the exact approved path set"
+                        )
+                    observed_diff_digest = hashlib.sha256(
+                        self._git_index(
+                            workspace,
+                            isolated_index,
+                            "diff",
+                            "--no-textconv",
+                            "--cached",
+                            "--binary",
+                            "--no-ext-diff",
+                            current_head,
+                            "--",
+                        ).stdout_bytes
+                    ).hexdigest()
+                    if observed_diff_digest != expected_diff_digest:
+                        raise VersionConflictError(
+                            "staged content differs from the approved diff digest"
+                        )
+                    tree = self._git_index(
+                        workspace,
+                        isolated_index,
+                        "write-tree",
+                    ).stdout.strip()
+                    commit = self._git(
+                        workspace,
+                        "commit-tree",
+                        tree,
+                        "-p",
+                        current_head,
+                        "-m",
+                        message,
+                    ).stdout.strip()
+                    observed_tree = self._git(
+                        workspace,
+                        "rev-parse",
+                        "--verify",
+                        f"{commit}^{{tree}}",
+                    ).stdout.strip()
+                    if observed_tree != tree:
+                        raise ConnectorError(
+                            "created Git commit does not contain the approved tree"
+                        )
+                    shared_index.prepare_from(isolated_index)
+
+                if (
+                    self._head(workspace) != current_head
+                    or self._current_branch(workspace) != branch
+                ):
                     raise VersionConflictError(
-                        "staged content differs from the approved diff digest"
+                        "repository branch or HEAD changed before commit publication"
                     )
-                tree = self._git_index(
+                config_guard.validate()
+                shared_index.validate_head()
+                reflog_reason = f"commit: {message.splitlines()[0]}"
+                with self._sandbox.isolated_ref_transaction_repository(
                     workspace,
-                    isolated_index,
-                    "write-tree",
-                ).stdout.strip()
-                commit = self._git(
-                    workspace,
-                    "commit-tree",
-                    tree,
-                    "-p",
-                    current_head,
-                    "-m",
-                    message,
-                ).stdout.strip()
-                observed_tree = self._git(
-                    workspace,
-                    "rev-parse",
-                    "--verify",
-                    f"{commit}^{{tree}}",
-                ).stdout.strip()
-                if observed_tree != tree:
-                    raise ConnectorError(
-                        "created Git commit does not contain the approved tree"
-                    )
-                shared_index.prepare_from(isolated_index)
+                    branch=branch,
+                ) as ref_transaction:
+                    published_record = (current_head, commit, reflog_reason)
+                    try:
+                        self._git_ref_transaction(
+                            ref_transaction.git_dir,
+                            reflog_reason,
+                            f"refs/heads/{branch}",
+                            commit,
+                            current_head,
+                        )
+                    except ConnectorError as error:
+                        raise VersionConflictError(
+                            "repository branch advanced before commit publication"
+                        ) from error
+                    try:
+                        ref_transaction.validate_records((published_record,))
+                        config_guard.validate()
+                        shared_index.validate_head()
+                        shared_index.install()
+                    except (ConnectorError, VersionConflictError) as error:
+                        try:
+                            self._git_ref_transaction(
+                                ref_transaction.git_dir,
+                                "rollback: repository metadata changed",
+                                f"refs/heads/{branch}",
+                                current_head,
+                                commit,
+                            )
+                            ref_transaction.validate_records(
+                                (
+                                    published_record,
+                                    (
+                                        commit,
+                                        current_head,
+                                        "rollback: repository metadata changed",
+                                    ),
+                                )
+                            )
+                        except ConnectorError as rollback_error:
+                            raise ConnectorError(
+                                "repository metadata changed and branch restoration "
+                                "could not be confirmed"
+                            ) from rollback_error
+                        raise VersionConflictError(
+                            "repository metadata changed; commit publication was rolled back"
+                        ) from error
 
-            if (
-                self._head(workspace) != current_head
-                or self._current_branch(workspace) != branch
-            ):
-                raise VersionConflictError(
-                    "repository branch or HEAD changed before commit publication"
-                )
-            try:
-                self._git(
-                    workspace,
-                    "update-ref",
-                    f"refs/heads/{branch}",
-                    commit,
-                    current_head,
-                )
-            except ConnectorError as error:
-                raise VersionConflictError(
-                    "repository branch advanced before commit publication"
-                ) from error
-            shared_index.install()
+            post_status = self._status_digest(workspace)
+            config_guard.validate()
 
-        post_status = self._status_digest(workspace)
         after = {
             "branch": self._current_branch(workspace),
             "commit": commit,
@@ -823,6 +982,60 @@ class GitWorkspaceConnector(CompensatingConnector):
             compensation=_compensation_descriptor(after),
         )
 
+    def _stage_raw_paths(
+        self,
+        workspace: Path,
+        isolated_index: Path,
+        paths: Sequence[str],
+    ) -> None:
+        """Stage exact raw file bytes without repository-controlled conversions."""
+
+        for relative in paths:
+            existing = self._git_index(
+                workspace,
+                isolated_index,
+                "ls-files",
+                "--stage",
+                "--",
+                relative,
+            ).stdout.strip()
+            opened = _read_workspace_regular_file(workspace, relative)
+            if opened is None:
+                if not existing:
+                    raise ConnectorError(
+                        "approved commit path is neither tracked nor a regular file"
+                    )
+                self._git_index(
+                    workspace,
+                    isolated_index,
+                    "update-index",
+                    "--force-remove",
+                    "--",
+                    relative,
+                )
+                continue
+            payload, file_mode = opened
+            mode = (
+                existing.split(maxsplit=1)[0]
+                if existing
+                else ("100755" if file_mode & stat.S_IXUSR else "100644")
+            )
+            blob = self._git_bytes(
+                workspace,
+                ("hash-object", "--no-filters", "-w", "--stdin"),
+                payload,
+            ).stdout.strip()
+            self._git_index(
+                workspace,
+                isolated_index,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                mode,
+                blob,
+                relative,
+            )
+
     def _push_branch(self, action: AgentAction, workspace: Path) -> ExecutionResult:
         remote = str(action.parameters.get("remote", "origin")).strip()
         if remote not in self._allowed_remotes:
@@ -834,7 +1047,6 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise ConnectorError("protected branch pushes are prohibited")
         if branch != self._current_branch(workspace):
             raise ConnectorError("only the current branch may be pushed")
-        remote_url = self._approved_remote_url(action, workspace, remote)
         commit = self._head(workspace)
         if not action.target.expected_version:
             raise ConnectorError("branch push requires an approved commit hash")
@@ -842,14 +1054,32 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise VersionConflictError(
                 f"repository HEAD changed: expected {action.target.expected_version}, observed {commit}"
             )
-        before_hash = self._remote_branch_hash(workspace, remote_url, branch)
-        self._git(
-            workspace,
-            "push",
-            remote_url,
-            f"{commit}:refs/heads/{branch}",
-        )
-        after_hash = self._remote_branch_hash(workspace, remote_url, branch)
+        with self._sandbox.lock_repository_config(workspace) as config_guard:
+            self._sandbox.validate_repository_config(workspace)
+            remote_url = self._approved_remote_url(action, workspace, remote)
+            config_guard.validate()
+            with self._sandbox.isolated_publication_repository(
+                workspace
+            ) as publication_repository:
+                before_hash = self._remote_branch_hash_from(
+                    publication_repository,
+                    remote_url,
+                    branch,
+                )
+                config_guard.validate()
+                self._git_publication(
+                    publication_repository,
+                    "push",
+                    remote_url,
+                    f"{commit}:refs/heads/{branch}",
+                )
+                config_guard.validate()
+                after_hash = self._remote_branch_hash_from(
+                    publication_repository,
+                    remote_url,
+                    branch,
+                )
+            config_guard.validate()
         if after_hash != commit:
             raise ConnectorError("remote branch did not resolve to the pushed commit")
         after = {
@@ -914,6 +1144,59 @@ class GitWorkspaceConnector(CompensatingConnector):
     ) -> SandboxedGitResult:
         return self._run(workspace, args, index_file=index_file)
 
+    def _git_worktree(
+        self,
+        workspace: Path,
+        *args: str,
+    ) -> SandboxedGitResult:
+        head = self._head(workspace)
+        with self._sandbox.isolated_worktree_snapshot(
+            workspace,
+            head=head,
+        ) as snapshot:
+            return self._sandbox.run(
+                snapshot.git_dir,
+                args,
+                index_file=snapshot.index_file,
+                worktree=workspace,
+            )
+
+    def _git_publication(
+        self,
+        repository: Path,
+        *args: str,
+    ) -> SandboxedGitResult:
+        return self._sandbox.run(
+            repository,
+            args,
+            bare_repository=True,
+        )
+
+    def _git_ref_transaction(
+        self,
+        git_dir: Path,
+        reason: str,
+        ref: str,
+        new_oid: str,
+        old_oid: str,
+    ) -> SandboxedGitResult:
+        return self._sandbox.run(
+            git_dir,
+            (
+                "--git-dir",
+                str(git_dir),
+                "-c",
+                "core.logAllRefUpdates=true",
+                "update-ref",
+                "-m",
+                reason,
+                ref,
+                new_oid,
+                old_oid,
+            ),
+            bare_repository=True,
+        )
+
     def _run(
         self,
         workspace: Path,
@@ -936,29 +1219,56 @@ class GitWorkspaceConnector(CompensatingConnector):
         return self._git(workspace, "branch", "--show-current").stdout.strip()
 
     def _require_clean(self, workspace: Path) -> None:
-        if self._git(workspace, "status", "--porcelain").stdout.strip():
+        if self._git_worktree(
+            workspace,
+            "status",
+            "--porcelain",
+            "--ignore-submodules=all",
+        ).stdout.strip():
             raise ConnectorError("Git workspace must be clean before branch creation")
 
     def _diff_digest(self, workspace: Path) -> str:
         return hashlib.sha256(
-            self._git(
+            self._git_worktree(
                 workspace,
                 "diff",
+                "--no-textconv",
                 "--binary",
                 "--no-ext-diff",
-            ).stdout.encode("utf-8")
+                "--ignore-submodules=all",
+            ).stdout_bytes
         ).hexdigest()
 
     def _status_digest(self, workspace: Path) -> str:
         return hashlib.sha256(
-            self._git(workspace, "status", "--porcelain=v1").stdout.encode("utf-8")
+            self._git_worktree(
+                workspace,
+                "status",
+                "--porcelain=v1",
+                "--ignore-submodules=all",
+            ).stdout_bytes
         ).hexdigest()
 
     def _remote_branch_hash(
         self, workspace: Path, remote_url: str, branch: str
     ) -> str | None:
-        result = self._git(
-            workspace,
+        with self._sandbox.isolated_publication_repository(
+            workspace
+        ) as publication_repository:
+            return self._remote_branch_hash_from(
+                publication_repository,
+                remote_url,
+                branch,
+            )
+
+    def _remote_branch_hash_from(
+        self,
+        publication_repository: Path,
+        remote_url: str,
+        branch: str,
+    ) -> str | None:
+        result = self._git_publication(
+            publication_repository,
             "ls-remote",
             "--heads",
             remote_url,
@@ -1037,9 +1347,108 @@ def _branch(value: str, *, allow_protected: bool = False) -> str:
 
 def _relative_path(value: str) -> str:
     path = Path(value)
-    if path.is_absolute() or ".." in path.parts or not path.parts:
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or not path.parts
+        or path == Path(".")
+        or any(part.casefold() == ".git" for part in path.parts)
+        or any(character in value for character in ("\n", "\r", "\0"))
+    ):
         raise ConnectorError("commit path must remain inside the workspace")
     return path.as_posix()
+
+
+def _read_workspace_regular_file(
+    workspace: Path,
+    relative: str,
+) -> tuple[bytes, int] | None:
+    """Safe-open and snapshot one regular workspace file without following links."""
+
+    root_metadata = workspace.lstat()
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise VersionConflictError("repository workspace identity changed")
+    root_fd = os.open(
+        workspace,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    directory_fds = [root_fd]
+    directory_chain: list[tuple[int, str, tuple[int, int]]] = []
+    file_fd = -1
+    try:
+        if _identity(os.fstat(root_fd)) != _identity(root_metadata):
+            raise VersionConflictError("repository workspace identity changed")
+        parts = Path(relative).parts
+        current_fd = root_fd
+        for part in parts[:-1]:
+            child_fd = os.open(
+                part,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_fd,
+            )
+            child_metadata = os.fstat(child_fd)
+            if not stat.S_ISDIR(child_metadata.st_mode):
+                raise ConnectorError("approved commit path parent is not a directory")
+            directory_chain.append((current_fd, part, _identity(child_metadata)))
+            directory_fds.append(child_fd)
+            current_fd = child_fd
+        try:
+            file_fd = os.open(
+                parts[-1],
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_fd,
+            )
+        except FileNotFoundError:
+            return None
+        before = os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > _MAX_BLOB_BYTES:
+            raise ConnectorError(
+                "approved commit paths must be bounded regular files or tracked deletions"
+            )
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(file_fd, min(1024 * 1024, remaining))
+            if not chunk:
+                raise VersionConflictError(
+                    "approved commit path changed while being read"
+                )
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(file_fd, 1):
+            raise VersionConflictError("approved commit path changed while being read")
+        after = os.fstat(file_fd)
+        if (
+            _identity(after) != _identity(before)
+            or after.st_mode != before.st_mode
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+            or after.st_ctime_ns != before.st_ctime_ns
+            or _identity(workspace.lstat()) != _identity(root_metadata)
+        ):
+            raise VersionConflictError("approved commit path changed while being read")
+        for parent_fd, name, identity in directory_chain:
+            metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode) or _identity(metadata) != identity:
+                raise VersionConflictError("approved commit path parent changed")
+        return b"".join(chunks), before.st_mode
+    except OSError as error:
+        raise ConnectorError(
+            "approved commit path could not be safely opened"
+        ) from error
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
 
 
 def _sha256_parameter(parameters: Mapping[str, Any], key: str) -> str:

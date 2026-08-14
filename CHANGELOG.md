@@ -39,7 +39,10 @@
 - provider mutation connectors require runtime, generic, and granular provider gates;
 - PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
 - standalone Git worktree restore is not exposed because a status precheck followed by `reset --hard` cannot preserve edits made between check and use.
-- local Git commits bind approved diffs through an isolated index and immutable tree, while pushes publish the exact approved commit object rather than a mutable branch source.
+- local Git diff and status bindings hash the exact stdout bytes, disable text conversion/external diff drivers, and reject executable diff/filter or URL-rewrite configuration;
+- local Git commits safe-open regular worktree files without following links, stage raw blobs through an isolated index, lock symbolic HEAD through compare-and-swap publication, and verify matching HEAD/branch reflog records before installing the reviewed index;
+- Git publication uses a trusted config-isolated repository and the exact approved commit object rather than a mutable branch source, so local branch races and repository URL rewrites cannot change the published content or destination;
+- explicit-path commit creation intentionally refuses symlink, submodule, and tracked mode changes, linked-worktree metadata, and unsafe/missing/hard-linked reflogs instead of weakening content or recovery guarantees.
 
 ## 0.3.0 — Read-only communication context
 

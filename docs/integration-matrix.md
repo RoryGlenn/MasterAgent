@@ -11,7 +11,7 @@
 | SharePoint/OneDrive | Microsoft Graph delegated/application subject to policy | site/drive/item/folder/text | local artifact | bounded small-file upload | hash exact prior/uploaded/restored provider bytes; restore previous version | disabled |
 | OneNote | Microsoft Graph delegated | notebooks, sections, pages, page content | HTML/proposal | disabled pending exact DOM proof | read content is re-read; no write connector is registered | disabled |
 | PowerPoint | local `python-pptx` | — | `.pptx` generation | upload through SharePoint only | local file digest; SharePoint version verification after upload | available locally |
-| Git workspace | local Git identity | repository preconditions | branch and patch plan | apply patch, create branch/commit, push | exact HEAD/ref checks; connector-managed reverse patch and compare-and-swap local ref rollback; remote push recovery is manual; no standalone worktree restore | requires explicit workspace root |
+| Git workspace | local Git identity | repository preconditions | branch and patch plan | apply patch, create branch/regular-file commit, push exact approved OID | raw-byte diff/status binding; locked HEAD/ref/index publication; exact reflog checks; config-isolated remote verification; connector-managed reverse patch and compare-and-swap local ref rollback; remote push recovery is manual; no standalone worktree restore | requires explicit workspace root |
 | Connector plugin | metadata-only entry-point inventory | — | — | disabled | future isolated-worker contract | never executed |
 
 ## Hard exclusions

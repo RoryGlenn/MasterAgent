@@ -242,24 +242,24 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                 workspace_root=root,
                 allow_file_remotes=True,
             )
-            original_git = connector._git
+            original_git = connector._git_publication
             raced_commit = ""
 
-            def racing_git(workspace: Path, *arguments: str):
+            def racing_git(publication: Path, *arguments: str):
                 nonlocal raced_commit
                 if arguments and arguments[0] == "push" and not raced_commit:
-                    (workspace / "README.md").write_text(
+                    (repository / "README.md").write_text(
                         "unapproved concurrent commit\n",
                         encoding="utf-8",
                     )
-                    _git(workspace, "add", "README.md")
-                    _git(workspace, "commit", "-m", "concurrent change")
-                    raced_commit = _git(workspace, "rev-parse", "HEAD")
-                return original_git(workspace, *arguments)
+                    _git(repository, "add", "README.md")
+                    _git(repository, "commit", "-m", "concurrent change")
+                    raced_commit = _git(repository, "rev-parse", "HEAD")
+                return original_git(publication, *arguments)
 
-            connector._git = racing_git  # type: ignore[method-assign]
+            connector._git_publication = racing_git  # type: ignore[method-assign]
             result = connector.execute(action)
-            del connector._git
+            del connector._git_publication
 
             remote_commit = _git(
                 repository,
@@ -272,6 +272,139 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             self.assertEqual(_git(repository, "rev-parse", "HEAD"), raced_commit)
             self.assertEqual(remote_commit, approved_commit)
             self.assertEqual(result.after["commit"], approved_commit)
+
+    def test_push_ignores_direct_url_rewrite_injected_at_publication_boundary(
+        self,
+    ) -> None:
+        for rewrite_key in ("insteadOf", "pushInsteadOf"):
+            with (
+                self.subTest(rewrite_key=rewrite_key),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                approved = root / "approved.git"
+                attacker = root / "attacker.git"
+                for remote in (approved, attacker):
+                    subprocess.run(
+                        ["git", "init", "--bare", str(remote)],
+                        check=True,
+                        capture_output=True,
+                    )
+                repository = _repository(root / "repo")
+                _git(repository, "remote", "add", "origin", str(approved))
+                _git(repository, "switch", "-c", "agent/change")
+                approved_commit = _git(repository, "rev-parse", "HEAD")
+                action = action_for(
+                    "repository.branch.push",
+                    system="repository",
+                    resource_type="workspace",
+                    resource_id="repo",
+                    risk=RiskLevel.REVERSIBLE_WRITE,
+                    expected_version=approved_commit,
+                    parameters={
+                        "workspace": "repo",
+                        "remote": "origin",
+                        "remote_url": str(approved),
+                        "branch": "agent/change",
+                    },
+                )
+                connector = GitWorkspaceConnector(
+                    workspace_root=root,
+                    allow_file_remotes=True,
+                )
+                original_publication = connector._git_publication
+                injected = False
+
+                def racing_publication(
+                    publication: Path,
+                    *arguments: str,
+                    _repository: Path = repository,
+                    _attacker: Path = attacker,
+                    _rewrite_key: str = rewrite_key,
+                    _approved: Path = approved,
+                    _original_publication=original_publication,
+                ):
+                    nonlocal injected
+                    if arguments and arguments[0] == "push" and not injected:
+                        injected = True
+                        with (_repository / ".git/config").open(
+                            "a",
+                            encoding="utf-8",
+                        ) as config:
+                            config.write(
+                                f'\n[url "{_attacker}"]\n'
+                                f"\t{_rewrite_key} = {_approved}\n"
+                            )
+                    return _original_publication(publication, *arguments)
+
+                connector._git_publication = racing_publication  # type: ignore[method-assign]
+                with self.assertRaisesRegex(ConnectorError, "config identity changed"):
+                    connector.execute(action)
+                del connector._git_publication
+
+                self.assertTrue(injected)
+                self.assertEqual(
+                    _git(approved, "rev-parse", "refs/heads/agent/change"),
+                    approved_commit,
+                )
+                self.assertEqual(
+                    _git(
+                        attacker,
+                        "rev-parse",
+                        "--verify",
+                        "refs/heads/agent/change",
+                        check=False,
+                    ),
+                    "",
+                )
+
+    def test_pushurl_configuration_is_rejected_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved.git"
+            attacker = root / "attacker.git"
+            for remote in (approved, attacker):
+                subprocess.run(
+                    ["git", "init", "--bare", str(remote)],
+                    check=True,
+                    capture_output=True,
+                )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(approved))
+            _git(repository, "config", "remote.origin.pushurl", str(attacker))
+            _git(repository, "switch", "-c", "agent/change")
+            action = action_for(
+                "repository.branch.push",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "remote": "origin",
+                    "remote_url": str(approved),
+                    "branch": "agent/change",
+                },
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "remote.origin.pushurl"):
+                GitWorkspaceConnector(
+                    workspace_root=root,
+                    allow_file_remotes=True,
+                ).execute(action)
+
+            for remote in (approved, attacker):
+                self.assertEqual(
+                    _git(
+                        remote,
+                        "rev-parse",
+                        "--verify",
+                        "refs/heads/agent/change",
+                        check=False,
+                    ),
+                    "",
+                )
 
     def test_commit_isolates_index_at_content_binding_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -334,6 +467,359 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             )
             self.assertEqual(_git(repository, "status", "--porcelain"), "M README.md")
             self.assertEqual(result.after["diff_sha256"], approved_digest)
+
+    def test_commit_hashes_raw_non_utf8_diff_bytes_without_replacement_collision(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            approved_bytes, attacker_bytes = _replacement_collision_payloads()
+            (repository / "README.md").write_bytes(approved_bytes)
+            approved_result = connector._git(
+                repository,
+                "diff",
+                "--no-textconv",
+                "--binary",
+                "--no-ext-diff",
+            )
+            approved_digest = connector._diff_digest(repository)
+            self.assertEqual(
+                approved_digest,
+                hashlib.sha256(approved_result.stdout_bytes).hexdigest(),
+            )
+
+            (repository / "README.md").write_bytes(attacker_bytes)
+            attacker_result = connector._git(
+                repository,
+                "diff",
+                "--no-textconv",
+                "--binary",
+                "--no-ext-diff",
+            )
+            self.assertEqual(approved_result.stdout, attacker_result.stdout)
+            self.assertNotEqual(
+                approved_result.stdout_bytes,
+                attacker_result.stdout_bytes,
+            )
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved non-UTF-8 change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": approved_digest,
+                },
+            )
+
+            with self.assertRaisesRegex(VersionConflictError, "approved diff digest"):
+                connector.execute(action)
+
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), approved_head)
+            self.assertEqual(
+                (repository / "README.md").read_bytes(),
+                attacker_bytes,
+            )
+
+    @unittest.skipUnless(os.name == "posix", "textconv test requires POSIX")
+    def test_diff_textconv_is_disabled_and_executable_config_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            marker = root / "textconv-ran"
+            command = root / "textconv"
+            command.write_text(
+                f'#!/bin/sh\nprintf textconv > {marker}\ncat "$1"\n',
+                encoding="utf-8",
+            )
+            command.chmod(0o700)
+            (repository / ".gitattributes").write_text(
+                "README.md diff=evil\n",
+                encoding="utf-8",
+            )
+            _git(repository, "add", ".gitattributes")
+            _git(repository, "commit", "-m", "add attributes")
+            _git(repository, "config", "diff.evil.textconv", str(command))
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            connector = GitWorkspaceConnector(workspace_root=root)
+
+            connector._diff_digest(repository)
+            self.assertFalse(marker.exists())
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": connector._diff_digest(repository),
+                },
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "diff.evil.textconv"):
+                connector.execute(action)
+
+            self.assertFalse(marker.exists())
+
+    def test_diff_cachetextconv_config_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            _git(repository, "config", "diff.evil.cachetextconv", "true")
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "cachetextconv"):
+                GitWorkspaceConnector(workspace_root=root).execute(action)
+
+    @unittest.skipUnless(os.name == "posix", "filter test requires POSIX")
+    def test_worktree_status_and_diff_ignore_filter_injected_at_subprocess_boundary(
+        self,
+    ) -> None:
+        for git_command in ("status", "diff"):
+            with (
+                self.subTest(git_command=git_command),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                repository = _repository(root / "repo")
+                marker = root / "filter-ran"
+                command = root / "clean-filter"
+                command.write_text(
+                    f"#!/bin/sh\nprintf filter > {marker}\ncat\n",
+                    encoding="utf-8",
+                )
+                command.chmod(0o700)
+                (repository / "README.md").write_text(
+                    "changed\n",
+                    encoding="utf-8",
+                )
+                connector = GitWorkspaceConnector(workspace_root=root)
+                original_run = connector._sandbox.run
+                injected = False
+
+                def racing_run(
+                    git_dir: Path,
+                    arguments: tuple[str, ...],
+                    _git_command: str = git_command,
+                    _repository: Path = repository,
+                    _command: Path = command,
+                    _original_run=original_run,
+                    **kwargs,
+                ):
+                    nonlocal injected
+                    if (
+                        kwargs.get("worktree") is not None
+                        and arguments
+                        and arguments[0] == _git_command
+                        and not injected
+                    ):
+                        injected = True
+                        (_repository / ".gitattributes").write_text(
+                            "README.md filter=evil\n",
+                            encoding="utf-8",
+                        )
+                        with (_repository / ".git/config").open(
+                            "a",
+                            encoding="utf-8",
+                        ) as config:
+                            config.write(f'\n[filter "evil"]\n\tclean = {_command}\n')
+                    return _original_run(git_dir, arguments, **kwargs)
+
+                connector._sandbox.run = racing_run  # type: ignore[method-assign]
+                if git_command == "status":
+                    connector._status_digest(repository)
+                else:
+                    connector._diff_digest(repository)
+                del connector._sandbox.run
+
+                self.assertTrue(injected)
+                self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.name == "posix", "filter test requires POSIX")
+    def test_commit_filter_injected_at_hash_boundary_never_executes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            marker = root / "filter-ran"
+            command = root / "clean-filter"
+            command.write_text(
+                f"#!/bin/sh\nprintf filter > {marker}\ncat\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o700)
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            original_index = (repository / ".git/index").read_bytes()
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": _diff_sha256(repository),
+                },
+            )
+            connector = GitWorkspaceConnector(workspace_root=root)
+            original_git_bytes = connector._git_bytes
+            injected = False
+
+            def racing_git_bytes(
+                workspace: Path,
+                arguments: tuple[str, ...],
+                payload: bytes,
+            ):
+                nonlocal injected
+                if arguments and arguments[0] == "hash-object" and not injected:
+                    injected = True
+                    (workspace / ".gitattributes").write_text(
+                        "README.md filter=evil\n",
+                        encoding="utf-8",
+                    )
+                    with (workspace / ".git/config").open(
+                        "a",
+                        encoding="utf-8",
+                    ) as config:
+                        config.write(f'\n[filter "evil"]\n\tclean = {command}\n')
+                return original_git_bytes(workspace, arguments, payload)
+
+            connector._git_bytes = racing_git_bytes  # type: ignore[method-assign]
+            with self.assertRaisesRegex(ConnectorError, "config identity changed"):
+                connector.execute(action)
+            del connector._git_bytes
+
+            self.assertTrue(injected)
+            self.assertFalse(marker.exists())
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), approved_head)
+            self.assertEqual((repository / ".git/index").read_bytes(), original_index)
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "approved\n",
+            )
+
+    def test_commit_head_switch_at_ref_transaction_is_rolled_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            _git(repository, "branch", "other")
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            original_index = (repository / ".git/index").read_bytes()
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": _diff_sha256(repository),
+                },
+            )
+            connector = GitWorkspaceConnector(workspace_root=root)
+            original_transaction = connector._git_ref_transaction
+            injected = False
+
+            def racing_transaction(
+                git_dir: Path,
+                reason: str,
+                ref: str,
+                new_oid: str,
+                old_oid: str,
+            ):
+                nonlocal injected
+                if not injected:
+                    injected = True
+                    replacement = repository / ".git/HEAD.inject"
+                    replacement.write_text(
+                        "ref: refs/heads/other\n",
+                        encoding="ascii",
+                    )
+                    os.replace(replacement, repository / ".git/HEAD")
+                return original_transaction(
+                    git_dir,
+                    reason,
+                    ref,
+                    new_oid,
+                    old_oid,
+                )
+
+            connector._git_ref_transaction = racing_transaction  # type: ignore[method-assign]
+            with self.assertRaisesRegex(VersionConflictError, "rolled back"):
+                connector.execute(action)
+            del connector._git_ref_transaction
+
+            self.assertTrue(injected)
+            self.assertEqual(
+                _git(repository, "rev-parse", "refs/heads/main"), approved_head
+            )
+            self.assertEqual(
+                _git(repository, "rev-parse", "refs/heads/other"), approved_head
+            )
+            self.assertEqual(_git(repository, "branch", "--show-current"), "other")
+            self.assertEqual((repository / ".git/index").read_bytes(), original_index)
+            self.assertFalse((repository / ".git/index.lock").exists())
+            self.assertFalse((repository / ".git/HEAD.lock").exists())
+
+    @unittest.skipUnless(os.name == "posix", "hard-link test requires POSIX")
+    def test_commit_refuses_hardlinked_reflog_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            (repository / "README.md").write_text("approved\n", encoding="utf-8")
+            approved_head = _git(repository, "rev-parse", "HEAD")
+            branch_log = repository / ".git/logs/refs/heads/main"
+            os.link(branch_log, root / "reflog-alias")
+            action = action_for(
+                "repository.commit.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=approved_head,
+                parameters={
+                    "workspace": "repo",
+                    "message": "approved change",
+                    "paths": ["README.md"],
+                    "expected_diff_sha256": _diff_sha256(repository),
+                },
+            )
+
+            with self.assertRaisesRegex(ConnectorError, "singly linked"):
+                GitWorkspaceConnector(workspace_root=root).execute(action)
+
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), approved_head)
+            self.assertEqual(_git(repository, "diff", "--cached", "--name-only"), "")
 
     def test_commit_preserves_unrelated_shared_index_flags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -672,6 +1158,134 @@ class GitBranchPushConnectorTests(unittest.TestCase):
                 "",
             )
 
+    def test_publish_uses_approved_oid_when_local_branch_races(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)],
+                check=True,
+                capture_output=True,
+            )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(remote))
+            _git(repository, "switch", "-c", "agent/change")
+            approved_commit = _git(repository, "rev-parse", "HEAD")
+            connector = GitBranchPushConnector(
+                repository_root=root,
+                allow_file_remotes=True,
+            )
+            action = action_for(
+                "bitbucket.branch.push",
+                system="bitbucket",
+                resource_type="branch",
+                resource_id="agent/change",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                parameters={
+                    "repository_path": str(repository),
+                    "branch": "agent/change",
+                    "remote": "origin",
+                    "remote_url": str(remote),
+                },
+                expected_version=approved_commit,
+            )
+            original_publication = connector._run_publication
+            raced_commit = ""
+
+            def racing_publication(workspace: Path, *arguments: str):
+                nonlocal raced_commit
+                if arguments and arguments[0] == "push" and not raced_commit:
+                    (repository / "README.md").write_text(
+                        "unapproved concurrent commit\n",
+                        encoding="utf-8",
+                    )
+                    _git(repository, "add", "README.md")
+                    _git(repository, "commit", "-m", "concurrent change")
+                    raced_commit = _git(repository, "rev-parse", "HEAD")
+                return original_publication(workspace, *arguments)
+
+            connector._run_publication = racing_publication  # type: ignore[method-assign]
+            result = connector.execute(action)
+            del connector._run_publication
+
+            self.assertNotEqual(raced_commit, approved_commit)
+            self.assertEqual(_git(repository, "rev-parse", "HEAD"), raced_commit)
+            self.assertEqual(
+                _git(remote, "rev-parse", "refs/heads/agent/change"),
+                approved_commit,
+            )
+            self.assertEqual(result.after["commit"], approved_commit)
+
+    def test_publication_ignores_injected_source_pushinstead_of(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved.git"
+            attacker = root / "attacker.git"
+            for remote in (approved, attacker):
+                subprocess.run(
+                    ["git", "init", "--bare", str(remote)],
+                    check=True,
+                    capture_output=True,
+                )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(approved))
+            _git(repository, "switch", "-c", "agent/change")
+            approved_commit = _git(repository, "rev-parse", "HEAD")
+            connector = GitBranchPushConnector(
+                repository_root=root,
+                allow_file_remotes=True,
+            )
+            action = action_for(
+                "bitbucket.branch.push",
+                system="bitbucket",
+                resource_type="branch",
+                resource_id="agent/change",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                parameters={
+                    "repository_path": str(repository),
+                    "branch": "agent/change",
+                    "remote": "origin",
+                    "remote_url": str(approved),
+                },
+                expected_version=approved_commit,
+            )
+            original_publication = connector._run_publication
+            injected = False
+
+            def racing_publication(workspace: Path, *arguments: str):
+                nonlocal injected
+                if arguments and arguments[0] == "push" and not injected:
+                    injected = True
+                    with (repository / ".git/config").open(
+                        "a",
+                        encoding="utf-8",
+                    ) as config:
+                        config.write(
+                            f'\n[url "{attacker}"]\n\tpushInsteadOf = {approved}\n'
+                        )
+                return original_publication(workspace, *arguments)
+
+            connector._run_publication = racing_publication  # type: ignore[method-assign]
+            with self.assertRaisesRegex(ConnectorError, "config identity changed"):
+                connector.execute(action)
+            del connector._run_publication
+
+            self.assertTrue(injected)
+            self.assertEqual(
+                _git(approved, "rev-parse", "refs/heads/agent/change"),
+                approved_commit,
+            )
+            self.assertEqual(
+                _git(
+                    attacker,
+                    "rev-parse",
+                    "--verify",
+                    "refs/heads/agent/change",
+                    check=False,
+                ),
+                "",
+            )
+
     @unittest.skipUnless(os.name == "posix", "executable config test requires POSIX")
     def test_repository_ssh_command_is_rejected_without_inheriting_secrets(
         self,
@@ -807,6 +1421,29 @@ def _diff_sha256(repository: Path) -> str:
         capture_output=True,
     )
     return hashlib.sha256(result.stdout).hexdigest()
+
+
+def _replacement_collision_payloads() -> tuple[bytes, bytes]:
+    """Find distinct invalid UTF-8 blobs with one seven-hex Git abbreviation."""
+
+    observed: dict[str, bytes] = {}
+    for value in range(200_000):
+        remaining = value
+        invalid = bytearray()
+        for _ in range(4):
+            invalid.append(0x80 + (remaining & 0x3F))
+            remaining >>= 6
+        payload = b"value-" + bytes(invalid) + b"\n"
+        framed = f"blob {len(payload)}\0".encode("ascii") + payload
+        abbreviation = hashlib.sha1(
+            framed,
+            usedforsecurity=False,
+        ).hexdigest()[:7]
+        previous = observed.get(abbreviation)
+        if previous is not None and previous != payload:
+            return previous, payload
+        observed[abbreviation] = payload
+    raise AssertionError("failed to construct deterministic Git abbreviation collision")
 
 
 def _readme_patch(value: str) -> str:

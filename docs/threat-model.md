@@ -80,7 +80,9 @@ Controls:
 
 - expected version/eTag/commit preconditions;
 - exact commit-object push sources instead of mutable local branch ref sources;
-- isolated Git indexes, immutable reviewed trees, and compare-and-swap branch updates;
+- raw-byte Git diff/status hashes with text conversion and external diff disabled;
+- safe-open raw-blob staging, isolated Git indexes, immutable reviewed trees, and symbolic-HEAD/branch compare-and-swap publication with exact reflog validation;
+- config-isolated remote publication that ignores repository URL rewrites and push URLs;
 - independent provider re-read;
 - fail-closed conflict states;
 - no automatic overwrite/rebase after conflict.
