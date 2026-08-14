@@ -274,7 +274,7 @@ authentication = "local_git"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Create a non-protected local Git branch."
+description = "Create a non-protected local Git branch at the checked-out HEAD."
 
 [capabilities."repository.branch.plan"]
 enabled = true

@@ -54,6 +54,179 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                 "agent/change", _git(repository, "branch", "--list", "agent/change")
             )
 
+    def test_branch_creation_rejects_a_base_that_would_require_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            _git(repository, "switch", "-c", "other")
+            (repository / "README.md").write_text("other\n", encoding="utf-8")
+            _git(repository, "add", "README.md")
+            _git(repository, "commit", "-m", "other")
+            other_head = _git(repository, "rev-parse", "HEAD")
+            _git(repository, "switch", "main")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=other_head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "other",
+                },
+            )
+
+            with self.assertRaisesRegex(
+                ConnectorError,
+                "base must resolve to the current checked-out HEAD",
+            ):
+                connector.execute(action)
+
+            self.assertEqual(_git(repository, "branch", "--show-current"), "main")
+            self.assertEqual(_git(repository, "branch", "--list", "agent/change"), "")
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
+    @unittest.skipUnless(os.name == "posix", "filter test requires POSIX")
+    def test_branch_creation_never_executes_injected_checkout_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            (repository / ".gitattributes").write_text(
+                "README.md filter=evil\n",
+                encoding="utf-8",
+            )
+            _git(repository, "add", ".gitattributes")
+            _git(repository, "commit", "-m", "add attributes")
+            head = _git(repository, "rev-parse", "HEAD")
+            marker = root / "filter-ran"
+            command = root / "smudge-filter"
+            command.write_text(
+                f"#!/bin/sh\nprintf filter > {marker}\ncat\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o700)
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+            original_git = connector._git
+            injected = False
+
+            def racing_git(workspace: Path, *arguments: str):
+                nonlocal injected
+                if arguments == ("switch", "-c", "agent/change", head):
+                    injected = True
+                    with (repository / ".git/config").open(
+                        "a",
+                        encoding="utf-8",
+                    ) as config:
+                        config.write(f'\n[filter "evil"]\n\tsmudge = {command}\n')
+                return original_git(workspace, *arguments)
+
+            connector._git = racing_git  # type: ignore[method-assign]
+            with self.assertRaisesRegex(ConnectorError, "config identity changed"):
+                connector.execute(action)
+            del connector._git
+
+            self.assertTrue(injected)
+            self.assertFalse(marker.exists())
+            self.assertEqual(_git(repository, "branch", "--show-current"), "main")
+            self.assertEqual(_git(repository, "branch", "--list", "agent/change"), "")
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
+    @unittest.skipUnless(os.name == "posix", "filter test requires POSIX")
+    def test_branch_compensation_never_executes_injected_checkout_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            (repository / ".gitattributes").write_text(
+                "README.md filter=evil\n",
+                encoding="utf-8",
+            )
+            _git(repository, "add", ".gitattributes")
+            _git(repository, "commit", "-m", "add attributes")
+            head = _git(repository, "rev-parse", "HEAD")
+            marker = root / "filter-ran"
+            command = root / "smudge-filter"
+            command.write_text(
+                f"#!/bin/sh\nprintf filter > {marker}\ncat\n",
+                encoding="utf-8",
+            )
+            command.chmod(0o700)
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+            result = connector.execute(action)
+            original_git = connector._git
+            injected = False
+
+            def racing_git(workspace: Path, *arguments: str):
+                nonlocal injected
+                if arguments == (
+                    "symbolic-ref",
+                    "-m",
+                    "rollback: restore prior branch",
+                    "HEAD",
+                    "refs/heads/main",
+                ):
+                    injected = True
+                    with (repository / ".git/config").open(
+                        "a",
+                        encoding="utf-8",
+                    ) as config:
+                        config.write(f'\n[filter "evil"]\n\tsmudge = {command}\n')
+                return original_git(workspace, *arguments)
+
+            connector._git = racing_git  # type: ignore[method-assign]
+            with self.assertRaisesRegex(ConnectorError, "config identity changed"):
+                connector.compensate(action, result)
+            del connector._git
+
+            self.assertTrue(injected)
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                _git(repository, "branch", "--show-current"),
+                "agent/change",
+            )
+            self.assertEqual(
+                _git(repository, "rev-parse", "refs/heads/agent/change"),
+                head,
+            )
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "old\n",
+            )
+
     def test_patch_apply_and_compensation_restore_clean_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1073,7 +1246,17 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
 
             def racing_git(workspace: Path, *arguments: str):
                 nonlocal injected
-                if arguments == ("switch", "main") and not injected:
+                if (
+                    arguments
+                    == (
+                        "symbolic-ref",
+                        "-m",
+                        "rollback: restore prior branch",
+                        "HEAD",
+                        "refs/heads/main",
+                    )
+                    and not injected
+                ):
                     injected = True
                     (workspace / "README.md").write_text(
                         "human concurrent work\n",

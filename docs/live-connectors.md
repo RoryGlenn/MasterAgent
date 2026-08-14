@@ -29,6 +29,9 @@ tree. A private per-worktree Git directory performs the branch compare-and-swap
 without releasing the real HEAD lock; exact matching HEAD and branch reflog
 records are required before the reviewed index is installed atomically.
 Worktree edits made after the snapshot remain unstaged and are not discarded.
+Local branch creation is deliberately limited to the currently checked-out
+commit, so creating or compensating a branch never checks out file content and
+cannot invoke repository-defined smudge or process filters.
 
 Diff bindings use raw Git stdout bytes with text conversion and external diff
 drivers disabled. Executable diff/filter configuration, URL rewrites, and remote

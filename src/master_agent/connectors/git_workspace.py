@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Self
@@ -480,13 +480,18 @@ class GitWorkspaceConnector(CompensatingConnector):
         expected_status = str(before.get("worktree_status_sha256", "")).strip()
         created_branch = ""
         if action.capability == "repository.branch.create":
-            created_branch = self._compensate_branch_creation(
-                workspace,
-                result=result,
-                previous_branch=previous_branch,
-                previous_head=previous_head,
-                expected_status=expected_status,
-            )
+            with self._sandbox.lock_repository_config(workspace) as config_guard:
+                self._sandbox.validate_repository_config(workspace)
+                config_guard.validate()
+                created_branch = self._compensate_branch_creation(
+                    workspace,
+                    result=result,
+                    previous_branch=previous_branch,
+                    previous_head=previous_head,
+                    expected_status=expected_status,
+                    validate_config=config_guard.validate,
+                )
+                config_guard.validate()
         elif action.capability == "repository.patch.apply":
             payload = self._patch_payload(action)
             self._git_bytes(
@@ -586,8 +591,9 @@ class GitWorkspaceConnector(CompensatingConnector):
         previous_branch: str,
         previous_head: str,
         expected_status: str,
+        validate_config: Callable[[], None],
     ) -> str:
-        """Switch back and delete only the exact unchanged branch ref."""
+        """Restore HEAD without a checkout and delete the exact unchanged branch."""
 
         created_branch = str((result.after or {}).get("branch", "")).strip()
         created_head = str((result.after or {}).get("head", "")).strip()
@@ -606,19 +612,75 @@ class GitWorkspaceConnector(CompensatingConnector):
         ).stdout.strip()
         if previous_ref != previous_head:
             raise VersionConflictError("previous branch advanced after branch creation")
-        self._git(workspace, "switch", previous_branch)
-        if expected_status and self._status_digest(workspace) != expected_status:
+        self._git(
+            workspace,
+            "symbolic-ref",
+            "-m",
+            "rollback: restore prior branch",
+            "HEAD",
+            f"refs/heads/{previous_branch}",
+        )
+        try:
+            validate_config()
+            if expected_status and self._status_digest(workspace) != expected_status:
+                raise VersionConflictError(
+                    "Git worktree changed during compensation; created branch was retained"
+                )
+            self._git(
+                workspace,
+                "update-ref",
+                "-d",
+                f"refs/heads/{created_branch}",
+                created_head,
+            )
+            validate_config()
+        except ConnectorError:
+            self._restore_created_branch_ref(
+                workspace,
+                created_branch=created_branch,
+                created_head=created_head,
+            )
+            raise
+        return created_branch
+
+    def _restore_created_branch_ref(
+        self,
+        workspace: Path,
+        *,
+        created_branch: str,
+        created_head: str,
+    ) -> None:
+        """Restore an unchanged created branch and HEAD without checking out files."""
+
+        observed = self._sandbox.run(
+            workspace,
+            (
+                "rev-parse",
+                "--verify",
+                f"refs/heads/{created_branch}",
+            ),
+            check=False,
+        )
+        if observed.returncode != 0:
+            self._git(
+                workspace,
+                "update-ref",
+                f"refs/heads/{created_branch}",
+                created_head,
+                "0" * len(created_head),
+            )
+        elif observed.stdout.strip() != created_head:
             raise VersionConflictError(
-                "Git worktree changed during compensation; created branch was retained"
+                "created branch changed while compensation was being restored"
             )
         self._git(
             workspace,
-            "update-ref",
-            "-d",
+            "symbolic-ref",
+            "-m",
+            "rollback: retain created branch",
+            "HEAD",
             f"refs/heads/{created_branch}",
-            created_head,
         )
-        return created_branch
 
     def _patch_payload(self, action: AgentAction) -> bytes:
         """Read and revalidate the exact approval-bound patch bytes."""
@@ -654,6 +716,11 @@ class GitWorkspaceConnector(CompensatingConnector):
         base = _branch(_required(action.parameters, "base"), allow_protected=True)
         if branch in self._protected:
             raise ConnectorError("cannot create a configured protected branch")
+        current_head = self._head(workspace)
+        current_branch = self._current_branch(workspace)
+        if not current_branch:
+            raise ConnectorError("branch creation requires a checked-out branch")
+        _branch(current_branch, allow_protected=True)
         self._require_clean(workspace)
         base_hash = self._git(workspace, "rev-parse", base).stdout.strip()
         if (
@@ -663,13 +730,59 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise VersionConflictError(
                 f"repository base changed: expected {action.target.expected_version}, observed {base_hash}"
             )
+        if base_hash != current_head:
+            raise ConnectorError(
+                "branch creation base must resolve to the current checked-out HEAD"
+            )
         before = {
-            "branch": self._current_branch(workspace),
-            "head": self._head(workspace),
+            "branch": current_branch,
+            "head": current_head,
             "worktree_status_sha256": self._status_digest(workspace),
         }
-        self._git(workspace, "switch", "-c", branch, base)
-        post_status = self._status_digest(workspace)
+        with self._sandbox.lock_repository_config(workspace) as config_guard:
+            self._sandbox.validate_repository_config(workspace)
+            config_guard.validate()
+            if (
+                self._head(workspace) != current_head
+                or self._current_branch(workspace) != current_branch
+            ):
+                raise VersionConflictError(
+                    "repository branch or HEAD changed before branch creation"
+                )
+            switched = False
+            try:
+                # The start point is the already checked-out commit. Git only
+                # creates the new ref and changes symbolic HEAD; it never has a
+                # reason to materialize worktree files through repository filters.
+                self._git(workspace, "switch", "-c", branch, current_head)
+                switched = True
+                config_guard.validate()
+                post_status = self._status_digest(workspace)
+                config_guard.validate()
+            except ConnectorError:
+                if switched:
+                    try:
+                        self._git(
+                            workspace,
+                            "symbolic-ref",
+                            "-m",
+                            "rollback: branch creation metadata changed",
+                            "HEAD",
+                            f"refs/heads/{current_branch}",
+                        )
+                        self._git(
+                            workspace,
+                            "update-ref",
+                            "-d",
+                            f"refs/heads/{branch}",
+                            current_head,
+                        )
+                    except ConnectorError as rollback_error:
+                        raise ConnectorError(
+                            "branch creation metadata changed and restoration could "
+                            "not be confirmed"
+                        ) from rollback_error
+                raise
         after = {
             "branch": branch,
             "head": self._head(workspace),
