@@ -25,17 +25,40 @@ A reversible connector additionally implements `compensate` and `verify_compensa
 
 ## Activation
 
-Discovery is metadata-only:
+Discovery is metadata-only. Persist the inventory as an operator-controlled
+lock after reviewing the distribution name, version, entry point, and artifact
+digest:
 
 ```bash
-master-agent plugins
+master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
-Loading occurs only during apply and only for exact names:
+Bind the selected plugin and live integrations identity into the plan before a
+human approves its new fingerprint:
 
 ```bash
-master-agent run plan.json --apply --connector-mode live --plugin servicenow
+master-agent bind-context plan.json \
+  --integrations /trusted/config/integrations.toml \
+  --plugin servicenow \
+  --plugin-lock /trusted/config/connector-plugins.json \
+  --output bound-plan.json
 ```
+
+Loading occurs only during live apply, only for exact names in the approved
+plan, and only when the current installed artifact still matches the lock:
+
+```bash
+master-agent run bound-plan.json \
+  --apply \
+  --connector-mode live \
+  --integrations /trusted/config/integrations.toml \
+  --plugin servicenow \
+  --plugin-lock /trusted/config/connector-plugins.json
+```
+
+The loader imports from a private snapshot of the locked distribution and
+removes ambient working-directory import paths. Editable plugin installs and
+entry modules not owned by the locked distribution fail closed.
 
 ## Required governance work
 

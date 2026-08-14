@@ -255,6 +255,210 @@ class AgentAction:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectorExecutionBinding:
+    """Secret-free identity of one connector's approved live destination."""
+
+    system: str
+    deployment: str
+    config_identity_sha256: str
+    resolved_base_url: str
+    resolved_origin: str
+    ca_bundle_path: str | None = None
+    ca_bundle_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("system", self.system),
+            ("deployment", self.deployment),
+            ("resolved_base_url", self.resolved_base_url),
+            ("resolved_origin", self.resolved_origin),
+        ):
+            if not value.strip():
+                raise ValidationError(f"connector execution binding {name} is empty")
+        _validate_sha256(
+            self.config_identity_sha256,
+            "connector execution binding config_identity_sha256",
+        )
+        if (self.ca_bundle_path is None) != (self.ca_bundle_sha256 is None):
+            raise ValidationError(
+                "connector execution binding CA path and digest must be supplied together"
+            )
+        if self.ca_bundle_path is not None and not self.ca_bundle_path.strip():
+            raise ValidationError("connector execution binding CA path is empty")
+        if self.ca_bundle_sha256 is not None:
+            _validate_sha256(
+                self.ca_bundle_sha256,
+                "connector execution binding ca_bundle_sha256",
+            )
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Serialize the connector binding."""
+
+        return {
+            "system": self.system,
+            "deployment": self.deployment,
+            "config_identity_sha256": self.config_identity_sha256,
+            "resolved_base_url": self.resolved_base_url,
+            "resolved_origin": self.resolved_origin,
+            "ca_bundle_path": self.ca_bundle_path,
+            "ca_bundle_sha256": self.ca_bundle_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ConnectorExecutionBinding:
+        """Parse a connector binding."""
+
+        return cls(
+            system=str(data["system"]),
+            deployment=str(data["deployment"]),
+            config_identity_sha256=str(data["config_identity_sha256"]),
+            resolved_base_url=str(data["resolved_base_url"]),
+            resolved_origin=str(data["resolved_origin"]),
+            ca_bundle_path=(
+                str(data["ca_bundle_path"])
+                if data.get("ca_bundle_path") is not None
+                else None
+            ),
+            ca_bundle_sha256=(
+                str(data["ca_bundle_sha256"])
+                if data.get("ca_bundle_sha256") is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PluginExecutionBinding:
+    """Exact reviewed identity of one approved connector plugin."""
+
+    name: str
+    group: str
+    entry_point: str
+    distribution: str
+    distribution_version: str
+    artifact_sha256: str
+    identity_sha256: str
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("name", self.name),
+            ("group", self.group),
+            ("entry_point", self.entry_point),
+            ("distribution", self.distribution),
+            ("distribution_version", self.distribution_version),
+        ):
+            if not value.strip():
+                raise ValidationError(f"plugin execution binding {name} is empty")
+        _validate_sha256(
+            self.artifact_sha256,
+            "plugin execution binding artifact_sha256",
+        )
+        _validate_sha256(
+            self.identity_sha256,
+            "plugin execution binding identity_sha256",
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the plugin binding."""
+
+        return {
+            "name": self.name,
+            "group": self.group,
+            "entry_point": self.entry_point,
+            "distribution": self.distribution,
+            "distribution_version": self.distribution_version,
+            "artifact_sha256": self.artifact_sha256,
+            "identity_sha256": self.identity_sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PluginExecutionBinding:
+        """Parse a plugin binding."""
+
+        return cls(
+            name=str(data["name"]),
+            group=str(data["group"]),
+            entry_point=str(data["entry_point"]),
+            distribution=str(data["distribution"]),
+            distribution_version=str(data["distribution_version"]),
+            artifact_sha256=str(data["artifact_sha256"]),
+            identity_sha256=str(data["identity_sha256"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionContext:
+    """Reviewed, secret-free connector and plugin context for live execution."""
+
+    integrations_sha256: str
+    connectors: tuple[ConnectorExecutionBinding, ...] = ()
+    plugins: tuple[PluginExecutionBinding, ...] = ()
+    schema: str = "master-agent/execution-context@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/execution-context@1":
+            raise ValidationError("unsupported execution context schema")
+        _validate_sha256(
+            self.integrations_sha256,
+            "execution context integrations_sha256",
+        )
+        connectors = tuple(sorted(self.connectors, key=lambda item: item.system))
+        plugins = tuple(sorted(self.plugins, key=lambda item: item.name))
+        if len({item.system for item in connectors}) != len(connectors):
+            raise ValidationError("execution context connector systems must be unique")
+        if len({item.name for item in plugins}) != len(plugins):
+            raise ValidationError("execution context plugin names must be unique")
+        object.__setattr__(self, "connectors", connectors)
+        object.__setattr__(self, "plugins", plugins)
+
+    @property
+    def fingerprint(self) -> str:
+        """Return the stable digest used for runtime equality diagnostics."""
+
+        payload = json.dumps(
+            self.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the execution context."""
+
+        return {
+            "schema": self.schema,
+            "integrations_sha256": self.integrations_sha256,
+            "connectors": [item.to_dict() for item in self.connectors],
+            "plugins": [item.to_dict() for item in self.plugins],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ExecutionContext:
+        """Parse an execution context."""
+
+        connectors = data.get("connectors")
+        plugins = data.get("plugins")
+        if not isinstance(connectors, list):
+            raise ValidationError("execution context connectors must be a list")
+        if not isinstance(plugins, list):
+            raise ValidationError("execution context plugins must be a list")
+        if not all(isinstance(item, Mapping) for item in connectors):
+            raise ValidationError("execution context connectors must be objects")
+        if not all(isinstance(item, Mapping) for item in plugins):
+            raise ValidationError("execution context plugins must be objects")
+        return cls(
+            schema=str(data.get("schema", "")),
+            integrations_sha256=str(data["integrations_sha256"]),
+            connectors=tuple(
+                ConnectorExecutionBinding.from_dict(item) for item in connectors
+            ),
+            plugins=tuple(PluginExecutionBinding.from_dict(item) for item in plugins),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ChangePlan:
     """Immutable set of actions proposed for one user goal."""
 
@@ -267,6 +471,7 @@ class ChangePlan:
     workflow_id: str | None = None
     workflow_fingerprint: str | None = None
     compensate_on_failure: bool = False
+    execution_context: ExecutionContext | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.compensate_on_failure, bool):
@@ -321,7 +526,7 @@ class ChangePlan:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the plan to JSON-compatible data."""
 
-        return {
+        payload: dict[str, Any] = {
             "schema_version": self.schema_version,
             "plan_id": str(self.plan_id),
             "goal": self.goal,
@@ -332,6 +537,9 @@ class ChangePlan:
             "compensate_on_failure": self.compensate_on_failure,
             "actions": [action.to_dict() for action in self.actions],
         }
+        if self.execution_context is not None:
+            payload["execution_context"] = self.execution_context.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ChangePlan:
@@ -359,6 +567,11 @@ class ChangePlan:
             compensate_on_failure=_strict_bool(
                 data.get("compensate_on_failure", False),
                 "compensate_on_failure",
+            ),
+            execution_context=(
+                ExecutionContext.from_dict(_expect_mapping(data, "execution_context"))
+                if data.get("execution_context") is not None
+                else None
             ),
             actions=tuple(AgentAction.from_dict(item) for item in actions_data),
         )
@@ -640,6 +853,13 @@ def _strict_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ValidationError(f"{name} must be a boolean")
     return value
+
+
+def _validate_sha256(value: str, name: str) -> None:
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise ValidationError(f"{name} must be a lowercase SHA-256 digest")
 
 
 def _expect_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:

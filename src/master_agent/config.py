@@ -212,6 +212,46 @@ class ConnectorConfig:
             if not source.get(name)
         )
 
+    def resolve_execution_target(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> tuple[str, Path | None]:
+        """Resolve and validate the secret-free destination used by a connector.
+
+        Unlike :meth:`resolve`, this method deliberately does not require or
+        access authentication values. It is used while an operator binds the
+        exact live destination and trust store to a plan before approval.
+        """
+
+        if not self.enabled:
+            raise ConfigurationError(f"connector is disabled: {self.system}")
+        source = environ if environ is not None else os.environ
+        base_url = source.get(self.base_url_env, "") if self.base_url_env else ""
+        base_url = base_url.strip() or (self.base_url or "").strip()
+        if not base_url:
+            raise ConfigurationError(f"connector {self.system} requires a base URL")
+        _validate_base_url(base_url, system=self.system)
+        _validate_provider_origin(
+            base_url,
+            system=self.system,
+            deployment=self.deployment,
+        )
+
+        ca_bundle: Path | None = None
+        if self.ca_bundle_env and source.get(self.ca_bundle_env):
+            selected = Path(source[self.ca_bundle_env]).expanduser()
+            try:
+                ca_bundle = selected.resolve(strict=True)
+            except OSError as error:
+                raise ConfigurationError(
+                    f"connector {self.system} CA bundle does not exist: {selected}"
+                ) from error
+            if not ca_bundle.is_file():
+                raise ConfigurationError(
+                    f"connector {self.system} CA bundle does not exist: {selected}"
+                )
+        return base_url.rstrip("/"), ca_bundle
+
     def resolve(
         self,
         environ: Mapping[str, str] | None = None,
@@ -246,16 +286,7 @@ class ConnectorConfig:
                 + "; ".join(errors)
             )
 
-        base_url = source.get(self.base_url_env, "") if self.base_url_env else ""
-        base_url = base_url.strip() or (self.base_url or "").strip()
-        if not base_url:
-            raise ConfigurationError(f"connector {self.system} requires a base URL")
-        _validate_base_url(base_url, system=self.system)
-        _validate_provider_origin(
-            base_url,
-            system=self.system,
-            deployment=self.deployment,
-        )
+        base_url, ca_bundle = self.resolve_execution_target(source)
 
         username = source.get(self.username_env) if self.username_env else None
         secret = source.get(self.secret_env) if self.secret_env else None
@@ -311,20 +342,10 @@ class ConnectorConfig:
                 f"connector {self.system} requires an authentication secret"
             )
 
-        ca_bundle = (
-            Path(source[self.ca_bundle_env]).expanduser()
-            if self.ca_bundle_env and source.get(self.ca_bundle_env)
-            else None
-        )
-        if ca_bundle is not None and not ca_bundle.is_file():
-            raise ConfigurationError(
-                f"connector {self.system} CA bundle does not exist: {ca_bundle}"
-            )
-
         return ResolvedConnectorConfig(
             system=self.system,
             deployment=self.deployment,
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             auth=ResolvedAuth(
                 mode=self.auth_mode,
                 username=username,

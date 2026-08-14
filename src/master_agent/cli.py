@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -28,6 +29,10 @@ from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
 from master_agent.discovery import DiscoveryStatus, discover_integrations
 from master_agent.errors import MasterAgentError, StructuredDataTypeError
+from master_agent.execution_context import (
+    build_execution_context,
+    enforce_execution_context,
+)
 from master_agent.governance import GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import Approval, ChangePlan
@@ -35,7 +40,12 @@ from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
-from master_agent.plugins import discover_connector_plugins, load_connector_plugins
+from master_agent.plugins import (
+    PluginLock,
+    discover_connector_plugins,
+    load_connector_plugins,
+    resolve_locked_plugin_descriptors,
+)
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.readiness import assess_readiness
 from master_agent.recurring import (
@@ -80,6 +90,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _sample_plan(args.output)
         if args.command == "inspect":
             return _inspect(args.plan)
+        if args.command == "bind-context":
+            return _bind_context(
+                plan_path=args.plan,
+                integrations_path=args.integrations,
+                plugin_names=args.plugin,
+                plugin_lock_path=args.plugin_lock,
+                output=args.output,
+            )
         if args.command == "approve":
             return _approve(
                 plan_path=args.plan,
@@ -110,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
                 plugin_names=args.plugin,
+                plugin_lock_path=args.plugin_lock,
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
@@ -245,6 +264,25 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect = subparsers.add_parser("inspect", help="inspect a plan")
     inspect.add_argument("plan", type=Path)
 
+    bind_context = subparsers.add_parser(
+        "bind-context",
+        help="bind reviewed live connector and plugin identities into a plan",
+    )
+    bind_context.add_argument("plan", type=Path)
+    bind_context.add_argument("--integrations", type=Path, default=None)
+    bind_context.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        help="exact connector entry-point name to bind",
+    )
+    bind_context.add_argument(
+        "--plugin-lock",
+        type=Path,
+        help="explicit operator-reviewed plugin lock produced by 'plugins --output'",
+    )
+    bind_context.add_argument("--output", type=Path, required=True)
+
     approve = subparsers.add_parser(
         "approve",
         help="create an approval bound to an exact plan and action IDs",
@@ -313,6 +351,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="explicit connector entry-point name to load during --apply",
+    )
+    run.add_argument(
+        "--plugin-lock",
+        type=Path,
+        help="explicit operator-reviewed lock for every selected connector plugin",
     )
 
     plugins = subparsers.add_parser(
@@ -515,6 +558,11 @@ def _inspect(path: Path) -> int:
     print(f"goal: {plan.goal}")
     print(f"plan ID: {plan.plan_id}")
     print(f"fingerprint: {plan.fingerprint}")
+    if plan.execution_context is None:
+        print("execution context: unbound")
+    else:
+        print("execution context:")
+        print(json.dumps(plan.execution_context.to_dict(), indent=2, ensure_ascii=True))
     print("actions:")
     for action in plan.actions:
         dependencies = ",".join(str(item) for item in action.dependencies) or "-"
@@ -523,6 +571,42 @@ def _inspect(path: Path) -> int:
             f"{action.capability:<38} {action.target.uri} deps={dependencies}"
         )
         print(json.dumps(action.to_dict(), indent=4, ensure_ascii=True))
+    return 0
+
+
+def _bind_context(
+    *,
+    plan_path: Path,
+    integrations_path: Path | None,
+    plugin_names: list[str],
+    plugin_lock_path: Path | None,
+    output: Path,
+) -> int:
+    """Write a plan whose fingerprint covers exact live runtime identities."""
+
+    plan = _load_plan(plan_path)
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(integrations_path, "integrations.toml")
+    )
+    plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
+    descriptors = (
+        resolve_locked_plugin_descriptors(
+            enabled_names=plugin_names,
+            trusted_lock=plugin_lock,
+        )
+        if plugin_lock is not None
+        else ()
+    )
+    context = build_execution_context(
+        integrations,
+        environ=os.environ,
+        plugin_descriptors=descriptors,
+    )
+    bound = replace(plan, execution_context=context)
+    _write_json(output, bound.to_dict(), restricted=True)
+    print(f"wrote {output}")
+    print(f"execution context fingerprint: {context.fingerprint}")
+    print(f"plan fingerprint: {bound.fingerprint}")
     return 0
 
 
@@ -587,6 +671,7 @@ def _run(
     capabilities_path: Path | None,
     governance_path: Path | None,
     plugin_names: list[str],
+    plugin_lock_path: Path | None,
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -604,6 +689,9 @@ def _run(
         if approval_authorities is not None
         else None
     )
+    if apply and plugin_names and connector_mode != "live":
+        raise ValueError("connector plugins may only be loaded in live mode")
+    plugin_lock: PluginLock | None = None
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
@@ -612,12 +700,30 @@ def _run(
         connectors = _mock_registry()
         register_draft_connectors(connectors, draft_output_dir)
     else:
+        execution_environ = dict(os.environ)
         integration_config = IntegrationConfig.from_toml(
             resolve_config_source(integrations_path, "integrations.toml")
         )
+        plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
+        plugin_descriptors = (
+            resolve_locked_plugin_descriptors(
+                enabled_names=plugin_names,
+                trusted_lock=plugin_lock,
+            )
+            if plugin_lock is not None
+            else ()
+        )
+        enforce_execution_context(
+            plan,
+            build_execution_context(
+                integration_config,
+                environ=execution_environ,
+                plugin_descriptors=plugin_descriptors,
+            ),
+        )
         connectors = build_live_registry(
             integration_config,
-            environ=os.environ,
+            environ=execution_environ,
             include_writes=include_writes,
             include_communications=include_communications,
             workspace_root=workspace_root,
@@ -633,11 +739,37 @@ def _run(
         loaded = load_connector_plugins(
             connectors,
             enabled_names=plugin_names,
+            trusted_lock=plugin_lock,
         )
         for item in loaded:
             print(
                 f"loaded plugin {item.descriptor.name}: " + ", ".join(item.capabilities)
             )
+
+    if apply and connector_mode == "live":
+        # Re-read identities immediately before execution. This catches an
+        # integrations, environment-origin, CA, lock, or installed-artifact
+        # change that occurs after client construction or plugin import.
+        current_integrations = IntegrationConfig.from_toml(
+            resolve_config_source(integrations_path, "integrations.toml")
+        )
+        current_plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
+        current_plugin_descriptors = (
+            resolve_locked_plugin_descriptors(
+                enabled_names=plugin_names,
+                trusted_lock=current_plugin_lock,
+            )
+            if current_plugin_lock is not None
+            else ()
+        )
+        enforce_execution_context(
+            plan,
+            build_execution_context(
+                current_integrations,
+                environ=os.environ,
+                plugin_descriptors=current_plugin_descriptors,
+            ),
+        )
 
     report = _orchestrator(
         connectors,
@@ -677,16 +809,25 @@ def _plugins(*, output: Path | None) -> int:
     if not plugins:
         print("no connector plugins installed")
     if output is not None:
-        _write_json(
-            output,
-            {
-                "schema": "master-agent/plugins@1",
-                "plugins": [item.to_dict() for item in plugins],
-            },
-            restricted=True,
-        )
+        _write_json(output, PluginLock(plugins=plugins).to_dict(), restricted=True)
         print(f"wrote {output}")
     return 0
+
+
+def _load_plugin_lock(
+    plugin_names: Sequence[str],
+    plugin_lock_path: Path | None,
+) -> PluginLock | None:
+    selected = tuple(name.strip() for name in plugin_names if name.strip())
+    if not selected:
+        if plugin_lock_path is not None:
+            raise ValueError("--plugin-lock requires at least one --plugin")
+        return None
+    if plugin_lock_path is None:
+        raise ValueError("--plugin-lock is required when --plugin is supplied")
+    return PluginLock.from_json(
+        resolve_config_source(plugin_lock_path, "plugin-lock.json")
+    )
 
 
 def _readiness(

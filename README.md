@@ -78,7 +78,7 @@ Supported domains:
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
 - **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, and explicit workspace roots.
 - **Evidence discipline:** full content is persisted only under an explicit retention rule; durable audit records normally store digests and metadata.
-- **Plugin isolation:** discovery does not import plugin code; a plugin is loaded only by exact name during `--apply`.
+- **Plugin isolation:** discovery does not import plugin code; live loading requires an exact operator lock and imports from a verified private artifact snapshot.
 
 ## Requirements
 
@@ -202,17 +202,26 @@ Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI do
 
 ## Exact-plan approvals
 
-Inspect a proposed plan:
+Before approving a live plan, bind the exact integrations file, resolved
+destinations, CA bundle identities, and selected plugin identities into it:
 
 ```bash
-master-agent inspect change-plan.json
+master-agent bind-context change-plan.json \
+  --integrations /trusted/config/integrations.toml \
+  --output bound-change-plan.json
+```
+
+Inspect the bound plan and its new fingerprint:
+
+```bash
+master-agent inspect bound-change-plan.json
 ```
 
 Create an approval bound to selected action UUIDs:
 
 ```bash
 export MASTER_AGENT_APPROVAL_KEY_RORY='at-least-32-random-secret-bytes'
-master-agent approve change-plan.json \
+master-agent approve bound-change-plan.json \
   --actions ACTION_UUID_1,ACTION_UUID_2 \
   --key-id rory \
   --approval-authorities /trusted/config/approval-authorities.toml \
@@ -234,13 +243,14 @@ A write requires all of these:
 
 1. the capability is enabled in `config/capabilities.toml`;
 2. governance permits it in `config/governance.toml`;
-3. the plan uses a permitted authority source and exact approval;
+3. the plan binds the current integrations, resolved origin/CA, and plugin
+   identities and uses an exact approval;
 4. `--enable-writes` is supplied;
 5. the connector and its granular write flag are enabled in `config/integrations.toml`;
 6. valid credentials and expected versions are present.
 
 ```bash
-master-agent run change-plan.json \
+master-agent run bound-change-plan.json \
   --connector-mode live \
   --apply \
   --enable-writes \
@@ -264,7 +274,7 @@ Build a separately reviewable compensation plan from a completed run:
 
 ```bash
 master-agent compensation-plan \
-  --plan change-plan.json \
+  --plan bound-change-plan.json \
   --report .master-agent/run-report.json \
   --created-by operator@example.com \
   --output compensation-plan.json
@@ -275,7 +285,7 @@ master-agent compensation-plan \
 External communication additionally requires `--enable-communications` and the granular `outlook_send_enabled` or `teams_send_enabled` provider flag:
 
 ```bash
-master-agent run communication-plan.json \
+master-agent run bound-communication-plan.json \
   --connector-mode live \
   --apply \
   --enable-communications \
@@ -308,19 +318,29 @@ master-agent recurring-run weekly_status \
 
 ## Connector plugins
 
-List installed connector entry points without importing their code:
+Write an exact operator-reviewed lock without importing plugin code:
 
 ```bash
-master-agent plugins
+master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
-Explicitly load one reviewed plugin during a live apply:
+Bind the selected identity before approval, then supply the same lock during
+live apply:
 
 ```bash
-master-agent run plan.json \
+master-agent bind-context plan.json \
+  --integrations config/integrations.toml \
+  --plugin servicenow \
+  --plugin-lock /trusted/config/connector-plugins.json \
+  --output bound-plan.json
+```
+
+```bash
+master-agent run bound-plan.json \
   --connector-mode live \
   --apply \
-  --plugin servicenow
+  --plugin servicenow \
+  --plugin-lock /trusted/config/connector-plugins.json
 ```
 
 Plugin capabilities must still exist in the catalog and pass governance, approval, source-of-truth, and connector-overlap checks. See [`docs/plugin-development.md`](docs/plugin-development.md).

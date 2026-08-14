@@ -166,7 +166,10 @@ Controls:
 
 - discovery reads entry-point metadata without importing;
 - installation grants no authority;
-- exact plugin name required on applied run;
+- exact plugin name, distribution, version, entry point, and artifact digest are
+  operator-locked and approval-bound;
+- the entry module must be owned by the locked distribution and is imported
+  from a private snapshot with ambient repository paths removed;
 - connector contract and non-empty dotted capabilities validated;
 - registry rejects overlapping capability implementations;
 - catalog/governance/policy still apply;

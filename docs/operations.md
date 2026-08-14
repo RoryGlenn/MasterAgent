@@ -3,14 +3,16 @@
 ## Normal run lifecycle
 
 1. Generate or receive a plan.
-2. Inspect the plan and fingerprint.
-3. Create exact action approvals with an explicit trusted approval-authority
+2. For live execution, bind the trusted integrations bundle, resolved
+   destinations/CA identities, and selected locked plugins into the plan.
+3. Inspect the bound plan and fingerprint.
+4. Create exact action approvals with an explicit trusted approval-authority
    key ring and the fingerprint printed by `master-agent inspect`.
-4. Run policy-only dry run.
-5. Apply using only required connector classes.
-6. Review per-action state and verification.
-7. Verify the audit chain.
-8. Retain full evidence only when policy requires it.
+5. Run policy-only dry run.
+6. Apply using only required connector classes.
+7. Review per-action state and verification.
+8. Verify the audit chain.
+9. Retain full evidence only when policy requires it.
 
 ## Action states
 
