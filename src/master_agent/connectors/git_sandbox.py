@@ -22,6 +22,7 @@ from master_agent.errors import ConnectorError
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_INDEX_BYTES = 128 * 1024 * 1024
 _MAX_REFLOG_BYTES = 128 * 1024 * 1024
+_FORCED_RACY_INDEX_TIMESTAMP_NS = 1_000_000_000
 _PINNED_CWD_EXEC = (
     "import os,sys;"
     "fd=int(sys.argv[1]);"
@@ -631,6 +632,34 @@ class GitSandbox:
                     ):
                         raise ConnectorError(
                             "repository index changed while being copied"
+                        )
+                    # A freshly copied index has a newer mtime than every cache
+                    # entry. Git can then trust matching size/timestamps and miss
+                    # a same-stat content edit (its "racy clean" optimization).
+                    # A near-epoch mtime makes ordinary entries potentially
+                    # racy, forcing Git to compare worktree content while
+                    # retaining the exact index.
+                    try:
+                        # Git treats an index timestamp of exactly zero as
+                        # "unknown" and disables its racy-entry check, so use
+                        # the earliest positive whole-second timestamp.
+                        os.utime(
+                            destination_fd,
+                            ns=(
+                                _FORCED_RACY_INDEX_TIMESTAMP_NS,
+                                _FORCED_RACY_INDEX_TIMESTAMP_NS,
+                            ),
+                        )
+                    except OSError as error:
+                        raise ConnectorError(
+                            "private Git index timestamp could not be invalidated"
+                        ) from error
+                    if (
+                        os.fstat(destination_fd).st_mtime_ns
+                        != _FORCED_RACY_INDEX_TIMESTAMP_NS
+                    ):
+                        raise ConnectorError(
+                            "private Git index timestamp was not invalidated"
                         )
                     os.fsync(destination_fd)
                 finally:
