@@ -8,13 +8,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.errors import ConnectorError
 from master_agent.models import (
     ActionState,
     AgentAction,
-    Approval,
     AuthoritySource,
     ChangePlan,
     ExecutionResult,
@@ -127,17 +127,27 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 compensate_on_failure=True,
             )
             now = datetime.now(UTC)
-            approval = Approval(
-                plan_fingerprint=plan.fingerprint,
+            authenticator = HmacApprovalAuthenticator(
+                {
+                    "rory": ApprovalAuthority(
+                        key_id="rory",
+                        subject="rory",
+                        secret=b"rory-test-approval-secret-32-bytes!!",
+                    )
+                }
+            )
+            approval = authenticator.issue(
+                plan=plan,
                 approved_action_ids=(first.action_id, second.action_id),
-                approved_by="rory",
+                key_id="rory",
                 issued_at=now - timedelta(seconds=1),
                 expires_at=now + timedelta(minutes=5),
             )
             audit = AuditLog(root / "audit.sqlite3")
             orchestrator = WorkflowOrchestrator(
                 policy=PolicyEngine(
-                    PolicyConfig.from_toml(ROOT / "config/policy.toml")
+                    PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+                    approval_authenticator=authenticator,
                 ),
                 sources=SourceOfTruthRegistry.from_toml(sources_path),
                 connectors=registry,

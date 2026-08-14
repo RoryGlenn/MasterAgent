@@ -11,6 +11,7 @@ import sys
 from typing import Sequence
 from uuid import UUID
 
+from master_agent.approvals import HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
@@ -82,7 +83,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _approve(
                 plan_path=args.plan,
                 actions=args.actions,
-                approver=args.approver,
+                key_id=args.key_id,
+                expected_fingerprint=args.expected_fingerprint,
+                approval_authorities=args.approval_authorities,
                 output=args.output,
                 ttl_minutes=args.ttl_minutes,
             )
@@ -91,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plan_path=args.plan,
                 apply=args.apply,
                 approval_paths=args.approval,
+                approval_authorities=args.approval_authorities,
                 database=args.database,
                 connector_mode=args.connector_mode,
                 integrations_path=args.integrations,
@@ -238,7 +242,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     approve.add_argument("plan", type=Path)
     approve.add_argument("--actions", required=True)
-    approve.add_argument("--approver", required=True)
+    approve.add_argument("--key-id", required=True)
+    approve.add_argument("--expected-fingerprint", required=True)
+    approve.add_argument("--approval-authorities", type=Path, required=True)
     approve.add_argument("--output", type=Path, required=True)
     approve.add_argument("--ttl-minutes", type=int, default=30)
 
@@ -253,6 +259,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--integrations", type=Path, default=None)
     run.add_argument("--identities", type=Path, default=None)
     run.add_argument("--approval", type=Path, action="append", default=[])
+    run.add_argument(
+        "--approval-authorities",
+        type=Path,
+        help="explicit trusted approval-authority key ring",
+    )
     run.add_argument(
         "--database",
         type=Path,
@@ -501,6 +512,7 @@ def _inspect(path: Path) -> int:
             f"  {action.action_id}  {action.risk:<24} "
             f"{action.capability:<38} {action.target.uri} deps={dependencies}"
         )
+        print(json.dumps(action.to_dict(), indent=4, ensure_ascii=False))
     return 0
 
 
@@ -508,22 +520,33 @@ def _approve(
     *,
     plan_path: Path,
     actions: str,
-    approver: str,
+    key_id: str,
+    expected_fingerprint: str,
+    approval_authorities: Path,
     output: Path,
     ttl_minutes: int,
 ) -> int:
     if ttl_minutes <= 0:
         raise ValueError("ttl-minutes must be positive")
     plan = _load_plan(plan_path)
+    if expected_fingerprint != plan.fingerprint:
+        raise ValueError(
+            "plan fingerprint does not match --expected-fingerprint; inspect "
+            "the current file before approving"
+        )
     requested = tuple(UUID(item.strip()) for item in actions.split(",") if item.strip())
     unknown = set(requested) - {action.action_id for action in plan.actions}
     if unknown:
         raise ValueError(f"approval references unknown action IDs: {unknown}")
     issued_at = datetime.now(UTC)
-    approval = Approval(
-        plan_fingerprint=plan.fingerprint,
+    authenticator = HmacApprovalAuthenticator.from_toml(
+        approval_authorities,
+        environ=os.environ,
+    )
+    approval = authenticator.issue(
+        plan=plan,
         approved_action_ids=requested,
-        approved_by=approver,
+        key_id=key_id,
         issued_at=issued_at,
         expires_at=issued_at + timedelta(minutes=ttl_minutes),
     )
@@ -539,6 +562,7 @@ def _run(
     plan_path: Path,
     apply: bool,
     approval_paths: list[Path],
+    approval_authorities: Path | None,
     database: Path,
     connector_mode: str,
     integrations_path: Path | None,
@@ -558,6 +582,18 @@ def _run(
 
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
+    if approvals and approval_authorities is None:
+        raise ValueError(
+            "--approval-authorities is required when approval artifacts are supplied"
+        )
+    approval_authenticator = (
+        HmacApprovalAuthenticator.from_toml(
+            approval_authorities,
+            environ=os.environ,
+        )
+        if approval_authorities is not None
+        else None
+    )
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
@@ -599,6 +635,7 @@ def _run(
         database,
         capabilities_path=capabilities_path,
         governance_path=governance_path,
+        approval_authenticator=approval_authenticator,
     ).run(
         plan,
         approvals=approvals,
@@ -1286,12 +1323,14 @@ def _orchestrator(
     *,
     capabilities_path: Path | None = None,
     governance_path: Path | None = None,
+    approval_authenticator: HmacApprovalAuthenticator | None = None,
 ) -> WorkflowOrchestrator:
     """Build the governed runtime from repository or packaged defaults."""
 
     return WorkflowOrchestrator(
         policy=PolicyEngine(
-            PolicyConfig.from_toml(resolve_config_source(None, "policy.toml"))
+            PolicyConfig.from_toml(resolve_config_source(None, "policy.toml")),
+            approval_authenticator=approval_authenticator,
         ),
         sources=SourceOfTruthRegistry.from_toml(
             resolve_config_source(None, "sources_of_truth.toml")

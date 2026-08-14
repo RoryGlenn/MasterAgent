@@ -4,7 +4,8 @@
 
 1. Generate or receive a plan.
 2. Inspect the plan and fingerprint.
-3. Create exact action approvals.
+3. Create exact action approvals with an explicit trusted approval-authority
+   key ring and the fingerprint printed by `master-agent inspect`.
 4. Run policy-only dry run.
 5. Apply using only required connector classes.
 6. Review per-action state and verification.

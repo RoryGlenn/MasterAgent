@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import tomllib
+from uuid import UUID
 
 from master_agent.config_sources import ConfigSource
 from master_agent.models import AgentAction, ChangePlan, RiskLevel
@@ -59,19 +60,43 @@ class SourceOfTruthRegistry:
                 continue
             if rule.direction != "outbound_only":
                 continue
-            canonical_write_exists = any(
-                candidate.target.uri == rule.canonical_uri
-                and candidate.risk not in {
-                    RiskLevel.READ_ONLY,
-                    RiskLevel.LOCAL_GENERATION,
-                }
+            canonical_writes = {
+                candidate.action_id
                 for candidate in plan.actions
-            )
-            if not canonical_write_exists:
+                if candidate.target.uri == rule.canonical_uri
+                and candidate.risk
+                not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+            }
+            if not canonical_writes:
                 return (
                     False,
                     f"{rule.field} is owned by {rule.canonical_uri}; update the "
                     "canonical source before its projection",
                 )
+            ancestors = _dependency_ancestors(plan, action)
+            if canonical_writes.isdisjoint(ancestors):
+                return (
+                    False,
+                    f"{rule.field} projection must depend on a write to "
+                    f"{rule.canonical_uri}; plan ordering alone is not authority",
+                )
 
         return True, "source-of-truth policy satisfied"
+
+
+def _dependency_ancestors(
+    plan: ChangePlan,
+    action: AgentAction,
+) -> frozenset[UUID]:
+    """Return all direct and transitive dependency IDs for an action."""
+
+    by_id = {candidate.action_id: candidate for candidate in plan.actions}
+    ancestors: set[UUID] = set()
+    pending = list(action.dependencies)
+    while pending:
+        dependency = pending.pop()
+        if dependency in ancestors:
+            continue
+        ancestors.add(dependency)
+        pending.extend(by_id[dependency].dependencies)
+    return frozenset(ancestors)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -155,6 +156,7 @@ class BitbucketWriteConnectorTests(unittest.TestCase):
         transport.add_json("POST", collection, {"id": 9}, status=201)
         transport.add_json("GET", item, _cloud_pr("OPEN"))
         transport.add_json("GET", item, _cloud_pr("OPEN"))
+        transport.add_json("GET", item, _cloud_pr("OPEN"))
         transport.add_bytes("POST", decline, b"", status=200)
         transport.add_json("GET", item, _cloud_pr("DECLINED"))
         connector = BitbucketWriteConnector(
@@ -294,6 +296,9 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                 parameters={
                     "drive_id": "drive",
                     "local_path": str(local),
+                    "local_sha256": hashlib.sha256(
+                        local.read_bytes()
+                    ).hexdigest(),
                     "content_type": "text/plain",
                 },
             )

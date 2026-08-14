@@ -188,6 +188,70 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
                 (repository / "README.md").read_text(encoding="utf-8"), "old\n"
             )
 
+    def test_compensation_refuses_to_clobber_concurrent_human_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            head = _git(repository, "rev-parse", "HEAD")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            action = action_for(
+                "repository.branch.create",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=head,
+                parameters={
+                    "workspace": "repo",
+                    "branch": "agent/change",
+                    "base": "main",
+                },
+            )
+            result = connector.execute(action)
+            (repository / "README.md").write_text(
+                "human concurrent work\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(VersionConflictError):
+                connector.compensate(action, result)
+
+            self.assertEqual(
+                (repository / "README.md").read_text(encoding="utf-8"),
+                "human concurrent work\n",
+            )
+
+    def test_patch_compensation_refuses_new_staged_human_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = _repository(root / "repo")
+            head = _git(repository, "rev-parse", "HEAD")
+            connector = GitWorkspaceConnector(workspace_root=root)
+            patch = _readme_patch("new")
+            action = action_for(
+                "repository.patch.apply",
+                system="repository",
+                resource_type="workspace",
+                resource_id="repo",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                expected_version=head,
+                parameters={
+                    "workspace": "repo",
+                    "patch_text": patch,
+                    "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+                },
+            )
+            result = connector.execute(action)
+            human_file = repository / "human.txt"
+            human_file.write_text("keep me\n", encoding="utf-8")
+            _git(repository, "add", "human.txt")
+
+            with self.assertRaises(VersionConflictError):
+                connector.compensate(action, result)
+
+            self.assertEqual(human_file.read_text(encoding="utf-8"), "keep me\n")
+            self.assertEqual((repository / "README.md").read_text(), "new\n")
+
 
 class GitBranchPushConnectorTests(unittest.TestCase):
     """Validate new-branch-only publication and remote deletion rollback."""

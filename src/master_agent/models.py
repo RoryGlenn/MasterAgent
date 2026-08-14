@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
 import json
-from typing import Any, Mapping
+import math
+from typing import Any, Mapping, Never
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
@@ -34,6 +35,15 @@ class AuthoritySource(StrEnum):
     RETRIEVED_EXTERNAL_CONTENT = "retrieved_external_content"
 
 
+class DataClassification(StrEnum):
+    """Information classification carried by an action."""
+
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
 class ActionState(StrEnum):
     """Terminal and non-terminal states for an action."""
 
@@ -49,6 +59,16 @@ class ActionState(StrEnum):
     COMPENSATING = "compensating"
     COMPENSATED = "compensated"
     COMPENSATION_FAILED = "compensation_failed"
+    REUSED = "reused"
+    INDETERMINATE = "indeterminate"
+
+
+class CompensationMode(StrEnum):
+    """How a compensation operation may be invoked."""
+
+    PLAN = "plan"
+    IN_PROCESS = "in_process"
+    MANUAL = "manual"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +146,7 @@ class AgentAction:
     requires_approval: bool
     idempotency_key: str
     justification: str
+    data_classification: DataClassification = DataClassification.INTERNAL
     dependencies: tuple[UUID, ...] = ()
     action_id: UUID = field(default_factory=uuid4)
 
@@ -142,11 +163,57 @@ class AgentAction:
             raise ValidationError("justification must not be empty")
         if self.action_id in self.dependencies:
             raise ValidationError("an action cannot depend on itself")
+        object.__setattr__(self, "parameters", _freeze_json_mapping(self.parameters))
+        object.__setattr__(self, "dependencies", tuple(self.dependencies))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the action to JSON-compatible data."""
 
-        return _jsonable(asdict(self))
+        return {
+            "action_id": str(self.action_id),
+            "capability": self.capability,
+            "target": {
+                "system": self.target.system,
+                "resource_type": self.target.resource_type,
+                "resource_id": self.target.resource_id,
+                "expected_version": self.target.expected_version,
+            },
+            "parameters": _jsonable(self.parameters),
+            "risk": str(self.risk),
+            "data_classification": str(self.data_classification),
+            "authority_source": str(self.authority_source),
+            "requires_approval": self.requires_approval,
+            "idempotency_key": self.idempotency_key,
+            "justification": self.justification,
+            "dependencies": [str(item) for item in self.dependencies],
+        }
+
+    @property
+    def effect_fingerprint(self) -> str:
+        """Return a stable digest binding an idempotency key to one effect."""
+
+        payload = {
+            "capability": self.capability,
+            "target": {
+                "system": self.target.system,
+                "resource_type": self.target.resource_type,
+                "resource_id": self.target.resource_id,
+                "expected_version": self.target.expected_version,
+            },
+            "parameters": _jsonable(self.parameters),
+            "risk": str(self.risk),
+            "data_classification": str(self.data_classification),
+            "authority_source": str(self.authority_source),
+            "requires_approval": self.requires_approval,
+        }
+        material = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        return hashlib.sha256(material).hexdigest()
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> AgentAction:
@@ -167,6 +234,9 @@ class AgentAction:
             ),
             parameters=dict(_expect_mapping(data, "parameters")),
             risk=RiskLevel(str(data["risk"])),
+            data_classification=DataClassification(
+                str(data.get("data_classification", DataClassification.INTERNAL))
+            ),
             authority_source=AuthoritySource(str(data["authority_source"])),
             requires_approval=_strict_bool(data.get("requires_approval"), "requires_approval"),
             idempotency_key=str(data["idempotency_key"]),
@@ -203,6 +273,9 @@ class ChangePlan:
             raise ValidationError("workflow_fingerprint must not be empty when supplied")
         if self.workflow_fingerprint is not None and self.workflow_id is None:
             raise ValidationError("workflow_fingerprint requires workflow_id")
+        object.__setattr__(self, "actions", tuple(self.actions))
+        if not self.actions:
+            raise ValidationError("a change plan must contain at least one action")
         action_ids = [action.action_id for action in self.actions]
         if len(action_ids) != len(set(action_ids)):
             raise ValidationError("action IDs must be unique")
@@ -227,6 +300,7 @@ class ChangePlan:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
@@ -285,6 +359,9 @@ class Approval:
     approved_by: str
     issued_at: datetime
     expires_at: datetime
+    key_id: str
+    signature: str
+    signature_scheme: str = "hmac-sha256"
     approval_id: UUID = field(default_factory=uuid4)
 
     def __post_init__(self) -> None:
@@ -292,8 +369,17 @@ class Approval:
             raise ValidationError("plan_fingerprint must not be empty")
         if not self.approved_action_ids:
             raise ValidationError("approval must cover at least one action")
+        object.__setattr__(self, "approved_action_ids", tuple(self.approved_action_ids))
         if not self.approved_by.strip():
             raise ValidationError("approved_by must not be empty")
+        if self.approved_by != self.approved_by.strip():
+            raise ValidationError("approved_by must not contain surrounding whitespace")
+        if not self.key_id.strip() or self.key_id != self.key_id.strip():
+            raise ValidationError("key_id must be a non-empty normalized identifier")
+        if not self.signature.strip():
+            raise ValidationError("approval signature must not be empty")
+        if not self.signature_scheme.strip():
+            raise ValidationError("approval signature scheme must not be empty")
         if self.expires_at <= self.issued_at:
             raise ValidationError("approval must expire after it is issued")
 
@@ -309,7 +395,30 @@ class Approval:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the approval to JSON-compatible data."""
 
-        return _jsonable(asdict(self))
+        return {
+            "approval_id": str(self.approval_id),
+            "plan_fingerprint": self.plan_fingerprint,
+            "approved_action_ids": [str(item) for item in self.approved_action_ids],
+            "approved_by": self.approved_by,
+            "issued_at": self.issued_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+            "key_id": self.key_id,
+            "signature_scheme": self.signature_scheme,
+            "signature": self.signature,
+        }
+
+    def signing_payload(self) -> bytes:
+        """Return the canonical byte sequence authenticated by the signature."""
+
+        payload = self.to_dict()
+        payload.pop("signature")
+        return json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Approval:
@@ -324,6 +433,119 @@ class Approval:
             approved_by=str(data["approved_by"]),
             issued_at=datetime.fromisoformat(str(data["issued_at"])),
             expires_at=datetime.fromisoformat(str(data["expires_at"])),
+            key_id=str(data["key_id"]),
+            signature=str(data["signature"]),
+            signature_scheme=str(data.get("signature_scheme", "hmac-sha256")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompensationDescriptor:
+    """Typed, persisted description of an available rollback operation."""
+
+    kind: str
+    mode: CompensationMode
+    capability: str | None = None
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+    expected_version: str | None = None
+    target_resource_id: str | None = None
+    reason: str | None = None
+    schema: str = "master-agent/compensation@1"
+
+    def __post_init__(self) -> None:
+        if not self.kind.strip():
+            raise ValidationError("compensation kind must not be empty")
+        if self.mode is CompensationMode.PLAN and not (
+            self.capability and self.capability.strip()
+        ):
+            raise ValidationError(
+                "plan compensation requires an executable capability"
+            )
+        if self.mode is not CompensationMode.PLAN and not (
+            self.reason and self.reason.strip()
+        ):
+            raise ValidationError(
+                "non-plan compensation requires an operator-facing reason"
+            )
+        object.__setattr__(self, "parameters", _freeze_json_mapping(self.parameters))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the descriptor to a stable versioned object."""
+
+        return {
+            "schema": self.schema,
+            "kind": self.kind,
+            "mode": str(self.mode),
+            "capability": self.capability,
+            "parameters": _jsonable(self.parameters),
+            "expected_version": self.expected_version,
+            "target_resource_id": self.target_resource_id,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CompensationDescriptor":
+        """Parse a versioned descriptor or a supported legacy descriptor."""
+
+        if data.get("schema") == "master-agent/compensation@1":
+            parameters = data.get("parameters", {})
+            if not isinstance(parameters, Mapping):
+                raise ValidationError("compensation parameters must be an object")
+            return cls(
+                schema=str(data["schema"]),
+                kind=str(data["kind"]),
+                mode=CompensationMode(str(data["mode"])),
+                capability=(
+                    str(data["capability"])
+                    if data.get("capability") is not None
+                    else None
+                ),
+                parameters=dict(parameters),
+                expected_version=(
+                    str(data["expected_version"])
+                    if data.get("expected_version") is not None
+                    else None
+                ),
+                target_resource_id=(
+                    str(data["target_resource_id"])
+                    if data.get("target_resource_id") is not None
+                    else None
+                ),
+                reason=(
+                    str(data["reason"])
+                    if data.get("reason") is not None
+                    else None
+                ),
+            )
+
+        capability = str(data.get("capability", "")).strip()
+        excluded = {
+            "capability",
+            "expected_version",
+            "kind",
+            "automatic_delete_disabled",
+            "automatic_remote_branch_delete_disabled",
+        }
+        if capability:
+            return cls(
+                kind=str(data.get("kind", "legacy_plan_compensation")),
+                mode=CompensationMode.PLAN,
+                capability=capability,
+                parameters={
+                    str(key): value
+                    for key, value in data.items()
+                    if key not in excluded and value is not None
+                },
+                expected_version=(
+                    str(data["expected_version"])
+                    if data.get("expected_version") is not None
+                    else None
+                ),
+            )
+        return cls(
+            kind=str(data.get("kind", "legacy_in_process_compensation")),
+            mode=CompensationMode.IN_PROCESS,
+            reason="connector only exposes in-process compensation",
         )
 
 
@@ -342,7 +564,15 @@ class ExecutionResult:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the result to JSON-compatible data."""
 
-        return _jsonable(asdict(self))
+        return {
+            "action_id": str(self.action_id),
+            "state": str(self.state),
+            "before": _jsonable(self.before),
+            "after": _jsonable(self.after),
+            "connector_reference": self.connector_reference,
+            "message": self.message,
+            "compensation": _jsonable(self.compensation),
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ExecutionResult":
@@ -388,7 +618,12 @@ class VerificationResult:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the verification result."""
 
-        return _jsonable(asdict(self))
+        return {
+            "action_id": str(self.action_id),
+            "verified": self.verified,
+            "observed": _jsonable(self.observed),
+            "message": self.message,
+        }
 
 
 
@@ -416,6 +651,80 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (tuple, list, set)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _freeze_json_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Recursively freeze and validate a JSON-compatible mapping."""
+
+    frozen = _freeze_json(value, path="mapping")
+    if not isinstance(frozen, Mapping):  # pragma: no cover - type guard.
+        raise ValidationError("value must be an object")
+    return frozen
+
+
+def _freeze_json(value: Any, *, path: str) -> Any:
+    if isinstance(value, Mapping):
+        frozen: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValidationError(f"{path} keys must be strings")
+            frozen[key] = _freeze_json(item, path=f"{path}.{key}")
+        return _FrozenDict(frozen)
+    if isinstance(value, (tuple, list)):
+        return _FrozenList(
+            _freeze_json(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        )
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValidationError(f"{path} contains a non-finite number")
+        return value
+    raise ValidationError(
+        f"{path} contains a non-JSON-compatible value: {type(value).__name__}"
+    )
+
+
+class _FrozenDict(dict[str, Any]):
+    """A JSON-serializable dictionary that rejects ordinary mutation."""
+
+    def _immutable(self, *_args: Any, **_kwargs: Any) -> Never:
+        raise TypeError("approved action parameters are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenDict":
+        return self
+
+
+class _FrozenList(list[Any]):
+    """A JSON-serializable list that rejects ordinary mutation."""
+
+    def _immutable(self, *_args: Any, **_kwargs: Any) -> Never:
+        raise TypeError("approved action parameters are immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "_FrozenList":
+        return self
 
 
 def _validate_acyclic(actions: tuple[AgentAction, ...]) -> None:

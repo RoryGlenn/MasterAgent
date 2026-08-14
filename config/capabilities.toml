@@ -6,6 +6,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Push only a new agent-prefixed branch and delete only that exact unchanged ref during rollback."
 
 [capabilities."bitbucket.build_status.read"]
@@ -57,6 +58,7 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Restore the prior Confluence page version and body."
 
 [capabilities."confluence.page.create"]
@@ -87,6 +89,7 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Version-check and update a Confluence page."
 
 [capabilities."confluence.page.update.draft"]
@@ -128,6 +131,7 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Restore Jira state captured by a prior approved action."
 
 [capabilities."jira.issue.read"]
@@ -145,6 +149,7 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Transition a Jira issue with an explicit reverse transition for compensation."
 
 [capabilities."jira.issue.transition.draft"]
@@ -158,6 +163,7 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Update explicitly named Jira fields after version validation."
 
 [capabilities."jira.issue.update.draft"]
@@ -217,6 +223,7 @@ enabled = true
 authentication = "delegated"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Patch a OneNote page and retain the prior HTML for rollback."
 
 [capabilities."outlook.attachment.list"]
@@ -266,6 +273,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Create a non-protected local Git branch."
 
 [capabilities."repository.branch.plan"]
@@ -279,6 +287,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = false
+requires_expected_version = true
 description = "Push only the current non-protected branch without force."
 
 [capabilities."repository.commit.create"]
@@ -286,6 +295,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Create a local commit from an explicit path allowlist."
 
 [capabilities."repository.patch.apply"]
@@ -293,6 +303,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Apply a bounded approved patch with exact HEAD preconditions."
 
 [capabilities."repository.patch.generate"]
@@ -306,6 +317,7 @@ enabled = true
 authentication = "local_git"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Restore a local worktree to an explicitly approved commit."
 
 [capabilities."sharepoint.drive.children"]
@@ -333,6 +345,7 @@ enabled = true
 authentication = "microsoft_graph"
 risk = "reversible_write"
 reversible = true
+requires_expected_version = true
 description = "Upload a bounded file while retaining the prior version for rollback."
 
 [capabilities."sharepoint.site.read"]

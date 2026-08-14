@@ -7,11 +7,13 @@ from typing import Any, Mapping
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.utils import quote_segment, string_parameter
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -145,7 +147,15 @@ class BitbucketWriteConnector:
             after=after,
             connector_reference=str(observed.get("web_url") or response.url),
             message="Bitbucket pull request created",
-            compensation={"kind": "decline_pull_request", "pull_request_id": pr_id},
+            compensation=CompensationDescriptor(
+                kind="decline_pull_request",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=pr_id,
+                reason=(
+                    "decline requires connector-held provider context and is "
+                    "available only during the originating run"
+                ),
+            ).to_dict(),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -191,6 +201,14 @@ class BitbucketWriteConnector:
         pr_id = str(after.get("id", ""))
         if not pr_id:
             raise ConnectorError("pull-request compensation requires a provider ID")
+        current = self._read_pull_request(pr_id, after)
+        if any(
+            current.get(key) != after.get(key)
+            for key in ("id", "title", "state", "version")
+        ):
+            raise VersionConflictError(
+                "Bitbucket pull request changed after creation; decline is refused"
+            )
         if self._config.deployment is DeploymentType.CLOUD:
             workspace = str(after.get("workspace", ""))
             repository = str(after.get("repository", ""))

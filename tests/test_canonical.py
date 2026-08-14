@@ -42,6 +42,63 @@ class SourceOfTruthTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("canonical source", reason)
 
+    def test_projection_must_depend_on_the_canonical_write(self) -> None:
+        registry = SourceOfTruthRegistry.from_toml(
+            ROOT / "config/sources_of_truth.toml"
+        )
+        canonical = AgentAction(
+            capability="confluence.page.update",
+            target=ResourceRef(
+                "confluence",
+                "page",
+                "project-status",
+                expected_version="1",
+            ),
+            parameters={"body": "canonical"},
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="canonical:update",
+            justification="update canonical source",
+        )
+        unordered = AgentAction(
+            capability="teams.message.update",
+            target=ResourceRef("teams", "message", "weekly-status-draft"),
+            parameters={"body": "projection"},
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="canonical:projection:unordered",
+            justification="update projection",
+        )
+        unordered_plan = ChangePlan(
+            goal="unordered projection",
+            actions=(unordered, canonical),
+            created_by="test",
+        )
+        valid, reason = registry.validate(unordered_plan, unordered)
+        self.assertFalse(valid)
+        self.assertIn("must depend", reason)
+
+        ordered = AgentAction(
+            capability=unordered.capability,
+            target=unordered.target,
+            parameters=unordered.parameters,
+            risk=unordered.risk,
+            authority_source=unordered.authority_source,
+            requires_approval=True,
+            idempotency_key="canonical:projection:ordered",
+            justification="update projection after canonical source",
+            dependencies=(canonical.action_id,),
+        )
+        ordered_plan = ChangePlan(
+            goal="ordered projection",
+            actions=(ordered, canonical),
+            created_by="test",
+        )
+        valid, _ = registry.validate(ordered_plan, ordered)
+        self.assertTrue(valid)
+
 
 if __name__ == "__main__":
     unittest.main()

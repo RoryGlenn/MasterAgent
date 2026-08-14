@@ -12,16 +12,7 @@ from typing import Any, Mapping
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
-from master_agent.models import AgentAction, RiskLevel
-
-
-class DataClassification(StrEnum):
-    """Supported information classifications."""
-
-    PUBLIC = "public"
-    INTERNAL = "internal"
-    CONFIDENTIAL = "confidential"
-    RESTRICTED = "restricted"
+from master_agent.models import AgentAction, DataClassification, RiskLevel
 
 
 class EnvironmentKind(StrEnum):
@@ -199,6 +190,12 @@ class GovernanceProfile:
                 False,
                 f"capability {action.capability} is not allowed in "
                 f"{self.environment}",
+            )
+        if action.data_classification not in rule.data_classifications:
+            return (
+                False,
+                f"data classification {action.data_classification} is not allowed "
+                f"for {action.capability}",
             )
         if rule.approval_tier is ApprovalTier.PROHIBITED:
             return False, f"governance prohibits {action.capability}"

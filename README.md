@@ -211,14 +211,22 @@ master-agent inspect change-plan.json
 Create an approval bound to selected action UUIDs:
 
 ```bash
+export MASTER_AGENT_APPROVAL_KEY_RORY='at-least-32-random-secret-bytes'
 master-agent approve change-plan.json \
   --actions ACTION_UUID_1,ACTION_UUID_2 \
-  --approver rory@example.com \
+  --key-id rory \
+  --approval-authorities /trusted/config/approval-authorities.toml \
+  --expected-fingerprint FINGERPRINT_PRINTED_BY_INSPECT \
   --ttl-minutes 30 \
   --output approval-rory.json
 ```
 
-A dual-approval capability requires a second approval from a different identity.
+Approval JSON is not authority by itself. The signature is verified against the
+explicit operator-controlled key ring, which binds each key ID to one identity.
+Unsigned, tampered, unknown-key, or identity-edited artifacts cannot authorize an
+apply. Keep the key ring outside repositories being operated on; use
+`config/approval-authorities.example` only as a schema example. A
+dual-approval capability requires a second valid key bound to a different identity.
 
 ## Execute approved reversible writes
 
@@ -240,6 +248,7 @@ master-agent run change-plan.json \
   --capabilities config/capabilities.toml \
   --governance config/governance.toml \
   --approval approval-rory.json \
+  --approval-authorities /trusted/config/approval-authorities.toml \
   --database .master-agent/audit.sqlite3 \
   --result-json .master-agent/run-report.json \
   --retention config/retention.toml

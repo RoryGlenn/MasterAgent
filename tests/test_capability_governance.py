@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import tempfile
 import unittest
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.governance import ApprovalTier, GovernanceProfile
 from master_agent.models import (
     AgentAction,
-    Approval,
     AuthoritySource,
     ChangePlan,
+    DataClassification,
     ResourceRef,
     RiskLevel,
 )
@@ -49,9 +49,42 @@ class CapabilityGovernanceTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("disabled", reason)
 
+    def test_version_and_classification_contracts_fail_closed(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        action = AgentAction(
+            capability="jira.issue.update",
+            target=ResourceRef("jira", "issue", "X-1"),
+            parameters={"fields": {"summary": "changed"}},
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            data_classification=DataClassification.RESTRICTED,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="version-classification",
+            justification="test",
+        )
+
+        allowed, reason = catalog.validate_action(action)
+        self.assertFalse(allowed)
+        self.assertIn("expected_version", reason)
+        allowed, reason = governance.validate_action(action)
+        self.assertFalse(allowed)
+        self.assertIn("classification", reason)
+
     def test_dual_governance_requires_two_distinct_approvers(self) -> None:
+        authenticator = HmacApprovalAuthenticator(
+            {
+                name: ApprovalAuthority(
+                    key_id=name,
+                    subject=name,
+                    secret=(f"{name}-approval-secret-" + "x" * 32).encode(),
+                )
+                for name in ("alice", "bob")
+            }
+        )
         policy = PolicyEngine(
-            PolicyConfig.from_toml(ROOT / "config/policy.toml")
+            PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+            approval_authenticator=authenticator,
         )
         action = AgentAction(
             capability="example.high_impact",
@@ -66,11 +99,11 @@ class CapabilityGovernanceTests(unittest.TestCase):
         plan = ChangePlan(goal="dual approval test", actions=(action,), created_by="test")
         now = datetime.now(UTC)
 
-        def approval(name: str) -> Approval:
-            return Approval(
-                plan_fingerprint=plan.fingerprint,
+        def approval(name: str):
+            return authenticator.issue(
+                plan=plan,
                 approved_action_ids=(action.action_id,),
-                approved_by=name,
+                key_id=name,
                 issued_at=now - timedelta(minutes=1),
                 expires_at=now + timedelta(minutes=10),
             )
@@ -102,6 +135,38 @@ class CapabilityGovernanceTests(unittest.TestCase):
             governance.approval_tier_for("repository.permission.change"),
             ApprovalTier.PROHIBITED,
         )
+
+    def test_governance_minimum_forces_approval_even_if_risk_is_auto_permitted(self) -> None:
+        action = AgentAction(
+            capability="example.high_impact",
+            target=ResourceRef("example", "resource", "1"),
+            parameters={},
+            risk=RiskLevel.HIGH_IMPACT,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="governance-forces-approval",
+            justification="test",
+        )
+        plan = ChangePlan(goal="governance approval", actions=(action,), created_by="test")
+        policy = PolicyEngine(
+            PolicyConfig(
+                auto_permit_risks=frozenset({RiskLevel.HIGH_IMPACT}),
+                require_approval_risks=frozenset(),
+                prohibit_risks=frozenset(),
+                prohibited_capabilities=(),
+                write_capability_patterns=(),
+            )
+        )
+
+        decision = policy.evaluate(
+            plan,
+            action,
+            minimum_distinct_approvers=2,
+        )
+
+        self.assertFalse(decision.permitted)
+        self.assertTrue(decision.approval_required)
+        self.assertIn("2 distinct", decision.reason)
 
 
 if __name__ == "__main__":

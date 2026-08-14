@@ -8,11 +8,13 @@ from typing import Any, Mapping
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.base import CompensatingConnector
 from master_agent.connectors.utils import enforce_expected_version, quote_segment
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -124,6 +126,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
         page_id = str(after.get("id", action.target.resource_id))
         if result.before is None:
             before = self._read_page(page_id)
+            if not _page_matches(before, after):
+                raise VersionConflictError(
+                    "Confluence page changed after creation; deletion is refused"
+                )
             path = (
                 f"wiki/api/v2/pages/{quote_segment(page_id)}"
                 if self._config.deployment is DeploymentType.CLOUD
@@ -145,6 +151,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
             )
 
         current = self._read_page(page_id)
+        if not _page_matches(current, after):
+            raise VersionConflictError(
+                "Confluence page changed after update; rollback is refused"
+            )
         prior = result.before
         replacement = AgentAction(
             capability="confluence.page.compensate",
@@ -253,6 +263,15 @@ class ConfluenceWriteConnector(CompensatingConnector):
             after=after,
             connector_reference=response.url,
             message="Confluence page created",
+            compensation=CompensationDescriptor(
+                kind="delete_created_page",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=page_id,
+                reason=(
+                    "created-page deletion is available only through the "
+                    "originating connector run"
+                ),
+            ).to_dict(),
         )
 
     def _update(self, action: AgentAction, *, compensating: bool) -> ExecutionResult:
@@ -327,6 +346,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 if compensating
                 else "Confluence page update accepted"
             ),
+            compensation=CompensationDescriptor.from_dict(
+                observed["compensation"]
+            ).to_dict(),
         )
 
     def _read_page(self, page_id: str) -> dict[str, Any]:
@@ -403,6 +425,13 @@ def _cloud_body(page: Mapping[str, Any]) -> tuple[str, str]:
         if isinstance(value, Mapping):
             return str(value.get("value", "")), representation
     return "", "storage"
+
+
+def _page_matches(observed: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    return all(
+        observed.get(key) == expected.get(key)
+        for key in ("id", "title", "body", "version")
+    )
 
 
 def _required_text(parameters: Mapping[str, Any], key: str) -> str:

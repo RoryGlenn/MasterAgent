@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -171,7 +172,13 @@ class Phase4ConnectorTests(unittest.TestCase):
                 resource_type="drive_item",
                 resource_id="item-1",
                 expected_version="e1",
-                parameters={"drive_id": "drive-1", "local_path": str(artifact)},
+                parameters={
+                    "drive_id": "drive-1",
+                    "local_path": str(artifact),
+                    "local_sha256": hashlib.sha256(
+                        artifact.read_bytes()
+                    ).hexdigest(),
+                },
             )
             result = connector.execute(action)
             self.assertTrue(connector.verify(action, result).verified)
@@ -194,6 +201,7 @@ class Phase4ConnectorTests(unittest.TestCase):
         }
         declined = {**created, "state": "DECLINED", "updated_on": "v2"}
         transport.add_json("POST", collection, {"id": 12}, status=201)
+        transport.add_json("GET", item, created)
         transport.add_json("GET", item, created)
         transport.add_json("GET", item, created)
         transport.add_json("POST", item + "/decline", declined, status=200)
@@ -237,9 +245,18 @@ class Phase4ConnectorTests(unittest.TestCase):
         }
         content = b"<html><body><h1>Status</h1><div>Ready</div></body></html>"
         for _ in range(2):
-            transport.add_json("GET", "/v1.0/me/onenote/pages/page-1", metadata)
-            transport.add_bytes("GET", "/v1.0/me/onenote/pages/page-1/content", content)
-        transport.add_bytes("DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204)
+            transport.add_json(
+                "GET", "/v1.0/me/onenote/pages/page-1", metadata
+            )
+            transport.add_bytes(
+                "GET", "/v1.0/me/onenote/pages/page-1/content", content
+            )
+        transport.add_json(
+            "GET", "/v1.0/me/onenote/pages/page-1", metadata
+        )
+        transport.add_bytes(
+            "DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204
+        )
         transport.add_json(
             "GET", "/v1.0/me/onenote/pages/page-1", {"error": "not found"}, status=404
         )

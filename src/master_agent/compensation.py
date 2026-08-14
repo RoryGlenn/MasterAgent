@@ -10,6 +10,8 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    CompensationDescriptor,
+    CompensationMode,
     ResourceRef,
     RiskLevel,
 )
@@ -30,6 +32,7 @@ def build_compensation_plan(
 
     original_by_id = {action.action_id: action for action in original.actions}
     compensation_actions: list[AgentAction] = []
+    unavailable: list[str] = []
     previous: UUID | None = None
     for item in reversed(report.actions):
         if item.result is None:
@@ -44,35 +47,28 @@ def build_compensation_plan(
             )
         if not isinstance(compensation, Mapping):
             continue
-        capability = str(compensation.get("capability", "")).strip()
-        if not capability:
+        descriptor = CompensationDescriptor.from_dict(compensation)
+        if descriptor.mode is not CompensationMode.PLAN:
+            unavailable.append(
+                f"{item.action_id}: {descriptor.reason or descriptor.mode}"
+            )
             continue
+        capability = descriptor.capability or ""
         source = original_by_id.get(item.action_id)
         if source is None:
             continue
-        expected = compensation.get("expected_version")
-        excluded = {
-            "capability",
-            "expected_version",
-            "kind",
-            "automatic_delete_disabled",
-            "automatic_remote_branch_delete_disabled",
-        }
-        parameters = {
-            str(key): value
-            for key, value in compensation.items()
-            if key not in excluded and value is not None
-        }
         dependencies = (previous,) if previous is not None else ()
         action = AgentAction(
             capability=capability,
             target=ResourceRef(
                 system=source.target.system,
                 resource_type=source.target.resource_type,
-                resource_id=source.target.resource_id,
-                expected_version=str(expected) if expected is not None else None,
+                resource_id=(
+                    descriptor.target_resource_id or source.target.resource_id
+                ),
+                expected_version=descriptor.expected_version,
             ),
-            parameters=parameters,
+            parameters=descriptor.parameters,
             risk=RiskLevel.REVERSIBLE_WRITE,
             authority_source=AuthoritySource.DIRECT_USER,
             requires_approval=True,
@@ -89,7 +85,11 @@ def build_compensation_plan(
         previous = action.action_id
 
     if not compensation_actions:
-        raise ValidationError("run contains no automatic compensation operations")
+        detail = f": {'; '.join(unavailable)}" if unavailable else ""
+        raise ValidationError(
+            "run contains no separately approvable compensation operations"
+            + detail
+        )
     return ChangePlan(
         goal=f"Compensate reversible effects of plan {original.plan_id}.",
         actions=tuple(compensation_actions),

@@ -12,11 +12,13 @@ from master_agent.connectors.utils import (
     quote_segment,
     string_parameter,
 )
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -150,6 +152,17 @@ class JiraWriteConnector(CompensatingConnector):
 
         before_state = self._read_issue(action.target.resource_id)
         if action.capability == "jira.issue.update":
+            expected_after = result.after or {}
+            if (
+                before_state.get("version") != expected_after.get("version")
+                or not _fields_match(
+                    before_state.get("fields"),
+                    expected_after.get("requested_fields", {}),
+                )
+            ):
+                raise VersionConflictError(
+                    "Jira issue changed after update; rollback is refused"
+                )
             fields = (result.after or {}).get("compensation", {}).get("fields")
             if not isinstance(fields, Mapping) or not fields:
                 fields = _previous_values(
@@ -178,6 +191,16 @@ class JiraWriteConnector(CompensatingConnector):
             comment_id = str((result.after or {}).get("comment_id", ""))
             if not comment_id:
                 raise ConnectorError("Jira comment rollback has no comment ID")
+            current_comment = self._read_comment(
+                action.target.resource_id,
+                comment_id,
+            )
+            if current_comment.get("body_text") != (result.after or {}).get(
+                "body_text"
+            ):
+                raise VersionConflictError(
+                    "Jira comment changed after creation; deletion is refused"
+                )
             response = self._client.request_bytes(
                 "DELETE",
                 (
@@ -197,6 +220,14 @@ class JiraWriteConnector(CompensatingConnector):
             )
 
         if action.capability == "jira.issue.transition":
+            expected_after = result.after or {}
+            if (
+                before_state.get("version") != expected_after.get("version")
+                or before_state.get("status") != expected_after.get("status")
+            ):
+                raise VersionConflictError(
+                    "Jira issue changed after transition; reversal is refused"
+                )
             reverse_id = str(
                 (result.after or {}).get("compensation", {}).get(
                     "reverse_transition_id", ""
@@ -289,6 +320,9 @@ class JiraWriteConnector(CompensatingConnector):
             after=after,
             connector_reference=f"jira:{action.target.resource_id}",
             message="Jira issue update accepted",
+            compensation=CompensationDescriptor.from_dict(
+                after["compensation"]
+            ).to_dict(),
         )
 
     def _create_comment(self, action: AgentAction) -> ExecutionResult:
@@ -324,6 +358,14 @@ class JiraWriteConnector(CompensatingConnector):
             after=after,
             connector_reference=response.url,
             message="Jira comment created",
+            compensation=CompensationDescriptor(
+                kind="delete_created_comment",
+                mode=CompensationMode.IN_PROCESS,
+                reason=(
+                    "created-comment deletion is available only through the "
+                    "originating connector run"
+                ),
+            ).to_dict(),
         )
 
     def _transition_issue(self, action: AgentAction) -> ExecutionResult:
@@ -365,6 +407,14 @@ class JiraWriteConnector(CompensatingConnector):
             after=after,
             connector_reference=f"jira:{action.target.resource_id}",
             message="Jira transition accepted",
+            compensation=CompensationDescriptor(
+                kind="reverse_issue_transition",
+                mode=CompensationMode.IN_PROCESS,
+                reason=(
+                    "transition reversal requires provider state retained by "
+                    "the originating connector run"
+                ),
+            ).to_dict(),
         )
 
     def _compensate(self, action: AgentAction) -> ExecutionResult:

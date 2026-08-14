@@ -8,6 +8,8 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -45,11 +47,14 @@ class CompensationPlanTests(unittest.TestCase):
             state=ActionState.SUCCEEDED,
             before={"value": "old"},
             after={"value": "new"},
-            compensation={
-                "capability": "example.resource.restore",
-                "value": "old",
-                "expected_version": "2",
-            },
+            compensation=CompensationDescriptor(
+                kind="restore_previous_value",
+                mode=CompensationMode.PLAN,
+                capability="example.resource.restore",
+                parameters={"value": "old"},
+                expected_version="2",
+                target_resource_id="provider-42",
+            ).to_dict(),
         )
         report = RunReport(
             run_id=uuid4(),
@@ -78,6 +83,7 @@ class CompensationPlanTests(unittest.TestCase):
         self.assertEqual(reverse.capability, "example.resource.restore")
         self.assertEqual(reverse.parameters, {"value": "old"})
         self.assertEqual(reverse.target.expected_version, "2")
+        self.assertEqual(reverse.target.resource_id, "provider-42")
         self.assertTrue(reverse.requires_approval)
         self.assertEqual(reverse.authority_source, AuthoritySource.DIRECT_USER)
 

@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 from collections.abc import Iterator
 from typing import Any, Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
+
+
+class IdempotencyClaimState(StrEnum):
+    """Result of atomically reserving one idempotency key."""
+
+    CLAIMED = "claimed"
+    COMPLETED = "completed"
+    IN_PROGRESS = "in_progress"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyClaim:
+    """Atomic idempotency reservation outcome."""
+
+    state: IdempotencyClaimState
+    token: str | None = None
+    result: Mapping[str, Any] | None = None
 
 
 class AuditLog:
@@ -47,6 +67,7 @@ class AuditLog:
             default=str,
         )
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             previous = connection.execute(
                 "SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -90,44 +111,165 @@ class AuditLog:
         plan_id: UUID,
         action_id: UUID,
         result: Mapping[str, Any],
+        action_fingerprint: str = "legacy-unbound",
     ) -> None:
-        """Persist a successful idempotent result."""
+        """Persist a successful result for compatibility with old callers.
+
+        New execution paths must call :meth:`claim_action` followed by
+        :meth:`complete_action` so the side effect is reserved before it runs.
+        """
 
         result_json = json.dumps(result, sort_keys=True, default=str)
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO completed_actions (
-                    idempotency_key, plan_id, action_id, result_json, completed_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    idempotency_key, plan_id, action_id, action_fingerprint,
+                    status, claim_token, result_json, claimed_at, completed_at
+                ) VALUES (?, ?, ?, ?, 'completed', NULL, ?, ?, ?)
                 """,
                 (
                     idempotency_key,
                     str(plan_id),
                     str(action_id),
+                    action_fingerprint,
                     result_json,
+                    datetime.now(UTC).isoformat(),
                     datetime.now(UTC).isoformat(),
                 ),
             )
 
-    def completed_result(self, idempotency_key: str) -> dict[str, Any] | None:
+    def claim_action(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        plan_id: UUID,
+        action_id: UUID,
+    ) -> IdempotencyClaim:
+        """Atomically reserve a key before any connector side effect occurs."""
+
+        token = str(uuid4())
+        claimed_at = datetime.now(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT action_fingerprint, status, claim_token, result_json
+                FROM completed_actions WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO completed_actions (
+                        idempotency_key, plan_id, action_id, action_fingerprint,
+                        status, claim_token, result_json, claimed_at, completed_at
+                    ) VALUES (?, ?, ?, ?, 'pending', ?, '{}', ?, ?)
+                    """,
+                    (
+                        idempotency_key,
+                        str(plan_id),
+                        str(action_id),
+                        action_fingerprint,
+                        token,
+                        claimed_at,
+                        claimed_at,
+                    ),
+                )
+                return IdempotencyClaim(
+                    state=IdempotencyClaimState.CLAIMED,
+                    token=token,
+                )
+            stored_fingerprint, status, _stored_token, result_json = row
+            if stored_fingerprint != action_fingerprint:
+                return IdempotencyClaim(state=IdempotencyClaimState.CONFLICT)
+            if status == "completed":
+                result = json.loads(str(result_json))
+                return IdempotencyClaim(
+                    state=IdempotencyClaimState.COMPLETED,
+                    result=result,
+                )
+            return IdempotencyClaim(state=IdempotencyClaimState.IN_PROGRESS)
+
+    def complete_action(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        claim_token: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        """Complete exactly the reservation held by one execution attempt."""
+
+        result_json = json.dumps(result, sort_keys=True, default=str)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE completed_actions
+                SET status = 'completed', result_json = ?, completed_at = ?
+                WHERE idempotency_key = ?
+                  AND action_fingerprint = ?
+                  AND status = 'pending'
+                  AND claim_token = ?
+                """,
+                (
+                    result_json,
+                    datetime.now(UTC).isoformat(),
+                    idempotency_key,
+                    action_fingerprint,
+                    claim_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("idempotency reservation was lost or replaced")
+
+    def completed_result(
+        self,
+        idempotency_key: str,
+        *,
+        action_fingerprint: str | None = None,
+    ) -> dict[str, Any] | None:
         """Return a prior successful result for an idempotency key."""
 
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT result_json FROM completed_actions WHERE idempotency_key = ?",
+                """
+                SELECT result_json, action_fingerprint, status
+                FROM completed_actions WHERE idempotency_key = ?
+                """,
                 (idempotency_key,),
             ).fetchone()
-        return json.loads(str(row[0])) if row else None
+        if row is None or row[2] != "completed":
+            return None
+        if action_fingerprint is not None and row[1] != action_fingerprint:
+            return None
+        return json.loads(str(row[0]))
 
-    def clear_completed(self, idempotency_key: str) -> None:
+    def clear_completed(
+        self,
+        idempotency_key: str,
+        *,
+        action_fingerprint: str | None = None,
+    ) -> None:
         """Remove an idempotency completion after verified compensation."""
 
         with self._connect() as connection:
-            connection.execute(
-                "DELETE FROM completed_actions WHERE idempotency_key = ?",
-                (idempotency_key,),
-            )
+            if action_fingerprint is None:
+                connection.execute(
+                    "DELETE FROM completed_actions WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                )
+            else:
+                connection.execute(
+                    """
+                    DELETE FROM completed_actions
+                    WHERE idempotency_key = ? AND action_fingerprint = ?
+                    """,
+                    (idempotency_key, action_fingerprint),
+                )
 
     def verify_chain(self) -> tuple[bool, str]:
         """Verify every audit event hash and link."""
@@ -195,17 +337,39 @@ class AuditLog:
                     idempotency_key TEXT PRIMARY KEY,
                     plan_id TEXT NOT NULL,
                     action_id TEXT NOT NULL,
+                    action_fingerprint TEXT,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    claim_token TEXT,
                     result_json TEXT NOT NULL,
+                    claimed_at TEXT,
                     completed_at TEXT NOT NULL
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute(
+                    "PRAGMA table_info(completed_actions)"
+                ).fetchall()
+            }
+            migrations = {
+                "action_fingerprint": "TEXT",
+                "status": "TEXT NOT NULL DEFAULT 'completed'",
+                "claim_token": "TEXT",
+                "claimed_at": "TEXT",
+            }
+            for name, definition in migrations.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE completed_actions ADD COLUMN {name} {definition}"
+                    )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Open, commit, and close one SQLite transaction safely."""
 
-        connection = sqlite3.connect(self._database)
+        connection = sqlite3.connect(self._database, timeout=30.0)
+        connection.execute("PRAGMA busy_timeout = 30000")
         try:
             yield connection
             connection.commit()

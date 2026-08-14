@@ -39,6 +39,7 @@ class CapabilityDefinition:
     authentication: str
     risk: RiskLevel
     reversible: bool = False
+    requires_expected_version: bool = False
     required_scopes: tuple[str, ...] = ()
     description: str = ""
 
@@ -117,6 +118,10 @@ class CapabilityCatalog:
                 authentication=str(value.get("authentication", "unspecified")),
                 risk=risk,
                 reversible=_strict_bool(value.get("reversible", False), f"capability {name} reversible"),
+                requires_expected_version=_strict_bool(
+                    value.get("requires_expected_version", False),
+                    f"capability {name} requires_expected_version",
+                ),
                 required_scopes=tuple(str(item) for item in scopes),
                 description=str(value.get("description", "")),
             )
@@ -148,6 +153,15 @@ class CapabilityCatalog:
                 f"capability risk mismatch for {action.capability}: "
                 f"catalog={definition.risk}, action={action.risk}",
             )
+        if (
+            definition.requires_expected_version
+            and not action.target.expected_version
+        ):
+            return (
+                False,
+                f"capability requires an approved expected_version: "
+                f"{action.capability}",
+            )
         return True, "capability is enabled and risk-classified"
 
     def enabled_names(self) -> tuple[str, ...]:
@@ -167,6 +181,7 @@ class CapabilityCatalog:
                     "authentication": item.authentication,
                     "risk": str(item.risk),
                     "reversible": item.reversible,
+                    "requires_expected_version": item.requires_expected_version,
                     "required_scopes": list(item.required_scopes),
                     "description": item.description,
                 }

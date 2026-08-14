@@ -19,6 +19,7 @@ from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -136,17 +137,29 @@ class GitWorkspaceConnector(CompensatingConnector):
                         "--no-ext-diff",
                     ).stdout.encode("utf-8")
                 ).hexdigest(),
+                "worktree_status_sha256": self._status_digest(workspace),
             }
-            verified = observed["diff_sha256"] == after.get("diff_sha256")
+            verified = (
+                observed["diff_sha256"] == after.get("diff_sha256")
+                and observed["worktree_status_sha256"]
+                == after.get("worktree_status_sha256")
+            )
         else:
             observed = {
                 "branch": self._current_branch(workspace),
                 "head": self._git(workspace, "rev-parse", "HEAD").stdout.strip(),
+                "worktree_status_sha256": self._status_digest(workspace),
             }
             expected_head = after.get("commit") or after.get("head")
             expected_branch = after.get("branch")
-            verified = (not expected_head or observed["head"] == expected_head) and (
-                not expected_branch or observed["branch"] == expected_branch
+            verified = (
+                (not expected_head or observed["head"] == expected_head)
+                and (not expected_branch or observed["branch"] == expected_branch)
+                and (
+                    not after.get("worktree_status_sha256")
+                    or observed["worktree_status_sha256"]
+                    == after.get("worktree_status_sha256")
+                )
             )
         return VerificationResult(
             action_id=action.action_id,
@@ -172,6 +185,10 @@ class GitWorkspaceConnector(CompensatingConnector):
             )
         if action.capability == "repository.worktree.restore":
             raise ConnectorError("restore actions are not recursively compensatable")
+        if not self.verify(action, result).verified:
+            raise VersionConflictError(
+                "Git state changed after execution; automatic compensation is refused"
+            )
         workspace = self._workspace(action)
         self._sandbox.validate_repository_config(workspace)
         before = result.before or {}
@@ -257,15 +274,19 @@ class GitWorkspaceConnector(CompensatingConnector):
             "head": self._head(workspace),
         }
         self._git(workspace, "switch", "-c", branch, base)
+        post_status = self._status_digest(workspace)
         after = {
             "branch": branch,
             "head": self._head(workspace),
             "base": base,
             "base_hash": base_hash,
+            "worktree_status_sha256": post_status,
             "compensation": {
                 "capability": "repository.worktree.restore",
                 "commit": before["head"],
                 "branch": before["branch"],
+                "expected_version": base_hash,
+                "expected_worktree_status_sha256": post_status,
             },
         }
         return ExecutionResult(
@@ -275,6 +296,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             after=after,
             connector_reference=str(workspace),
             message="local Git branch created",
+            compensation=_compensation_descriptor(after),
         )
 
     def _apply_patch(self, action: AgentAction, workspace: Path) -> ExecutionResult:
@@ -326,10 +348,12 @@ class GitWorkspaceConnector(CompensatingConnector):
             payload,
         )
         diff = self._git(workspace, "diff", "--binary").stdout
+        post_status = self._status_digest(workspace)
         after = {
             "head": current_head,
             "branch": self._current_branch(workspace),
             "diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+            "worktree_status_sha256": post_status,
             "changed_files": tuple(
                 line
                 for line in self._git(
@@ -341,6 +365,8 @@ class GitWorkspaceConnector(CompensatingConnector):
                 "capability": "repository.worktree.restore",
                 "commit": current_head,
                 "branch": self._current_branch(workspace),
+                "expected_version": current_head,
+                "expected_worktree_status_sha256": post_status,
             },
         }
         return ExecutionResult(
@@ -350,6 +376,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             after=after,
             connector_reference=str(workspace),
             message="approved patch applied to local worktree",
+            compensation=_compensation_descriptor(after),
         )
 
     def _create_commit(self, action: AgentAction, workspace: Path) -> ExecutionResult:
@@ -422,16 +449,20 @@ class GitWorkspaceConnector(CompensatingConnector):
             self._git(workspace, "reset", "--mixed", current_head)
             raise
         commit = self._head(workspace)
+        post_status = self._status_digest(workspace)
         after = {
             "branch": self._current_branch(workspace),
             "commit": commit,
             "parent": current_head,
             "paths": tuple(staged),
             "diff_sha256": observed_diff_digest,
+            "worktree_status_sha256": post_status,
             "compensation": {
                 "capability": "repository.worktree.restore",
                 "commit": current_head,
                 "branch": self._current_branch(workspace),
+                "expected_version": commit,
+                "expected_worktree_status_sha256": post_status,
             },
         }
         return ExecutionResult(
@@ -441,6 +472,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             after=after,
             connector_reference=f"git:{commit}",
             message="approved local Git commit created",
+            compensation=_compensation_descriptor(after),
         )
 
     def _push_branch(self, action: AgentAction, workspace: Path) -> ExecutionResult:
@@ -491,6 +523,7 @@ class GitWorkspaceConnector(CompensatingConnector):
             after=after,
             connector_reference=f"git:{remote}/{branch}",
             message="approved branch pushed without force",
+            compensation=_compensation_descriptor(after),
         )
 
     def _restore(self, action: AgentAction, workspace: Path) -> ExecutionResult:
@@ -506,6 +539,13 @@ class GitWorkspaceConnector(CompensatingConnector):
         ):
             raise VersionConflictError(
                 f"repository HEAD changed: expected {action.target.expected_version}, observed {current['head']}"
+            )
+        expected_status = str(
+            action.parameters.get("expected_worktree_status_sha256", "")
+        ).strip()
+        if expected_status and expected_status != self._status_digest(workspace):
+            raise VersionConflictError(
+                "repository worktree changed after approval; restore is prohibited"
             )
         self._git(workspace, "rev-parse", "--verify", f"{commit}^{{commit}}")
         self._git(workspace, "reset", "--hard", commit)
@@ -582,6 +622,13 @@ class GitWorkspaceConnector(CompensatingConnector):
             ).stdout.encode("utf-8")
         ).hexdigest()
 
+    def _status_digest(self, workspace: Path) -> str:
+        return hashlib.sha256(
+            self._git(workspace, "status", "--porcelain=v1").stdout.encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
     def _remote_branch_hash(
         self, workspace: Path, remote_url: str, branch: str
     ) -> str | None:
@@ -621,6 +668,13 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise ConnectorError(f"unsupported Git capability: {action.capability}")
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
             raise ConnectorError("Git mutations must use reversible_write risk")
+
+
+def _compensation_descriptor(after: Mapping[str, Any]) -> dict[str, Any]:
+    raw = after.get("compensation")
+    if not isinstance(raw, Mapping):
+        raise ConnectorError("Git result omitted typed compensation metadata")
+    return CompensationDescriptor.from_dict(raw).to_dict()
 
 
 def _required(parameters: Mapping[str, Any], key: str) -> str:

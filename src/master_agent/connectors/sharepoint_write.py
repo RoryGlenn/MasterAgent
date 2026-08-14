@@ -10,11 +10,13 @@ from typing import Any, Mapping
 from master_agent.config import ResolvedConnectorConfig
 from master_agent.connectors.microsoft_graph import graph_client
 from master_agent.connectors.utils import enforce_expected_version, quote_segment, string_parameter
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.http import HttpTransport
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -83,6 +85,14 @@ class SharePointWriteConnector:
         item_id = action.target.resource_id
         local_path = self._local_path(action.parameters)
         content = local_path.read_bytes()
+        approved_digest = str(
+            action.parameters.get("local_sha256", "")
+        ).strip().lower()
+        observed_digest = hashlib.sha256(content).hexdigest()
+        if len(approved_digest) != 64 or approved_digest != observed_digest:
+            raise ConnectorError(
+                "SharePoint local artifact does not match approved local_sha256"
+            )
         if len(content) > self._max_upload_bytes:
             raise ConnectorError(
                 "SharePoint upload exceeds configured maximum of "
@@ -118,7 +128,7 @@ class SharePointWriteConnector:
             "drive_id": drive_id,
             "item_id": item_id,
             "uploaded_size": len(content),
-            "uploaded_sha256": hashlib.sha256(content).hexdigest(),
+            "uploaded_sha256": observed_digest,
             "source_name": local_path.name,
             "prior_version_id": prior_version_id,
         }
@@ -130,12 +140,15 @@ class SharePointWriteConnector:
             after=normalized,
             connector_reference=str(after.get("web_url") or response.url),
             message="SharePoint DriveItem replaced with an approved artifact",
-            compensation={
-                "kind": "restore_drive_item_version",
-                "drive_id": drive_id,
-                "item_id": item_id,
-                "version_id": prior_version_id,
-            },
+            compensation=CompensationDescriptor(
+                kind="restore_drive_item_version",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=item_id,
+                reason=(
+                    "provider-version restore is available only through the "
+                    "originating connector run"
+                ),
+            ).to_dict(),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -189,6 +202,10 @@ class SharePointWriteConnector:
             raise ConnectorError("SharePoint rollback metadata is incomplete")
         item_path = self._item_path(drive_id, item_id)
         current = self._read_metadata(item_path)
+        if current.get("etag") != after.get("etag"):
+            raise VersionConflictError(
+                "SharePoint item changed after upload; version restore is refused"
+            )
         response = self._client.request_bytes(
             "POST",
             f"{item_path}/versions/{quote_segment(version_id)}/restoreVersion",

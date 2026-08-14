@@ -19,11 +19,17 @@ from master_agent.connectors.utils import (
     quote_segment,
     string_parameter,
 )
-from master_agent.errors import ConnectorError, ResourceNotFoundError
+from master_agent.errors import (
+    ConnectorError,
+    ResourceNotFoundError,
+    VersionConflictError,
+)
 from master_agent.http import HttpTransport
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -310,7 +316,15 @@ class OneNoteWriteConnector:
                 after=after,
                 connector_reference=str(observed.get("web_url") or response.url),
                 message="OneNote page created",
-                compensation={"available": True, "kind": "delete_created_page", "page_id": page_id},
+                compensation=CompensationDescriptor(
+                    kind="delete_created_page",
+                    mode=CompensationMode.IN_PROCESS,
+                    target_resource_id=page_id,
+                    reason=(
+                        "created-page deletion is available only through the "
+                        "originating connector run"
+                    ),
+                ).to_dict(),
             )
 
         page_id = action.target.resource_id
@@ -353,12 +367,20 @@ class OneNoteWriteConnector:
             },
             connector_reference=str(observed.get("web_url") or page_id),
             message="OneNote page update accepted",
-            compensation={
-                "available": bool(previous_html),
-                "previous_content_sha256": hashlib.sha256(
-                    previous_html.encode("utf-8")
-                ).hexdigest(),
-            },
+            compensation=CompensationDescriptor(
+                kind="restore_previous_page_html",
+                mode=CompensationMode.IN_PROCESS,
+                reason=(
+                    "prior page HTML is held only by the originating connector "
+                    "and is not persisted in the run report"
+                ),
+                parameters={
+                    "available": bool(previous_html),
+                    "previous_content_sha256": hashlib.sha256(
+                        previous_html.encode("utf-8")
+                    ).hexdigest(),
+                },
+            ).to_dict(),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -411,6 +433,11 @@ class OneNoteWriteConnector:
             page_id = str((result.after or {}).get("id", "")).strip()
             if not page_id:
                 raise ConnectorError("OneNote create rollback has no page ID")
+            current = self._read_page(root, page_id, include_content=False)
+            if current.get("version") != (result.after or {}).get("version"):
+                raise VersionConflictError(
+                    "OneNote page changed after creation; deletion is refused"
+                )
             response = self._client.request_bytes(
                 "DELETE",
                 f"{root}/onenote/pages/{quote_segment(page_id)}",
@@ -431,6 +458,10 @@ class OneNoteWriteConnector:
             raise ConnectorError("OneNote previous content is unavailable")
         page_id = action.target.resource_id
         current = self._read_page(root, page_id, include_content=False)
+        if current.get("version") != (result.after or {}).get("version"):
+            raise VersionConflictError(
+                "OneNote page changed after update; rollback is refused"
+            )
         self._client.request_bytes(
             "PATCH",
             f"{root}/onenote/pages/{quote_segment(page_id)}/content",

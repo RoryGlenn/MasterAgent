@@ -17,6 +17,8 @@ from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -148,12 +150,15 @@ class GitBranchPushConnector:
             after=after,
             connector_reference=f"git:{remote}/{branch}",
             message="new review branch pushed without force",
-            compensation={
-                "kind": "delete_exact_new_branch",
-                "remote": remote,
-                "branch": branch,
-                "expected_commit": commit,
-            },
+            compensation=CompensationDescriptor(
+                kind="delete_exact_new_branch",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=branch,
+                reason=(
+                    "remote deletion requires the originating connector's "
+                    "allowlisted repository boundary"
+                ),
+            ).to_dict(),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
