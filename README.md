@@ -135,36 +135,47 @@ repository-local files must be selected explicitly.
 
 ## Quick safe demonstration
 
-Generate the complete Phase 3 review package without credentials or provider writes:
+Run the complete Phase 3 review-package workflow without credentials or
+provider writes:
 
 ```bash
-mkdir -p .master-agent/draft-package-001
-chmod 700 .master-agent .master-agent/draft-package-001
-master-agent draft-package \
-  --workflow config/draft-package.toml \
-  --output-dir .master-agent/draft-package-001 \
-  --database .master-agent/audit.sqlite3
+master-agent demo
 ```
 
+The command creates a fresh private workspace under
+`~/.master-agent/MasterAgent/`, prints its path, generates the package, and
+verifies its audit chain.
 The package contains:
 
 ```text
-.master-agent/draft-package-001/
-├── change-package.pptx
-├── confluence-update-draft.json
-├── confluence-update-draft.md
-├── jira-update-draft.json
-├── jira-update-draft.md
-├── source-change.patch
-├── stakeholder-email.eml
-├── stakeholder-email.json
-├── team-message.json
-├── team-message.md
-├── README.md
-└── manifest.json
+<printed demo workspace>/
+├── artifacts/
+│   ├── change-package.pptx
+│   ├── confluence-update-draft.json
+│   ├── confluence-update-draft.md
+│   ├── jira-update-draft.json
+│   ├── jira-update-draft.md
+│   ├── source-change.patch
+│   ├── stakeholder-email.eml
+│   ├── stakeholder-email.json
+│   ├── team-message.json
+│   ├── team-message.md
+│   ├── README.md
+│   └── manifest.json
+└── state/
+    └── audit.sqlite3
 ```
 
 Nothing is published, sent, committed, or uploaded.
+
+For persistent local state, use a private directory outside the source
+checkout. A `.master-agent` directory inside the checkout is deliberately
+rejected by release validation:
+
+```bash
+mkdir -p "$HOME/.master-agent/MasterAgent"
+chmod 700 "$HOME/.master-agent" "$HOME/.master-agent/MasterAgent"
+```
 
 ## Deployment readiness
 
@@ -176,15 +187,19 @@ master-agent readiness \
   --capabilities config/capabilities.toml \
   --governance config/governance.toml \
   --oauth config/oauth.toml \
-  --output .master-agent/readiness.json
+  --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
+
+`ready: True` means the selected configuration is internally safe. The CLI
+also prints the live connector count; the packaged default is
+`live connectors: 0 (safe local mode only)`.
 
 Safe connector discovery:
 
 ```bash
 master-agent discover \
   --integrations config/integrations.toml \
-  --output .master-agent/discovery.json
+  --output "$HOME/.master-agent/MasterAgent/discovery.json"
 ```
 
 After administrators approve the deployment, run bounded read-only probes:
@@ -194,7 +209,7 @@ master-agent discover \
   --integrations config/integrations.toml \
   --systems jira,confluence,bitbucket,microsoft,sharepoint,outlook,teams,onenote \
   --probe \
-  --output .master-agent/discovery-probed.json
+  --output "$HOME/.master-agent/MasterAgent/discovery-probed.json"
 ```
 
 ## Microsoft delegated authentication
@@ -205,7 +220,7 @@ Enable only the reviewed OAuth profile in `config/oauth.toml`, then acquire a de
 master-agent oauth-device-code \
   --oauth config/oauth.toml \
   --profile microsoft_delegated \
-  --token-file .master-agent/tokens/microsoft.json
+  --token-file "$HOME/.master-agent/MasterAgent/tokens/microsoft.json"
 ```
 
 Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI does not automate tenant consent or administrator approval.
@@ -329,7 +344,7 @@ Build a separately reviewable compensation plan from a completed run:
 ```bash
 master-agent compensation-plan \
   --plan bound-change-plan.json \
-  --report .master-agent/run-report.json \
+  --report /absolute/state/run-report.json \
   --created-by operator@example.com \
   --output compensation-plan.json
 ```

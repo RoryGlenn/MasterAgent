@@ -14,17 +14,22 @@
 ## Safe readiness
 
 ```bash
-master-agent readiness --output .master-agent/readiness.json
+mkdir -p "$HOME/.master-agent/MasterAgent"
+chmod 700 "$HOME/.master-agent" "$HOME/.master-agent/MasterAgent"
+master-agent readiness \
+  --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
 Readiness performs no network calls. A safe unconnected installation may be `ready=true` with a warning that no live connectors are enabled, because the configuration and governance are internally valid but not activated.
+The human-readable CLI output makes that state explicit as
+`live connectors: 0 (safe local mode only)`.
 
 ## Device code
 
 ```bash
 master-agent oauth-device-code \
   --profile microsoft_delegated \
-  --token-file .master-agent/tokens/microsoft.json
+  --token-file "$HOME/.master-agent/MasterAgent/tokens/microsoft.json"
 ```
 
 Only an enabled `entra_device_code` profile can run. The operator completes the provider's interactive authentication. The runtime writes the access token to a user-restricted file and prints expiry, not the token.

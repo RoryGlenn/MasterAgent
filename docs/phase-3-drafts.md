@@ -7,13 +7,15 @@ Prepare a complete cross-system change package without changing any provider or 
 ## Command
 
 ```bash
-mkdir -p .master-agent/draft-package-001
-chmod 700 .master-agent .master-agent/draft-package-001
-master-agent draft-package \
-  --workflow config/draft-package.toml \
-  --output-dir .master-agent/draft-package-001 \
-  --database .master-agent/audit.sqlite3
+master-agent demo
 ```
+
+`demo` creates and prints a fresh private workspace under
+`~/.master-agent/MasterAgent/`, generates the complete package, and verifies
+its audit chain.
+Nothing is sent or published. For a persistent operator-selected location, use
+`draft-package` with distinct, pre-existing mode-`0700` artifact and audit
+directories outside the source checkout.
 
 ## Artifacts
 

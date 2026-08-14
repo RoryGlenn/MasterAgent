@@ -111,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "demo":
+            return _demo()
         if args.command == "sample-plan":
             return _sample_plan(args.output)
         if args.command == "inspect":
@@ -295,6 +297,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Governed enterprise-agent orchestration runtime.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser(
+        "demo",
+        help="run a credential-free local demonstration in a fresh private workspace",
+    )
 
     sample = subparsers.add_parser("sample-plan", help="write the mock sample plan")
     sample.add_argument(
@@ -1133,6 +1140,15 @@ def _readiness(
     payload = report.to_dict()
     print(f"environment: {report.environment}")
     print(f"ready: {report.ready}")
+    connector_checks = tuple(
+        check
+        for check in report.checks
+        if str(check.get("name", "")).startswith("connector:")
+    )
+    if connector_checks:
+        print(f"live connectors: {len(connector_checks)} configured")
+    else:
+        print("live connectors: 0 (safe local mode only)")
     for check in report.checks:
         print(f"  {'PASS' if check.get('passed') else 'FAIL'} {check.get('name')}")
     for warning in report.warnings:
@@ -1175,6 +1191,44 @@ def _oauth_device_code(
     return 0
 
 
+def _demo() -> int:
+    """Run the complete credential-free demonstration outside the source tree."""
+
+    workspace = _new_demo_workspace()
+    workspace.chmod(0o700)
+    artifacts = workspace / "artifacts"
+    state = workspace / "state"
+    artifacts.mkdir(mode=0o700)
+    state.mkdir(mode=0o700)
+    database = state / "audit.sqlite3"
+
+    print("mode: safe local demonstration (no credentials or provider writes)")
+    print(f"demo workspace: {workspace}")
+    status = _draft_package(
+        workflow_path=None,
+        output_dir=artifacts,
+        database=database,
+    )
+    if status != 0:
+        return status
+    return _audit_verify(database)
+
+
+def _new_demo_workspace() -> Path:
+    """Create the private, unpredictable root used by the safe demonstration."""
+
+    runtime_root = Path.home() / ".master-agent"
+    product_root = runtime_root / "MasterAgent"
+    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    product_root.mkdir(mode=0o700, exist_ok=True)
+    with PinnedDirectory.open(product_root) as pinned_root:
+        workspace = Path(
+            tempfile.mkdtemp(prefix="demo-", dir=pinned_root.path)
+        ).resolve(strict=True)
+        pinned_root.validate()
+    return workspace
+
+
 def _draft_package(
     *,
     workflow_path: Path | None,
@@ -1214,7 +1268,7 @@ def _draft_package(
             audit=audit,
         ).run(plan, dry_run=False)
         artifacts = render_draft_package(report, output_dir=output_directory)
-        _print_report(report)
+        _print_report(report, mode_label="local generation")
         print(f"summary: {artifacts.summary_markdown}")
         print(f"manifest: {artifacts.manifest_json}")
         return 0 if report.successful else 2
@@ -1631,6 +1685,8 @@ def _evidence_prune(*, root: Path, apply: bool, output: Path | None) -> int:
 def _citations(path: Path, *, output: Path | None) -> int:
     payload = json.loads(path.read_text(encoding="utf-8"))
     citations = find_citations(payload)
+    if not citations:
+        print("no citations found")
     for citation in citations:
         marker = citation.get("marker") or citation.get("citation_id")
         title = citation.get("title") or citation.get("resource_id")
@@ -1900,10 +1956,10 @@ def _write_json(
             pass
 
 
-def _print_report(report: RunReport) -> None:
+def _print_report(report: RunReport, *, mode_label: str | None = None) -> None:
     print(f"run ID: {report.run_id}")
     print(f"plan fingerprint: {report.plan_fingerprint}")
-    print(f"mode: {'dry-run' if report.dry_run else 'apply'}")
+    print(f"mode: {mode_label or ('dry-run' if report.dry_run else 'apply')}")
     for item in report.actions:
         print(
             f"{item.state:<20} {item.action_id!s:<36} "

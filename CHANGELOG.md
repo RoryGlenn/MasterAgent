@@ -28,10 +28,13 @@
 - live read, write, and communication connectors are constructed independently;
 - configuration now requires granular provider gates in addition to runtime flags;
 - policy evaluation now combines the capability catalog, organization governance, source-of-truth rules, immutable approvals, and risk rules;
-- the CLI exposes `readiness`, `oauth-device-code`, `draft-package`,
-  `compensation-plan`, `recurring-status`, and `plugins`; `recurring-run`,
+- the CLI exposes the one-command credential-free `demo`, plus `readiness`,
+  `oauth-device-code`, `draft-package`, `compensation-plan`, `recurring-status`,
+  and `plugins`; `recurring-run`,
   `weekly-status`, and `communication-context` are retained as fail-closed
   command names but do not execute;
+- readiness output states the live connector count, and an empty citation
+  lookup reports `no citations found` instead of producing blank output;
 - applied result names are reserved before connector/audit effects and committed
   create-only before human-readable output; audit, artifact, and result
   directories must be pairwise distinct;
