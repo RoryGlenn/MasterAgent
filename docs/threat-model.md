@@ -56,7 +56,8 @@ Controls:
 
 - explicit `ResourceRef` and identity mapping;
 - exact target identifiers in plans;
-- source-of-truth rules;
+- source-of-truth rules with capability-specific immutable-value extractors;
+- caller-supplied source-binding hashes are ignored as authority;
 - exact recipient/body approval;
 - no implicit external recipients.
 

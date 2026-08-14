@@ -81,6 +81,34 @@ Replace placeholder owners such as `unassigned` and `example-organization` befor
 - explicit external-model policy;
 - rules covering every enabled capability.
 
+## Canonical-source extractors
+
+Each entry in `sources_of_truth.toml` maps every allowed canonical and
+projection capability to one or more reviewed parameter selectors. The runtime
+derives typed SHA-256 values from those exact immutable action parameters and
+requires a dependent canonical write with a matching value. A capability with
+no built-in selector verifier, or a configured selector that the verifier does
+not recognize for that capability, makes configuration loading fail closed.
+
+The packaged rules currently verify these mappings:
+
+| Governed field | Capability | Selected parameters |
+|---|---|---|
+| project status narrative | `confluence.page.update` | `body` |
+| project status narrative | `teams.message.draft` | `body` |
+| project status narrative | `outlook.email.draft` | `body` |
+| project status narrative | `powerpoint.presentation.generate` | rendered slide titles and first 12 bullets, or rendered `sections` fallback |
+| work-item status | `jira.issue.update` | `fields.status` or `fields.status.name` |
+| work-item status | `jira.issue.transition` | `target_status` |
+| work-item status | `powerpoint.presentation.generate` | rendered slide titles and first 12 bullets, or rendered `sections` fallback |
+
+`source_bindings` values supplied in an action are not authorization evidence
+and cannot influence this comparison. Governed local-generation targets are
+checked too; their lower risk does not exempt them from canonical integrity.
+The built-in static sample uses distinct `*-preview` resource IDs because it
+reads canonical systems but does not propose a canonical write; those harmless
+preview artifacts must not masquerade as the exact governed projections above.
+
 ## Recurring workflows
 
 A recurring workflow must be enabled explicitly and may execute only capabilities, recipients, and canonical sources in its registration. `--force` changes due-time evaluation only; it cannot enable a disabled registration.

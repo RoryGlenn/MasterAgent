@@ -94,7 +94,14 @@ The most specific matching rule wins. Uncovered capabilities fail closed. Dual a
 
 ### Source-of-truth registry
 
-Canonical resources are validated before execution. A projection cannot be updated without an authorized canonical change in the same plan when the registry says the field is outbound-only.
+Canonical resources are validated before execution. A governed projection,
+including a matching local-generation target, cannot be updated without an
+authorized canonical change in the same plan when the registry says the field
+is outbound-only. Each allowed capability has reviewed parameter selectors;
+the registry hashes the actual immutable canonical and projection values and
+requires an exact match through the dependency graph. Caller-supplied binding
+digests do not grant authority, and missing capability verifiers fail during
+configuration loading.
 
 ### Connector registry
 

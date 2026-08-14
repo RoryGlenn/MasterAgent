@@ -7,8 +7,8 @@ canonical_system = "confluence"
 canonical_resource_id = "project-status"
 projections = ["powerpoint:weekly-status", "teams:weekly-status-draft", "outlook:weekly-status-draft"]
 direction = "outbound_only"
-canonical_capabilities = ["confluence.page.update"]
-projection_capabilities = ["powerpoint.presentation.generate", "teams.message.update", "teams.message.draft", "outlook.email.draft"]
+canonical_extractors = { "confluence.page.update" = ["body"] }
+projection_extractors = { "powerpoint.presentation.generate" = ["slides[].title", "slides[].bullets[]", "sections[]"], "teams.message.draft" = ["body"], "outlook.email.draft" = ["body"] }
 
 [[rules]]
 field = "work_item_status"
@@ -16,5 +16,5 @@ canonical_system = "jira"
 canonical_resource_id = "PROJECT-SPRINT"
 projections = ["powerpoint:weekly-status"]
 direction = "outbound_only"
-canonical_capabilities = ["jira.issue.update", "jira.issue.transition"]
-projection_capabilities = ["powerpoint.presentation.generate"]
+canonical_extractors = { "jira.issue.update" = ["fields.status", "fields.status.name"], "jira.issue.transition" = ["target_status"] }
+projection_extractors = { "powerpoint.presentation.generate" = ["slides[].title", "slides[].bullets[]", "sections[]"] }
