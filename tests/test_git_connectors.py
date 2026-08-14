@@ -320,6 +320,7 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             connector._git = racing_git  # type: ignore[method-assign]
             with self.assertRaisesRegex(VersionConflictError, "worktree changed"):
                 connector.compensate(action, result)
+            del connector._git
 
             self.assertEqual(
                 (repository / "README.md").read_text(),

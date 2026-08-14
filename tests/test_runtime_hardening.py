@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import unittest
 from collections.abc import Mapping
-from contextlib import closing, redirect_stderr
+from contextlib import closing, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from io import StringIO
@@ -201,6 +201,26 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValidationError, "control characters"):
             ResourceRef("test", "resource", "safe\x1b[8mhidden")
+        with self.assertRaisesRegex(ValidationError, "control characters"):
+            ChangePlan(
+                goal="safe\u202espoofed",
+                actions=(action,),
+                created_by="test",
+            )
+
+    def test_inspect_escapes_controls_inside_action_parameters(self) -> None:
+        action = _write_action("one", "safe\x1b[2Jhidden")
+        plan = _plan(action)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan.to_dict()), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                status = main(["inspect", str(path)])
+
+        self.assertEqual(status, 0)
+        self.assertNotIn("\x1b", output.getvalue())
+        self.assertIn("\\u001b", output.getvalue())
 
     def test_cli_approval_requires_the_inspected_fingerprint(self) -> None:
         action = _write_action("one", "approved")

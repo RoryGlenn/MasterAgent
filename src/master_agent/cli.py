@@ -522,7 +522,7 @@ def _inspect(path: Path) -> int:
             f"  {action.action_id}  {action.risk:<24} "
             f"{action.capability:<38} {action.target.uri} deps={dependencies}"
         )
-        print(json.dumps(action.to_dict(), indent=4, ensure_ascii=False))
+        print(json.dumps(action.to_dict(), indent=4, ensure_ascii=True))
     return 0
 
 

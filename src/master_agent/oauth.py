@@ -609,13 +609,35 @@ def _token_from_response(
 def _read_restricted_token_file(path: Path) -> str:
     """Read a bounded regular token file without following symbolic links."""
 
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    selected = path.expanduser()
+    resolved = selected if selected.is_absolute() else Path.cwd() / selected
     try:
-        descriptor = os.open(path, flags)
+        parent = resolved.parent.resolve(strict=True)
+        parent_before = parent.lstat()
     except FileNotFoundError as error:
         raise AuthenticationError("token file does not exist") from error
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory_fd = os.open(parent, directory_flags)
     except OSError as error:
+        raise AuthenticationError(
+            "token directory could not be opened safely"
+        ) from error
+    parent_open = os.fstat(directory_fd)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        _validate_token_directory(parent_open, expected=parent_before)
+        descriptor = os.open(resolved.name, flags, dir_fd=directory_fd)
+    except FileNotFoundError as error:
+        os.close(directory_fd)
+        raise AuthenticationError("token file does not exist") from error
+    except OSError as error:
+        os.close(directory_fd)
         raise AuthenticationError("token file could not be opened safely") from error
+    except AuthenticationError:
+        os.close(directory_fd)
+        raise
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
@@ -634,11 +656,15 @@ def _read_restricted_token_file(path: Path) -> str:
         if len(payload) > 1024 * 1024:
             raise AuthenticationError("token file exceeds the 1 MiB limit")
         try:
-            return payload.decode("utf-8")
+            rendered = payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AuthenticationError("token file is not valid UTF-8") from error
+        if not _directory_path_matches(parent, parent_open):
+            raise AuthenticationError("token directory changed during read")
+        return rendered
     finally:
         os.close(descriptor)
+        os.close(directory_fd)
 
 
 def _fsync_directory(directory: Path) -> None:

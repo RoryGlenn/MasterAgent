@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -726,7 +727,7 @@ class _FrozenMapping(Mapping[str, Any]):
 def _reject_control_characters(value: str, name: str) -> None:
     """Reject terminal-control bytes from fields rendered during approval."""
 
-    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+    if any(unicodedata.category(character) in {"Cc", "Cf"} for character in value):
         raise ValidationError(f"{name} must not contain control characters")
 
 

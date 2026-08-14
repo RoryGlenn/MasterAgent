@@ -68,7 +68,13 @@ class GitSandbox:
     ) -> SandboxedGitResult:
         """Run an argv-only Git command with a minimal deterministic environment."""
 
-        command = [self._git, *self._config_overrides(), *arguments]
+        command = [
+            self._git,
+            *self._config_overrides(),
+            "-c",
+            f"core.worktree={repository.resolve()}",
+            *arguments,
+        ]
         try:
             completed = subprocess.run(
                 command,
@@ -126,6 +132,17 @@ class GitSandbox:
         expected_git_dir = git_entry.resolve()
         if observed_git_dir != expected_git_dir:
             raise ConnectorError("Git metadata is outside the approved repository")
+        common_value = self.run(
+            repository,
+            ("rev-parse", "--git-common-dir"),
+        ).stdout.strip()
+        observed_common_dir = Path(common_value)
+        if not observed_common_dir.is_absolute():
+            observed_common_dir = repository / observed_common_dir
+        if observed_common_dir.resolve() != expected_git_dir:
+            raise ConnectorError(
+                "Git common metadata is outside the approved repository"
+            )
         if (
             self.run(repository, ("rev-parse", "--is-bare-repository")).stdout.strip()
             != "false"
