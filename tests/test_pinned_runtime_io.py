@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+import sys
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -75,7 +78,7 @@ class PinnedSQLiteTests(unittest.TestCase):
 class PinnedRetentionTests(unittest.TestCase):
     """Prove retention publication remains within the approved directory."""
 
-    def test_parent_swap_during_prepare_rolls_back_only_through_dirfd(self) -> None:
+    def test_parent_swap_during_create_rolls_back_only_through_dirfd(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -83,16 +86,15 @@ class PinnedRetentionTests(unittest.TestCase):
             displaced = root / "displaced"
             approved.mkdir(mode=0o700)
             pinned = PinnedDirectory.open(approved)
-            real_prepare = retention._prepare_restricted_temp_at
+            real_open = retention._open_new_restricted_file_at
             calls = 0
 
-            def prepare_then_swap(
+            def open_then_swap(
                 parent_descriptor: int,
                 name: str,
-                content: bytes,
-            ) -> tuple[str, tuple[int, int]]:
+            ) -> tuple[int, tuple[int, int]]:
                 nonlocal calls
-                result = real_prepare(parent_descriptor, name, content)
+                result = real_open(parent_descriptor, name)
                 calls += 1
                 if calls == 1:
                     approved.rename(displaced)
@@ -103,8 +105,8 @@ class PinnedRetentionTests(unittest.TestCase):
                 with (
                     patch.object(
                         retention,
-                        "_prepare_restricted_temp_at",
-                        side_effect=prepare_then_swap,
+                        "_open_new_restricted_file_at",
+                        side_effect=open_then_swap,
                     ),
                     self.assertRaisesRegex(ConfigurationError, "path was replaced"),
                 ):
@@ -117,41 +119,36 @@ class PinnedRetentionTests(unittest.TestCase):
                     )
 
                 self.assertEqual(list(approved.iterdir()), [])
-                self.assertEqual(list(displaced.iterdir()), [])
+                self.assertEqual(
+                    {path.name for path in displaced.iterdir()},
+                    {".master-agent-retention.flock"},
+                )
             finally:
                 pinned.close()
 
-    def test_interruption_cleans_all_pinned_temporary_files(self) -> None:
+    def test_interruption_rolls_back_all_created_final_files(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             pinned = PinnedDirectory.open(root)
-            real_replace = retention.os.replace
+            real_write = retention._write_restricted_descriptor
             calls = 0
 
-            def interrupt_second_replace(
-                source: str,
-                destination: str,
-                *,
-                src_dir_fd: int | None = None,
-                dst_dir_fd: int | None = None,
+            def interrupt_second_write(
+                descriptor: int,
+                content: bytes,
             ) -> None:
                 nonlocal calls
                 calls += 1
                 if calls == 2:
                     raise KeyboardInterrupt
-                real_replace(
-                    source,
-                    destination,
-                    src_dir_fd=src_dir_fd,
-                    dst_dir_fd=dst_dir_fd,
-                )
+                real_write(descriptor, content)
 
             try:
                 with (
                     patch.object(
-                        retention.os,
-                        "replace",
-                        side_effect=interrupt_second_replace,
+                        retention,
+                        "_write_restricted_descriptor",
+                        side_effect=interrupt_second_write,
                     ),
                     self.assertRaises(KeyboardInterrupt),
                 ):
@@ -163,9 +160,88 @@ class PinnedRetentionTests(unittest.TestCase):
                         parent_directory=pinned,
                     )
 
-                self.assertEqual(list(root.iterdir()), [])
+                self.assertEqual(
+                    {path.name for path in root.iterdir()},
+                    {".master-agent-retention.flock"},
+                )
             finally:
                 pinned.close()
+
+    def test_concurrent_public_writers_cannot_mix_evidence_and_sidecar(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "evidence.txt"
+            first_write_started = threading.Event()
+            release_first_write = threading.Event()
+            second_started = threading.Event()
+            second_finished = threading.Event()
+            real_write = retention._write_restricted_descriptor
+            outcomes: dict[str, BaseException | None] = {}
+            paused = False
+
+            def pause_first_writer(descriptor: int, content: bytes) -> None:
+                nonlocal paused
+                if threading.current_thread().name == "retention-a" and not paused:
+                    paused = True
+                    first_write_started.set()
+                    if not release_first_write.wait(timeout=5):
+                        raise RuntimeError("test writer release timed out")
+                real_write(descriptor, content)
+
+            def write(label: str, content: str) -> None:
+                if label == "b":
+                    second_started.set()
+                try:
+                    write_retained_text(
+                        path,
+                        content,
+                        evidence_type="run-result/test",
+                        config=config,
+                    )
+                except BaseException as error:  # noqa: BLE001
+                    outcomes[label] = error
+                else:
+                    outcomes[label] = None
+                finally:
+                    if label == "b":
+                        second_finished.set()
+
+            with patch.object(
+                retention,
+                "_write_restricted_descriptor",
+                side_effect=pause_first_writer,
+            ):
+                first = threading.Thread(
+                    target=write,
+                    args=("a", "content-a"),
+                    name="retention-a",
+                )
+                second = threading.Thread(
+                    target=write,
+                    args=("b", "content-b"),
+                    name="retention-b",
+                )
+                first.start()
+                self.assertTrue(first_write_started.wait(timeout=5))
+                second.start()
+                self.assertTrue(second_started.wait(timeout=5))
+                self.assertFalse(second_finished.wait(timeout=0.1))
+                release_first_write.set()
+                first.join(timeout=5)
+                second.join(timeout=5)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertIsNone(outcomes["a"])
+            self.assertIsInstance(outcomes["b"], ConfigurationError)
+            self.assertEqual(path.read_text(encoding="utf-8"), "content-a")
+            sidecar = path.with_suffix(path.suffix + ".retention.json")
+            manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(
+                manifest["content_digest"],
+                retention.content_digest("content-a"),
+            )
 
 
 @unittest.skipUnless(shutil.which("git"), "Git is required")
@@ -186,6 +262,7 @@ class PinnedGitSandboxTests(unittest.TestCase):
             real_duplicate = pinned.duplicate_fd
             real_run = git_sandbox.subprocess.run
             observed_stdout: list[bytes] = []
+            observed_commands: list[list[str]] = []
 
             def duplicate_then_swap() -> int:
                 descriptor = real_duplicate()
@@ -197,6 +274,7 @@ class PinnedGitSandboxTests(unittest.TestCase):
                 *args: object, **kwargs: object
             ) -> subprocess.CompletedProcess[bytes]:
                 completed = real_run(*args, **kwargs)
+                observed_commands.append(list(args[0]))
                 observed_stdout.append(completed.stdout)
                 return completed
 
@@ -221,6 +299,10 @@ class PinnedGitSandboxTests(unittest.TestCase):
                     )
 
                 self.assertEqual(observed_stdout, [f"{approved_head}\n".encode()])
+                self.assertEqual(
+                    observed_commands[0][:4],
+                    [sys.executable, "-I", "-S", "-c"],
+                )
             finally:
                 sandbox.close()
                 pinned.close()

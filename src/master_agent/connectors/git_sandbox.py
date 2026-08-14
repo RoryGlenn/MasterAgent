@@ -465,7 +465,10 @@ class GitSandbox:
             pass_descriptors: tuple[int, ...] = ()
             if working_directory is not None:
                 selected = worktree if worktree is not None else repository
-                if Path(os.path.abspath(os.fspath(selected))) != working_directory.path:
+                if (
+                    Path(os.path.realpath(os.fspath(selected)))
+                    != working_directory.path
+                ):
                     raise ConnectorError(
                         "pinned Git working directory does not match the command path"
                     )
@@ -477,6 +480,7 @@ class GitSandbox:
                 launch_command = [
                     sys.executable,
                     "-I",
+                    "-S",
                     "-c",
                     _PINNED_CWD_EXEC,
                     str(inherited_descriptor),

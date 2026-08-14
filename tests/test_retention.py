@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from master_agent import retention
 from master_agent.errors import ConfigurationError
 from master_agent.evidence import content_digest
 from master_agent.retention import (
@@ -280,7 +280,7 @@ persistence = "explicit_content"
             evidence = root / "evidence.json"
             evidence.symlink_to(victim)
 
-            with self.assertRaisesRegex(ConfigurationError, "unsafe"):
+            with self.assertRaisesRegex(ConfigurationError, "already exists"):
                 write_retained_json(
                     evidence,
                     {"schema": "example@1"},
@@ -319,20 +319,24 @@ persistence = "explicit_content"
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
         with TemporaryDirectory() as directory:
             evidence = Path(directory) / "evidence.json"
-            real_replace = os.replace
+            real_open = retention._open_new_restricted_file_at
             calls = 0
 
-            def fail_second_replace(source: object, destination: object) -> None:
+            def fail_second_create(
+                parent_descriptor: int,
+                name: str,
+            ) -> tuple[int, tuple[int, int]]:
                 nonlocal calls
                 calls += 1
                 if calls == 2:
                     raise OSError("simulated sidecar commit failure")
-                real_replace(source, destination)
+                return real_open(parent_descriptor, name)
 
             with (
-                patch(
-                    "master_agent.retention.os.replace",
-                    side_effect=fail_second_replace,
+                patch.object(
+                    retention,
+                    "_open_new_restricted_file_at",
+                    side_effect=fail_second_create,
                 ),
                 self.assertRaisesRegex(ConfigurationError, "commit failed"),
             ):
@@ -346,6 +350,75 @@ persistence = "explicit_content"
 
             self.assertFalse(evidence.exists())
             self.assertFalse(evidence.with_suffix(".json.retention.json").exists())
+
+    def test_existing_pair_is_never_overwritten(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            evidence = Path(directory) / "result.txt"
+            first_evidence, first_sidecar = write_retained_text(
+                evidence,
+                "first",
+                evidence_type="run-result/test",
+                config=config,
+            )
+            evidence_before = first_evidence.read_bytes()
+            sidecar_before = first_sidecar.read_bytes()
+
+            with self.assertRaisesRegex(ConfigurationError, "already exists"):
+                write_retained_text(
+                    evidence,
+                    "second",
+                    evidence_type="run-result/test",
+                    config=config,
+                )
+
+            self.assertEqual(first_evidence.read_bytes(), evidence_before)
+            self.assertEqual(first_sidecar.read_bytes(), sidecar_before)
+
+    def test_digest_mismatch_is_repaired_and_never_purged_as_valid(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        created = datetime(2026, 8, 13, tzinfo=UTC)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, sidecar = write_retained_text(
+                root / "result.txt",
+                "approved",
+                evidence_type="run-result/test",
+                config=config,
+                now=created,
+            )
+            evidence.write_text("tampered", encoding="utf-8")
+
+            purge = purge_expired_evidence(
+                root,
+                now=created + timedelta(hours=25),
+                dry_run=False,
+            )
+            repair = repair_orphaned_evidence(root, dry_run=True)
+
+            self.assertTrue(purge.errors)
+            self.assertEqual(purge.removed_files, ())
+            self.assertTrue(evidence.exists())
+            self.assertTrue(sidecar.exists())
+            self.assertEqual(
+                set(repair.orphaned_files),
+                {str(evidence), str(sidecar)},
+            )
+
+    def test_missing_parent_is_not_created_by_retention_write(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing"
+
+            with self.assertRaisesRegex(ConfigurationError, "does not exist"):
+                write_retained_text(
+                    missing / "result.txt",
+                    "content",
+                    evidence_type="run-result/test",
+                    config=config,
+                )
+
+            self.assertFalse(missing.exists())
 
     def test_orphaned_evidence_is_detected_and_quarantined(self) -> None:
         with TemporaryDirectory() as directory:

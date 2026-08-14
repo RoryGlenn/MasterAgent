@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import stat
 import weakref
@@ -13,6 +14,7 @@ from typing import Self
 from master_agent.errors import ConfigurationError
 
 _MAX_DIRECTORY_DEPTH = 64
+_MINIMUM_INHERITED_DESCRIPTOR = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +61,9 @@ class PinnedDirectory:
     ``O_DIRECTORY`` and ``O_NOFOLLOW``. Retaining the complete chain permits
     later validation without traversing a replaced ancestor pathname.
 
-    To avoid creating a missing runtime root before an approval gate, pin its
-    nearest approved existing ancestor first and call :meth:`pin_child` with
-    ``create=True`` only after that gate succeeds.
+    Runtime roots must already exist before approval. The retained ``create``
+    parameters are compatibility shims that fail closed instead of mutating a
+    namespace before or after approval.
     """
 
     def __init__(
@@ -95,8 +97,10 @@ class PinnedDirectory:
         mode: int = 0o700,
         expected_identity: DirectoryIdentity | None = None,
     ) -> PinnedDirectory:
-        """Open or securely create and pin one canonical directory path."""
+        """Open and pin one preexisting canonical directory path."""
 
+        if create:
+            raise ConfigurationError("runtime directories must exist before approval")
         selected = path.expanduser()
         if not selected.is_absolute():
             selected = Path.cwd() / selected
@@ -116,8 +120,6 @@ class PinnedDirectory:
                 descriptor = _open_directory_component(
                     descriptors[-1],
                     component,
-                    create=create,
-                    mode=mode,
                 )
                 descriptors.append(descriptor)
                 names.append(component)
@@ -179,7 +181,7 @@ class PinnedDirectory:
 
         with self._lock:
             self.validate()
-            descriptor = os.dup(self._descriptors[-1])
+            descriptor = _duplicate_descriptor(self._descriptors[-1])
             try:
                 if not self.identity.matches(os.fstat(descriptor)):
                     raise ConfigurationError(
@@ -202,7 +204,7 @@ class PinnedDirectory:
                     self._identities,
                     strict=True,
                 ):
-                    descriptor = os.dup(source)
+                    descriptor = _duplicate_descriptor(source)
                     descriptors.append(descriptor)
                     if not identity.matches(os.fstat(descriptor)):
                         raise ConfigurationError(
@@ -226,8 +228,10 @@ class PinnedDirectory:
         mode: int = 0o700,
         expected_identity: DirectoryIdentity | None = None,
     ) -> PinnedDirectory:
-        """Pin or securely create a bounded no-follow path beneath this one."""
+        """Pin a bounded preexisting no-follow path beneath this one."""
 
+        if create:
+            raise ConfigurationError("runtime directories must exist before approval")
         child = Path(relative)
         if (
             child.is_absolute()
@@ -250,8 +254,6 @@ class PinnedDirectory:
                 descriptor = _open_directory_component(
                     descriptors[-1],
                     component,
-                    create=create,
-                    mode=mode,
                 )
                 descriptors.append(descriptor)
                 names.append(component)
@@ -336,44 +338,17 @@ def pin_directory(
 def _open_directory_component(
     parent_descriptor: int,
     name: str,
-    *,
-    create: bool,
-    mode: int,
 ) -> int:
-    """Open one no-follow child, creating only a missing directory."""
+    """Open one preexisting no-follow child directory."""
 
     try:
         return os.open(name, _directory_open_flags(), dir_fd=parent_descriptor)
     except FileNotFoundError:
-        if not create:
-            raise ConfigurationError("runtime directory does not exist") from None
+        raise ConfigurationError("runtime directory does not exist") from None
     except OSError as error:
         raise ConfigurationError(
             "runtime directory component must be a no-follow directory"
         ) from error
-    try:
-        os.mkdir(name, mode=mode, dir_fd=parent_descriptor)
-    except FileExistsError as error:
-        raise ConfigurationError(
-            "runtime directory appeared while it was being created"
-        ) from error
-    except OSError as error:
-        raise ConfigurationError("runtime directory could not be created") from error
-    try:
-        descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_descriptor)
-    except OSError as error:
-        raise ConfigurationError(
-            "created runtime directory could not be pinned"
-        ) from error
-    try:
-        _validate_directory(os.fstat(descriptor))
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.fsync(parent_descriptor)
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
 
 
 def _directory_identity(descriptor: int, *, private: bool) -> DirectoryIdentity:
@@ -426,6 +401,24 @@ def _directory_open_flags() -> int:
             "secure descriptor-backed runtime directories are unavailable"
         )
     return os.O_RDONLY | directory | no_follow | getattr(os, "O_CLOEXEC", 0)
+
+
+def _duplicate_descriptor(descriptor: int) -> int:
+    """Duplicate one descriptor safely above the standard-stream range."""
+
+    command = getattr(fcntl, "F_DUPFD_CLOEXEC", None)
+    if command is None:
+        raise ConfigurationError("close-on-exec descriptor duplication is unavailable")
+    try:
+        return int(
+            fcntl.fcntl(
+                descriptor,
+                command,
+                _MINIMUM_INHERITED_DESCRIPTOR,
+            )
+        )
+    except OSError as error:
+        raise ConfigurationError("runtime directory could not be duplicated") from error
 
 
 def _close_descriptors(descriptors: tuple[int, ...], lock: RLock) -> None:

@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class PinnedDirectoryTests(unittest.TestCase):
@@ -81,7 +85,7 @@ class PinnedDirectoryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ConfigurationError, "path was replaced"):
                     pinned.validate()
                 with self.assertRaisesRegex(ConfigurationError, "path was replaced"):
-                    pinned.pin_child("child", create=True)
+                    pinned.pin_child("child")
             finally:
                 pinned.close()
 
@@ -99,15 +103,23 @@ class PinnedDirectoryTests(unittest.TestCase):
             ):
                 pinned.pin_child("alias")
 
-    def test_create_sets_requested_mode_on_every_new_component(self) -> None:
+    def test_create_is_rejected_without_mutating_missing_components(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            with PinnedDirectory.open(root) as pinned:
-                created = pinned.pin_child("one/two", create=True, mode=0o700)
-                created.close()
+            with (
+                PinnedDirectory.open(root) as pinned,
+                self.assertRaisesRegex(ConfigurationError, "exist before approval"),
+            ):
+                pinned.pin_child("one/two", create=True, mode=0o700)
 
-            self.assertEqual(stat.S_IMODE((root / "one").stat().st_mode), 0o700)
-            self.assertEqual(stat.S_IMODE((root / "one" / "two").stat().st_mode), 0o700)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_open_create_is_rejected_even_when_directory_exists(self) -> None:
+        with (
+            TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "exist before approval"),
+        ):
+            PinnedDirectory.open(Path(directory), create=True)
 
     def test_create_never_chmods_preexisting_unsafe_directory(self) -> None:
         with TemporaryDirectory() as directory:
@@ -118,7 +130,7 @@ class PinnedDirectoryTests(unittest.TestCase):
 
             with (
                 PinnedDirectory.open(root) as pinned,
-                self.assertRaisesRegex(ConfigurationError, "group- or world-writable"),
+                self.assertRaisesRegex(ConfigurationError, "exist before approval"),
             ):
                 pinned.pin_child("unsafe", create=True, mode=0o700)
 
@@ -158,7 +170,7 @@ class PinnedDirectoryTests(unittest.TestCase):
                 PinnedDirectory.open(root) as pinned,
                 self.assertRaisesRegex(ConfigurationError, "path is too deep"),
             ):
-                pinned.pin_child(too_deep, create=True)
+                pinned.pin_child(too_deep)
 
             self.assertEqual(list(root.iterdir()), [])
 
@@ -180,6 +192,40 @@ class PinnedDirectoryTests(unittest.TestCase):
                     self.assertRaisesRegex(ConfigurationError, "closed"),
                 ):
                     operation()
+
+    def test_duplicate_fd_stays_above_closed_standard_streams(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            approved = root / "approved"
+            report = root / "descriptor.txt"
+            approved.mkdir(mode=0o700)
+            script = """
+import os
+import sys
+from pathlib import Path
+from master_agent.directory_safety import PinnedDirectory
+
+for descriptor in range(3):
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
+pinned = PinnedDirectory.open(Path(sys.argv[1]))
+duplicate = pinned.duplicate_fd()
+Path(sys.argv[2]).write_text(str(duplicate), encoding="ascii")
+os.close(duplicate)
+pinned.close()
+"""
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(ROOT / "src")
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(approved), str(report)],
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(completed.returncode, 0)
+            self.assertGreaterEqual(int(report.read_text(encoding="ascii")), 3)
 
 
 if __name__ == "__main__":

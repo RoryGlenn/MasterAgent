@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
-import secrets
 import stat
-import tempfile
 import tomllib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -31,6 +30,7 @@ _SECURITY_CATEGORIES = frozenset(
     }
 )
 _SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+_RETENTION_FLOCK_NAME = ".master-agent-retention.flock"
 
 
 class PersistenceMode(StrEnum):
@@ -338,6 +338,8 @@ def purge_expired_evidence(
 
     for sidecar in manifests:
         try:
+            if sidecar.is_symlink():
+                raise OSError("retention sidecar must not be a symbolic link")
             raw = json.loads(sidecar.read_text(encoding="utf-8"))
             if not isinstance(raw, Mapping):
                 raise StructuredDataTypeError("retention sidecar must be a JSON object")
@@ -349,13 +351,17 @@ def purge_expired_evidence(
             evidence_name = str(raw.get("evidence_path", ""))
             if not evidence_name or Path(evidence_name).name != evidence_name:
                 raise ValueError("retention evidence_path must be a sibling filename")
-            evidence = (sidecar.parent / evidence_name).resolve()
+            evidence_path = sidecar.parent / evidence_name
+            if evidence_path.is_symlink() or not evidence_path.is_file():
+                raise ValueError("retention evidence file is missing or unsafe")
+            evidence = evidence_path.resolve()
             if evidence.parent != sidecar.parent.resolve():
                 raise ValueError(
                     "retention evidence path escapes its sidecar directory"
                 )
             if resolved_root not in (sidecar.resolve(), *sidecar.resolve().parents):
                 raise ValueError("retention sidecar escapes selected root")
+            _verify_retained_content(evidence_path, raw)
             for candidate in (evidence, sidecar.resolve()):
                 if candidate.exists():
                     removed.append(str(candidate))
@@ -396,6 +402,7 @@ def repair_orphaned_evidence(
         path
         for path in sorted(root.rglob("*"))
         if (path.is_file() or path.is_symlink())
+        and path.name != _RETENTION_FLOCK_NAME
         and quarantine not in (path.resolve(), *path.resolve().parents)
     ][:max_files]
     paired_evidence: set[Path] = set()
@@ -416,7 +423,14 @@ def repair_orphaned_evidence(
             if evidence.is_symlink() or not evidence.is_file():
                 orphans.add(sidecar)
             else:
-                paired_evidence.add(evidence.resolve())
+                try:
+                    _verify_retained_content(evidence, raw)
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    orphans.add(sidecar)
+                    orphans.add(evidence)
+                    errors.append(f"{sidecar}: content digest mismatch")
+                else:
+                    paired_evidence.add(evidence.resolve())
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
             orphans.add(sidecar)
             errors.append(f"{sidecar}: {type(error).__name__}")
@@ -452,6 +466,22 @@ def repair_orphaned_evidence(
         errors=tuple(errors),
         dry_run=dry_run,
     )
+
+
+def _verify_retained_content(path: Path, manifest: Mapping[str, Any]) -> None:
+    """Require retained bytes to match the digest recorded by their sidecar."""
+
+    expected = manifest.get("content_digest")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ValueError("retention content digest is invalid")
+    text = path.read_text(encoding="utf-8")
+    value: Any = json.loads(text) if path.suffix.casefold() == ".json" else text
+    if content_digest(value) != expected:
+        raise ValueError("retention content digest does not match evidence")
 
 
 def _permitted_rule(
@@ -740,146 +770,83 @@ def _atomic_write_files(
     if parent_directory is not None:
         _atomic_write_files_at(files, parent_directory)
         return
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _reject_symlink(parent)
-
-    snapshots: dict[Path, bytes | None] = {}
-    temporary: dict[Path, Path] = {}
-    committed: list[Path] = []
-    try:
-        for target, content in files.items():
-            snapshots[target] = _read_existing_regular_file(target)
-            temporary[target] = _prepare_restricted_temp(parent, target.name, content)
-        for target in targets:
-            os.replace(temporary[target], target)
-            committed.append(target)
-        _fsync_directory(parent)
-    except BaseException as error:
-        rollback_errors: list[str] = []
-        for target in reversed(committed):
-            try:
-                previous = snapshots[target]
-                if previous is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    restored = _prepare_restricted_temp(
-                        parent,
-                        target.name,
-                        previous,
-                    )
-                    os.replace(restored, target)
-            except (OSError, ConfigurationError) as rollback_error:
-                rollback_errors.append(type(rollback_error).__name__)
-        for temp_path in temporary.values():
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        try:
-            _fsync_directory(parent)
-        except OSError as rollback_error:
-            rollback_errors.append(type(rollback_error).__name__)
-        if rollback_errors:
-            raise ConfigurationError(
-                "retained evidence commit failed and rollback was incomplete: "
-                + ", ".join(rollback_errors)
-            ) from error
-        if isinstance(error, ConfigurationError):
-            raise
-        if not isinstance(error, Exception):
-            raise
-        raise ConfigurationError(
-            f"retained evidence commit failed: {type(error).__name__}"
-        ) from error
+    with PinnedDirectory.open(parent) as pinned:
+        canonical_files = {
+            pinned.path / target.name: content for target, content in files.items()
+        }
+        _atomic_write_files_at(canonical_files, pinned)
 
 
 def _atomic_write_files_at(
     files: Mapping[Path, bytes],
     parent_directory: PinnedDirectory,
 ) -> None:
-    """Commit retained siblings relative to one approved directory descriptor."""
+    """Create retained siblings once under one persistent transaction lock."""
 
     targets = tuple(files)
+    content_by_name = {target.name: content for target, content in files.items()}
     if any(
-        target.parent != parent_directory.path
+        Path(os.path.realpath(target.parent)) != parent_directory.path
         or target.name in {"", ".", ".."}
         or Path(target.name).name != target.name
         for target in targets
-    ):
+    ) or len(content_by_name) != len(targets):
         raise ConfigurationError(
             "retained evidence must be an immediate child of its pinned parent"
         )
     pinned = parent_directory.duplicate()
     parent_descriptor = pinned.fileno()
-    snapshots: dict[str, bytes | None] = {}
-    temporary: dict[str, tuple[str, tuple[int, int]]] = {}
-    committed: list[tuple[str, tuple[int, int]]] = []
+    lock_descriptor = -1
+    lock_identity: tuple[int, int] | None = None
+    created: list[tuple[str, int, tuple[int, int]]] = []
     try:
-        for target, content in files.items():
-            snapshots[target.name] = _read_existing_regular_file_at(
-                parent_descriptor,
-                target.name,
-            )
-            temporary[target.name] = _prepare_restricted_temp_at(
-                parent_descriptor,
-                target.name,
-                content,
-            )
+        lock_descriptor, lock_identity = _open_retention_lock(parent_descriptor)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            lock_identity,
+        )
         pinned.validate()
-        for target in targets:
-            temporary_name, identity = temporary[target.name]
-            _replace_restricted_temp_at(
+        for target, content in files.items():
+            descriptor, identity = _open_new_restricted_file_at(
                 parent_descriptor,
-                temporary_name,
                 target.name,
+            )
+            created.append((target.name, descriptor, identity))
+            _write_restricted_descriptor(descriptor, content)
+        for target_name, descriptor, identity in created:
+            _validate_restricted_file_at(
+                parent_descriptor,
+                target_name,
                 identity,
             )
-            committed.append((target.name, identity))
-            if _restricted_file_identity_at(parent_descriptor, target.name) != identity:
-                raise ConfigurationError("retained evidence publication was replaced")
+            if _read_restricted_descriptor(descriptor) != content_by_name[target_name]:
+                raise ConfigurationError("retained evidence content changed")
         os.fsync(parent_descriptor)
         pinned.validate()
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            lock_identity,
+        )
+        for target_name, _, identity in created:
+            _validate_restricted_file_at(
+                parent_descriptor,
+                target_name,
+                identity,
+            )
     except BaseException as error:
         rollback_errors: list[str] = []
-        for target_name, committed_identity in reversed(committed):
-            try:
-                previous = snapshots[target_name]
-                if previous is None:
-                    _unlink_restricted_file_at(
-                        parent_descriptor,
-                        target_name,
-                        committed_identity,
-                    )
-                else:
-                    restored_name, restored_identity = _prepare_restricted_temp_at(
-                        parent_descriptor,
-                        target_name,
-                        previous,
-                    )
-                    _replace_restricted_temp_at(
-                        parent_descriptor,
-                        restored_name,
-                        target_name,
-                        restored_identity,
-                    )
-                    if (
-                        _restricted_file_identity_at(parent_descriptor, target_name)
-                        != restored_identity
-                    ):
-                        raise ConfigurationError(
-                            "retained evidence rollback was replaced"
-                        )
-            except (OSError, ConfigurationError) as rollback_error:
-                rollback_errors.append(type(rollback_error).__name__)
-        for temporary_name, identity in temporary.values():
+        for target_name, _, identity in reversed(created):
             try:
                 _unlink_restricted_file_at(
                     parent_descriptor,
-                    temporary_name,
+                    target_name,
                     identity,
                 )
-            except (OSError, ConfigurationError):
-                pass
+            except (OSError, ConfigurationError) as rollback_error:
+                rollback_errors.append(type(rollback_error).__name__)
         try:
             os.fsync(parent_descriptor)
         except OSError as rollback_error:
@@ -897,113 +864,153 @@ def _atomic_write_files_at(
             f"retained evidence commit failed: {type(error).__name__}"
         ) from error
     finally:
+        for _, descriptor, _ in reversed(created):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if lock_descriptor >= 0:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_descriptor)
         pinned.close()
 
 
-def _read_existing_regular_file_at(
+def _open_retention_lock(
+    parent_descriptor: int,
+) -> tuple[int, tuple[int, int]]:
+    """Open or create the content-free persistent retention lock."""
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    created = False
+    try:
+        descriptor = os.open(_RETENTION_FLOCK_NAME, flags, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(
+                _RETENTION_FLOCK_NAME,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            created = True
+        except FileExistsError:
+            descriptor = os.open(
+                _RETENTION_FLOCK_NAME,
+                flags,
+                dir_fd=parent_descriptor,
+            )
+    except OSError as error:
+        raise ConfigurationError("retention transaction lock is unsafe") from error
+    try:
+        if created:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            os.fsync(parent_descriptor)
+        identity = _restricted_file_identity(
+            os.fstat(descriptor),
+            _RETENTION_FLOCK_NAME,
+        )
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            identity,
+        )
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_new_restricted_file_at(
     parent_descriptor: int,
     name: str,
-) -> bytes | None:
-    """Read one existing retained file relative to a pinned parent."""
+) -> tuple[int, tuple[int, int]]:
+    """Create one final retained name without replacing an existing entry."""
 
     try:
         descriptor = os.open(
             name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
             dir_fd=parent_descriptor,
         )
-    except FileNotFoundError:
-        return None
+    except FileExistsError as error:
+        raise ConfigurationError(
+            f"retained evidence destination already exists: {name}"
+        ) from error
     except OSError as error:
         raise ConfigurationError(
             f"retained evidence destination is unsafe: {name}"
         ) from error
-    try:
-        _restricted_file_identity(os.fstat(descriptor), name)
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(descriptor)
-
-
-def _prepare_restricted_temp_at(
-    parent_descriptor: int,
-    name: str,
-    content: bytes,
-) -> tuple[str, tuple[int, int]]:
-    """Write and fsync a fresh restricted temporary file through a dirfd."""
-
-    temporary_name = f".{name}.retention-txn-{secrets.token_hex(16)}"
-    descriptor = os.open(
-        temporary_name,
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0),
-        0o600,
-        dir_fd=parent_descriptor,
-    )
     identity: tuple[int, int] | None = None
     try:
         metadata = os.fstat(descriptor)
-        identity = _restricted_file_identity(metadata, temporary_name)
-        remaining = memoryview(content)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("short retained evidence write")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-        return temporary_name, identity
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+        ):
+            raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+        identity = metadata.st_dev, metadata.st_ino
+        os.fchmod(descriptor, 0o600)
+        if _restricted_file_identity(os.fstat(descriptor), name) != identity:
+            raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+        return descriptor, identity
     except BaseException:
         if identity is not None:
             try:
                 _unlink_restricted_file_at(
                     parent_descriptor,
-                    temporary_name,
+                    name,
                     identity,
                 )
             except (OSError, ConfigurationError):
                 pass
-        raise
-    finally:
         os.close(descriptor)
+        raise
 
 
-def _replace_restricted_temp_at(
-    parent_descriptor: int,
-    temporary_name: str,
-    target_name: str,
-    identity: tuple[int, int],
+def _write_restricted_descriptor(
+    descriptor: int,
+    content: bytes,
 ) -> None:
-    """Publish only the exact temporary inode created by this transaction."""
+    """Write and fsync exact retained bytes through the created descriptor."""
 
-    current = os.stat(
-        temporary_name,
-        dir_fd=parent_descriptor,
-        follow_symlinks=False,
-    )
-    if _restricted_file_identity(current, temporary_name) != identity:
-        raise ConfigurationError("retained evidence temporary file was replaced")
-    os.replace(
-        temporary_name,
-        target_name,
-        src_dir_fd=parent_descriptor,
-        dst_dir_fd=parent_descriptor,
-    )
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError("short retained evidence write")
+        remaining = remaining[written:]
+    os.fsync(descriptor)
 
 
-def _restricted_file_identity_at(
+def _read_restricted_descriptor(descriptor: int) -> bytes:
+    """Read back all retained bytes through the created descriptor."""
+
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while chunk := os.read(descriptor, 1024 * 1024):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_restricted_file_at(
     parent_descriptor: int,
     name: str,
-) -> tuple[int, int]:
-    """Validate and identify one retained name relative to a pinned parent."""
+    expected_identity: tuple[int, int],
+) -> None:
+    """Require one public name to remain the exact restricted inode."""
 
-    metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-    return _restricted_file_identity(metadata, name)
+    current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if _restricted_file_identity(current, name) != expected_identity:
+        raise ConfigurationError("retained evidence file identity changed")
 
 
 def _unlink_restricted_file_at(
@@ -1017,7 +1024,12 @@ def _unlink_restricted_file_at(
         current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError:
         return
-    if _restricted_file_identity(current, name) != expected_identity:
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.getuid()
+        or current.st_nlink != 1
+        or (current.st_dev, current.st_ino) != expected_identity
+    ):
         raise ConfigurationError("retained evidence file identity changed")
     os.unlink(name, dir_fd=parent_descriptor)
 
@@ -1036,56 +1048,6 @@ def _restricted_file_identity(
     ):
         raise ConfigurationError(f"retained evidence file is unsafe: {name}")
     return metadata.st_dev, metadata.st_ino
-
-
-def _read_existing_regular_file(path: Path) -> bytes | None:
-    """Read an existing destination without following a final symlink."""
-
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except FileNotFoundError:
-        return None
-    except OSError as error:
-        raise ConfigurationError(
-            f"retained evidence destination is unsafe: {path.name}"
-        ) from error
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ConfigurationError(
-                f"retained evidence destination is not a regular file: {path.name}"
-            )
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks)
-    finally:
-        os.close(descriptor)
-
-
-def _prepare_restricted_temp(parent: Path, name: str, content: bytes) -> Path:
-    """Write and fsync a mode-0600 no-follow temporary file."""
-
-    descriptor, raw_path = tempfile.mkstemp(
-        prefix=f".{name}.retention-txn-",
-        dir=parent,
-    )
-    path = Path(raw_path)
-    try:
-        os.fchmod(descriptor, 0o600)
-        remaining = memoryview(content)
-        while remaining:
-            written = os.write(descriptor, remaining)
-            if written <= 0:
-                raise OSError("short retained evidence write")
-            remaining = remaining[written:]
-        os.fsync(descriptor)
-    except BaseException:
-        os.close(descriptor)
-        path.unlink(missing_ok=True)
-        raise
-    os.close(descriptor)
-    return path
 
 
 def _reject_symlink(path: Path) -> None:
