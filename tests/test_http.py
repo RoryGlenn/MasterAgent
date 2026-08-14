@@ -3,8 +3,8 @@
 import unittest
 
 from master_agent.errors import AuthenticationError, ConnectorHttpError
-from master_agent.http import SafeHttpClient
-from tests.fakes import ScriptedTransport
+from master_agent.http import HttpResponse, SafeHttpClient, http_action_budget
+from tests.fakes import ExpectedRequest, QueueTransport, ScriptedTransport
 
 
 class SafeHttpClientTests(unittest.TestCase):
@@ -72,6 +72,73 @@ class SafeHttpClientTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ConnectorHttpError, "not permitted"):
             client.request_json("POST", "items", json_body={"read": True})
+
+    def test_parse_errors_and_response_references_drop_query_strings(self) -> None:
+        response = HttpResponse(
+            status=200,
+            headers={},
+            body=b"not-json",
+            url="https://example.test/items?$search=confidential-project",
+        )
+        with self.assertRaises(ConnectorHttpError) as context:
+            response.json()
+        self.assertNotIn("confidential-project", str(context.exception))
+
+        transport = ScriptedTransport()
+        transport.add_json("GET", "/api/items", {"value": 1})
+        client = SafeHttpClient(
+            base_url="https://example.test/api", transport=transport
+        )
+        _, returned = client.request_json(
+            "GET",
+            "items",
+            query={"token": "confidential-query-token"},
+        )
+        self.assertNotIn("confidential-query-token", returned.url)
+        self.assertNotIn("?", returned.url)
+
+    def test_request_id_is_dropped_when_it_contains_provider_diagnostics(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/api/items",
+            {"error": "no"},
+            status=500,
+            headers={"x-request-id": "secret query=value"},
+        )
+        client = SafeHttpClient(
+            base_url="https://example.test/api", transport=transport
+        )
+        with self.assertRaises(ConnectorHttpError) as context:
+            client.request_json("GET", "items")
+        self.assertNotIn("secret", str(context.exception))
+        self.assertIsNone(context.exception.request_id)
+
+    def test_global_action_budget_counts_nested_requests(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json("GET", "/api/one", {"value": 1})
+        transport.add_json("GET", "/api/two", {"value": 2})
+        client = SafeHttpClient(
+            base_url="https://example.test/api", transport=transport
+        )
+        with http_action_budget(max_requests=1, max_response_bytes=1024):
+            client.request_json("GET", "one")
+            with self.assertRaisesRegex(ConnectorHttpError, "request/page budget"):
+                client.request_json("GET", "two")
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_global_action_budget_counts_aggregate_response_bytes(self) -> None:
+        transport = QueueTransport(
+            ExpectedRequest("GET", "/api/one", b"12345678"),
+            ExpectedRequest("GET", "/api/two", b"abcdefgh"),
+        )
+        client = SafeHttpClient(
+            base_url="https://example.test/api", transport=transport
+        )
+        with http_action_budget(max_requests=2, max_response_bytes=12):
+            client.request_bytes("GET", "one")
+            with self.assertRaisesRegex(ConnectorHttpError, "response-byte budget"):
+                client.request_bytes("GET", "two")
 
 
 if __name__ == "__main__":

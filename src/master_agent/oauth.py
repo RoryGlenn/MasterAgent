@@ -7,16 +7,18 @@ left to an organization-approved secret manager or operating-system keychain.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 import base64
 import json
 import os
-from pathlib import Path
+import secrets
 import stat
 import threading
 import time
-from typing import Any, Callable, Mapping, Protocol
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Protocol
 
 from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.http import HttpTransport, SafeHttpClient
@@ -127,7 +129,7 @@ class EnvironmentTokenProvider:
             raw_expiry = self._environ.get(self._expires_at_env, "").strip()
             if raw_expiry:
                 try:
-                    expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+                    expiry = datetime.fromisoformat(raw_expiry)
                 except ValueError as error:
                     raise AuthenticationError(
                         "access-token expiry environment value is invalid"
@@ -144,22 +146,21 @@ class RestrictedTokenFileProvider:
     """Read an explicitly created, permission-restricted token JSON file."""
 
     def __init__(self, path: Path) -> None:
-        self._path = path.expanduser().resolve()
+        selected = path.expanduser()
+        absolute = selected if selected.is_absolute() else Path.cwd() / selected
+        self._path = absolute.parent.resolve(strict=True) / absolute.name
 
     def get_token(self) -> AccessToken:
         """Read the token file after enforcing restrictive POSIX permissions."""
 
-        _require_restricted_file(self._path)
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = json.loads(_read_restricted_token_file(self._path))
         except (OSError, json.JSONDecodeError) as error:
             raise AuthenticationError("token file could not be read") from error
         if not isinstance(raw, Mapping):
             raise AuthenticationError("token file must contain a JSON object")
         try:
-            expires_at = datetime.fromisoformat(
-                str(raw["expires_at"]).replace("Z", "+00:00")
-            )
+            expires_at = datetime.fromisoformat(str(raw["expires_at"]))
             scopes_raw = raw.get("scopes", [])
             scopes = tuple(str(item) for item in scopes_raw)
             token = AccessToken(
@@ -237,10 +238,7 @@ class EntraClientCredentialsProvider:
         self._client_secret = client_secret
         self._scopes = scopes
         self._client = SafeHttpClient(
-            base_url=(
-                "https://login.microsoftonline.com/"
-                f"{tenant_id}/oauth2/v2.0/"
-            ),
+            base_url=(f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/"),
             transport=transport,
             timeout_seconds=timeout_seconds,
             max_response_bytes=1024 * 1024,
@@ -289,10 +287,7 @@ class EntraDeviceCodeProvider:
         self._scopes = scopes
         self._sleep = sleep
         self._client = SafeHttpClient(
-            base_url=(
-                "https://login.microsoftonline.com/"
-                f"{tenant_id}/oauth2/v2.0/"
-            ),
+            base_url=(f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/"),
             transport=transport,
             timeout_seconds=timeout_seconds,
             max_response_bytes=1024 * 1024,
@@ -328,8 +323,7 @@ class EntraDeviceCodeProvider:
             challenge = DeviceCodeChallenge(
                 user_code=str(data["user_code"]),
                 verification_uri=str(
-                    data.get("verification_uri")
-                    or data.get("verification_url")
+                    data.get("verification_uri") or data.get("verification_url")
                 ),
                 message=str(data.get("message", "")),
                 expires_at=datetime.now(UTC) + timedelta(seconds=expires_in),
@@ -337,7 +331,9 @@ class EntraDeviceCodeProvider:
                 device_code=str(data["device_code"]),
             )
         except (KeyError, TypeError, ValueError) as error:
-            raise AuthenticationError("device-code response schema is invalid") from error
+            raise AuthenticationError(
+                "device-code response schema is invalid"
+            ) from error
         self._challenge = challenge
         return challenge
 
@@ -364,7 +360,7 @@ class EntraDeviceCodeProvider:
                 )
             if not isinstance(data, Mapping):
                 raise AuthenticationError("device-code polling response is invalid")
-            error_code = str(data.get("error", "unknown_error"))
+            error_code = _safe_oauth_error_code(data.get("error"))
             if error_code == "authorization_pending":
                 self._sleep(interval)
                 continue
@@ -402,8 +398,18 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
     prefer an organization-approved secret manager instead.
     """
 
-    resolved = path.expanduser().resolve()
-    resolved.parent.mkdir(parents=True, exist_ok=True)
+    selected = path.expanduser()
+    resolved = selected if selected.is_absolute() else Path.cwd() / selected
+    resolved.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    resolved = resolved.parent.resolve(strict=True) / resolved.name
+    try:
+        existing = resolved.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and stat.S_ISLNK(existing.st_mode):
+        raise AuthenticationError("token file target must not be a symlink")
+    if existing is not None and not stat.S_ISREG(existing.st_mode):
+        raise AuthenticationError("token file target must be a regular file")
     payload = {
         "access_token": token.value,
         "expires_at": token.expires_at.isoformat(),
@@ -411,14 +417,30 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
         "token_type": token.token_type,
         "source": token.source,
     }
-    temporary = resolved.with_suffix(resolved.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
-    temporary.replace(resolved)
-    os.chmod(resolved, stat.S_IRUSR | stat.S_IWUSR)
+    encoded = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    temporary = resolved.parent / f".{resolved.name}.{secrets.token_hex(16)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = None
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, resolved)
+        os.chmod(resolved, stat.S_IRUSR | stat.S_IWUSR, follow_symlinks=False)
+        _fsync_directory(resolved.parent)
+    except OSError as error:
+        raise AuthenticationError("token file could not be written safely") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
     return resolved
 
 
@@ -464,7 +486,7 @@ def _token_from_response(
         raise AuthenticationError("OAuth token response must be an object")
     if data.get("error"):
         raise AuthenticationError(
-            f"OAuth token request failed: {data.get('error')}"
+            f"OAuth token request failed: {_safe_oauth_error_code(data.get('error'))}"
         )
     try:
         value = str(data["access_token"])
@@ -482,12 +504,58 @@ def _token_from_response(
     )
 
 
-def _require_restricted_file(path: Path) -> None:
-    if not path.is_file():
-        raise AuthenticationError("token file does not exist")
-    if os.name == "posix":
-        mode = stat.S_IMODE(path.stat().st_mode)
-        if mode & (stat.S_IRWXG | stat.S_IRWXO):
-            raise AuthenticationError(
-                "token file permissions must not grant group or other access"
-            )
+def _read_restricted_token_file(path: Path) -> str:
+    """Read a bounded regular token file without following symbolic links."""
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as error:
+        raise AuthenticationError("token file does not exist") from error
+    except OSError as error:
+        raise AuthenticationError("token file could not be opened safely") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise AuthenticationError("token file must be a regular file")
+        if os.name == "posix":
+            if metadata.st_uid != os.geteuid():
+                raise AuthenticationError(
+                    "token file must be owned by the current user"
+                )
+            mode = stat.S_IMODE(metadata.st_mode)
+            if mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise AuthenticationError(
+                    "token file permissions must not grant group or other access"
+                )
+        payload = os.read(descriptor, 1024 * 1024 + 1)
+        if len(payload) > 1024 * 1024:
+            raise AuthenticationError("token file exceeds the 1 MiB limit")
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AuthenticationError("token file is not valid UTF-8") from error
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(directory: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _safe_oauth_error_code(value: object) -> str:
+    """Return a provider error code without copying arbitrary diagnostics."""
+
+    rendered = str(value or "unknown_error").strip()
+    if not rendered or len(rendered) > 80:
+        return "unknown_error"
+    if not all(
+        character.isalnum() or character in {"_", "-", "."} for character in rendered
+    ):
+        return "unknown_error"
+    return rendered

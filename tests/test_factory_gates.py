@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.config import IntegrationConfig
 from master_agent.connectors.factory import build_live_connectors
@@ -25,7 +25,10 @@ class ConnectorFactoryGateTests(unittest.TestCase):
             config = IntegrationConfig.from_toml(path)
             connectors = build_live_connectors(
                 config,
-                environ={"JIRA_USER": "user@example.test", "JIRA_TOKEN": "token"},
+                environ={
+                    "MASTER_AGENT_JIRA_USERNAME": "user@example.test",
+                    "MASTER_AGENT_JIRA_TOKEN": "token",
+                },
                 systems={"jira"},
                 include_writes=True,
             )
@@ -42,7 +45,10 @@ class ConnectorFactoryGateTests(unittest.TestCase):
             config = IntegrationConfig.from_toml(path)
             connectors = build_live_connectors(
                 config,
-                environ={"JIRA_USER": "user@example.test", "JIRA_TOKEN": "token"},
+                environ={
+                    "MASTER_AGENT_JIRA_USERNAME": "user@example.test",
+                    "MASTER_AGENT_JIRA_TOKEN": "token",
+                },
                 systems={"jira"},
                 include_writes=True,
             )
@@ -68,7 +74,7 @@ class ConnectorFactoryGateTests(unittest.TestCase):
             config = IntegrationConfig.from_toml(path)
             connectors = build_live_connectors(
                 config,
-                environ={"GRAPH_TOKEN": "token"},
+                environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "token"},
                 systems={"sharepoint", "onenote", "outlook", "teams"},
                 include_writes=True,
                 include_communications=True,
@@ -94,7 +100,7 @@ class ConnectorFactoryGateTests(unittest.TestCase):
             config = IntegrationConfig.from_toml(path)
             connectors = build_live_connectors(
                 config,
-                environ={"GRAPH_TOKEN": "token"},
+                environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "token"},
                 systems={"sharepoint", "onenote", "outlook", "teams"},
                 include_writes=True,
                 include_communications=True,
@@ -111,16 +117,16 @@ class ConnectorFactoryGateTests(unittest.TestCase):
 
 
 def _jira_config(*, write_enabled: bool, writes_enabled: bool) -> str:
-    return f'''[connectors.jira]
+    return f"""[connectors.jira]
 enabled = true
 deployment = "cloud"
-base_url = "https://jira.example.test"
+base_url = "https://example.atlassian.net"
 auth_mode = "basic"
-username_env = "JIRA_USER"
-secret_env = "JIRA_TOKEN"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
 write_enabled = {str(write_enabled).lower()}
 writes_enabled = {str(writes_enabled).lower()}
-'''
+"""
 
 
 def _microsoft_config(
@@ -130,12 +136,12 @@ def _microsoft_config(
     granular: bool,
 ) -> str:
     flag = str(granular).lower()
-    return f'''[connectors.microsoft]
+    return f"""[connectors.microsoft]
 enabled = true
 deployment = "cloud"
 base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "bearer"
-secret_env = "GRAPH_TOKEN"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 identity_mode = "delegated"
 write_enabled = {str(write_enabled).lower()}
 send_enabled = {str(send_enabled).lower()}
@@ -144,7 +150,7 @@ onenote_read_enabled = {flag}
 onenote_writes_enabled = {flag}
 outlook_send_enabled = {flag}
 teams_send_enabled = {flag}
-'''
+"""
 
 
 if __name__ == "__main__":

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
 from master_agent.connectors.git_remote import GitBranchPushConnector
@@ -159,7 +159,9 @@ class Phase4ConnectorTests(unittest.TestCase):
             transport.add_json("GET", item, restored)
 
             connector = SharePointWriteConnector(
-                resolved_config("microsoft", base_url="https://graph.microsoft.com/v1.0"),
+                resolved_config(
+                    "microsoft", base_url="https://graph.microsoft.com/v1.0"
+                ),
                 artifact_root=root,
                 transport=transport,
             )
@@ -235,15 +237,9 @@ class Phase4ConnectorTests(unittest.TestCase):
         }
         content = b"<html><body><h1>Status</h1><div>Ready</div></body></html>"
         for _ in range(2):
-            transport.add_json(
-                "GET", "/v1.0/me/onenote/pages/page-1", metadata
-            )
-            transport.add_bytes(
-                "GET", "/v1.0/me/onenote/pages/page-1/content", content
-            )
-        transport.add_bytes(
-            "DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204
-        )
+            transport.add_json("GET", "/v1.0/me/onenote/pages/page-1", metadata)
+            transport.add_bytes("GET", "/v1.0/me/onenote/pages/page-1/content", content)
+        transport.add_bytes("DELETE", "/v1.0/me/onenote/pages/page-1", b"", status=204)
         transport.add_json(
             "GET", "/v1.0/me/onenote/pages/page-1", {"error": "not found"}, status=404
         )
@@ -277,17 +273,56 @@ class Phase4ConnectorTests(unittest.TestCase):
             root = Path(directory)
             remote = root / "remote.git"
             repository = root / "repo"
-            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
-            subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.test"], check=True)
-            subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "init", str(repository)], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository),
+                    "config",
+                    "user.email",
+                    "test@example.test",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.name", "Test"],
+                check=True,
+            )
             (repository / "README.md").write_text("hello\n", encoding="utf-8")
-            subprocess.run(["git", "-C", str(repository), "add", "README.md"], check=True)
-            subprocess.run(["git", "-C", str(repository), "commit", "-m", "initial"], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "checkout", "-b", "agent/test"], check=True, capture_output=True)
-            subprocess.run(["git", "-C", str(repository), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "add", "README.md"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "checkout", "-b", "agent/test"],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "remote", "add", "origin", str(remote)],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "-C", str(repository), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
 
-            connector = GitBranchPushConnector(repository_root=root)
+            connector = GitBranchPushConnector(
+                repository_root=root,
+                allow_file_remotes=True,
+            )
             action = write_action(
                 "bitbucket.branch.push",
                 system="bitbucket",
@@ -297,7 +332,9 @@ class Phase4ConnectorTests(unittest.TestCase):
                     "repository_path": str(repository),
                     "branch": "agent/test",
                     "remote": "origin",
+                    "remote_url": str(remote),
                 },
+                expected_version=head,
             )
             result = connector.execute(action)
             self.assertTrue(connector.verify(action, result).verified)

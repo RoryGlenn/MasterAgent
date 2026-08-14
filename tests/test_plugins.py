@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import tempfile
 import unittest
+from dataclasses import dataclass
+from pathlib import Path
 
 from master_agent.connectors.mock import MockConnector
 from master_agent.errors import ConfigurationError
@@ -27,6 +29,17 @@ class _FakeEntryPoint:
     def load(self) -> object:
         self.load_count += 1
         return self.factory
+
+
+@dataclass
+class _FakeDistribution:
+    name: str
+    version: str
+    root: Path
+    files: tuple[Path, ...]
+
+    def locate_file(self, relative: Path) -> Path:
+        return self.root / relative
 
 
 class PluginTests(unittest.TestCase):
@@ -91,6 +104,51 @@ class PluginTests(unittest.TestCase):
                 enabled_names=("invalid",),
                 entries=(entry,),
             )
+
+    def test_duplicate_names_are_rejected_before_either_plugin_is_imported(
+        self,
+    ) -> None:
+        first = _FakeEntryPoint("duplicate", "safe:factory", lambda: object())
+        second = _FakeEntryPoint("duplicate", "attacker:factory", lambda: object())
+
+        with self.assertRaisesRegex(ConfigurationError, "unique"):
+            load_connector_plugins(
+                ConnectorRegistry(),
+                enabled_names=("duplicate",),
+                entries=(first, second),
+            )
+
+        self.assertEqual(first.load_count, 0)
+        self.assertEqual(second.load_count, 0)
+
+    def test_descriptor_binds_distribution_version_entry_point_and_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "plugin.py"
+            artifact.write_text("VALUE = 1\n", encoding="utf-8")
+            distribution = _FakeDistribution(
+                name="master-agent-example",
+                version="1.2.3",
+                root=root,
+                files=(Path("plugin.py"),),
+            )
+            entry = _FakeEntryPoint(
+                name="example",
+                value="plugin:factory",
+                factory=lambda: object(),
+                dist=distribution,
+            )
+
+            before = discover_connector_plugins(entries=(entry,))[0]
+            artifact.write_text("VALUE = 2\n", encoding="utf-8")
+            after = discover_connector_plugins(entries=(entry,))[0]
+
+        self.assertEqual(before.distribution_version, "1.2.3")
+        self.assertNotEqual(before.artifact_sha256, after.artifact_sha256)
+        self.assertNotEqual(before.identity_sha256, after.identity_sha256)
+        self.assertEqual(entry.load_count, 0)
 
 
 if __name__ == "__main__":

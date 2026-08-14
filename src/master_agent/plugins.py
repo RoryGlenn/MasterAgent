@@ -7,14 +7,17 @@ contract before it can be registered.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import stat
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import metadata
-from types import MappingProxyType
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
 
 from master_agent.errors import ConfigurationError
 from master_agent.registry import ConnectorRegistry
-
 
 CONNECTOR_ENTRY_POINT_GROUP = "master_agent.connectors"
 
@@ -27,6 +30,28 @@ class PluginDescriptor:
     group: str
     value: str
     distribution: str | None = None
+    distribution_version: str | None = None
+    artifact_sha256: str | None = None
+    identity_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        payload = {
+            "name": self.name,
+            "group": self.group,
+            "value": self.value,
+            "distribution": self.distribution,
+            "distribution_version": self.distribution_version,
+            "artifact_sha256": self.artifact_sha256,
+        }
+        identity = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        object.__setattr__(self, "identity_sha256", identity)
 
     def to_dict(self) -> dict[str, str | None]:
         """Serialize plugin metadata without loading plugin code."""
@@ -36,6 +61,9 @@ class PluginDescriptor:
             "group": self.group,
             "value": self.value,
             "distribution": self.distribution,
+            "distribution_version": self.distribution_version,
+            "artifact_sha256": self.artifact_sha256,
+            "identity_sha256": self.identity_sha256,
         }
 
 
@@ -111,11 +139,15 @@ def load_connector_plugins(
         Metadata for successfully loaded plugins.
     """
 
-    requested = tuple(dict.fromkeys(name.strip() for name in enabled_names if name.strip()))
+    requested = tuple(
+        dict.fromkeys(name.strip() for name in enabled_names if name.strip())
+    )
     if not requested:
         return ()
     selected = tuple(entries) if entries is not None else _installed_entries()
-    by_name = MappingProxyType({str(item.name): item for item in selected})
+    descriptors = discover_connector_plugins(entries=selected)
+    by_name = {str(item.name): item for item in selected}
+    descriptor_by_name = {item.name: item for item in descriptors}
     missing = sorted(set(requested) - set(by_name))
     if missing:
         raise ConfigurationError(
@@ -125,8 +157,21 @@ def load_connector_plugins(
     loaded: list[LoadedPlugin] = []
     for name in requested:
         entry = by_name[name]
-        descriptor = _descriptor(entry)
+        descriptor = descriptor_by_name[name]
+        if entries is None and (
+            not descriptor.distribution
+            or not descriptor.distribution_version
+            or not descriptor.artifact_sha256
+        ):
+            raise ConfigurationError(
+                f"connector plugin {name} lacks a verifiable distribution artifact"
+            )
         factory = entry.load()
+        observed = _descriptor(entry)
+        if observed.identity_sha256 != descriptor.identity_sha256:
+            raise ConfigurationError(
+                f"connector plugin {name} changed while it was being loaded"
+            )
         produced = factory() if callable(factory) else factory
         connectors = _normalize_connectors(produced, plugin_name=name)
         for connector in connectors:
@@ -163,12 +208,58 @@ def _descriptor(entry: Any) -> PluginDescriptor:
         raise ConfigurationError(f"unexpected connector plugin group: {group}")
     distribution = getattr(entry, "dist", None)
     distribution_name = getattr(distribution, "name", None)
+    distribution_version = getattr(distribution, "version", None)
     return PluginDescriptor(
         name=str(entry.name),
         group=group,
         value=str(entry.value),
         distribution=str(distribution_name) if distribution_name else None,
+        distribution_version=(
+            str(distribution_version) if distribution_version else None
+        ),
+        artifact_sha256=_distribution_artifact_sha256(distribution),
     )
+
+
+def _distribution_artifact_sha256(distribution: Any) -> str | None:
+    """Hash the currently installed files owned by a plugin distribution."""
+
+    if distribution is None:
+        return None
+    files = getattr(distribution, "files", None)
+    if not files:
+        return None
+    manifest: list[dict[str, object]] = []
+    try:
+        for relative in sorted(files, key=str):
+            path = Path(distribution.locate_file(relative))
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ConfigurationError(
+                    "connector plugin distribution contains a non-regular artifact"
+                )
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            manifest.append(
+                {
+                    "path": str(relative),
+                    "size": metadata.st_size,
+                    "sha256": digest.hexdigest(),
+                }
+            )
+    except (OSError, TypeError) as error:
+        raise ConfigurationError(
+            "connector plugin distribution artifacts could not be verified"
+        ) from error
+    encoded = json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _normalize_connectors(value: Any, *, plugin_name: str) -> tuple[Any, ...]:

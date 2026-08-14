@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-import os
 from pathlib import Path
 from types import MappingProxyType
-import tomllib
-from typing import Any, Mapping
+from typing import Any
 
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
@@ -59,6 +60,7 @@ class OAuthProfile:
             "metadata",
             MappingProxyType(dict(self.metadata or {})),
         )
+        _validate_environment_references(self)
 
     def required_environment_variables(self) -> tuple[str, ...]:
         """Return required variable names without reading secret values."""
@@ -112,9 +114,12 @@ class OAuthProfile:
         for name in self.required_environment_variables():
             if not source.get(name):
                 errors.append(f"environment variable {name} is missing")
-        if self.flow is OAuthFlow.RESTRICTED_FILE and self.token_file is not None:
-            if not self.token_file.expanduser().is_file():
-                errors.append(f"token file does not exist: {self.token_file}")
+        if (
+            self.flow is OAuthFlow.RESTRICTED_FILE
+            and self.token_file is not None
+            and not self.token_file.expanduser().is_file()
+        ):
+            errors.append(f"token file does not exist: {self.token_file}")
         return tuple(dict.fromkeys(errors))
 
     def build_provider(
@@ -190,14 +195,16 @@ class OAuthProfiles:
         object.__setattr__(self, "profiles", MappingProxyType(dict(self.profiles)))
 
     @classmethod
-    def from_toml(cls, path: ConfigSource) -> "OAuthProfiles":
+    def from_toml(cls, path: ConfigSource) -> OAuthProfiles:
         """Load OAuth profiles from TOML."""
 
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
         except FileNotFoundError as error:
-            raise ConfigurationError(f"OAuth configuration not found: {path}") from error
+            raise ConfigurationError(
+                f"OAuth configuration not found: {path}"
+            ) from error
         table = raw.get("profiles", {})
         if not isinstance(table, Mapping):
             raise ConfigurationError("[profiles] must be a TOML table")
@@ -242,7 +249,9 @@ class OAuthProfiles:
                 access_token_env=_optional(value, "access_token_env"),
                 expires_at_env=_optional(value, "expires_at_env"),
                 token_file=Path(token_file_value) if token_file_value else None,
-                enabled=_strict_bool(value.get("enabled", False), f"OAuth profile {name} enabled"),
+                enabled=_strict_bool(
+                    value.get("enabled", False), f"OAuth profile {name} enabled"
+                ),
                 metadata={key: item for key, item in value.items() if key not in known},
             )
         return cls(profiles)
@@ -265,3 +274,37 @@ def _strict_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigurationError(f"{name} must be a boolean")
     return value
+
+
+_MICROSOFT_ENVIRONMENT_REFERENCES = frozenset(
+    {
+        "MASTER_AGENT_ENTRA_TENANT_ID",
+        "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID",
+        "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
+        "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN",
+        "MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT",
+    }
+)
+
+
+def _validate_environment_references(profile: OAuthProfile) -> None:
+    """Keep OAuth profiles from becoming arbitrary environment readers."""
+
+    if profile.provider not in {"microsoft_entra", "microsoft_graph"}:
+        if profile.required_environment_variables():
+            raise ConfigurationError(
+                f"OAuth provider {profile.provider} has no credential broker"
+            )
+        return
+    for name in (
+        profile.tenant_id_env,
+        profile.client_id_env,
+        profile.client_secret_env,
+        profile.access_token_env,
+        profile.expires_at_env,
+    ):
+        if name and name not in _MICROSOFT_ENVIRONMENT_REFERENCES:
+            raise ConfigurationError(
+                f"OAuth profile {profile.name} has an unapproved environment reference"
+            )

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
 from master_agent.cli import main
 from master_agent.planners.static import build_weekly_status_plan
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,9 +60,9 @@ class CliTests(unittest.TestCase):
 [connectors.jira]
 enabled = true
 deployment = "cloud"
-base_url = "https://jira.example.test"
+base_url = "https://example.atlassian.net"
 auth_mode = "bearer"
-secret_env = "MASTER_AGENT_TEST_MISSING_TOKEN"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
 """.strip()
                 + "\n",
                 encoding="utf-8",
@@ -134,7 +133,9 @@ secret_env = "MASTER_AGENT_TEST_MISSING_TOKEN"
             self.assertIn("disabled", stdout.getvalue())
             self.assertIn("jira", stdout.getvalue())
 
-    def test_packaged_defaults_build_communication_plan_outside_repository(self) -> None:
+    def test_packaged_defaults_build_communication_plan_outside_repository(
+        self,
+    ) -> None:
         """Phase 2B planning must work from wheel-packaged safe defaults."""
 
         with TemporaryDirectory() as directory:

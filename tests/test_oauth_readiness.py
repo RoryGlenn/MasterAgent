@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
@@ -13,7 +13,6 @@ from master_agent.governance import GovernanceProfile
 from master_agent.oauth import AccessToken, InMemoryTokenCache, StaticTokenProvider
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.readiness import assess_readiness
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,7 +61,7 @@ class OAuthReadinessTests(unittest.TestCase):
 enabled = true
 provider = "microsoft_graph"
 flow = "environment"
-access_token_env = "GRAPH_TOKEN"
+access_token_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 scopes = ["User.Read"]
 """.strip()
                 + "\n",
@@ -70,7 +69,10 @@ scopes = ["User.Read"]
             )
             profile = OAuthProfiles.from_toml(path).profile("graph")
             errors = profile.readiness_errors({})
-            self.assertIn("environment variable GRAPH_TOKEN is missing", errors)
+            self.assertIn(
+                "environment variable MASTER_AGENT_GRAPH_ACCESS_TOKEN is missing",
+                errors,
+            )
             self.assertNotIn("Bearer", " ".join(errors))
 
 

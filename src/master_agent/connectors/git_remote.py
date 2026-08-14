@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass
-import os
-from pathlib import Path
 import re
-import subprocess
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
+from master_agent.connectors.git_sandbox import (
+    GitSandbox,
+    SandboxedGitResult,
+    validate_remote_url,
+)
 from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import (
     ActionState,
@@ -20,17 +23,8 @@ from master_agent.models import (
     VerificationResult,
 )
 
-
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-
-
-@dataclass(frozen=True, slots=True)
-class _CommandResult:
-    """Result from one fixed Git command."""
-
-    stdout: str
-    stderr: str
 
 
 class GitBranchPushConnector:
@@ -61,18 +55,25 @@ class GitBranchPushConnector:
         branch_prefix: str = "agent/",
         allowed_remotes: tuple[str, ...] = ("origin",),
         timeout_seconds: float = 120.0,
+        allow_file_remotes: bool = False,
     ) -> None:
         root = repository_root.expanduser().resolve()
         if not root.exists() or not root.is_dir():
             raise ConnectorError("repository_root must be an existing directory")
         if not branch_prefix or branch_prefix.startswith("-") or ".." in branch_prefix:
             raise ConnectorError("branch_prefix is unsafe")
-        if not allowed_remotes or any(not _REMOTE_RE.fullmatch(item) for item in allowed_remotes):
+        if not allowed_remotes or any(
+            not _REMOTE_RE.fullmatch(item) for item in allowed_remotes
+        ):
             raise ConnectorError("allowed_remotes contains an unsafe remote name")
         self._repository_root = root
         self._branch_prefix = branch_prefix
         self._allowed_remotes = frozenset(allowed_remotes)
-        self._timeout_seconds = timeout_seconds
+        self._allow_file_remotes = allow_file_remotes
+        self._sandbox = GitSandbox(
+            timeout_seconds=timeout_seconds,
+            allow_file_protocol=allow_file_remotes,
+        )
         self._last: dict[str, dict[str, Any]] = {}
 
     @property
@@ -92,16 +93,21 @@ class GitBranchPushConnector:
 
         self._validate(action)
         repository = self._repository(action.parameters)
+        self._sandbox.validate_repository_config(repository)
         branch = self._branch(action.parameters)
         remote = str(action.parameters.get("remote", "origin")).strip()
         if remote not in self._allowed_remotes:
             raise ConnectorError("Git remote is not allowlisted")
 
-        current_branch = self._run(repository, "branch", "--show-current").stdout.strip()
+        current_branch = self._run(
+            repository, "branch", "--show-current"
+        ).stdout.strip()
         if current_branch != branch:
             raise ConnectorError("only the current checked-out branch may be pushed")
         commit = self._run(repository, "rev-parse", "HEAD").stdout.strip()
-        if action.target.expected_version and action.target.expected_version != commit:
+        if not action.target.expected_version:
+            raise ConnectorError("branch publication requires an approved commit hash")
+        if action.target.expected_version != commit:
             raise VersionConflictError(
                 "repository HEAD changed since approval: "
                 f"expected {action.target.expected_version}, observed {commit}"
@@ -109,25 +115,27 @@ class GitBranchPushConnector:
         if self._run(repository, "status", "--porcelain").stdout.strip():
             raise ConnectorError("repository worktree must be clean before publication")
 
-        existing = self._remote_hash(repository, remote, branch)
+        remote_url = self._approved_remote_url(action, repository, remote)
+        existing = self._remote_hash(repository, remote_url, branch)
         if existing is not None:
-            raise VersionConflictError("remote branch already exists; overwrite is prohibited")
+            raise VersionConflictError(
+                "remote branch already exists; overwrite is prohibited"
+            )
 
-        self._validate_remote(repository, remote)
         self._run(
             repository,
             "push",
-            "--set-upstream",
-            remote,
+            remote_url,
             f"refs/heads/{branch}:refs/heads/{branch}",
         )
-        observed = self._remote_hash(repository, remote, branch)
+        observed = self._remote_hash(repository, remote_url, branch)
         if observed != commit:
             raise ConnectorError("remote branch does not point to the approved commit")
 
         after = {
             "repository_path": str(repository),
             "remote": remote,
+            "remote_url": remote_url,
             "branch": branch,
             "commit": commit,
             "created_new_ref": True,
@@ -163,10 +171,15 @@ class GitBranchPushConnector:
 
         after = result.after or {}
         repository = self._repository(after)
+        self._sandbox.validate_repository_config(repository)
         remote = str(after.get("remote", ""))
+        remote_url = validate_remote_url(
+            str(after.get("remote_url", "")),
+            allow_file=self._allow_file_remotes,
+        )
         branch = str(after.get("branch", ""))
         expected = str(after.get("commit", ""))
-        observed_hash = self._remote_hash(repository, remote, branch)
+        observed_hash = self._remote_hash(repository, remote_url, branch)
         observed = {"remote": remote, "branch": branch, "commit": observed_hash}
         verified = bool(expected and observed_hash == expected)
         return VerificationResult(
@@ -189,13 +202,18 @@ class GitBranchPushConnector:
 
         after = result.after or {}
         repository = self._repository(after)
+        self._sandbox.validate_repository_config(repository)
         remote = str(after.get("remote", ""))
+        remote_url = validate_remote_url(
+            str(after.get("remote_url", "")),
+            allow_file=self._allow_file_remotes,
+        )
         branch = str(after.get("branch", ""))
         expected = str(after.get("commit", ""))
         if remote not in self._allowed_remotes:
             raise ConnectorError("rollback remote is not allowlisted")
         self._validate_branch(branch)
-        observed = self._remote_hash(repository, remote, branch)
+        observed = self._remote_hash(repository, remote_url, branch)
         if not observed:
             raise VersionConflictError("remote branch is already absent")
         if observed != expected:
@@ -205,10 +223,10 @@ class GitBranchPushConnector:
         self._run(
             repository,
             "push",
-            remote,
+            remote_url,
             f":refs/heads/{branch}",
         )
-        remaining = self._remote_hash(repository, remote, branch)
+        remaining = self._remote_hash(repository, remote_url, branch)
         compensation = ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -216,6 +234,7 @@ class GitBranchPushConnector:
             after={
                 "repository_path": str(repository),
                 "remote": remote,
+                "remote_url": remote_url,
                 "branch": branch,
                 "commit": remaining,
                 "deleted": remaining is None,
@@ -236,9 +255,14 @@ class GitBranchPushConnector:
 
         after = compensation.after or {}
         repository = self._repository(after)
+        self._sandbox.validate_repository_config(repository)
         remote = str(after.get("remote", ""))
+        remote_url = validate_remote_url(
+            str(after.get("remote_url", "")),
+            allow_file=self._allow_file_remotes,
+        )
         branch = str(after.get("branch", ""))
-        observed_hash = self._remote_hash(repository, remote, branch)
+        observed_hash = self._remote_hash(repository, remote_url, branch)
         verified = observed_hash is None
         return VerificationResult(
             action_id=action.action_id,
@@ -255,7 +279,9 @@ class GitBranchPushConnector:
         if action.target.system != self.system:
             raise ConnectorError("Git publication connector received another system")
         if action.capability not in self.capabilities:
-            raise ConnectorError(f"unsupported Git publication capability: {action.capability}")
+            raise ConnectorError(
+                f"unsupported Git publication capability: {action.capability}"
+            )
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
             raise ConnectorError("branch publication must use reversible_write risk")
         if not action.requires_approval:
@@ -269,7 +295,9 @@ class GitBranchPushConnector:
         try:
             path.relative_to(self._repository_root)
         except ValueError as error:
-            raise ConnectorError("repository_path is outside repository_root") from error
+            raise ConnectorError(
+                "repository_path is outside repository_root"
+            ) from error
         if not (path / ".git").exists():
             raise ConnectorError("repository_path is not a Git worktree")
         return path
@@ -283,8 +311,7 @@ class GitBranchPushConnector:
         if (
             not _BRANCH_RE.fullmatch(branch)
             or not branch.startswith(self._branch_prefix)
-            or branch.endswith("/")
-            or branch.endswith(".lock")
+            or branch.endswith(("/", ".lock"))
             or branch.startswith("-")
             or ".." in branch
             or "//" in branch
@@ -292,57 +319,35 @@ class GitBranchPushConnector:
         ):
             raise ConnectorError("branch is outside the approved branch namespace")
 
-    def _remote_hash(self, repository: Path, remote: str, branch: str) -> str | None:
+    def _remote_hash(
+        self, repository: Path, remote_url: str, branch: str
+    ) -> str | None:
         result = self._run(
             repository,
             "ls-remote",
             "--heads",
-            remote,
+            remote_url,
             f"refs/heads/{branch}",
         ).stdout.strip()
         return result.split()[0] if result else None
 
-    def _validate_remote(self, repository: Path, remote: str) -> None:
-        value = self._run(repository, "remote", "get-url", remote).stdout.strip()
-        allowed = (
-            value.startswith("https://")
-            or value.startswith("ssh://")
-            or re.match(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:", value)
-            or value.startswith("file://")
-            or Path(value).is_absolute()
+    def _approved_remote_url(
+        self,
+        action: AgentAction,
+        repository: Path,
+        remote: str,
+    ) -> str:
+        approved = validate_remote_url(
+            str(action.parameters.get("remote_url", "")),
+            allow_file=self._allow_file_remotes,
         )
-        if not allowed:
-            raise ConnectorError("Git remote URL scheme is not approved")
+        observed = validate_remote_url(
+            self._run(repository, "remote", "get-url", remote).stdout.strip(),
+            allow_file=self._allow_file_remotes,
+        )
+        if observed != approved:
+            raise VersionConflictError("Git remote URL changed since approval")
+        return approved
 
-    def _run(self, repository: Path, *arguments: str) -> _CommandResult:
-        environment = dict(os.environ)
-        environment.update(
-            {
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_ASKPASS": "/bin/false",
-                "SSH_ASKPASS": "/bin/false",
-            }
-        )
-        try:
-            completed = subprocess.run(
-                ["git", "-c", "credential.helper=", *arguments],
-                cwd=repository,
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=self._timeout_seconds,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise ConnectorError(
-                f"fixed Git operation failed: {type(error).__name__}"
-            ) from error
-        stdout = completed.stdout.decode("utf-8", errors="replace")
-        stderr = completed.stderr.decode("utf-8", errors="replace")
-        if completed.returncode != 0:
-            diagnostic = " ".join(stderr.strip().split())[:500]
-            raise ConnectorError(
-                f"Git operation returned {completed.returncode}: "
-                f"{diagnostic or 'no diagnostic'}"
-            )
-        return _CommandResult(stdout=stdout, stderr=stderr)
+    def _run(self, repository: Path, *arguments: str) -> SandboxedGitResult:
+        return self._sandbox.run(repository, arguments)

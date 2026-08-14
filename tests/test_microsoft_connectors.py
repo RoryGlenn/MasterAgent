@@ -239,7 +239,9 @@ class SharePointConnectorTests(unittest.TestCase):
         graph_request, download_request = transport.requests
         self.assertIn("Authorization", graph_request.headers)
         self.assertNotIn("Authorization", download_request.headers)
-        self.assertEqual(urlparse(download_request.url).hostname, "tenant.sharepoint.com")
+        self.assertEqual(
+            urlparse(download_request.url).hostname, "tenant.sharepoint.com"
+        )
 
     def test_text_read_rejects_binary_extension_before_download(self) -> None:
         transport = ScriptedTransport()
@@ -272,6 +274,32 @@ class SharePointConnectorTests(unittest.TestCase):
         with self.assertRaisesRegex(ConnectorError, "unsupported extension"):
             connector.execute(action)
         self.assertEqual(len(transport.requests), 1)
+
+    def test_site_identifier_is_encoded_as_one_path_segment(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/v1.0/sites/%2Fdrives%2Fattacker",
+            {"id": "/drives/attacker", "displayName": "Encoded"},
+        )
+        connector = SharePointConnector(
+            resolved_config(
+                "microsoft",
+                base_url="https://graph.microsoft.com/v1.0",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "sharepoint.site.read",
+            system="sharepoint",
+            resource_type="site",
+            resource_id="/drives/attacker",
+        )
+
+        connector.execute(action)
+
+        path = urlparse(transport.requests[0].url).path
+        self.assertEqual(path, "/v1.0/sites/%2Fdrives%2Fattacker")
 
 
 if __name__ == "__main__":

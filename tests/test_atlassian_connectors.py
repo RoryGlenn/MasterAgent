@@ -1,12 +1,14 @@
 """Contract tests for Jira, Confluence, and Bitbucket connectors."""
 
 import unittest
+from dataclasses import replace
 from urllib.parse import urlparse
 
 from master_agent.config import DeploymentType
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.jira import JiraConnector
+from master_agent.errors import ConnectorHttpError
 from tests.fakes import ScriptedTransport
 from tests.helpers import read_action, resolved_config
 
@@ -239,9 +241,7 @@ class BitbucketConnectorTests(unittest.TestCase):
             "GET",
             "/rest/build-status/latest/commits/abc123",
             {
-                "values": [
-                    {"key": "build", "name": "Build", "state": "SUCCESSFUL"}
-                ],
+                "values": [{"key": "build", "name": "Build", "state": "SUCCESSFUL"}],
                 "isLastPage": True,
             },
         )
@@ -272,6 +272,51 @@ class BitbucketConnectorTests(unittest.TestCase):
         self.assertEqual(pull_request["ci_summary"]["successful"], 1)
         paths = [urlparse(item.url).path for item in transport.requests]
         self.assertIn("/rest/build-status/latest/commits/abc123", paths)
+
+    def test_nested_enrichment_shares_one_global_request_budget(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests",
+            {"values": [_cloud_pull_request()]},
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7/statuses",
+            {"values": []},
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7/diffstat",
+            {"values": []},
+        )
+        config = replace(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            max_pages=2,
+        )
+        connector = BitbucketConnector(config, transport=transport)
+        action = read_action(
+            "bitbucket.pull_request.search",
+            system="bitbucket",
+            resource_type="pull_request_collection",
+            resource_id="open-prs-budget",
+            parameters={
+                "workspace": "acme",
+                "repository": "widget",
+                "include_statuses": True,
+                "include_diffstat": True,
+                "enrichment_limit": 1,
+                "limit": 1,
+            },
+        )
+
+        with self.assertRaisesRegex(ConnectorHttpError, "request/page budget"):
+            connector.execute(action)
+
+        self.assertEqual(len(transport.requests), 2)
 
 
 def _jira_issue() -> dict[str, object]:
@@ -309,7 +354,9 @@ def _cloud_pull_request() -> dict[str, object]:
         "destination": {"branch": {"name": "main"}},
         "participants": [],
         "reviewers": [{"display_name": "Don"}],
-        "links": {"html": {"href": "https://bitbucket.org/acme/widget/pull-requests/7"}},
+        "links": {
+            "html": {"href": "https://bitbucket.org/acme/widget/pull-requests/7"}
+        },
         "created_on": "2026-08-12T10:00:00Z",
         "updated_on": "2026-08-13T10:00:00Z",
     }
