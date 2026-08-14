@@ -167,6 +167,67 @@ class AuditSafetyTests(unittest.TestCase):
             self.assertIn("contains no events", message)
             self.assertEqual(os.stat(database).st_mode & 0o777, 0o600)
 
+    def test_verification_rejects_torn_ledger_without_mutating_state(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            ledger = root / ".audit.sqlite3.master-agent.lock"
+            audit = AuditLog(database)
+            audit.record(
+                run_id=uuid4(),
+                plan_id=uuid4(),
+                action_id=None,
+                event_type="test",
+                payload={"safe": True},
+            )
+            audit.close()
+            with ledger.open("ab") as stream:
+                stream.write(b"P deliberately-torn")
+                stream.flush()
+                os.fsync(stream.fileno())
+            before_database = (database.read_bytes(), database.stat().st_mtime_ns)
+            before_ledger = (ledger.read_bytes(), ledger.stat().st_mtime_ns)
+
+            valid, message = AuditLog.verify_existing(database)
+
+            self.assertFalse(valid)
+            self.assertIn("torn", message)
+            self.assertEqual(
+                (database.read_bytes(), database.stat().st_mtime_ns),
+                before_database,
+            )
+            self.assertEqual(
+                (ledger.read_bytes(), ledger.stat().st_mtime_ns),
+                before_ledger,
+            )
+
+    def test_verification_does_not_recreate_a_missing_lock_ledger(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "audit.sqlite3"
+            ledger = root / ".audit.sqlite3.master-agent.lock"
+            audit = AuditLog(database)
+            audit.record(
+                run_id=uuid4(),
+                plan_id=uuid4(),
+                action_id=None,
+                event_type="test",
+                payload={"safe": True},
+            )
+            audit.close()
+            ledger.unlink()
+            before = (database.read_bytes(), database.stat().st_mtime_ns)
+
+            valid, message = AuditLog.verify_existing(database)
+
+            self.assertFalse(valid)
+            self.assertIn("no trusted lock ledger", message)
+            self.assertEqual(
+                (database.read_bytes(), database.stat().st_mtime_ns),
+                before,
+            )
+            self.assertFalse(ledger.exists())
+
     def test_checkpoint_detects_tail_truncation(self) -> None:
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
@@ -191,7 +252,9 @@ class AuditSafetyTests(unittest.TestCase):
             valid, message = AuditLog.verify_existing(database)
 
             self.assertFalse(valid)
-            self.assertIn("checkpoint", message)
+            self.assertTrue(
+                "checkpoint" in message or "content identity changed" in message
+            )
 
     def test_concurrent_appends_preserve_one_linear_chain(self) -> None:
         with TemporaryDirectory() as directory:
@@ -292,7 +355,7 @@ class AuditSafetyTests(unittest.TestCase):
             self.assertEqual(_audit_event_count(displaced), 0)
             audit.close()
 
-    def test_constructor_swap_and_restore_cannot_redirect_schema_creation(
+    def test_constructor_swap_and_decoy_fd_cannot_redirect_schema_creation(
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
@@ -303,6 +366,7 @@ class AuditSafetyTests(unittest.TestCase):
             attacker.write_bytes(b"")
             attacker.chmod(0o600)
             real_connect = sqlite_safety.sqlite3.connect
+            decoy_descriptors: list[int] = []
 
             def connect_while_redirected(
                 *args: object,
@@ -311,23 +375,33 @@ class AuditSafetyTests(unittest.TestCase):
                 database.rename(displaced)
                 attacker.rename(database)
                 try:
-                    return real_connect(*args, **kwargs)
+                    connection = real_connect(*args, **kwargs)
                 finally:
                     database.rename(attacker)
                     displaced.rename(database)
+                decoy_descriptors.append(os.open(database, os.O_RDWR | os.O_NOFOLLOW))
+                return connection
 
-            with (
-                patch.object(
+            try:
+                with patch.object(
                     sqlite_safety.sqlite3,
                     "connect",
                     side_effect=connect_while_redirected,
-                ),
-                self.assertRaisesRegex(ConfigurationError, "exactly one pinned"),
-            ):
-                AuditLog(database)
+                ):
+                    audit = AuditLog(database)
+                audit.close()
+                self.assertTrue(
+                    all(os.fstat(descriptor).st_ino for descriptor in decoy_descriptors)
+                )
+            finally:
+                for descriptor in decoy_descriptors:
+                    os.close(descriptor)
 
             self.assertEqual(attacker.read_bytes(), b"")
-            self.assertFalse(database.exists())
+            self.assertEqual(
+                _audit_table_names(database),
+                ["audit_events", "audit_state", "completed_actions"],
+            )
 
 
 def _audit_event_count(database: Path) -> int:
@@ -337,6 +411,19 @@ def _audit_event_count(database: Path) -> int:
         row = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()
     assert row is not None
     return int(row[0])
+
+
+def _audit_table_names(database: Path) -> list[str]:
+    """Return application table names from one stable audit generation."""
+
+    with closing(sqlite3.connect(database)) as connection:
+        return [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
 
 
 if __name__ == "__main__":

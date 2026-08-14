@@ -9,7 +9,9 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
+from master_agent import sqlite_safety
 from master_agent.errors import ConfigurationError
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 
@@ -101,15 +103,166 @@ class SQLiteSafetyTests(unittest.TestCase):
             self.assertEqual(rows, [])
             database.close()
 
+    def test_removing_created_state_also_removes_its_ledger_for_retry(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            ledger_path = root / ".state.sqlite3.master-agent.lock"
+            database = PinnedSQLiteDatabase(database_path)
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+
+            database.close(remove_created=True)
+
+            self.assertFalse(database_path.exists())
+            self.assertFalse(ledger_path.exists())
+            replacement = PinnedSQLiteDatabase(database_path)
+            with replacement.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            replacement.close()
+
+    def test_last_moment_destination_swap_never_writes_attacker_inode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            database_path = root / "state.sqlite3"
+            displaced = root / "trusted-old.sqlite3"
+            attacker = root / "attacker.sqlite3"
+            attacker_alias = root / "attacker-preserved.sqlite3"
+            database = PinnedSQLiteDatabase(database_path)
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            with closing(sqlite3.connect(attacker)) as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+                connection.execute("INSERT INTO values_for_test VALUES (99)")
+                connection.commit()
+            os.link(attacker, attacker_alias)
+            real_replace = sqlite_safety.os.replace
+
+            def replace_after_destination_swap(
+                source: str,
+                destination: str,
+                **kwargs: object,
+            ) -> None:
+                database_path.rename(displaced)
+                attacker.rename(database_path)
+                real_replace(source, destination, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.object(
+                    sqlite_safety.os,
+                    "replace",
+                    side_effect=replace_after_destination_swap,
+                ),
+                database.connect() as connection,
+            ):
+                connection.execute("INSERT INTO values_for_test VALUES (1)")
+
+            with closing(sqlite3.connect(database_path)) as connection:
+                committed = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            with closing(sqlite3.connect(attacker_alias)) as connection:
+                attacker_rows = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            with closing(sqlite3.connect(displaced)) as connection:
+                displaced_rows = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            self.assertEqual(committed, [(1,)])
+            self.assertEqual(attacker_rows, [(99,)])
+            self.assertEqual(displaced_rows, [])
+            database.close()
+
+    def test_interrupted_prepare_recovers_the_exact_old_generation(self) -> None:
+        with TemporaryDirectory() as directory:
+            database_path = Path(directory) / "state.sqlite3"
+            database = PinnedSQLiteDatabase(database_path)
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+
+            with (
+                patch.object(
+                    sqlite_safety.os,
+                    "replace",
+                    side_effect=OSError("simulated crash before replace"),
+                ),
+                self.assertRaisesRegex(OSError, "before replace"),
+                database.connect() as connection,
+            ):
+                connection.execute("INSERT INTO values_for_test VALUES (1)")
+            database.close()
+
+            recovered = PinnedSQLiteDatabase(database_path)
+            with recovered.connect() as connection:
+                rows = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            self.assertEqual(rows, [])
+            recovered.close()
+
+    def test_interrupted_commit_recovers_the_exact_new_generation(self) -> None:
+        with TemporaryDirectory() as directory:
+            database_path = Path(directory) / "state.sqlite3"
+            database = PinnedSQLiteDatabase(database_path)
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+            real_append = sqlite_safety._append_ledger_record
+            prepared = False
+
+            def fail_commit_record(descriptor: int, record: str) -> None:
+                nonlocal prepared
+                if record.startswith("P "):
+                    prepared = True
+                    real_append(descriptor, record)
+                    return
+                if prepared and record.startswith("C "):
+                    raise OSError("simulated crash after replace")
+                real_append(descriptor, record)
+
+            with (
+                patch.object(
+                    sqlite_safety,
+                    "_append_ledger_record",
+                    side_effect=fail_commit_record,
+                ),
+                self.assertRaisesRegex(OSError, "after replace"),
+                database.connect() as connection,
+            ):
+                connection.execute("INSERT INTO values_for_test VALUES (1)")
+            database.close()
+
+            recovered = PinnedSQLiteDatabase(database_path)
+            with recovered.connect() as connection:
+                rows = connection.execute(
+                    "SELECT value FROM values_for_test"
+                ).fetchall()
+            self.assertEqual(rows, [(1,)])
+            recovered.close()
+
     def test_rollback_failure_poison_closes_the_connection(self) -> None:
         with TemporaryDirectory() as directory:
             database_path = Path(directory) / "state.sqlite3"
             database = PinnedSQLiteDatabase(database_path)
             with database.connect() as connection:
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
-            database._connection = _RollbackFailingConnection(database._connection)
+            real_connect = sqlite_safety.sqlite3.connect
 
-            with self.assertRaises(KeyboardInterrupt), database.connect() as connection:
+            def rollback_failing_connect(
+                *args: object,
+                **kwargs: object,
+            ) -> _RollbackFailingConnection:
+                return _RollbackFailingConnection(real_connect(*args, **kwargs))
+
+            with (
+                patch.object(
+                    sqlite_safety.sqlite3,
+                    "connect",
+                    side_effect=rollback_failing_connect,
+                ),
+                self.assertRaises(KeyboardInterrupt),
+                database.connect() as connection,
+            ):
                 connection.execute("INSERT INTO values_for_test VALUES (1)")
                 raise KeyboardInterrupt
 

@@ -416,7 +416,7 @@ class RecurringWorkflowTests(unittest.TestCase):
             self.assertEqual(_recurring_run_count(displaced), 1)
             store.close()
 
-    def test_constructor_swap_and_restore_cannot_redirect_schema_or_claim(
+    def test_constructor_swap_and_decoy_fd_cannot_redirect_schema_or_claim(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -429,6 +429,7 @@ class RecurringWorkflowTests(unittest.TestCase):
             store = RecurringStateStore(database)
             scheduled = datetime(2026, 8, 13, 20, 0, tzinfo=UTC)
             real_connect = sqlite_safety.sqlite3.connect
+            decoy_descriptors: list[int] = []
 
             def connect_while_redirected(
                 *args: object,
@@ -437,27 +438,35 @@ class RecurringWorkflowTests(unittest.TestCase):
                 database.rename(displaced)
                 attacker.rename(database)
                 try:
-                    return real_connect(*args, **kwargs)
+                    connection = real_connect(*args, **kwargs)
                 finally:
                     database.rename(attacker)
                     displaced.rename(database)
+                decoy_descriptors.append(os.open(database, os.O_RDWR | os.O_NOFOLLOW))
+                return connection
 
-            with (
-                patch.object(
+            try:
+                with patch.object(
                     sqlite_safety.sqlite3,
                     "connect",
                     side_effect=connect_while_redirected,
-                ),
-                self.assertRaisesRegex(ConfigurationError, "exactly one pinned"),
-            ):
-                store.claim(
-                    name="must-not-be-redirected",
-                    scheduled_at=scheduled,
-                    started_at=scheduled,
+                ):
+                    claim_token = store.claim(
+                        name="must-not-be-redirected",
+                        scheduled_at=scheduled,
+                        started_at=scheduled,
+                    )
+                self.assertIsNotNone(claim_token)
+                store.close()
+                self.assertTrue(
+                    all(os.fstat(descriptor).st_ino for descriptor in decoy_descriptors)
                 )
+            finally:
+                for descriptor in decoy_descriptors:
+                    os.close(descriptor)
 
             self.assertEqual(attacker.read_bytes(), b"")
-            self.assertFalse(database.exists())
+            self.assertEqual(_recurring_run_count(database), 1)
 
     def test_scope_and_recipient_allowlists_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

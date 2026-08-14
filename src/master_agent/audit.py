@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator, Mapping
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -14,8 +14,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from master_agent.errors import StructuredDataTypeError
-from master_agent.sqlite_safety import PinnedSQLiteDatabase
+from master_agent.errors import ConfigurationError, StructuredDataTypeError
+from master_agent.sqlite_safety import (
+    PinnedSQLiteDatabase,
+    readonly_snapshot_connection,
+)
 
 
 class IdempotencyClaimState(StrEnum):
@@ -364,17 +367,10 @@ class AuditLog:
     def verify_existing(cls, database: Path) -> tuple[bool, str]:
         """Verify an existing database without creating or modifying it."""
 
-        if database.is_symlink():
-            return False, "audit database must not be a symbolic link"
-        if not database.exists():
-            return False, f"audit database does not exist: {database}"
-        if not database.is_file():
-            return False, f"audit database is not a regular file: {database}"
         try:
-            uri = database.resolve().as_uri() + "?mode=ro"
-            with closing(sqlite3.connect(uri, uri=True)) as connection:
+            with readonly_snapshot_connection(database) as connection:
                 return cls._verify_connection(connection)
-        except sqlite3.Error as error:
+        except (ConfigurationError, OSError, sqlite3.Error) as error:
             return False, f"audit database could not be verified: {error}"
 
     @staticmethod

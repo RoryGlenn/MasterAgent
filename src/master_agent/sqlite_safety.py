@@ -1,8 +1,11 @@
-"""Identity-pinned SQLite connections for trusted local runtime state."""
+"""Race-safe SQLite snapshots for trusted local runtime state."""
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
+import secrets
 import sqlite3
 import stat
 import weakref
@@ -14,7 +17,10 @@ from threading import RLock
 
 from master_agent.errors import ConfigurationError
 
-_SQLITE_CONNECT_LOCK = RLock()
+_DIGEST_BYTES = 32
+_DIGEST_HEX_LENGTH = _DIGEST_BYTES * 2
+_LOCK_SUFFIX = ".master-agent.lock"
+_MAX_LEDGER_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,84 +49,148 @@ class _FileIdentity:
         return self == self.from_stat(value)
 
 
-class PinnedSQLiteDatabase:
-    """One persistent SQLite handle bound to a validated path identity.
+@dataclass(frozen=True, slots=True)
+class _Generation:
+    """One validated on-disk SQLite generation."""
 
-    The persistent connection is important: validating a path and then opening a
-    new SQLite connection on every operation would leave a rebinding window
-    between those two steps. Once this object has connected and post-validated
-    the path, later operations use only that already-open database handle. A
-    per-operation identity check fails closed if the configured path no longer
-    names the same database.
+    content: bytes
+    digest: str
+    identity: _FileIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _GenerationRef:
+    """Ledger-safe identity of one immutable database generation."""
+
+    digest: str
+    device: int
+    inode: int
+
+    @classmethod
+    def from_generation(cls, generation: _Generation) -> _GenerationRef:
+        """Build a ledger reference from one securely-opened generation."""
+
+        return cls(
+            digest=generation.digest,
+            device=generation.identity.device,
+            inode=generation.identity.inode,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerState:
+    """Last durable generation and any interrupted replacement."""
+
+    committed: _GenerationRef
+    pending_old: _GenerationRef | None = None
+    pending_new: _GenerationRef | None = None
+
+
+class PinnedSQLiteDatabase:
+    """SQLite state serialized through a pinned directory and stable lock.
+
+    SQLite's standard Python API can open only pathnames, not an already
+    validated file descriptor. Reopening the public path would reintroduce a
+    substitution race. This class therefore executes SQL in memory and persists
+    ordinary SQLite bytes as same-directory, fsynced, atomic generations.
+
+    A retained lock-file descriptor serializes independent instances. Its small
+    append-only ledger binds the approved database name to a content digest and
+    makes the prepare/replace/commit crash windows deterministic on restart.
     """
 
     def __init__(self, path: Path) -> None:
         self._path = Path(os.path.abspath(os.fspath(path)))
         self._parent = self._path.parent
+        self._name = self._path.name
+        self._lock_name = f".{self._name}{_LOCK_SUFFIX}"
         self._lock = RLock()
-        self._created = False
         self._active_context = False
         self._poisoned = False
+        self._created = False
+        self._lock_created = False
 
         parent_descriptor = _open_trusted_parent(self._parent, create=True)
+        lock_descriptor: int | None = None
+        database_descriptor: int | None = None
+        database_identity: _FileIdentity | None = None
         try:
-            parent_stat = os.fstat(parent_descriptor)
-            self._parent_identity = _validated_parent_identity(parent_stat)
-            database_descriptor, self._created = _open_database_file(
+            self._parent_identity = _validated_parent_identity(
+                os.fstat(parent_descriptor)
+            )
+            lock_descriptor, self._lock_created = _open_lock_file(
                 parent_descriptor,
-                self._path.name,
+                self._lock_name,
+                create=True,
             )
-            try:
-                database_stat = os.fstat(database_descriptor)
-                self._database_identity = _validated_database_identity(database_stat)
-            except BaseException:
-                os.close(database_descriptor)
-                raise
-        finally:
-            os.close(parent_descriptor)
-
-        connection: sqlite3.Connection | None = None
-        try:
-            self._validate_path_identity()
-            connection, sqlite_descriptor = _connect_verified_database(
-                self._path,
-                self._database_identity,
-                database_descriptor,
+            self._lock_identity = _validated_state_file_identity(
+                os.fstat(lock_descriptor),
+                label="SQLite state lock",
             )
-            # Post-validation happens before schema creation, migration, or any
-            # other SQL write can occur through this handle.
-            self._validate_path_identity()
-            connection.execute("PRAGMA busy_timeout = 30000")
+            with (
+                _file_lock(parent_descriptor, exclusive=True),
+                _file_lock(lock_descriptor, exclusive=True),
+            ):
+                database_descriptor, self._created = _open_database_file(
+                    parent_descriptor,
+                    self._name,
+                    create=True,
+                )
+                database_identity = _validated_state_file_identity(
+                    os.fstat(database_descriptor),
+                    label="SQLite state database",
+                )
+                generation = _read_generation(database_descriptor)
+                _reject_sqlite_sidecars(parent_descriptor, self._name)
+                _reconcile_ledger(
+                    lock_descriptor,
+                    _GenerationRef.from_generation(generation),
+                )
         except BaseException:
-            if connection is not None:
-                _close_sqlite_connection(connection)
-            try:
+            if database_descriptor is not None:
                 os.close(database_descriptor)
-            except OSError:
-                pass
             if self._created:
-                self._remove_created_file()
+                _unlink_if_identity(
+                    parent_descriptor,
+                    self._name,
+                    database_identity,
+                )
+            if lock_descriptor is not None:
+                os.close(lock_descriptor)
+            if self._lock_created:
+                _unlink_if_identity(
+                    parent_descriptor,
+                    self._lock_name,
+                    self._lock_identity if hasattr(self, "_lock_identity") else None,
+                )
+            os.close(parent_descriptor)
             raise
-        self._database_descriptor = database_descriptor
-        self._sqlite_descriptor = sqlite_descriptor
-        self._connection = connection
+        finally:
+            if database_descriptor is not None:
+                try:
+                    os.close(database_descriptor)
+                except OSError:
+                    pass
+
+        self._parent_descriptor = parent_descriptor
+        self._lock_descriptor = lock_descriptor
         self._finalizer = weakref.finalize(
             self,
-            _close_resources,
-            connection,
-            database_descriptor,
+            _close_descriptors,
+            parent_descriptor,
+            lock_descriptor,
             self._lock,
         )
 
     @property
     def created(self) -> bool:
-        """Return whether this object securely created the database file."""
+        """Return whether this object securely created the initial database."""
 
         return self._created
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """Yield the pinned connection after revalidating its public path."""
+        """Yield an isolated in-memory transaction over the latest generation."""
 
         with self._lock:
             if self._poisoned or not self._finalizer.alive:
@@ -128,137 +198,294 @@ class PinnedSQLiteDatabase:
             if self._active_context:
                 raise RuntimeError("nested SQLite state database contexts are unsafe")
             self._active_context = True
+            connection: sqlite3.Connection | None = None
             try:
-                self._validate_path_identity()
-                self._validate_sqlite_descriptor()
-                try:
-                    yield self._connection
-                except BaseException as error:
-                    self._rollback_or_poison(error)
-                    raise
-                try:
-                    # Revalidate after the caller's SQL and before the one
-                    # commit point owned by this context manager.
-                    self._validate_path_identity()
-                    self._validate_sqlite_descriptor()
-                    self._connection.commit()
-                except BaseException as error:
-                    self._rollback_or_poison(error)
-                    raise
+                with (
+                    _file_lock(self._parent_descriptor, exclusive=True),
+                    _file_lock(self._lock_descriptor, exclusive=True),
+                ):
+                    self._validate_fixed_paths()
+                    generation = self._load_current_generation()
+                    connection = _memory_connection(generation.content)
+                    try:
+                        yield connection
+                    except BaseException as error:
+                        self._rollback_memory_connection(connection, error)
+                        raise
+                    connection.commit()
+                    updated = _serialize_connection(connection)
+                    if _digest(updated) != generation.digest:
+                        self._persist_generation(generation, updated)
             finally:
+                if connection is not None:
+                    _close_sqlite_connection(connection)
                 self._active_context = False
 
     def close(self, *, remove_created: bool = False) -> None:
-        """Close the handle and optionally remove its securely-created file."""
+        """Close retained descriptors and optionally remove created state."""
 
         with self._lock:
-            self._finalizer()
-            if remove_created and self._created:
-                self._remove_created_file()
+            try:
+                if remove_created and self._created and self._finalizer.alive:
+                    with (
+                        _file_lock(self._parent_descriptor, exclusive=True),
+                        _file_lock(self._lock_descriptor, exclusive=True),
+                    ):
+                        try:
+                            self._validate_fixed_paths()
+                            generation = self._load_current_generation()
+                        except (ConfigurationError, OSError):
+                            pass
+                        else:
+                            removed = _unlink_if_identity(
+                                self._parent_descriptor,
+                                self._name,
+                                generation.identity,
+                            )
+                            if removed and self._lock_created:
+                                _unlink_if_identity(
+                                    self._parent_descriptor,
+                                    self._lock_name,
+                                    self._lock_identity,
+                                )
+                            if removed:
+                                os.fsync(self._parent_descriptor)
+            finally:
+                self._finalizer()
 
-    def _rollback_or_poison(self, original_error: BaseException) -> None:
-        """Rollback a failed context, permanently closing on rollback failure."""
+    def _rollback_memory_connection(
+        self,
+        connection: sqlite3.Connection,
+        original_error: BaseException,
+    ) -> None:
+        """Rollback an abandoned memory transaction or poison this instance."""
 
         try:
-            self._connection.rollback()
+            connection.rollback()
         except BaseException as rollback_error:  # noqa: BLE001
             self._poisoned = True
-            self._finalizer()
             original_error.add_note(
-                "SQLite rollback failed; the state database connection was closed "
+                "SQLite rollback failed; the state database instance was poisoned "
                 f"({type(rollback_error).__name__})"
             )
 
-    def _validate_sqlite_descriptor(self) -> None:
-        """Verify SQLite still owns the descriptor proven at construction."""
+    def _validate_fixed_paths(self) -> None:
+        """Verify the public parent and stable lock still name pinned objects."""
 
+        parent_stat = os.fstat(self._parent_descriptor)
+        _validated_parent_identity(parent_stat)
+        if not self._parent_identity.matches(parent_stat):
+            raise ConfigurationError("SQLite state database parent identity changed")
+        path_stat = self._parent.lstat()
+        if not self._parent_identity.matches(path_stat):
+            raise ConfigurationError("SQLite state database parent path was replaced")
+
+        lock_stat = os.fstat(self._lock_descriptor)
+        _validated_state_file_identity(lock_stat, label="SQLite state lock")
+        if not self._lock_identity.matches(lock_stat):
+            raise ConfigurationError("SQLite state lock descriptor identity changed")
         try:
-            trusted_value = os.fstat(self._database_descriptor)
-            sqlite_value = os.fstat(self._sqlite_descriptor)
+            public_lock = os.stat(
+                self._lock_name,
+                dir_fd=self._parent_descriptor,
+                follow_symlinks=False,
+            )
         except OSError as error:
-            self._poisoned = True
-            self._finalizer()
-            raise RuntimeError("SQLite state database descriptor was lost") from error
+            raise ConfigurationError("SQLite state lock path was replaced") from error
+        if not self._lock_identity.matches(public_lock):
+            raise ConfigurationError("SQLite state lock path was replaced")
+
+    def _load_current_generation(self) -> _Generation:
+        """Read the approved generation and reconcile an interrupted replace."""
+
+        _reject_sqlite_sidecars(self._parent_descriptor, self._name)
+        descriptor, _ = _open_database_file(
+            self._parent_descriptor,
+            self._name,
+            create=False,
+        )
         try:
-            _validated_database_identity(trusted_value)
-            _validated_database_identity(sqlite_value)
-        except ConfigurationError:
-            self._poisoned = True
-            self._finalizer()
+            generation = _read_generation(descriptor)
+        finally:
+            os.close(descriptor)
+        _reconcile_ledger(
+            self._lock_descriptor,
+            _GenerationRef.from_generation(generation),
+        )
+        return generation
+
+    def _persist_generation(self, previous: _Generation, updated: bytes) -> None:
+        """Atomically replace exactly the generation reviewed by this context."""
+
+        updated_digest = _digest(updated)
+        temp_name = f".{self._name}.tmp-{secrets.token_hex(16)}"
+        temp_descriptor = os.open(
+            temp_name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | _no_follow_flag(),
+            0o600,
+            dir_fd=self._parent_descriptor,
+        )
+        temp_identity: _FileIdentity | None = None
+        replaced = False
+        prepared = False
+        try:
+            temp_identity = _validated_state_file_identity(
+                os.fstat(temp_descriptor),
+                label="SQLite state temporary generation",
+            )
+            _write_descriptor(temp_descriptor, updated)
+            os.fsync(temp_descriptor)
+            if _digest(_read_descriptor(temp_descriptor)) != updated_digest:
+                raise OSError("SQLite state temporary generation verification failed")
+
+            self._validate_fixed_paths()
+            current = self._read_generation_without_reconciliation()
+            if current.digest != previous.digest or not current.identity.matches(
+                os.stat(
+                    self._name,
+                    dir_fd=self._parent_descriptor,
+                    follow_symlinks=False,
+                )
+            ):
+                raise ConfigurationError(
+                    "SQLite state database generation changed before commit"
+                )
+            previous_ref = _GenerationRef.from_generation(previous)
+            updated_ref = _GenerationRef(
+                digest=updated_digest,
+                device=temp_identity.device,
+                inode=temp_identity.inode,
+            )
+            ledger = _parse_ledger(self._lock_descriptor)
+            if ledger.pending_new is not None or ledger.committed != previous_ref:
+                raise ConfigurationError(
+                    "SQLite state ledger changed before database commit"
+                )
+
+            _append_ledger_record(
+                self._lock_descriptor,
+                f"P {_format_ref(previous_ref)} {_format_ref(updated_ref)}\n",
+            )
+            prepared = True
+
+            # Recheck after PREPARE. A swap after this check is atomically
+            # replaced as a directory entry; no attacker-selected inode is
+            # opened or written.
+            current = self._read_generation_without_reconciliation()
+            if current.digest != previous.digest:
+                raise ConfigurationError(
+                    "SQLite state database generation changed during commit"
+                )
+            os.replace(
+                temp_name,
+                self._name,
+                src_dir_fd=self._parent_descriptor,
+                dst_dir_fd=self._parent_descriptor,
+            )
+            replaced = True
+            os.fsync(self._parent_descriptor)
+
+            committed = self._read_generation_without_reconciliation()
+            if _GenerationRef.from_generation(committed) != updated_ref:
+                raise ConfigurationError(
+                    "SQLite state database replacement could not be verified"
+                )
+            _append_ledger_record(
+                self._lock_descriptor,
+                f"C {_format_ref(updated_ref)}\n",
+            )
+        except BaseException:
+            if prepared:
+                # PREPARE may be durable or replacement may have occurred. A
+                # fresh instance must reconcile exact old/new generations.
+                self._poisoned = True
             raise
-        if not _same_regular_file(
-            trusted_value, self._database_identity
-        ) or not _same_regular_file(sqlite_value, self._database_identity):
-            self._poisoned = True
-            self._finalizer()
-            raise RuntimeError("SQLite state database descriptor identity changed")
-
-    def _validate_path_identity(self) -> None:
-        """Verify the parent and database path still name the pinned objects."""
-
-        with _SQLITE_CONNECT_LOCK:
-            self._validate_path_identity_locked()
-
-    def _validate_path_identity_locked(self) -> None:
-        """Validate a path while no sibling state-db fd can be opened."""
-
-        parent_descriptor = _open_trusted_parent(self._parent, create=False)
-        try:
-            parent_stat = os.fstat(parent_descriptor)
-            _validated_parent_identity(parent_stat)
-            if not self._parent_identity.matches(parent_stat):
-                raise ConfigurationError(
-                    "SQLite state database parent identity changed"
-                )
-            try:
-                database_descriptor = os.open(
-                    self._path.name,
-                    os.O_RDWR | _no_follow_flag(),
-                    dir_fd=parent_descriptor,
-                )
-            except OSError as error:
-                raise ConfigurationError(
-                    "SQLite state database must remain a regular no-follow file"
-                ) from error
-            try:
-                database_stat = os.fstat(database_descriptor)
-                _validated_database_identity(database_stat)
-                if not self._database_identity.matches(database_stat):
-                    raise ConfigurationError("SQLite state database identity changed")
-                path_stat = os.stat(
-                    self._path.name,
-                    dir_fd=parent_descriptor,
-                    follow_symlinks=False,
-                )
-                if not self._database_identity.matches(path_stat):
-                    raise ConfigurationError("SQLite state database path was replaced")
-            finally:
-                os.close(database_descriptor)
         finally:
-            os.close(parent_descriptor)
-
-    def _remove_created_file(self) -> None:
-        """Remove only the exact file created by this object."""
-
-        try:
-            parent_descriptor = _open_trusted_parent(self._parent, create=False)
-        except ConfigurationError:
-            return
-        try:
-            if not self._parent_identity.matches(os.fstat(parent_descriptor)):
-                return
-            try:
-                path_stat = os.stat(
-                    self._path.name,
-                    dir_fd=parent_descriptor,
-                    follow_symlinks=False,
+            os.close(temp_descriptor)
+            if not replaced and temp_identity is not None:
+                _unlink_if_identity(
+                    self._parent_descriptor,
+                    temp_name,
+                    temp_identity,
                 )
-            except FileNotFoundError:
-                return
-            if self._database_identity.matches(path_stat):
-                os.unlink(self._path.name, dir_fd=parent_descriptor)
+
+    def _read_generation_without_reconciliation(self) -> _Generation:
+        """Read the current path through the retained trusted directory."""
+
+        descriptor, _ = _open_database_file(
+            self._parent_descriptor,
+            self._name,
+            create=False,
+        )
+        try:
+            return _read_generation(descriptor)
         finally:
-            os.close(parent_descriptor)
+            os.close(descriptor)
+
+
+@contextmanager
+def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Open an existing stable generation without creating or modifying it."""
+
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    parent = absolute.parent
+    parent_descriptor = _open_trusted_parent(parent, create=False)
+    lock_descriptor: int | None = None
+    database_descriptor: int | None = None
+    connection: sqlite3.Connection | None = None
+    try:
+        # Preserve a precise missing/unsafe database error without creating the
+        # stable ledger. The generation used below is reopened under its lock.
+        probe_descriptor, _ = _open_database_file(
+            parent_descriptor,
+            absolute.name,
+            create=False,
+            writable=False,
+        )
+        os.close(probe_descriptor)
+        lock_name = f".{absolute.name}{_LOCK_SUFFIX}"
+        try:
+            lock_descriptor, _ = _open_lock_file(
+                parent_descriptor,
+                lock_name,
+                create=False,
+                writable=False,
+            )
+        except FileNotFoundError as error:
+            raise ConfigurationError(
+                "SQLite state database has no trusted lock ledger"
+            ) from error
+        with (
+            _file_lock(parent_descriptor, exclusive=False),
+            _file_lock(lock_descriptor, exclusive=False),
+        ):
+            database_descriptor, _ = _open_database_file(
+                parent_descriptor,
+                absolute.name,
+                create=False,
+                writable=False,
+            )
+            generation = _read_generation(database_descriptor)
+            _reject_sqlite_sidecars(parent_descriptor, absolute.name)
+            ledger = _parse_ledger(lock_descriptor)
+            if ledger.pending_new is not None:
+                raise ConfigurationError(
+                    "SQLite state database has an interrupted replacement"
+                )
+            if ledger.committed != _GenerationRef.from_generation(generation):
+                raise ConfigurationError(
+                    "SQLite state database content identity changed"
+                )
+            connection = _memory_connection(generation.content)
+            yield connection
+    finally:
+        if connection is not None:
+            _close_sqlite_connection(connection)
+        if database_descriptor is not None:
+            os.close(database_descriptor)
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+        os.close(parent_descriptor)
 
 
 def path_entry_exists(path: Path) -> bool:
@@ -271,100 +498,50 @@ def path_entry_exists(path: Path) -> bool:
     return True
 
 
-def _connect_verified_database(
-    path: Path,
-    identity: _FileIdentity,
-    trusted_descriptor: int,
-) -> tuple[sqlite3.Connection, int]:
-    """Connect and prove SQLite opened exactly the securely-pinned inode."""
+@contextmanager
+def _file_lock(descriptor: int, *, exclusive: bool) -> Iterator[None]:
+    """Hold an advisory whole-file lock across one snapshot transaction."""
 
-    with _SQLITE_CONNECT_LOCK:
-        before = _snapshot_live_descriptors()
-        trusted_stat = before.get(trusted_descriptor)
-        if trusted_stat is None or not _same_regular_file(trusted_stat, identity):
-            raise ConfigurationError("trusted SQLite database descriptor was lost")
-        connection: sqlite3.Connection | None = None
-        try:
-            # Do not execute SQL until the descriptor opened by sqlite3.connect
-            # has been identified and matched to the independently pinned file.
-            connection = sqlite3.connect(
-                path.as_uri() + "?mode=rw",
-                uri=True,
-                timeout=30.0,
-                check_same_thread=False,
-            )
-            after = _snapshot_live_descriptors()
-            matching = [
-                descriptor
-                for descriptor, value in after.items()
-                if _descriptor_is_new(descriptor, value, before)
-                and _same_regular_file(value, identity)
-            ]
-            if len(matching) != 1:
-                raise ConfigurationError(
-                    "SQLite connection did not open exactly one pinned database "
-                    "descriptor"
-                )
-            return connection, matching[0]
-        except BaseException:
-            if connection is not None:
-                _close_sqlite_connection(connection)
-            raise
-
-
-def _snapshot_live_descriptors() -> dict[int, os.stat_result]:
-    """Snapshot currently-live descriptors without retaining the scan handle."""
-
-    descriptor_root = (
-        Path("/proc/self/fd") if Path("/proc/self/fd").is_dir() else Path("/dev/fd")
-    )
-    if not descriptor_root.is_dir():
-        raise ConfigurationError("live file-descriptor inspection is unavailable")
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
     try:
-        entries = os.listdir(descriptor_root)
+        fcntl.flock(descriptor, operation)
     except OSError as error:
-        raise ConfigurationError(
-            "live file descriptors could not be inspected"
-        ) from error
-    snapshot: dict[int, os.stat_result] = {}
-    for entry in entries:
+        raise ConfigurationError("SQLite state lock could not be acquired") from error
+    try:
+        yield
+    finally:
         try:
-            descriptor = int(entry)
-            value = os.fstat(descriptor)
-        except (OSError, ValueError):
-            # The directory-enumeration descriptor is closed by os.listdir
-            # before this loop, and concurrent unrelated closes fail closed if
-            # they affect the pinned descriptor proof.
-            continue
-        snapshot[descriptor] = value
-    return snapshot
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except OSError:
+            pass
 
 
-def _descriptor_is_new(
-    descriptor: int,
-    value: os.stat_result,
-    before: dict[int, os.stat_result],
-) -> bool:
-    """Return whether a descriptor number or its underlying object is new."""
+def _memory_connection(content: bytes) -> sqlite3.Connection:
+    """Create an isolated connection from ordinary serialized SQLite bytes."""
 
-    previous = before.get(descriptor)
-    if previous is None:
-        return True
-    return (
-        previous.st_dev != value.st_dev
-        or previous.st_ino != value.st_ino
-        or stat.S_IFMT(previous.st_mode) != stat.S_IFMT(value.st_mode)
-    )
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    try:
+        if content:
+            connection.deserialize(content)
+            row = connection.execute("PRAGMA quick_check").fetchone()
+            if row is None or str(row[0]).casefold() != "ok":
+                raise ConfigurationError("SQLite state database integrity check failed")
+        connection.execute("PRAGMA temp_store = MEMORY")
+        return connection
+    except BaseException:
+        _close_sqlite_connection(connection)
+        raise
 
 
-def _same_regular_file(value: os.stat_result, identity: _FileIdentity) -> bool:
-    """Return whether a descriptor is a regular file with the pinned inode."""
+def _serialize_connection(connection: sqlite3.Connection) -> bytes:
+    """Serialize a memory database, treating a schema-free database as empty."""
 
-    return (
-        stat.S_ISREG(value.st_mode)
-        and value.st_dev == identity.device
-        and value.st_ino == identity.inode
-    )
+    try:
+        return bytes(connection.serialize())
+    except sqlite3.OperationalError as error:
+        if "unable to serialize" in str(error).casefold():
+            return b""
+        raise
 
 
 def _open_trusted_parent(path: Path, *, create: bool) -> int:
@@ -397,66 +574,351 @@ def _open_trusted_parent(path: Path, *, create: bool) -> int:
             raise ConfigurationError(
                 "SQLite state database parent changed while it was opened"
             )
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         raise
     return descriptor
 
 
-def _open_database_file(parent_descriptor: int, name: str) -> tuple[int, bool]:
-    """Create or open a database through the already-validated parent handle."""
+def _open_lock_file(
+    parent_descriptor: int,
+    name: str,
+    *,
+    create: bool,
+    writable: bool = True,
+) -> tuple[int, bool]:
+    """Open or securely create the stable transaction lock and ledger."""
 
-    with _SQLITE_CONNECT_LOCK:
-        return _open_database_file_locked(parent_descriptor, name)
-
-
-def _open_database_file_locked(parent_descriptor: int, name: str) -> tuple[int, bool]:
-    """Open one state DB while descriptor snapshots are excluded."""
-
-    flags = os.O_RDWR | _no_follow_flag()
+    flags = (os.O_RDWR if writable else os.O_RDONLY) | _no_follow_flag()
     created = False
+    opened_identity: _FileIdentity | None = None
+    if create:
+        try:
+            descriptor = os.open(
+                name,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            created = True
+        except FileExistsError:
+            descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    else:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
     try:
-        descriptor = os.open(
-            name,
-            flags | os.O_CREAT | os.O_EXCL,
-            0o600,
-            dir_fd=parent_descriptor,
+        opened_identity = _FileIdentity.from_stat(os.fstat(descriptor))
+        _validated_state_file_identity(
+            os.fstat(descriptor),
+            label="SQLite state lock",
         )
-        created = True
-    except FileExistsError:
+        if created:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            os.fsync(parent_descriptor)
+    except BaseException:
+        os.close(descriptor)
+        if created:
+            _unlink_if_identity(parent_descriptor, name, opened_identity)
+        raise
+    return descriptor, created
+
+
+def _open_database_file(
+    parent_descriptor: int,
+    name: str,
+    *,
+    create: bool,
+    writable: bool = True,
+) -> tuple[int, bool]:
+    """Open or securely create one approved SQLite generation."""
+
+    flags = (os.O_RDWR if writable else os.O_RDONLY) | _no_follow_flag()
+    created = False
+    opened_identity: _FileIdentity | None = None
+    if create:
+        try:
+            descriptor = os.open(
+                name,
+                flags | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            created = True
+        except FileExistsError:
+            descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    else:
         try:
             descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+        except FileNotFoundError as error:
+            raise ConfigurationError("SQLite state database does not exist") from error
         except OSError as error:
             raise ConfigurationError(
                 "SQLite state database must be a regular no-follow file"
             ) from error
-    except OSError as error:
-        raise ConfigurationError(
-            "SQLite state database could not be created safely"
-        ) from error
     try:
         value = os.fstat(descriptor)
-        if not stat.S_ISREG(value.st_mode):
-            raise ConfigurationError("SQLite state database must be a regular file")
-        if value.st_nlink != 1:
+        opened_identity = _FileIdentity.from_stat(value)
+        _validate_regular_owned_single_link(value, label="SQLite state database")
+        if created or create:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            if created:
+                os.fsync(parent_descriptor)
+        elif stat.S_IMODE(value.st_mode) != 0o600:
             raise ConfigurationError(
-                "SQLite state database must have exactly one hard link"
+                "SQLite state database permissions must remain 0600"
             )
-        if value.st_uid != os.getuid():
-            raise ConfigurationError(
-                "SQLite state database must be owned by the current account"
-            )
-        os.fchmod(descriptor, 0o600)
-        os.fsync(descriptor)
-    except Exception:
+    except BaseException:
         os.close(descriptor)
         if created:
-            try:
-                os.unlink(name, dir_fd=parent_descriptor)
-            except OSError:
-                pass
+            _unlink_if_identity(parent_descriptor, name, opened_identity)
         raise
     return descriptor, created
+
+
+def _read_generation(descriptor: int) -> _Generation:
+    """Read one immutable snapshot from a validated open descriptor."""
+
+    value = os.fstat(descriptor)
+    identity = _validated_state_file_identity(
+        value,
+        label="SQLite state database",
+    )
+    content = _read_descriptor(descriptor)
+    return _Generation(content=content, digest=_digest(content), identity=identity)
+
+
+def _read_descriptor(descriptor: int) -> bytes:
+    """Read all bytes without sharing or changing the descriptor offset."""
+
+    size = os.fstat(descriptor).st_size
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < size:
+        chunk = os.pread(descriptor, min(1024 * 1024, size - offset), offset)
+        if not chunk:
+            raise OSError("SQLite state database ended during a locked read")
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
+
+
+def _write_descriptor(descriptor: int, content: bytes) -> None:
+    """Replace one temporary descriptor's bytes before it becomes public."""
+
+    os.ftruncate(descriptor, 0)
+    offset = 0
+    while offset < len(content):
+        written = os.pwrite(descriptor, content[offset:], offset)
+        if written <= 0:
+            raise OSError("SQLite state temporary generation write stalled")
+        offset += written
+    os.ftruncate(descriptor, len(content))
+
+
+def _digest(content: bytes) -> str:
+    """Return the ledger identity for serialized SQLite bytes."""
+
+    return hashlib.sha256(content).hexdigest()
+
+
+def _parse_ledger(descriptor: int) -> _LedgerState:
+    """Strictly parse a complete append-only generation ledger."""
+
+    raw = _read_descriptor(descriptor)
+    if len(raw) > _MAX_LEDGER_BYTES:
+        raise ConfigurationError("SQLite state ledger exceeds its safety limit")
+    if raw and not raw.endswith(b"\n"):
+        raise ConfigurationError("SQLite state ledger has a torn tail")
+    return _parse_complete_ledger(raw)
+
+
+def _parse_complete_ledger(raw: bytes) -> _LedgerState:
+    """Parse ledger bytes already proven to end at a record boundary."""
+
+    committed: _GenerationRef | None = None
+    pending_old: _GenerationRef | None = None
+    pending_new: _GenerationRef | None = None
+    try:
+        lines = raw.decode("ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise ConfigurationError("SQLite state ledger is malformed") from error
+    for line in lines:
+        parts = line.split(" ")
+        if len(parts) == 4 and parts[0] == "C":
+            value = _parse_ref(parts[1:])
+            if committed is None and pending_new is None:
+                committed = value
+            elif pending_new == value:
+                committed = value
+                pending_old = None
+                pending_new = None
+            else:
+                raise ConfigurationError("SQLite state ledger commit is inconsistent")
+        elif len(parts) == 7 and parts[0] == "P" and pending_new is None:
+            old = _parse_ref(parts[1:4])
+            new = _parse_ref(parts[4:7])
+            if committed != old:
+                raise ConfigurationError("SQLite state ledger prepare is inconsistent")
+            pending_old = old
+            pending_new = new
+        elif len(parts) == 4 and parts[0] == "A":
+            aborted = _parse_ref(parts[1:])
+            if pending_old != aborted:
+                raise ConfigurationError("SQLite state ledger abort is inconsistent")
+            pending_old = None
+            pending_new = None
+        else:
+            raise ConfigurationError("SQLite state ledger is malformed")
+    if committed is None:
+        raise ConfigurationError("SQLite state ledger is empty")
+    return _LedgerState(
+        committed=committed,
+        pending_old=pending_old,
+        pending_new=pending_new,
+    )
+
+
+def _reconcile_ledger(
+    descriptor: int,
+    current: _GenerationRef,
+) -> _LedgerState:
+    """Resolve only the two outcomes of a prepared atomic replacement."""
+
+    if os.fstat(descriptor).st_size == 0:
+        _append_ledger_record(descriptor, f"C {_format_ref(current)}\n")
+    _recover_proven_torn_tail(descriptor, current)
+    state = _parse_ledger(descriptor)
+    if state.pending_new is not None:
+        if current == state.pending_new:
+            _append_ledger_record(descriptor, f"C {_format_ref(current)}\n")
+        elif current == state.pending_old:
+            _append_ledger_record(descriptor, f"A {_format_ref(current)}\n")
+        else:
+            raise ConfigurationError(
+                "SQLite state database does not match either prepared generation"
+            )
+        state = _parse_ledger(descriptor)
+    if state.committed != current:
+        raise ConfigurationError("SQLite state database content identity changed")
+    return state
+
+
+def _recover_proven_torn_tail(
+    descriptor: int,
+    current: _GenerationRef,
+) -> None:
+    """Truncate only a tail consistent with the exact durable crash phase."""
+
+    raw = _read_descriptor(descriptor)
+    if not raw or raw.endswith(b"\n"):
+        return
+    complete_length = raw.rfind(b"\n") + 1
+    complete = raw[:complete_length]
+    tail = raw[complete_length:]
+    state = _parse_complete_ledger(complete)
+    if state.pending_new is None:
+        expected_prefix = f"P {_format_ref(state.committed)} ".encode("ascii")
+        plausible = current == state.committed and (
+            expected_prefix.startswith(tail)
+            or (
+                tail.startswith(expected_prefix)
+                and _plausible_partial_reference(tail[len(expected_prefix) :])
+            )
+        )
+    elif current == state.pending_new:
+        expected = f"C {_format_ref(state.pending_new)}".encode("ascii")
+        plausible = expected.startswith(tail)
+    elif current == state.pending_old:
+        expected = f"A {_format_ref(state.pending_old)}".encode("ascii")
+        plausible = expected.startswith(tail)
+    else:
+        plausible = False
+    if not plausible:
+        raise ConfigurationError("SQLite state ledger has an unprovable torn tail")
+    os.ftruncate(descriptor, complete_length)
+    os.fsync(descriptor)
+
+
+def _plausible_partial_reference(value: bytes) -> bool:
+    """Return whether bytes can be a prefix of one digest/device/inode tuple."""
+
+    try:
+        text = value.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    if len(text) > _DIGEST_HEX_LENGTH + 1 + 20 + 1 + 20:
+        return False
+    parts = text.split(" ")
+    if len(parts) > 3:
+        return False
+    if parts and any(character not in "0123456789abcdef" for character in parts[0]):
+        return False
+    if parts and len(parts[0]) > _DIGEST_HEX_LENGTH:
+        return False
+    return all(part.isdigit() for part in parts[1:] if part)
+
+
+def _append_ledger_record(descriptor: int, record: str) -> None:
+    """Durably append one complete ASCII ledger transition."""
+
+    payload = record.encode("ascii")
+    offset = os.fstat(descriptor).st_size
+    written = 0
+    while written < len(payload):
+        count = os.pwrite(descriptor, payload[written:], offset + written)
+        if count <= 0:
+            raise OSError("SQLite state ledger append stalled")
+        written += count
+    os.fsync(descriptor)
+
+
+def _is_digest(value: str) -> bool:
+    """Return whether a ledger field is one lowercase SHA-256 digest."""
+
+    return len(value) == _DIGEST_HEX_LENGTH and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
+def _format_ref(reference: _GenerationRef) -> str:
+    """Serialize one generation reference into three ASCII ledger fields."""
+
+    return f"{reference.digest} {reference.device} {reference.inode}"
+
+
+def _parse_ref(fields: list[str]) -> _GenerationRef:
+    """Parse one strict generation reference from ledger fields."""
+
+    if len(fields) != 3 or not _is_digest(fields[0]):
+        raise ConfigurationError("SQLite state ledger reference is malformed")
+    try:
+        device = int(fields[1])
+        inode = int(fields[2])
+    except ValueError as error:
+        raise ConfigurationError(
+            "SQLite state ledger reference is malformed"
+        ) from error
+    if device < 0 or inode <= 0:
+        raise ConfigurationError("SQLite state ledger reference is malformed")
+    return _GenerationRef(digest=fields[0], device=device, inode=inode)
+
+
+def _reject_sqlite_sidecars(parent_descriptor: int, name: str) -> None:
+    """Fail closed rather than ignore a legacy hot journal or WAL."""
+
+    for suffix in ("-journal", "-wal", "-shm"):
+        try:
+            os.stat(
+                name + suffix,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            continue
+        raise ConfigurationError(
+            f"SQLite state database has an unsupported sidecar: {suffix}"
+        )
 
 
 def _validated_parent_identity(value: os.stat_result) -> _FileIdentity:
@@ -476,22 +938,49 @@ def _validated_parent_identity(value: os.stat_result) -> _FileIdentity:
     return _FileIdentity.from_stat(value)
 
 
-def _validated_database_identity(value: os.stat_result) -> _FileIdentity:
-    """Validate and capture a private regular database-file identity."""
+def _validated_state_file_identity(
+    value: os.stat_result,
+    *,
+    label: str,
+) -> _FileIdentity:
+    """Validate and capture one private regular state-file identity."""
+
+    _validate_regular_owned_single_link(value, label=label)
+    if stat.S_IMODE(value.st_mode) != 0o600:
+        raise ConfigurationError(f"{label} permissions must remain 0600")
+    return _FileIdentity.from_stat(value)
+
+
+def _validate_regular_owned_single_link(
+    value: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    """Reject special files, aliases, and files controlled by another account."""
 
     if not stat.S_ISREG(value.st_mode):
-        raise ConfigurationError("SQLite state database must be a regular file")
+        raise ConfigurationError(f"{label} must be a regular file")
     if value.st_nlink != 1:
-        raise ConfigurationError(
-            "SQLite state database must have exactly one hard link"
-        )
+        raise ConfigurationError(f"{label} must have exactly one hard link")
     if value.st_uid != os.getuid():
-        raise ConfigurationError(
-            "SQLite state database must be owned by the current account"
-        )
-    if stat.S_IMODE(value.st_mode) != 0o600:
-        raise ConfigurationError("SQLite state database permissions must remain 0600")
-    return _FileIdentity.from_stat(value)
+        raise ConfigurationError(f"{label} must be owned by the current account")
+
+
+def _unlink_if_identity(
+    parent_descriptor: int,
+    name: str,
+    identity: _FileIdentity | None,
+) -> bool:
+    """Remove only an exact temporary or newly-created directory entry."""
+
+    try:
+        value = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if identity is None or not identity.matches(value):
+        return False
+    os.unlink(name, dir_fd=parent_descriptor)
+    return True
 
 
 def _no_follow_flag() -> int:
@@ -512,27 +1001,25 @@ def _directory_flag() -> int:
     return value
 
 
-def _close_resources(
-    connection: sqlite3.Connection,
-    database_descriptor: int,
+def _close_descriptors(
+    parent_descriptor: int,
+    lock_descriptor: int,
     lock: RLock,
 ) -> None:
-    """Close SQLite and its independently retained trusted descriptor."""
+    """Close stable descriptors under the same lock used for transactions."""
 
     with lock:
-        _close_sqlite_connection(connection)
-        try:
-            os.close(database_descriptor)
-        except OSError:
-            pass
+        for descriptor in (lock_descriptor, parent_descriptor):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _close_sqlite_connection(connection: sqlite3.Connection) -> None:
-    """Close SQLite without allowing cleanup failure to strand trusted fds."""
+    """Close a disposable memory connection during every exit path."""
 
     try:
         connection.close()
     except BaseException as close_error:  # noqa: BLE001
-        # Cleanup runs while propagating a more important construction,
-        # transaction, or finalization failure.
         _ = close_error
