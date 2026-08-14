@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
-from master_agent.governance import GovernanceProfile
+from master_agent.governance import EnvironmentKind, GovernanceProfile
+from master_agent.identity import IdentityRegistry
 from master_agent.oauth import AccessToken, InMemoryTokenCache, StaticTokenProvider
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.readiness import assess_readiness
@@ -74,6 +76,53 @@ scopes = ["User.Read"]
                 errors,
             )
             self.assertNotIn("Bearer", " ".join(errors))
+
+    def test_production_rejects_named_but_unimplemented_audit_sink(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        governance = replace(
+            governance,
+            environment=EnvironmentKind.PRODUCTION,
+            audit_sink="fictional-external-sink",
+            metadata={**dict(governance.metadata), "production_approved": True},
+        )
+
+        report = assess_readiness(
+            catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+            governance=governance,
+            integrations=IntegrationConfig.from_toml(ROOT / "config/integrations.toml"),
+            oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+            environ={},
+        )
+
+        self.assertFalse(report.ready)
+        self.assertTrue(
+            any("no implemented typed adapter" in error for error in report.errors)
+        )
+        self.assertTrue(
+            any("requires an implemented external" in error for error in report.errors)
+        )
+
+    def test_non_development_rejects_packaged_placeholder_facts(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        governance = replace(
+            governance,
+            environment=EnvironmentKind.NON_PRODUCTION,
+        )
+
+        report = assess_readiness(
+            catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+            governance=governance,
+            integrations=IntegrationConfig.from_toml(ROOT / "config/integrations.toml"),
+            oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+            identities=IdentityRegistry.from_toml(ROOT / "config/identities.toml"),
+            environ={},
+        )
+
+        rendered = "\n".join(report.errors)
+        self.assertFalse(report.ready)
+        self.assertIn("organization must not be a placeholder", rendered)
+        self.assertIn("requires an enabled connector", rendered)
+        self.assertIn("identity is a placeholder", rendered)
 
 
 if __name__ == "__main__":

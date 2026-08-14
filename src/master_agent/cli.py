@@ -118,6 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
                 oauth_path=args.oauth,
+                identities_path=args.identities,
                 output=args.output,
             )
         if args.command == "oauth-device-code":
@@ -320,6 +321,7 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--capabilities", type=Path, default=None)
     readiness.add_argument("--governance", type=Path, default=None)
     readiness.add_argument("--oauth", type=Path, default=None)
+    readiness.add_argument("--identities", type=Path, default=None)
     readiness.add_argument("--output", type=Path)
 
     oauth_device = subparsers.add_parser(
@@ -686,6 +688,7 @@ def _readiness(
     capabilities_path: Path | None,
     governance_path: Path | None,
     oauth_path: Path | None,
+    identities_path: Path | None,
     output: Path | None,
 ) -> int:
     """Assess Phase 0/2C configuration without performing network requests."""
@@ -702,6 +705,9 @@ def _readiness(
         ),
         oauth_profiles=OAuthProfiles.from_toml(
             resolve_config_source(oauth_path, "oauth.toml")
+        ),
+        identities=IdentityRegistry.from_toml(
+            resolve_config_source(identities_path, "identities.toml")
         ),
         environ=os.environ,
     )
@@ -1269,7 +1275,7 @@ def _scan(*, text: str | None, file: Path | None) -> int:
 
 
 def _audit_verify(database: Path) -> int:
-    valid, message = AuditLog(database).verify_chain()
+    valid, message = AuditLog.verify_existing(database)
     print(message)
     return 0 if valid else 4
 

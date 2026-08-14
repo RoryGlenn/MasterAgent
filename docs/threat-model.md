@@ -192,11 +192,19 @@ An operator or process may alter records or retained content.
 
 Controls:
 
-- hash-chained audit events;
+- serialized hash-chained audit events with a durable count/head checkpoint;
+- verification that refuses missing, empty, malformed, or tail-truncated audit
+  databases without creating them;
 - evidence SHA-256 digests and manifests;
 - mode-`0600` retained files where supported;
 - path-safe expiry cleanup;
-- production recommendation for immutable external audit storage.
+- production readiness that requires an implemented typed external,
+  tamper-resistant audit sink rather than trusting a configured product name.
+
+The local checkpoint detects accidental corruption and simple event deletion,
+but an administrator able to rewrite the entire SQLite database can rewrite the
+checkpoint too. Local SQLite is therefore a development sink, not an immutable
+external compliance record.
 
 ## Packaged prohibitions
 

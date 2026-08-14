@@ -17,7 +17,7 @@ from master_agent.connectors.base import (
 )
 from master_agent.errors import ConfigurationError, VersionConflictError
 from master_agent.governance import GovernanceProfile
-from master_agent.evidence import result_audit_summary
+from master_agent.evidence import audit_message_metadata, result_audit_summary
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -717,7 +717,10 @@ class WorkflowOrchestrator:
             "risk": action.risk,
             "authority_source": action.authority_source,
             "state": report.state,
-            "message": report.message,
+            **audit_message_metadata(
+                report.message,
+                default_code=f"action_{report.state}",
+            ),
         }
         if report.result is not None:
             payload["result"] = result_audit_summary(report.result)

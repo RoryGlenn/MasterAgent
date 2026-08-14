@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+import tomllib
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-import json
-import os
 from pathlib import Path
-import sqlite3
-import tomllib
+from threading import Event, Thread
 from types import MappingProxyType
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from master_agent.config_sources import ConfigSource
@@ -31,6 +33,16 @@ class DeliveryMode(StrEnum):
 
     LOCAL_ONLY = "local_only"
     DRAFT_ONLY = "draft_only"
+
+
+class ClaimStatus(StrEnum):
+    """Durable lifecycle of one scheduled occurrence claim."""
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    RECOVERABLE = "recoverable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +67,9 @@ class WeeklySchedule:
         try:
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as error:
-            raise ConfigurationError(f"unknown IANA timezone: {self.timezone}") from error
+            raise ConfigurationError(
+                f"unknown IANA timezone: {self.timezone}"
+            ) from error
 
     def scheduled_at_or_before(self, now: datetime) -> datetime:
         """Return the most recent scheduled instant at or before ``now``."""
@@ -108,14 +122,16 @@ class RecurringConfig:
         object.__setattr__(self, "workflows", MappingProxyType(dict(self.workflows)))
 
     @classmethod
-    def from_toml(cls, path: ConfigSource) -> "RecurringConfig":
+    def from_toml(cls, path: ConfigSource) -> RecurringConfig:
         """Load only known recurring workflow kinds from TOML."""
 
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
         except FileNotFoundError as error:
-            raise ConfigurationError(f"recurring configuration not found: {path}") from error
+            raise ConfigurationError(
+                f"recurring configuration not found: {path}"
+            ) from error
         # Runtime outputs are deliberately relative to the operator's current
         # working directory, including when safe defaults come from a wheel.
         base = Path.cwd().resolve()
@@ -132,7 +148,9 @@ class RecurringConfig:
                     str(value.get("delivery_mode", "local_only"))
                 )
             except ValueError as error:
-                raise ConfigurationError(f"unsupported recurring workflow: {name}") from error
+                raise ConfigurationError(
+                    f"unsupported recurring workflow: {name}"
+                ) from error
             allowed_capabilities = _string_list(value, "allowed_capabilities")
             if not allowed_capabilities:
                 raise ConfigurationError(
@@ -224,16 +242,27 @@ class RecurringRunResult:
 
 
 class RecurringStateStore:
-    """SQLite scheduler state and immutable run history."""
+    """SQLite scheduler state with atomic scheduled-occurrence claims."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        lease_duration: timedelta = timedelta(minutes=5),
+    ) -> None:
+        if lease_duration <= timedelta(0):
+            raise ValueError("lease_duration must be positive")
         self._path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self._lease_duration = lease_duration
+        self._initialized = False
+        if path.exists():
+            self._ensure_initialized()
 
     def last_success(self, name: str) -> datetime | None:
         """Return the most recent successful completion time."""
 
+        if not self._path.exists():
+            return None
         with closing(sqlite3.connect(self._path)) as connection:
             row = connection.execute(
                 "SELECT finished_at FROM recurring_runs "
@@ -243,17 +272,161 @@ class RecurringStateStore:
             ).fetchone()
         return datetime.fromisoformat(str(row[0])) if row else None
 
-    def record(
+    def occurrence_status(self, name: str, scheduled_at: datetime) -> str | None:
+        """Return the durable state of one scheduled occurrence."""
+
+        if not self._path.exists():
+            return None
+        with closing(sqlite3.connect(self._path)) as connection:
+            row = connection.execute(
+                "SELECT status FROM recurring_runs "
+                "WHERE workflow_name = ? AND scheduled_at = ?",
+                (name, scheduled_at.isoformat()),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def claim(
         self,
         *,
         name: str,
         scheduled_at: datetime,
         started_at: datetime,
+    ) -> bool:
+        """Atomically claim one occurrence before invoking its callback."""
+
+        self._ensure_initialized()
+        with closing(sqlite3.connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            lease_expires_at = started_at + self._lease_duration
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO recurring_runs (
+                    workflow_name, scheduled_at, started_at, finished_at,
+                    successful, summary_json, status, lease_expires_at,
+                    attempt_count, recovery_reason
+                ) VALUES (?, ?, ?, ?, 0, '{}', ?, ?, 1, NULL)
+                """,
+                (
+                    name,
+                    scheduled_at.isoformat(),
+                    started_at.isoformat(),
+                    started_at.isoformat(),
+                    str(ClaimStatus.RUNNING),
+                    lease_expires_at.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                cursor = connection.execute(
+                    """
+                    UPDATE recurring_runs
+                    SET started_at = ?, finished_at = ?, successful = 0,
+                        summary_json = '{}', status = ?, lease_expires_at = ?,
+                        attempt_count = attempt_count + 1,
+                        recovery_reason = NULL
+                    WHERE workflow_name = ? AND scheduled_at = ?
+                      AND status = ?
+                    """,
+                    (
+                        started_at.isoformat(),
+                        started_at.isoformat(),
+                        str(ClaimStatus.RUNNING),
+                        lease_expires_at.isoformat(),
+                        name,
+                        scheduled_at.isoformat(),
+                        str(ClaimStatus.RECOVERABLE),
+                    ),
+                )
+            connection.commit()
+            return cursor.rowcount == 1
+
+    def renew(
+        self,
+        *,
+        name: str,
+        scheduled_at: datetime,
+        now: datetime | None = None,
+    ) -> bool:
+        """Renew a running claim lease while its callback is active."""
+
+        self._ensure_initialized()
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        with closing(sqlite3.connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_runs SET lease_expires_at = ?
+                WHERE workflow_name = ? AND scheduled_at = ? AND status = ?
+                """,
+                (
+                    (current + self._lease_duration).isoformat(),
+                    name,
+                    scheduled_at.isoformat(),
+                    str(ClaimStatus.RUNNING),
+                ),
+            )
+            connection.commit()
+        return cursor.rowcount == 1
+
+    def expire_claims(self, *, now: datetime | None = None) -> int:
+        """Mark elapsed running leases expired without automatically retrying."""
+
+        if not self._path.exists():
+            return 0
+        self._ensure_initialized()
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        with closing(sqlite3.connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_runs
+                SET status = ?, recovery_reason = 'lease_expired'
+                WHERE status = ? AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= ?
+                """,
+                (
+                    str(ClaimStatus.EXPIRED),
+                    str(ClaimStatus.RUNNING),
+                    current.isoformat(),
+                ),
+            )
+            connection.commit()
+        return cursor.rowcount
+
+    def mark_recoverable(self, *, name: str, scheduled_at: datetime) -> bool:
+        """Explicitly permit a reviewed expired occurrence to be reclaimed."""
+
+        if not self._path.exists():
+            return False
+        self._ensure_initialized()
+        with closing(sqlite3.connect(self._path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_runs
+                SET status = ?, recovery_reason = 'operator_reviewed'
+                WHERE workflow_name = ? AND scheduled_at = ? AND status = ?
+                """,
+                (
+                    str(ClaimStatus.RECOVERABLE),
+                    name,
+                    scheduled_at.isoformat(),
+                    str(ClaimStatus.EXPIRED),
+                ),
+            )
+            connection.commit()
+        return cursor.rowcount == 1
+
+    def complete(
+        self,
+        *,
+        name: str,
+        scheduled_at: datetime,
         finished_at: datetime,
         result: RecurringRunResult,
     ) -> None:
-        """Append a recurring run record."""
+        """Complete a previously claimed occurrence exactly once."""
 
+        self._ensure_initialized()
         payload = json.dumps(
             result.summary,
             sort_keys=True,
@@ -261,23 +434,58 @@ class RecurringStateStore:
             default=str,
         )
         with closing(sqlite3.connect(self._path)) as connection:
-            connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
                 """
-                INSERT INTO recurring_runs (
-                    workflow_name, scheduled_at, started_at, finished_at,
-                    successful, summary_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                UPDATE recurring_runs
+                SET finished_at = ?, successful = ?, summary_json = ?, status = ?
+                    , lease_expires_at = NULL
+                WHERE workflow_name = ? AND scheduled_at = ? AND status = 'running'
                 """,
                 (
-                    name,
-                    scheduled_at.isoformat(),
-                    started_at.isoformat(),
                     finished_at.isoformat(),
                     int(result.successful),
                     payload,
+                    (
+                        str(ClaimStatus.SUCCEEDED)
+                        if result.successful
+                        else str(ClaimStatus.FAILED)
+                    ),
+                    name,
+                    scheduled_at.isoformat(),
                 ),
             )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise ConfigurationError(
+                    f"recurring occurrence is not actively claimed: "
+                    f"{name} at {scheduled_at.isoformat()}"
+                )
             connection.commit()
+
+    def fail(
+        self,
+        *,
+        name: str,
+        scheduled_at: datetime,
+        finished_at: datetime,
+        error: BaseException,
+    ) -> None:
+        """Mark a claimed occurrence failed without persisting error content."""
+
+        self.complete(
+            name=name,
+            scheduled_at=scheduled_at,
+            finished_at=finished_at,
+            result=RecurringRunResult(
+                successful=False,
+                summary={
+                    "workflow": name,
+                    "failed": True,
+                    "error_type": type(error).__name__,
+                },
+            ),
+        )
 
     def _initialize(self) -> None:
         with closing(sqlite3.connect(self._path)) as connection:
@@ -290,11 +498,58 @@ class RecurringStateStore:
                     started_at TEXT NOT NULL,
                     finished_at TEXT NOT NULL,
                     successful INTEGER NOT NULL,
-                    summary_json TEXT NOT NULL
+                    summary_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'succeeded',
+                    lease_expires_at TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 1,
+                    recovery_reason TEXT
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(recurring_runs)")
+            }
+            if "status" not in columns:
+                connection.execute(
+                    "ALTER TABLE recurring_runs "
+                    "ADD COLUMN status TEXT NOT NULL DEFAULT 'succeeded'"
+                )
+            if "lease_expires_at" not in columns:
+                connection.execute(
+                    "ALTER TABLE recurring_runs ADD COLUMN lease_expires_at TEXT"
+                )
+            if "attempt_count" not in columns:
+                connection.execute(
+                    "ALTER TABLE recurring_runs "
+                    "ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 1"
+                )
+            if "recovery_reason" not in columns:
+                connection.execute(
+                    "ALTER TABLE recurring_runs ADD COLUMN recovery_reason TEXT"
+                )
+            try:
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "recurring_occurrence_once "
+                    "ON recurring_runs (workflow_name, scheduled_at)"
+                )
+            except sqlite3.IntegrityError as error:
+                raise ConfigurationError(
+                    "recurring state contains duplicate scheduled occurrences; "
+                    "review and repair it before upgrading"
+                ) from error
             connection.commit()
+
+    def _ensure_initialized(self) -> None:
+        """Create scheduler state only when state is read or written."""
+
+        if self._initialized:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._initialize()
+        _restrict(self._path)
+        self._initialized = True
 
 
 class RecurringRunner:
@@ -303,7 +558,6 @@ class RecurringRunner:
     def __init__(self, config: RecurringConfig) -> None:
         self._config = config
         self._store = RecurringStateStore(config.state_database)
-        config.lock_dir.mkdir(parents=True, exist_ok=True)
 
     def due_status(
         self,
@@ -314,8 +568,10 @@ class RecurringRunner:
         """Calculate whether a workflow is currently due."""
 
         current = (now or datetime.now(UTC)).astimezone(UTC)
+        self._store.expire_claims(now=current)
         scheduled = workflow.schedule.scheduled_at_or_before(current)
         last = self._store.last_success(workflow.name)
+        occurrence_status = self._store.occurrence_status(workflow.name, scheduled)
         lateness = current - scheduled
         if not workflow.enabled:
             due = False
@@ -323,9 +579,11 @@ class RecurringRunner:
         elif lateness > timedelta(minutes=workflow.schedule.max_lateness_minutes):
             due = False
             reason = "latest schedule is outside the configured lateness window"
-        elif last is not None and last >= scheduled:
+        elif occurrence_status is not None:
             due = False
-            reason = "latest scheduled occurrence already succeeded"
+            reason = (
+                f"latest scheduled occurrence is already claimed ({occurrence_status})"
+            )
         else:
             due = True
             reason = "registered workflow is due"
@@ -351,7 +609,9 @@ class RecurringRunner:
         try:
             workflow = self._config.workflows[name]
         except KeyError as error:
-            raise ConfigurationError(f"recurring workflow is not registered: {name}") from error
+            raise ConfigurationError(
+                f"recurring workflow is not registered: {name}"
+            ) from error
         status = self.due_status(workflow, now=now)
         if not workflow.enabled:
             raise ConfigurationError(f"recurring workflow is disabled: {name}")
@@ -361,20 +621,73 @@ class RecurringRunner:
                 summary={"skipped": True, "reason": status.reason},
             )
         started = (now or datetime.now(UTC)).astimezone(UTC)
-        with self._lock(name):
-            result = callback(workflow)
-        finished = datetime.now(UTC)
-        self._store.record(
+        claimed = self._store.claim(
             name=name,
             scheduled_at=status.scheduled_at,
             started_at=started,
-            finished_at=finished,
+        )
+        if not claimed:
+            return RecurringRunResult(
+                successful=True,
+                summary={
+                    "skipped": True,
+                    "reason": "latest scheduled occurrence is already claimed",
+                },
+            )
+        try:
+            stop_heartbeat = Event()
+            heartbeat_errors: list[Exception] = []
+
+            def heartbeat() -> None:
+                interval = max(
+                    self._store._lease_duration.total_seconds() / 3,
+                    0.1,
+                )
+                while not stop_heartbeat.wait(interval):
+                    try:
+                        renewed = self._store.renew(
+                            name=name,
+                            scheduled_at=status.scheduled_at,
+                        )
+                        if not renewed:
+                            raise ConfigurationError(
+                                "recurring occurrence lease was lost"
+                            )
+                    except (OSError, sqlite3.Error, ConfigurationError) as error:
+                        heartbeat_errors.append(error)
+                        return
+
+            heartbeat_thread = Thread(target=heartbeat, daemon=True)
+            heartbeat_thread.start()
+            try:
+                with self._lock(name):
+                    result = callback(workflow)
+            finally:
+                stop_heartbeat.set()
+                heartbeat_thread.join()
+            if heartbeat_errors:
+                raise ConfigurationError(
+                    "recurring occurrence lease could not be renewed"
+                ) from heartbeat_errors[0]
+        except BaseException as error:
+            self._store.fail(
+                name=name,
+                scheduled_at=status.scheduled_at,
+                finished_at=datetime.now(UTC),
+                error=error,
+            )
+            raise
+        self._store.complete(
+            name=name,
+            scheduled_at=status.scheduled_at,
+            finished_at=datetime.now(UTC),
             result=result,
         )
         return result
 
     @contextmanager
     def _lock(self, name: str) -> Iterator[None]:
+        self._config.lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_path = self._config.lock_dir / f"{_safe_name(name)}.lock"
         try:
             descriptor = os.open(
@@ -475,4 +788,16 @@ def _resolve(base: Path, value: str) -> Path:
 
 
 def _safe_name(value: str) -> str:
-    return "".join(character if character.isalnum() or character in "._-" else "-" for character in value)
+    return "".join(
+        character if character.isalnum() or character in "._-" else "-"
+        for character in value
+    )
+
+
+def _restrict(path: Path) -> None:
+    """Restrict local scheduler state to the current account where supported."""
+
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass

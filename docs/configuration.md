@@ -76,7 +76,7 @@ The device-code command writes a restricted JSON token file. It does not manage 
 Replace placeholder owners such as `unassigned` and `example-organization` before non-development deployment. Production readiness additionally requires:
 
 - `production_approved = true`;
-- a non-local audit sink;
+- an implemented typed adapter for an external, tamper-resistant audit sink;
 - an approved secret manager;
 - explicit external-model policy;
 - rules covering every enabled capability.
@@ -95,3 +95,8 @@ master-agent plugins
 ```
 
 These commands do not import plugin code, publish content, or send communication. `discover --probe` is the explicit network-read step.
+
+The v1 runtime currently implements only the local SQLite development audit
+sink. Naming an external product in `audit_sink` does not make it operational;
+production readiness therefore fails closed until an actual typed external
+sink adapter is installed and registered by the runtime.

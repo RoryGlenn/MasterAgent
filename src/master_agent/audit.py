@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import hashlib
+import json
+import os
+import sqlite3
+import stat
+from collections.abc import Iterator, Mapping
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-import hashlib
-import json
 from pathlib import Path
-import sqlite3
-from collections.abc import Iterator
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID, uuid4
 
 
@@ -32,6 +34,40 @@ class IdempotencyClaim:
     token: str | None = None
     result: Mapping[str, Any] | None = None
 
+from master_agent.errors import ConfigurationError
+
+
+class AuditSinkKind(StrEnum):
+    """Implemented durable-audit transport kinds."""
+
+    LOCAL_SQLITE = "local_sqlite"
+
+
+@dataclass(frozen=True, slots=True)
+class AuditSinkDescriptor:
+    """Runtime-backed audit sink properties used by readiness checks."""
+
+    identifier: str
+    kind: AuditSinkKind
+    external: bool
+    tamper_resistant: bool
+
+
+_LOCAL_SQLITE_SINK = AuditSinkDescriptor(
+    identifier="local-sqlite-for-development",
+    kind=AuditSinkKind.LOCAL_SQLITE,
+    external=False,
+    tamper_resistant=False,
+)
+
+
+def implemented_audit_sink(identifier: str) -> AuditSinkDescriptor | None:
+    """Resolve only audit sinks with an implementation in this runtime."""
+
+    if identifier.strip().casefold() == _LOCAL_SQLITE_SINK.identifier:
+        return _LOCAL_SQLITE_SINK
+    return None
+
 
 class AuditLog:
     """SQLite-backed audit chain for local development.
@@ -45,7 +81,13 @@ class AuditLog:
     def __init__(self, database: Path) -> None:
         database.parent.mkdir(parents=True, exist_ok=True)
         self._database = database
-        self._initialize()
+        created = _prepare_database_file(database)
+        try:
+            self._initialize()
+        except Exception:
+            if created:
+                database.unlink(missing_ok=True)
+            raise
 
     def record(
         self,
@@ -68,10 +110,18 @@ class AuditLog:
         )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            previous = connection.execute(
+            state = connection.execute(
+                "SELECT event_count, head_hash FROM audit_state WHERE id = 1"
+            ).fetchone()
+            if state is None:
+                raise RuntimeError("audit checkpoint state is missing")
+            event_count, previous_hash = int(state[0]), str(state[1])
+            latest = connection.execute(
                 "SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1"
             ).fetchone()
-            previous_hash = str(previous[0]) if previous else "GENESIS"
+            latest_hash = str(latest[0]) if latest else "GENESIS"
+            if latest_hash != previous_hash:
+                raise RuntimeError("audit checkpoint does not match the event chain")
             material = "|".join(
                 [
                     previous_hash,
@@ -101,6 +151,10 @@ class AuditLog:
                     previous_hash,
                     event_hash,
                 ),
+            )
+            connection.execute(
+                "UPDATE audit_state SET event_count = ?, head_hash = ? WHERE id = 1",
+                (event_count + 1, event_hash),
             )
         return event_hash
 
@@ -272,9 +326,33 @@ class AuditLog:
                 )
 
     def verify_chain(self) -> tuple[bool, str]:
-        """Verify every audit event hash and link."""
+        """Verify a nonempty audit chain against its durable checkpoint."""
 
         with self._connect() as connection:
+            return self._verify_connection(connection)
+
+    @classmethod
+    def verify_existing(cls, database: Path) -> tuple[bool, str]:
+        """Verify an existing database without creating or modifying it."""
+
+        if database.is_symlink():
+            return False, "audit database must not be a symbolic link"
+        if not database.exists():
+            return False, f"audit database does not exist: {database}"
+        if not database.is_file():
+            return False, f"audit database is not a regular file: {database}"
+        try:
+            uri = database.resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True)) as connection:
+                return cls._verify_connection(connection)
+        except sqlite3.Error as error:
+            return False, f"audit database could not be verified: {error}"
+
+    @staticmethod
+    def _verify_connection(connection: sqlite3.Connection) -> tuple[bool, str]:
+        """Verify event hashes, links, and the append checkpoint."""
+
+        try:
             rows = connection.execute(
                 """
                 SELECT timestamp, run_id, plan_id, action_id, event_type,
@@ -282,6 +360,15 @@ class AuditLog:
                 FROM audit_events ORDER BY id
                 """
             ).fetchall()
+            checkpoint = connection.execute(
+                "SELECT event_count, head_hash FROM audit_state WHERE id = 1"
+            ).fetchone()
+        except sqlite3.Error as error:
+            return False, f"audit database schema is invalid: {error}"
+        if not rows:
+            return False, "audit database contains no events"
+        if checkpoint is None:
+            return False, "audit checkpoint state is missing"
 
         expected_previous = "GENESIS"
         for index, row in enumerate(rows, start=1):
@@ -312,10 +399,22 @@ class AuditLog:
             if calculated != event_hash:
                 return False, f"event hash mismatch at event {index}"
             expected_previous = str(event_hash)
+        checkpoint_count, checkpoint_hash = int(checkpoint[0]), str(checkpoint[1])
+        if checkpoint_count != len(rows):
+            return (
+                False,
+                (
+                    "audit checkpoint count does not match the event chain "
+                    f"({checkpoint_count} != {len(rows)})"
+                ),
+            )
+        if checkpoint_hash != expected_previous:
+            return False, "audit checkpoint head does not match the event chain"
         return True, f"verified {len(rows)} audit events"
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audit_events (
@@ -328,6 +427,15 @@ class AuditLog:
                     payload_json TEXT NOT NULL,
                     previous_hash TEXT NOT NULL,
                     event_hash TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    event_count INTEGER NOT NULL,
+                    head_hash TEXT NOT NULL
                 )
                 """
             )
@@ -363,6 +471,27 @@ class AuditLog:
                     connection.execute(
                         f"ALTER TABLE completed_actions ADD COLUMN {name} {definition}"
                     )
+            schema_version = int(
+                connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            state = connection.execute(
+                "SELECT event_count, head_hash FROM audit_state WHERE id = 1"
+            ).fetchone()
+            if state is None and schema_version == 0:
+                row = connection.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM audit_events"
+                ).fetchone()
+                event_count = int(row[0])
+                latest = connection.execute(
+                    "SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                head_hash = str(latest[0]) if latest else "GENESIS"
+                connection.execute(
+                    "INSERT INTO audit_state (id, event_count, head_hash) "
+                    "VALUES (1, ?, ?)",
+                    (event_count, head_hash),
+                )
+                connection.execute("PRAGMA user_version = 1")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -378,3 +507,38 @@ class AuditLog:
             raise
         finally:
             connection.close()
+
+
+def _prepare_database_file(path: Path) -> bool:
+    """Create or open a regular audit database without following symlinks."""
+
+    if path.parent.is_symlink():
+        raise ConfigurationError("audit database parent must not be a symbolic link")
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    created = False
+    try:
+        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+    except FileExistsError:
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as error:
+            raise ConfigurationError(
+                "audit database must be a regular no-follow file"
+            ) from error
+    except OSError as error:
+        raise ConfigurationError(
+            "audit database could not be created safely"
+        ) from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ConfigurationError("audit database must be a regular file")
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+    except Exception:
+        os.close(descriptor)
+        if created:
+            path.unlink(missing_ok=True)
+        raise
+    os.close(descriptor)
+    return created

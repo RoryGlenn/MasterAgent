@@ -30,4 +30,4 @@ master-agent recurring-status
 master-agent recurring-run weekly_status --connector-mode mock --force
 ```
 
-For production, invoke the same command from an organization scheduler under a narrowly permissioned service account. Current recurring workflows produce local packages and do not invoke Phase 4 or Phase 5 side effects.
+For production, invoke the same command from an organization scheduler under a narrowly permissioned service account. The runtime atomically claims the exact `(workflow, scheduled_at)` occurrence before invoking its callback; concurrent or repeated invocations skip an existing running, succeeded, or failed claim. A failed claim is not retried automatically because the runtime cannot prove whether an interrupted callback produced an observable result. Current recurring workflows produce local packages and do not invoke Phase 4 or Phase 5 side effects.
