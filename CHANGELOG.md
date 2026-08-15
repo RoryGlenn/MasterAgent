@@ -27,6 +27,8 @@
 - provider-verified GitHub bearer-token principal attestation that binds the
   immutable numeric user ID at review time and re-verifies it before applied
   connector execution.
+- a repository-scoped GitHub Copilot custom-agent profile that exposes
+  MasterAgent in the agent picker while preserving the governed CLI boundary.
 
 ### Changed
 

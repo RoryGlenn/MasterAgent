@@ -96,6 +96,19 @@ Supported domains:
   no local Git mutation capability is routable.
 - Organization-approved HTTPS API endpoints and credentials for live use.
 
+## Use as a GitHub Copilot custom agent
+
+Open the repository root in a supported Copilot IDE, then select
+**MasterAgent** from the agents dropdown. The repository-scoped profile at
+[`.github/agents/MasterAgent.agent.md`](.github/agents/MasterAgent.agent.md)
+loads the repository policy and routes enterprise operations through the
+existing governed CLI rather than direct provider tools.
+
+Cloning does not install the Python runtime. Complete the source installation
+below before asking the custom agent to run `master-agent` commands. See the
+[Copilot custom-agent guide](docs/copilot-custom-agent.md) for discovery,
+security boundaries, GitHub.com and CLI usage, and troubleshooting.
+
 ## Install from the source distribution
 
 **Machine: Ubuntu 24.04 or macOS development computer**
@@ -460,6 +473,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 
 - [Semantic codebase index](docs/semantic-index.md)
 - [CLI reference](docs/cli-reference.md)
+- [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)

@@ -17,6 +17,16 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+_AGENT_FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
+_COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent.agent.md")
+_COPILOT_AGENT_TOOLS = ("read", "search", "edit", "execute")
+_COPILOT_AGENT_KEYS = {
+    "name",
+    "description",
+    "tools",
+    "user-invocable",
+    "disable-model-invocation",
+}
 _FORBIDDEN_NAMES = {
     ".env",
     "audit.sqlite3",
@@ -86,6 +96,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_versions(root, checks, errors)
     _validate_packaged_defaults(root, checks, errors)
     _validate_capabilities(root, checks, errors)
+    _validate_copilot_agent(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
     _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
@@ -145,6 +156,7 @@ def validate_archive(path: Path) -> ValidationReport:
     else:
         required_suffixes = (
             "/.ai/MASTER_AGENT.md",
+            "/.github/agents/MasterAgent.agent.md",
             "/.env.example",
             "/config/capabilities.toml",
             "/scripts/validate_release.py",
@@ -256,6 +268,139 @@ def _validate_capabilities(
         errors.append("Bitbucket pull-request merge must remain disabled")
     else:
         checks.append("high-impact pull-request merge remains disabled")
+
+
+def _validate_copilot_agent(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Require the repository-scoped Copilot entry point to remain fail-closed."""
+
+    path = root / _COPILOT_AGENT_PATH
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        errors.append(f"Copilot custom agent is missing or unreadable: {path}: {error}")
+        return
+
+    metadata, body, frontmatter_errors = _parse_agent_frontmatter(text)
+    errors.extend(
+        f"Copilot custom agent frontmatter: {error}" for error in frontmatter_errors
+    )
+    if frontmatter_errors:
+        return
+
+    unexpected = sorted(set(metadata) - _COPILOT_AGENT_KEYS)
+    missing = sorted(_COPILOT_AGENT_KEYS - set(metadata))
+    if unexpected:
+        errors.append(
+            "Copilot custom agent has unreviewed frontmatter keys: "
+            + ", ".join(unexpected)
+        )
+    if missing:
+        errors.append(
+            "Copilot custom agent is missing frontmatter keys: " + ", ".join(missing)
+        )
+    if metadata.get("name") != "MasterAgent":
+        errors.append("Copilot custom agent name must be MasterAgent")
+    description = metadata.get("description")
+    if not isinstance(description, str) or not description.strip():
+        errors.append("Copilot custom agent description must be a non-empty string")
+    if metadata.get("user-invocable") is not True:
+        errors.append("Copilot custom agent must remain user-invocable")
+    if metadata.get("disable-model-invocation") is not True:
+        errors.append("Copilot custom agent must not be invoked automatically")
+    tools = metadata.get("tools")
+    if tools != _COPILOT_AGENT_TOOLS:
+        errors.append(
+            "Copilot custom agent tools must be exactly: "
+            + ", ".join(_COPILOT_AGENT_TOOLS)
+        )
+
+    required_references = (
+        "[AGENTS.md](../../AGENTS.md)",
+        "[Master Agent repository policy](../../.ai/MASTER_AGENT.md)",
+    )
+    for reference in required_references:
+        if reference not in body:
+            errors.append(
+                f"Copilot custom agent is missing required policy reference: {reference}"
+            )
+    required_boundaries = (
+        "config/capabilities.toml",
+        "Never call a provider directly",
+        "python scripts/validate_release.py",
+    )
+    for boundary in required_boundaries:
+        if boundary not in body:
+            errors.append(
+                f"Copilot custom agent is missing required boundary: {boundary}"
+            )
+
+    if not any(error.startswith("Copilot custom agent") for error in errors):
+        checks.append(
+            "Copilot custom agent is user-invocable, policy-bound, and tool-constrained"
+        )
+
+
+def _parse_agent_frontmatter(
+    text: str,
+) -> tuple[dict[str, object], str, tuple[str, ...]]:
+    """Parse the deliberately small YAML subset used by the agent profile."""
+
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        return {}, "", ("file must start with a YAML delimiter",)
+    try:
+        closing = lines.index("---", 1)
+    except ValueError:
+        return {}, "", ("closing YAML delimiter is missing",)
+
+    metadata: dict[str, object] = {}
+    parse_errors: list[str] = []
+    active_list: str | None = None
+    for number, line in enumerate(lines[1:closing], start=2):
+        if line.startswith("  - "):
+            if active_list is None:
+                parse_errors.append(f"line {number} has a list item without a key")
+                continue
+            value = line[4:].strip()
+            if not value:
+                parse_errors.append(f"line {number} has an empty list item")
+                continue
+            existing = metadata.get(active_list)
+            if not isinstance(existing, list):
+                parse_errors.append(f"line {number} cannot extend {active_list}")
+                continue
+            existing.append(value)
+            continue
+        active_list = None
+        match = _AGENT_FRONTMATTER_KEY.fullmatch(line)
+        if match is None:
+            parse_errors.append(f"line {number} is not a supported key or list item")
+            continue
+        key, raw_value = match.groups()
+        if key in metadata:
+            parse_errors.append(f"line {number} repeats key {key}")
+            continue
+        if not raw_value:
+            metadata[key] = []
+            active_list = key
+        elif raw_value == "true":
+            metadata[key] = True
+        elif raw_value == "false":
+            metadata[key] = False
+        else:
+            metadata[key] = raw_value.strip("'\"")
+
+    for key, value in tuple(metadata.items()):
+        if isinstance(value, list):
+            metadata[key] = tuple(value)
+    body = "\n".join(lines[closing + 1 :]).strip()
+    if not body:
+        parse_errors.append("instruction body is empty")
+    return metadata, body, tuple(parse_errors)
 
 
 def _validate_markdown_links(
