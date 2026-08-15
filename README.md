@@ -448,6 +448,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 
 ## Documentation
 
+- [Semantic codebase index](docs/semantic-index.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)
