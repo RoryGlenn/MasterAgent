@@ -32,20 +32,25 @@ TOML contains environment-variable **names**, never secret values. The runtime r
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
 
-GitHub Cloud uses `MASTER_AGENT_GITHUB_TOKEN` as an opaque bearer token. The
-cloud origin is fixed to `api.github.com`; alternate cloud hosts are rejected,
-and GitHub Enterprise Server is not part of the current connector contract.
+GitHub Cloud uses `MASTER_AGENT_GITHUB_TOKEN` as a bearer token. The cloud
+origin is fixed to `api.github.com`; alternate cloud hosts are rejected, and
+GitHub Enterprise Server is not part of the current connector contract. At
+context binding and applied execution, the typed GitHub adapter calls
+`GET /user` and binds the provider-returned numeric user ID. It does not trust a
+configured identity label or persist the token or mutable login.
 
-Exact-plan binding records a flow-enforced non-secret credential identity, not
-the token or password. Basic usernames and Entra client-credential tenant/client
-IDs are derived from their configured environment variables. Their secrets may
-rotate without changing the bound identity. Opaque bearer, delegated,
-token-file, and application-environment tokens cannot prove their principal to
-this runtime. Both `bind-context --connector-mode live` and live `run --apply`
-therefore reject them even if configuration supplies a claimed identity label.
-A provider-verified principal or trusted
-credential-broker attestation adapter is required before those flows can be
-used for applied execution.
+Exact-plan binding records a flow-enforced or provider-verified non-secret
+credential identity, not the token or password. Basic usernames and Entra
+client-credential tenant/client IDs are derived from their configured
+environment variables. GitHub bearer tokens are verified by GitHub at bind and
+apply time and resolve to `github:user:<numeric-id>`. Secrets may rotate without
+changing the binding when the verified principal remains the same. Other opaque
+bearer, delegated, token-file, and application-environment tokens cannot prove
+their principal to this runtime. Both `bind-context --connector-mode live` and
+live `run --apply` reject those flows even if configuration supplies a claimed
+identity label. Another provider-verified principal or trusted credential-broker
+attestation adapter is required before those flows can be used for applied
+execution.
 
 ## Applied-run manifest
 
@@ -118,7 +123,9 @@ Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucke
 The GitHub connector is read-only and disabled by default. It exposes only
 repository metadata, pull-request search/read, and commit check-run reads.
 `discover --systems github --probe` calls the fixed `/user` endpoint to verify
-the configured bearer token. No GitHub mutation gate exists.
+the configured bearer token. `bind-context` and `run --apply` also call that
+endpoint to bind and re-verify the numeric GitHub user ID before governed live
+reads. No GitHub mutation gate exists.
 
 ## Microsoft identity mode
 

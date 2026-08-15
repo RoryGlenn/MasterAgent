@@ -227,6 +227,14 @@ The probe performs one bounded `GET /user` request and reports only the
 authenticated login and numeric user ID. Repository, pull-request, and check
 content remains available only through the typed read capabilities.
 
+For governed live execution, `bind-context` performs the same provider-backed
+identity check and binds only `github:user:<numeric-id>` into the reviewed
+execution context. `run --apply` repeats the check before connector actions.
+Token rotation for the same numeric GitHub user remains valid; a token for a
+different user fails closed. Configuration-only `readiness` verifies that this
+adapter and its required environment reference are available but performs no
+network request, so use `discover --probe` to validate current credentials.
+
 ## Microsoft delegated authentication
 
 Enable only the reviewed OAuth profile in `config/oauth.toml`, then acquire a delegated token:
@@ -286,11 +294,12 @@ master-agent bind-context change-plan.json \
 Every corresponding `run --apply` argument must match. Basic usernames and
 Entra client-credential tenant/client IDs are derived and bound automatically;
 their password, API-token, or client-secret bytes are never fingerprinted, so
-ordinary rotation remains possible for the same flow-enforced identity. Opaque
-bearer, delegated, token-file, and application-environment tokens are rejected
-for live applied execution: a configured identity label is not attestation.
-Those flows require a provider-verified principal or a trusted credential-broker
-adapter, neither of which is currently implemented.
+ordinary rotation remains possible for the same flow-enforced identity.
+GitHub bearer tokens use the implemented provider-verified numeric-user
+attestation described above. Other opaque bearer, delegated, token-file, and
+application-environment tokens remain rejected for live applied execution: a
+configured identity label is not attestation. Those flows require another
+provider-verified principal or trusted credential-broker adapter.
 
 Inspect the bound plan and its new fingerprint:
 

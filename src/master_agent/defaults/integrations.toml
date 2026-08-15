@@ -59,6 +59,8 @@ enabled = false
 deployment = "cloud"
 base_url = "https://api.github.com"
 auth_mode = "bearer"
+# Bind and apply verify this token through GET /user and approval-bind its
+# provider-returned numeric user ID. No claimed principal belongs in this file.
 secret_env = "MASTER_AGENT_GITHUB_TOKEN"
 ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
 timeout_seconds = 20

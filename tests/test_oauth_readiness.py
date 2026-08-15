@@ -92,6 +92,41 @@ credential_identity = "tenant-a:claimed-user"
         self.assertIn("no such adapter is implemented", rendered)
         self.assertNotIn("opaque-token", rendered)
 
+    def test_github_provider_attestation_adapter_is_ready_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "opaque-token"},
+            )
+
+        connector_check = next(
+            check for check in report.checks if check["name"] == "connector:github"
+        )
+        self.assertTrue(report.ready, report.errors)
+        self.assertTrue(connector_check["passed"])
+        self.assertEqual(
+            connector_check["principal_attestation"],
+            "github_authenticated_user",
+        )
+        self.assertNotIn("opaque-token", str(report.to_dict()))
+
     def test_enabled_profile_reports_only_variable_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "oauth.toml"

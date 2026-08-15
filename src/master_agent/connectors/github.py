@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
@@ -20,6 +21,21 @@ from master_agent.models import AgentAction
 
 _REPOSITORY_COORDINATE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _PULL_REQUEST_STATES = frozenset({"open", "closed", "all"})
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubPrincipalAttestation:
+    """Provider-verified identity for the bearer token used by GitHub."""
+
+    user_id: int
+    login: str
+    reference: str
+
+    @property
+    def identity(self) -> str:
+        """Return the stable, secret-free identity bound into approvals."""
+
+        return f"github:user:{self.user_id}"
 
 
 class GitHubConnector(ReadOnlyConnector):
@@ -62,16 +78,32 @@ class GitHubConnector(ReadOnlyConnector):
     def probe(self) -> Mapping[str, Any]:
         """Verify GitHub authentication without exposing token material."""
 
-        data, response = self._client.request_json("GET", "user")
-        if not isinstance(data, Mapping):
-            raise ConnectorError("GitHub user response must be an object")
+        principal = self.attest_principal()
         return {
             "reachable": True,
             "deployment": self._config.deployment,
-            "authenticated_user": data.get("login"),
-            "user_id": data.get("id"),
-            "reference": response.url,
+            "authenticated_user": principal.login,
+            "user_id": principal.user_id,
+            "reference": principal.reference,
         }
+
+    def attest_principal(self) -> GitHubPrincipalAttestation:
+        """Resolve the token's immutable user identity through GitHub."""
+
+        data, response = self._client.request_json("GET", "user")
+        if not isinstance(data, Mapping):
+            raise ConnectorError("GitHub user response must be an object")
+        login = data.get("login")
+        user_id = data.get("id")
+        if not isinstance(login, str) or not login.strip():
+            raise ConnectorError("GitHub user response has no authenticated login")
+        if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
+            raise ConnectorError("GitHub user response has no valid numeric identity")
+        return GitHubPrincipalAttestation(
+            user_id=user_id,
+            login=login,
+            reference=response.url,
+        )
 
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
         if action.capability == "github.repository.read":
