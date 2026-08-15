@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 from importlib import metadata
 from io import StringIO
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -33,6 +32,7 @@ from master_agent.plugins import (
     PluginLock,
     discover_connector_plugins,
 )
+from tests.helpers import private_temporary_directory
 
 
 @dataclass
@@ -55,7 +55,7 @@ class CliPluginBoundaryTests(unittest.TestCase):
                 self._assert_plugin_apply_is_disabled(valid_approval=valid_approval)
 
     def test_approval_authority_file_is_parsed_from_trusted_snapshot(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             action = _read_action()
             plan = ChangePlan(
@@ -131,7 +131,7 @@ class CliPluginBoundaryTests(unittest.TestCase):
             self.assertEqual(payload["approved_by"], "trusted@example.test")
 
     def _assert_plugin_apply_is_disabled(self, *, valid_approval: bool) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             marker = root / "plugin-imported.marker"
             module_name = f"master_agent_marker_plugin_{uuid4().hex}"

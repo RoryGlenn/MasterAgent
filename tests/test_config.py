@@ -3,12 +3,12 @@
 import os
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from master_agent.auth import AuthMode, ResolvedAuth
 from master_agent.config import IntegrationConfig
 from master_agent.config_sources import resolve_config_source
 from master_agent.errors import ConfigurationError
+from tests.helpers import private_temporary_directory
 
 
 class IntegrationConfigTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class IntegrationConfigTests(unittest.TestCase):
         self.assertEqual(config.connector("jira").auth_mode, AuthMode.BASIC)
 
     def test_enabled_connector_reports_missing_environment(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
                 """
@@ -65,7 +65,7 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
         )
 
     def test_http_base_url_is_rejected(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
                 """
@@ -83,7 +83,10 @@ auth_mode = "none"
 
     def test_base_url_query_and_fragment_are_rejected(self) -> None:
         for suffix in ("?", "#", "?access_token=secret", "#access_token=secret"):
-            with self.subTest(suffix=suffix), TemporaryDirectory() as directory:
+            with (
+                self.subTest(suffix=suffix),
+                private_temporary_directory() as directory,
+            ):
                 path = Path(directory) / "integrations.toml"
                 path.write_text(
                     "[connectors.jira]\n"
@@ -105,7 +108,7 @@ auth_mode = "none"
             IntegrationConfig.from_toml(Path("/definitely/missing.toml"))
 
     def test_current_repository_config_is_never_implicitly_trusted(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             (root / "config").mkdir()
             (root / "config/integrations.toml").write_text(
@@ -132,7 +135,7 @@ secret_env = "AWS_SECRET_ACCESS_KEY"
     def test_connector_config_cannot_select_an_unrelated_environment_secret(
         self,
     ) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
                 """
@@ -151,7 +154,7 @@ secret_env = "AWS_SECRET_ACCESS_KEY"
     def test_cloud_credential_cannot_be_redirected_outside_provider_origin(
         self,
     ) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
                 """
@@ -170,7 +173,7 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
 
     @unittest.skipUnless(os.name == "posix", "permission checks require POSIX")
     def test_explicit_config_rejects_symlinks_and_writable_files(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             target = root / "target.toml"
             target.write_text("[connectors]\n", encoding="utf-8")
@@ -184,7 +187,7 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
 
     @unittest.skipUnless(os.name == "posix", "replacement test requires symlinks")
     def test_explicit_config_is_an_immutable_snapshot_after_validation(self) -> None:
-        with TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             selected = root / "integrations.toml"
             selected.write_text(

@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -41,6 +40,7 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import private_temporary_directory
 
 
 class ExecutionContextTests(unittest.TestCase):
@@ -49,7 +49,7 @@ class ExecutionContextTests(unittest.TestCase):
     def test_changed_resolved_origin_is_rejected_before_connector_construction(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
@@ -116,7 +116,7 @@ class ExecutionContextTests(unittest.TestCase):
             build_registry.assert_not_called()
 
     def test_ca_bundle_content_and_path_are_bound(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_CA_CONFIG, encoding="utf-8")
@@ -147,7 +147,7 @@ class ExecutionContextTests(unittest.TestCase):
     def test_origin_change_after_construction_is_rejected_before_execution(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
@@ -221,7 +221,7 @@ class ExecutionContextTests(unittest.TestCase):
             orchestrator.assert_not_called()
 
     def test_factory_rejects_each_changed_approved_connector_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_CA_CONFIG, encoding="utf-8")
@@ -278,7 +278,7 @@ class ExecutionContextTests(unittest.TestCase):
                 )
 
     def test_tls_uses_approved_bytes_during_ca_path_swap_and_restore(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_CA_CONFIG, encoding="utf-8")
@@ -331,7 +331,7 @@ class ExecutionContextTests(unittest.TestCase):
             self.assertEqual(ca_bundle.read_bytes(), approved_bytes)
 
     def test_context_round_trip_is_part_of_plan_fingerprint(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             integrations_path = Path(directory) / "integrations.toml"
             integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
             integrations = IntegrationConfig.from_toml(integrations_path)
@@ -356,7 +356,7 @@ class ExecutionContextTests(unittest.TestCase):
     def test_runtime_paths_gates_and_configuration_digests_are_approval_bound(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
@@ -471,7 +471,7 @@ class ExecutionContextTests(unittest.TestCase):
                         enforce_execution_context(bound_plan, observed)
 
     def test_basic_username_is_bound_without_binding_the_secret(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(_JIRA_BASIC_CONFIG, encoding="utf-8")
             integrations = IntegrationConfig.from_toml(path)
@@ -492,7 +492,7 @@ class ExecutionContextTests(unittest.TestCase):
         self.assertNotIn("TOKEN", json.dumps(alice.to_dict()))
 
     def test_effective_bitbucket_publication_root_is_bound(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             path = root / "integrations.toml"
             path.write_text(_BITBUCKET_PUBLICATION_CONFIG, encoding="utf-8")
@@ -538,7 +538,7 @@ class ExecutionContextTests(unittest.TestCase):
         )
 
     def test_declared_alias_cannot_hide_an_opaque_token_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
                 _MICROSOFT_BEARER_CONFIG
@@ -560,7 +560,7 @@ class ExecutionContextTests(unittest.TestCase):
                     )
 
     def test_live_bind_rejects_declared_opaque_principal_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(
@@ -606,7 +606,7 @@ class ExecutionContextTests(unittest.TestCase):
         self.assertFalse(bound_was_written)
 
     def test_live_apply_rejects_legacy_alias_after_opaque_token_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             integrations_path = root / "integrations.toml"
             integrations_path.write_text(
@@ -710,7 +710,7 @@ oauth_flow = "environment"
 secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 """,
         }
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             for name, authentication in configurations.items():
                 with self.subTest(name=name):
@@ -741,7 +741,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
         self.assertEqual(context.connectors, ())
 
     def test_entra_application_tenant_and_client_are_bound(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(_MICROSOFT_CLIENT_CREDENTIAL_CONFIG, encoding="utf-8")
             integrations = IntegrationConfig.from_toml(path)
@@ -815,7 +815,10 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             ),
         }
         for name, (configuration, approved, changed, canary) in scenarios.items():
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(name=name),
+                private_temporary_directory() as directory,
+            ):
                 root = Path(directory)
                 integrations_path = root / "integrations.toml"
                 integrations_path.write_text(configuration, encoding="utf-8")
@@ -871,7 +874,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
     def test_cli_rejects_changed_runtime_input_before_connector_construction(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             plan_path = root / "plan.json"
             plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
@@ -996,7 +999,10 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
         }
         repository_root = Path(__file__).resolve().parents[1]
         for name, option in configurations.items():
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(name=name),
+                private_temporary_directory() as directory,
+            ):
                 root = Path(directory)
                 plan_path = root / "plan.json"
                 plan_path.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
@@ -1050,7 +1056,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                 self.assertFalse(database.exists())
 
     def test_apply_uses_canonical_paths_after_final_ancestor_alias_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             approved = root / "approved"
             redirected = root / "redirected"
@@ -1123,7 +1129,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             self.assertEqual(tuple((redirected / "results").iterdir()), ())
 
     def test_runtime_directories_must_preexist_before_binding(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             runtime_root = root / "runtime"
             plan_path = root / "plan.json"
@@ -1198,7 +1204,10 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             "artifact-result": ("state/audit.sqlite3", "shared", "shared/report.json"),
         }
         for name, (database_name, artifacts_name, result_name) in scenarios.items():
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(name=name),
+                private_temporary_directory() as directory,
+            ):
                 root = Path(directory)
                 _mkdir_private(
                     root / "artifacts",
@@ -1236,7 +1245,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                 self.assertFalse(bound_path.exists())
 
     def test_runtime_binding_rejects_distinct_spellings_of_same_inode(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             state = root / "state"
             artifacts = root / "artifacts"
@@ -1276,7 +1285,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                 )
 
     def test_local_git_mutation_is_rejected_before_registry_or_audit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             drafts = root / "drafts"
             _mkdir_private(drafts)
@@ -1324,7 +1333,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             audit_log.assert_not_called()
 
     def test_apply_fails_closed_if_canonical_ancestor_is_replaced(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             approved = root / "approved"
             redirected = root / "redirected"
@@ -1393,7 +1402,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             self.assertEqual(tuple((redirected / "results").iterdir()), ())
 
     def test_apply_pins_approved_identity_before_first_context_gate(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             approved = root / "approved"
             saved = root / "approved.saved"
@@ -1464,7 +1473,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             self.assertEqual(tuple((approved / "results").iterdir()), ())
 
     def test_draft_fails_closed_if_canonical_artifact_root_is_replaced(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             artifacts = root / "artifacts"
             redirected = root / "redirected"
@@ -1519,7 +1528,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
             self.assertEqual(tuple(redirected.iterdir()), ())
 
     def test_result_fails_closed_if_canonical_parent_is_replaced(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             results = root / "results"
             redirected = root / "redirected"
@@ -1588,7 +1597,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
         for stale_name in ("report.json", "report.json.retention.json"):
             with (
                 self.subTest(stale_name=stale_name),
-                tempfile.TemporaryDirectory() as directory,
+                private_temporary_directory() as directory,
             ):
                 root = Path(directory)
                 artifacts = root / "artifacts"
@@ -1648,7 +1657,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                 self.assertEqual(tuple(artifacts.iterdir()), ())
 
     def test_result_is_committed_before_human_output(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             artifacts = root / "artifacts"
             results = root / "results"
@@ -1701,7 +1710,7 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
     def test_factory_rejects_bitbucket_local_git_publication(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             approved = root / "approved"
             redirected = root / "redirected"
