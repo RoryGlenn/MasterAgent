@@ -47,9 +47,9 @@ weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **75 typed capabilities**:
+The catalog contains **76 typed capabilities**:
 
-- 44 read-only capabilities;
+- 45 read-only capabilities;
 - 10 local-generation capabilities;
 - 16 reversible-write definitions, including 2 disabled OneNote writes and 5
   disabled local-Git mutations;
@@ -63,7 +63,7 @@ Supported domains:
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
-| GitHub Cloud | authenticated-user repository list, repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
+| GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
@@ -264,8 +264,20 @@ Atlassian connector needs the organization's reviewed base URL through
 `--integrations`; the packaged placeholder is rejected before network access.
 The agent should continue the requested feature after the probe succeeds.
 
-For the common “show my GitHub repositories” request, keep the checked-in
-connector disabled and run the one-command read path:
+For “show the public repositories under GitHub user `USERNAME`” or a request
+containing that user's public profile URL, use the anonymous typed path:
+
+```bash
+master-agent github-repositories --username USERNAME
+```
+
+This evaluates `github.public_repository.list`, calls GitHub's fixed public-user
+repository endpoint without loading or sending a credential, and independently
+re-reads the result. It accepts only public visibility. A credential file is
+neither required nor accepted on this route.
+
+For the distinct “show my GitHub repositories” request, keep the checked-in
+connector disabled and run the authenticated one-command path:
 
 ```bash
 master-agent github-repositories \

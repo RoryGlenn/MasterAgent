@@ -82,6 +82,19 @@ summarize, copy, or persist a credential value. A private connection report is
 mode `0600`. After connection succeeds, continue the requested provider
 feature; connectivity alone is not the outcome.
 
+For “show/list the public repositories for GitHub user `USERNAME`,” including a
+request that supplies a public profile URL, extract the username and use the
+credential-free typed path:
+
+```bash
+.venv/bin/master-agent github-repositories --username USERNAME
+```
+
+This evaluates `github.public_repository.list`, calls only GitHub's fixed
+public-user repository endpoint, lists public repositories anonymously, and
+independently re-reads the result. Do not search for, load, or request a GitHub
+token, and do not attest an unrelated authenticated user for this request.
+
 For “show/list my GitHub repositories,” use the complete typed path:
 
 ```bash

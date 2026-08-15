@@ -28,6 +28,108 @@ from tests.fakes import ExpectedRequest, QueueTransport
 class GitHubConnectorTests(unittest.TestCase):
     """Verify GitHub endpoint, normalization, and safety contracts."""
 
+    def test_public_user_repository_list_is_anonymous_bounded_and_normalized(
+        self,
+    ) -> None:
+        username = "rahul-aravind-opti"
+        repository = {
+            "id": 7,
+            "node_id": "R_7",
+            "name": "crossmint-challenge",
+            "full_name": f"{username}/crossmint-challenge",
+            "owner": {"login": username},
+            "description": "Public coding exercise.",
+            "private": False,
+            "visibility": "public",
+            "fork": False,
+            "archived": False,
+            "disabled": False,
+            "default_branch": "main",
+            "topics": ["go"],
+            "updated_at": "2025-11-08T10:00:00Z",
+            "pushed_at": "2025-11-08T09:00:00Z",
+            "html_url": f"https://github.com/{username}/crossmint-challenge",
+        }
+        transport = QueueTransport(
+            ExpectedRequest(
+                method="GET",
+                url_contains=(
+                    f"/users/{username}/repos?type=owner&sort=updated&"
+                    "direction=desc&per_page=10&page=1"
+                ),
+                payload=[repository],
+            )
+        )
+        connector = GitHubConnector(_config(), transport=transport)
+
+        result = connector.execute(
+            _action(
+                capability="github.public_repository.list",
+                resource_id=username,
+                parameters={"username": username, "limit": 10},
+            )
+        )
+
+        self.assertEqual(
+            result.after["schema"],
+            "master-agent/github-public-repositories@1",
+        )
+        self.assertEqual(result.after["query"]["username"], username)
+        self.assertEqual(result.after["query"]["visibility"], "public")
+        self.assertEqual(result.after["returned"], 1)
+        self.assertEqual(
+            result.after["repositories"][0]["full_name"],
+            f"{username}/crossmint-challenge",
+        )
+        self.assertNotIn("Authorization", transport.requests[0]["headers"])
+        transport.assert_drained()
+
+    def test_public_user_repository_list_rejects_unsafe_username_before_http(
+        self,
+    ) -> None:
+        connector = GitHubConnector(_config(), transport=QueueTransport())
+
+        with self.assertRaisesRegex(ConnectorError, "unsafe GitHub username"):
+            connector.execute(
+                _action(
+                    capability="github.public_repository.list",
+                    resource_id="unsafe",
+                    parameters={"username": "../user", "limit": 10},
+                )
+            )
+
+    def test_public_user_repository_list_rejects_nonpublic_response(self) -> None:
+        username = "rahul-aravind-opti"
+        transport = QueueTransport(
+            ExpectedRequest(
+                method="GET",
+                url_contains=f"/users/{username}/repos",
+                payload=[
+                    {
+                        "id": 7,
+                        "node_id": "R_7",
+                        "name": "private-repository",
+                        "full_name": f"{username}/private-repository",
+                        "owner": {"login": username},
+                        "private": True,
+                        "visibility": "private",
+                    }
+                ],
+            )
+        )
+        connector = GitHubConnector(_config(), transport=transport)
+
+        with self.assertRaisesRegex(ConnectorError, "was not public"):
+            connector.execute(
+                _action(
+                    capability="github.public_repository.list",
+                    resource_id=username,
+                    parameters={"username": username, "limit": 10},
+                )
+            )
+
+        transport.assert_drained()
+
     def test_principal_attestation_uses_immutable_numeric_user_identity(self) -> None:
         token = "provider-attestation-token"
         transport = QueueTransport(

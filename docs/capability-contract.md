@@ -10,6 +10,7 @@ jira.issue.read
 confluence.page.search
 confluence.page.read
 bitbucket.pull_request.search
+github.public_repository.list
 github.repository.list
 github.repository.read
 github.pull_request.search

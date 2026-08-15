@@ -6,10 +6,12 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- a 75-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
+- a 76-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
 - a bounded, read-only GitHub Cloud connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run
   reads;
+- a credential-free `github.public_repository.list` path for bounded,
+  independently verified public repositories owned by a specified GitHub user;
 - Phase 3 complete local draft packages containing Jira and Confluence proposals, Outlook `.eml`, Teams draft, PowerPoint, repository patch, summary, and integrity manifest;
 - approved Jira field updates, comments, transitions, version checks, and compensation;
 - approved Confluence page creation/update and compensation for Cloud and Data Center contracts;

@@ -21,7 +21,7 @@ or filesystem side effects.
 | `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
 | `discover` | Inspect connector configuration | Offline unless `--probe`; probing performs bounded read-only provider requests |
 | `connect` | Enable selected supported read connectors in memory and verify access | Fixed bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
-| `github-repositories` | Verify the GitHub identity and list repositories visible to it | Explicit bounded read-only GitHub requests; enables only the GitHub read connector in memory and never edits credentials or persistent configuration |
+| `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; enables only the GitHub read connector in memory and never edits credentials or persistent configuration |
 | `weekly-status-plan` | Build a read-only weekly-status plan | Writes only the selected local plan |
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
@@ -46,7 +46,11 @@ systems require an explicit reviewed integrations file when the packaged base
 URL is still the placeholder. This command verifies connectivity; the agent
 must continue with a typed feature command to complete the requested outcome.
 
-Both `connect` and `github-repositories` accept the canonical store or a strict
+`github-repositories --username USERNAME` is credential-free and accepts only
+public visibility. It ignores ambient GitHub tokens by constructing an
+anonymous connector, and it rejects `--credentials-file` rather than loading an
+unneeded secret. Without `--username`, `github-repositories` and `connect`
+accept the canonical store or a strict
 provider-keyed wrapper. A provider may be a token string, such as
 `{"github":"<token>"}`, or an object using only these applicable named fields:
 `token`, `username`, `token_file`, `token_expires_at`, `tenant_id`, `client_id`,

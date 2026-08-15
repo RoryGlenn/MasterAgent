@@ -121,6 +121,11 @@ For any supported connector, use `.venv/bin/master-agent connect --systems`
 with the exact requested systems. It performs minimum in-memory enablement,
 strict compatible credential loading, and fixed safe probes without persistent
 configuration changes. Then continue the requested feature. For GitHub
-repository discovery, use `.venv/bin/master-agent github-repositories`; it also
-evaluates the typed action, lists repositories, and independently verifies the
-result.
+repository discovery, use `.venv/bin/master-agent github-repositories`. When
+the operator names a GitHub user or supplies a public profile URL, extract
+the username and pass `--username USERNAME`; this path reads only public
+repositories anonymously, so never search for or request a token and never
+attest an unrelated authenticated user. Omit `--username` and use the governed
+credential path only for “my repositories,” private repositories, or other
+account-visible results. Both paths evaluate a typed action and independently
+verify the result.

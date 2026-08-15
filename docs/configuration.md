@@ -148,17 +148,25 @@ Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucke
 ## GitHub Cloud
 
 The GitHub connector is read-only and disabled by default. It exposes an
-authenticated-user repository list, repository metadata, pull-request
-search/read, and commit check-run reads.
+anonymous public-user repository list, an authenticated-user repository list,
+repository metadata, pull-request search/read, and commit check-run reads.
 `discover --systems github --probe` calls the fixed `/user` endpoint to verify
 the configured bearer token. `bind-context` and `run --apply` also call that
 endpoint to bind and re-verify the numeric GitHub user ID before governed live
 reads. No GitHub mutation gate exists.
 
-The convenience command below keeps the persistent connector disabled. The
-command enables only GitHub read access in memory, attests the user, evaluates
-the typed read through catalog/governance/policy, lists visible repositories,
-and independently verifies the result:
+For a specified user's public repositories, the convenience command constructs
+an anonymous in-memory connector, evaluates `github.public_repository.list`,
+calls only `/users/{username}/repos`, and independently verifies the result. It
+does not load an ambient token and rejects a credential file:
+
+```bash
+master-agent github-repositories --username USERNAME
+```
+
+For repositories visible to the authenticated account, the same command keeps
+the persistent connector disabled, attests the user, evaluates
+`github.repository.list`, and independently verifies the result:
 
 ```bash
 master-agent github-repositories \
@@ -270,8 +278,10 @@ path (but not its contents or digest), so bind and apply must select the same fi
 This plaintext format is a local-development convenience, not a production secret
 manager. Non-development governance profiles reject it.
 
-For `connect` and `github-repositories`, an existing restricted provider-keyed
-file is also accepted and adapted in memory. A provider may contain a token
+For `connect` and authenticated `github-repositories` calls without
+`--username`, an existing restricted provider-keyed file is also accepted and
+adapted in memory. The anonymous public-user route rejects a credential file.
+A provider may contain a token
 string or an object using only applicable fields from `token`, `username`,
 `token_file`, `token_expires_at`, `tenant_id`, `client_id`, and
 `client_secret`, for example:
