@@ -117,6 +117,7 @@ def build_live_connectors(
         config,
         environ=source,
         require_trusted_principal=approved_execution_context is not None,
+        principal_transport=transport,
     )
     if approved_execution_context is not None:
         _verify_approved_execution_context(

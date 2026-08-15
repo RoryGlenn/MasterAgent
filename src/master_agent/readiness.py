@@ -109,6 +109,11 @@ def assess_readiness(
                 "name": f"connector:{name}",
                 "passed": not connector_errors,
                 "deployment": str(connector.deployment),
+                "principal_attestation": (
+                    str(connector.principal_attestation_adapter)
+                    if connector.principal_attestation_adapter is not None
+                    else "flow_enforced"
+                ),
                 "errors": list(connector_errors),
             }
         )

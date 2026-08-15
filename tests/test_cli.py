@@ -7,6 +7,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from master_agent.cli import main
 from master_agent.planners.static import build_weekly_status_plan
@@ -119,6 +120,44 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
             self.assertEqual(status, 2, stderr.getvalue())
             self.assertIn("missing_environment", stdout.getvalue())
             self.assertNotIn("secret", stdout.getvalue().lower())
+
+    def test_readiness_accepts_implemented_github_principal_adapter(self) -> None:
+        with private_temporary_directory() as directory:
+            config = Path(directory) / "integrations.toml"
+            config.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GITHUB_TOKEN": "opaque-token"},
+                ),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                status = main(
+                    [
+                        "readiness",
+                        "--integrations",
+                        str(config),
+                    ]
+                )
+
+        self.assertEqual(status, 0, stderr.getvalue())
+        self.assertIn("ready: True", stdout.getvalue())
+        self.assertIn("live connectors: 1 configured", stdout.getvalue())
+        self.assertIn("PASS connector:github", stdout.getvalue())
 
     def test_packaged_defaults_allow_dry_run_outside_repository(self) -> None:
         """An installed package must not depend on the source-tree config path."""

@@ -22,6 +22,9 @@
   disabled pending exact target/config/source and runtime-manifest binding;
 - metadata-only connector plugin discovery, locking, and plan binding through the `master_agent.connectors` entry-point group; in-process apply remains disabled pending an isolated dependency-closure worker;
 - command-level and factory-gate tests proving broad runtime flags cannot bypass provider-specific gates.
+- provider-verified GitHub bearer-token principal attestation that binds the
+  immutable numeric user ID at review time and re-verifies it before applied
+  connector execution.
 
 ### Changed
 
@@ -59,6 +62,8 @@
   before config, credentials, connectors, or audit access;
 - draft package summaries/manifests and retained results use pinned,
   create-only final names with transaction-owned rollback.
+- GitHub token rotation is accepted only when `GET /user` proves the same
+  numeric principal; a token for another user fails before connector actions.
 
 ## 0.3.0 — Read-only communication context
 

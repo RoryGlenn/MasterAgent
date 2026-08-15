@@ -34,11 +34,13 @@ master-agent oauth-device-code \
 
 Only an enabled `entra_device_code` profile can run. The operator completes the provider's interactive authentication. The runtime writes the access token to a user-restricted file and prints expiry, not the token.
 
-Device-code, token-file, and environment bearer tokens remain opaque to the
-approval runtime. They may be acquired and inspected for readiness, but cannot
-be used by live `run --apply` until a provider-verified principal or trusted
-credential-broker attestation adapter is implemented. A configured identity
-label and unverified JWT claim parsing are not accepted as proof.
+Microsoft device-code, token-file, and environment bearer tokens remain opaque
+to the approval runtime. They may be acquired and inspected for readiness, but
+cannot be used by live `run --apply` until a Microsoft provider-verified
+principal or trusted credential-broker attestation adapter is implemented. A
+configured identity label and unverified JWT claim parsing are not accepted as
+proof. GitHub bearer tokens are a separate supported flow: the GitHub connector
+verifies `GET /user` at bind and apply time and binds the returned numeric ID.
 
 ## Real deployment gate
 

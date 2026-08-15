@@ -36,6 +36,12 @@ class DeploymentType(StrEnum):
     DATA_CENTER = "data_center"
 
 
+class PrincipalAttestationAdapter(StrEnum):
+    """Implemented provider-backed credential identity adapters."""
+
+    GITHUB_AUTHENTICATED_USER = "github_authenticated_user"
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectorConfig:
     """Unresolved configuration for one connector.
@@ -275,13 +281,20 @@ class ConnectorConfig:
 
         Basic authentication binds the username the provider authenticates, and
         Entra client credentials bind the tenant/client pair used to acquire the
-        token. Opaque bearer, delegated, token-file, and application-environment
-        tokens do not expose an independently trustworthy principal. A declared
-        label is not attestation, so live applied execution rejects those modes.
+        token. Provider-backed adapters are resolved separately because they
+        require a live attestation request. Other opaque bearer, delegated,
+        token-file, and application-environment tokens do not expose an
+        independently trustworthy principal. A declared label is not
+        attestation, so live applied execution rejects those modes.
         """
 
         if self.auth_mode is AuthMode.NONE:
             return None
+        if self.principal_attestation_adapter is not None:
+            raise ConfigurationError(
+                f"connector {self.system} credential identity requires "
+                "provider attestation"
+            )
         source = environ if environ is not None else os.environ
         if self.auth_mode is AuthMode.BASIC:
             if not self.username_env:
@@ -307,9 +320,25 @@ class ConnectorConfig:
 
         raise ConfigurationError(self.principal_attestation_error() or "")
 
+    @property
+    def principal_attestation_adapter(self) -> PrincipalAttestationAdapter | None:
+        """Return the implemented provider-backed principal adapter, if any."""
+
+        oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
+        if (
+            self.system == "github"
+            and self.deployment is DeploymentType.CLOUD
+            and self.auth_mode is AuthMode.BEARER
+            and oauth_flow == "environment"
+        ):
+            return PrincipalAttestationAdapter.GITHUB_AUTHENTICATED_USER
+        return None
+
     def principal_attestation_error(self) -> str | None:
         """Return why this flow cannot bind a trusted applied-run principal."""
 
+        if self.principal_attestation_adapter is not None:
+            return None
         oauth_flow = str(self.extra.get("oauth_flow", "environment")).strip()
         if self.auth_mode in {AuthMode.NONE, AuthMode.BASIC} or (
             self.auth_mode is AuthMode.OAUTH_APPLICATION

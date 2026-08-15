@@ -28,6 +28,53 @@ from tests.fakes import ExpectedRequest, QueueTransport
 class GitHubConnectorTests(unittest.TestCase):
     """Verify GitHub endpoint, normalization, and safety contracts."""
 
+    def test_principal_attestation_uses_immutable_numeric_user_identity(self) -> None:
+        token = "provider-attestation-token"
+        transport = QueueTransport(
+            ExpectedRequest(
+                method="GET",
+                url_contains="/user",
+                payload={"login": "RenamableLogin", "id": 42},
+            )
+        )
+        connector = GitHubConnector(_config(token=token), transport=transport)
+
+        principal = connector.attest_principal()
+
+        self.assertEqual(principal.identity, "github:user:42")
+        self.assertEqual(principal.login, "RenamableLogin")
+        self.assertNotIn(token, repr(principal))
+        self.assertEqual(
+            transport.requests[0]["headers"]["Authorization"],
+            f"Bearer {token}",
+        )
+        transport.assert_drained()
+
+    def test_principal_attestation_rejects_malformed_provider_identity(self) -> None:
+        invalid_payloads = (
+            {"login": "", "id": 42},
+            {"login": "RoryGlenn", "id": None},
+            {"login": "RoryGlenn", "id": True},
+            {"login": "RoryGlenn", "id": 0},
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                connector = GitHubConnector(
+                    _config(token="provider-attestation-token"),
+                    transport=QueueTransport(
+                        ExpectedRequest(
+                            method="GET",
+                            url_contains="/user",
+                            payload=payload,
+                        )
+                    ),
+                )
+                with self.assertRaisesRegex(
+                    ConnectorError,
+                    "authenticated login|valid numeric identity",
+                ):
+                    connector.attest_principal()
+
     def test_repository_read_normalizes_and_scans_untrusted_content(self) -> None:
         token = "test-github-token"
         transport = QueueTransport(
@@ -336,6 +383,7 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         )
         self.assertEqual(records[0].status, DiscoveryStatus.REACHABLE)
         self.assertEqual(records[0].probe["authenticated_user"], "RoryGlenn")
+        self.assertEqual(records[0].probe["user_id"], 42)
         self.assertNotIn("never-render-this-token", str(records[0].to_dict()))
         transport.assert_drained()
 
@@ -367,6 +415,26 @@ auth_mode = "bearer"
 secret_env = "AWS_SECRET_ACCESS_KEY"
 """
             )
+
+    def test_static_identity_lookup_cannot_bypass_provider_attestation(self) -> None:
+        connector = _integration_config(
+            """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+credential_identity = "claimed-admin-alias"
+"""
+        ).connector("github")
+
+        self.assertEqual(
+            connector.principal_attestation_adapter,
+            "github_authenticated_user",
+        )
+        with self.assertRaisesRegex(ConfigurationError, "provider attestation"):
+            connector.credential_identity({"MASTER_AGENT_GITHUB_TOKEN": "opaque-token"})
 
 
 def _config(

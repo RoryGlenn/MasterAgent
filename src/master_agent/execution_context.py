@@ -13,11 +13,14 @@ from urllib.parse import urlsplit
 from master_agent.config import (
     ConnectorConfig,
     IntegrationConfig,
+    PrincipalAttestationAdapter,
     ResolvedExecutionTarget,
 )
 from master_agent.config_sources import ConfigSource
+from master_agent.connectors.github import GitHubConnector
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
+from master_agent.http import HttpTransport
 from master_agent.models import (
     ChangePlan,
     ConfigurationExecutionBinding,
@@ -76,6 +79,7 @@ def capture_connector_executions(
     *,
     environ: Mapping[str, str] | None = None,
     require_trusted_principal: bool = True,
+    principal_transport: HttpTransport | None = None,
 ) -> tuple[CapturedConnectorExecution, ...]:
     """Capture enabled destinations and, when required, trusted principals."""
 
@@ -97,7 +101,12 @@ def capture_connector_executions(
                     resolved_base_url=target.base_url,
                     resolved_origin=_origin(target.base_url, system=config.system),
                     credential_identity=(
-                        config.credential_identity(source)
+                        _credential_identity(
+                            config,
+                            target=target,
+                            environ=source,
+                            transport=principal_transport,
+                        )
                         if require_trusted_principal
                         else None
                     ),
@@ -120,6 +129,7 @@ def build_execution_context(
     plugin_descriptors: Sequence[PluginDescriptor] = (),
     runtime: RuntimeExecutionBinding | None = None,
     include_connectors: bool = True,
+    principal_transport: HttpTransport | None = None,
 ) -> ExecutionContext:
     """Resolve a secret-free snapshot suitable for plan approval binding."""
 
@@ -133,6 +143,7 @@ def build_execution_context(
             for item in capture_connector_executions(
                 integrations,
                 environ=environ,
+                principal_transport=principal_transport,
             )
         )
         if include_connectors
@@ -167,6 +178,33 @@ def build_execution_context(
         plugins=tuple(plugin_bindings),
         runtime=runtime,
     )
+
+
+def _credential_identity(
+    config: ConnectorConfig,
+    *,
+    target: ResolvedExecutionTarget,
+    environ: Mapping[str, str],
+    transport: HttpTransport | None,
+) -> str | None:
+    """Capture a flow-enforced or provider-verified principal identity."""
+
+    adapter = config.principal_attestation_adapter
+    if adapter is PrincipalAttestationAdapter.GITHUB_AUTHENTICATED_USER:
+        resolved = config.resolve(environ, execution_target=target)
+        return (
+            GitHubConnector(
+                resolved,
+                transport=transport,
+            )
+            .attest_principal()
+            .identity
+        )
+    if adapter is not None:  # pragma: no cover - adapter registry invariant.
+        raise ConfigurationError(
+            f"connector {config.system} has an unsupported principal adapter"
+        )
+    return config.credential_identity(environ)
 
 
 def build_runtime_execution_binding(

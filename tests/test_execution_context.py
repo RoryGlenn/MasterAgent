@@ -40,6 +40,7 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.registry import ConnectorRegistry
+from tests.fakes import ExpectedRequest, QueueTransport
 from tests.helpers import private_temporary_directory
 
 
@@ -490,6 +491,84 @@ class ExecutionContextTests(unittest.TestCase):
             "basic:alice@example.test",
         )
         self.assertNotIn("TOKEN", json.dumps(alice.to_dict()))
+
+    def test_github_principal_is_provider_verified_and_bound(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                _GITHUB_BEARER_CONFIG
+                + '\ncredential_identity = "claimed-admin-alias"\n',
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(path)
+            original = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "token-for-user-42"},
+                principal_transport=_github_principal_transport(
+                    login="OriginalLogin",
+                    user_id=42,
+                ),
+            )
+            rotated = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "rotated-token-for-user-42"},
+                principal_transport=_github_principal_transport(
+                    login="RenamedLogin",
+                    user_id=42,
+                ),
+            )
+            swapped = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "token-for-user-99"},
+                principal_transport=_github_principal_transport(
+                    login="DifferentUser",
+                    user_id=99,
+                ),
+            )
+
+        self.assertEqual(original, rotated)
+        self.assertNotEqual(original, swapped)
+        self.assertEqual(
+            original.connectors[0].credential_identity,
+            "github:user:42",
+        )
+        rendered = json.dumps(original.to_dict())
+        self.assertNotIn("token-for-user-42", rendered)
+        self.assertNotIn("OriginalLogin", rendered)
+        self.assertNotIn("claimed-admin-alias", rendered)
+
+    def test_github_principal_swap_is_rejected_before_connector_actions(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(_GITHUB_BEARER_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            approved = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "approved-token"},
+                principal_transport=_github_principal_transport(
+                    login="ApprovedUser",
+                    user_id=42,
+                ),
+            )
+            swapped_transport = _github_principal_transport(
+                login="DifferentUser",
+                user_id=99,
+            )
+
+            with self.assertRaisesRegex(ConfigurationError, "credential identity"):
+                build_live_connectors(
+                    integrations,
+                    environ={"MASTER_AGENT_GITHUB_TOKEN": "swapped-token-canary"},
+                    systems={"github"},
+                    transport=swapped_transport,
+                    approved_execution_context=approved,
+                )
+
+        self.assertEqual(len(swapped_transport.requests), 1)
+        self.assertNotIn(
+            "swapped-token-canary",
+            json.dumps(approved.to_dict()),
+        )
 
     def test_effective_bitbucket_publication_root_is_bound(self) -> None:
         with private_temporary_directory() as directory:
@@ -1854,6 +1933,16 @@ def _mkdir_private(*paths: Path) -> None:
         path.chmod(0o700)
 
 
+def _github_principal_transport(*, login: str, user_id: int) -> QueueTransport:
+    return QueueTransport(
+        ExpectedRequest(
+            method="GET",
+            url_contains="/user",
+            payload={"login": login, "id": user_id},
+        )
+    )
+
+
 _JIRA_ENV_CONFIG = """
 [connectors.jira]
 enabled = true
@@ -1881,6 +1970,16 @@ base_url = "https://tenant-a.atlassian.net"
 auth_mode = "basic"
 username_env = "MASTER_AGENT_JIRA_USERNAME"
 secret_env = "MASTER_AGENT_JIRA_TOKEN"
+""".strip()
+
+
+_GITHUB_BEARER_CONFIG = """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
 """.strip()
 
 
