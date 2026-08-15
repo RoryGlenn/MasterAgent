@@ -16,15 +16,27 @@ All HTTP connectors use a constrained client that enforces:
 
 ## Read connectors
 
-Read results are normalized into stable schemas, marked as untrusted content, scanned for prompt-injection indicators, and independently re-read for verification where practical. The GitHub Cloud connector constructs authenticated-user repository-list, repository, pull-request, check-run, and identity endpoints internally and uses bounded numbered pagination; it exposes no write or arbitrary-request surface. Its authenticated-user request binds the provider-returned numeric principal during context review and re-verifies that principal before applied reads. Communication bodies and document content remain in memory unless explicit evidence output and retention rules permit persistence.
+Read results are normalized into stable schemas, marked as untrusted content,
+scanned for prompt-injection indicators, and independently re-read for
+verification where practical. The GitHub Cloud connector constructs fixed
+public-user and authenticated-user repository-list, repository, pull-request,
+check-run, and identity endpoints internally and uses bounded numbered
+pagination; it exposes no write or arbitrary-request surface.
+`github.public_repository.list` uses the public-user endpoint anonymously and
+does not resolve or forward an ambient credential. Authenticated GitHub reads
+bind the provider-returned numeric principal during context review and
+re-verify that principal before applied reads. Communication bodies and
+document content remain in memory unless explicit evidence output and
+retention rules permit persistence.
 
-`master-agent connect --systems ...` is the provider-neutral readiness path for
-operator-requested access. It enables only the selected supported read
-connectors in memory, accepts canonical or strictly mapped provider-keyed local
-credentials, runs each connector's fixed probe, and persists no connector or
-credential changes. It is not a generic HTTP surface and does not execute a
-feature action; the agent continues through the typed capability that produces
-the requested outcome.
+`master-agent connect --systems ...` is the provider-neutral readiness path
+when operator-requested access requires authentication. It enables only the
+selected supported read connectors in memory, accepts canonical or strictly
+mapped provider-keyed local credentials, runs each connector's fixed probe,
+and persists no connector or credential changes. It is not a prerequisite for
+the anonymous GitHub public-user repository list. It is not a generic HTTP
+surface and does not execute a feature action; the agent continues through the
+typed capability that produces the requested outcome.
 
 ## Mutation connectors
 

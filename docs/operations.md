@@ -4,8 +4,10 @@
 
 1. Generate or receive a plan.
 2. For live execution, bind the trusted integrations bundle, resolved
-   destinations/CA identities, and flow-enforced or provider-verified
-   credential principals into the plan. Plugin identities may be bound for
+   destinations/CA identities, and any flow-enforced or provider-verified
+   credential principals required by the selected capabilities into the plan.
+   A capability whose authentication class is `none` has no credential
+   principal and must not resolve one. Plugin identities may be bound for
    review, but plugin execution remains disabled.
 3. Inspect the bound plan and fingerprint.
 4. Create exact action approvals with an explicit trusted approval-authority

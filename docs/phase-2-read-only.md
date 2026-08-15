@@ -50,7 +50,11 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 
 ### None
 
-Available only for explicitly unauthenticated test or internal endpoints. Production environments should normally use authenticated connectors.
+Used only by capabilities explicitly cataloged for anonymous access. An
+authentication-free capability must not resolve or forward ambient credentials
+and may call only its fixed public or internal endpoint.
+`github.public_repository.list` uses this mode in production for a specified
+GitHub user's public repositories.
 
 ## Configuration resolution
 

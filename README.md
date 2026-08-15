@@ -94,7 +94,9 @@ Supported domains:
 - `python-pptx`, installed automatically.
 - Git only for repository inspection and quarantined internal mutation tests;
   no local Git mutation capability is routable.
-- Organization-approved HTTPS API endpoints and credentials for live use.
+- Organization-approved HTTPS API endpoints and, only when the selected typed
+  capability requires authentication, approved credentials for live use.
+  Anonymous public-data capabilities neither require nor load credentials.
 
 ## Use as a GitHub Copilot custom agent
 

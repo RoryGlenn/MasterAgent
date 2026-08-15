@@ -108,6 +108,14 @@ are denied for exact governed targets.
 
 Connectors register a system name and explicit capability set. Multiple connectors may serve one system only when their capability sets do not overlap. This allows, for example, live Outlook reads and local Outlook draft generation to coexist safely.
 
+Authentication is selected by the typed capability contract, not by a blanket
+provider default. The runtime uses the least-authorized registered route that
+can return the requested data. A capability classified for anonymous public
+access constructs an authentication-free connector and does not consult
+credential resolution, even when an ambient provider credential exists.
+Authenticated routes are reserved for private, account-visible, or otherwise
+identity-bound data.
+
 Plugin connectors are discovered, locked, and bound to plans without import.
 They are not loaded during apply: the CLI fails closed until a separate worker
 can seal the plugin and transitive dependency closure before execution.

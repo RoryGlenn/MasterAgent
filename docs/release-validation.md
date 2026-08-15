@@ -1,9 +1,10 @@
 # Release Validation — v1.0.0
 
 The source tree and built artifacts are validated offline before release.
-Organization-specific activation remains a deployment task because no real
-workplace credentials, tenant consent, production resources, authenticated
-approval service, or external audit-sink adapter is bundled.
+Organization-specific authenticated activation remains a deployment task
+because no real workplace credentials, tenant consent, production resources,
+authenticated approval service, or external audit-sink adapter is bundled.
+Typed anonymous public-data capabilities require no credential activation.
 
 ## Automated validation
 
@@ -24,6 +25,10 @@ approval service, or external audit-sink adapter is bundled.
   explicit no-local-change safeguards, provider-neutral ephemeral connection,
   capability-gap ownership, last-resort question rules, script, and policy are
   included in the source distribution.
+- Instruction, connector, configuration, deployment, and operations guides
+  distinguish typed anonymous public reads from authenticated access. Release
+  validation rejects the stale blanket claims that all live use requires a
+  credential or that authentication-free endpoints are only for tests.
 - The checked-in demonstration PowerPoint opens as a three-slide presentation;
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
@@ -48,8 +53,11 @@ python3 scripts/validate_release.py
 
 The release does not claim successful authentication against a particular
 organization and cannot report production-ready while no implemented external,
-tamper-resistant audit sink exists. Before live use, administrators must
-approve applications, scopes, Conditional Access behavior, retention, data
-handling, provider URLs, secret storage, and production governance. The
-deployment runbook requires read-only non-production probes before any
-reversible write or communication capability is enabled.
+tamper-resistant audit sink exists. Before authenticated live use,
+administrators must approve applicable applications, scopes, Conditional
+Access behavior, retention, data handling, provider URLs, secret storage, and
+production governance. Anonymous public-data capabilities still require
+reviewed endpoints, data handling, governance, and bounded verification, but
+not application registration or secret storage. The deployment runbook
+requires read-only non-production probes before any reversible write or
+communication capability is enabled.

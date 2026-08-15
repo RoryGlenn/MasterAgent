@@ -11,6 +11,11 @@
 - connector configuration diagnostics that expose variable names, not values;
 - explicit read-only live probes.
 
+This phase governs capabilities that require authentication. A capability
+explicitly cataloged for anonymous public access does not acquire, resolve, or
+forward a credential; `github.public_repository.list` is the current production
+example.
+
 ## Safe readiness
 
 ```bash
@@ -44,7 +49,8 @@ verifies `GET /user` at bind and apply time and binds the returned numeric ID.
 
 ## Real deployment gate
 
-Phase 2C code does not create tenant applications or grant consent. Before live use, administrators must review:
+Phase 2C code does not create tenant applications or grant consent. Before live
+use of an authenticated capability, administrators must review:
 
 - requested scopes;
 - delegated vs application identity;

@@ -32,12 +32,15 @@ TOML contains environment-variable **names**, never secret values. The runtime r
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
 
-GitHub Cloud uses `MASTER_AGENT_GITHUB_TOKEN` as a bearer token. The cloud
-origin is fixed to `api.github.com`; alternate cloud hosts are rejected, and
-GitHub Enterprise Server is not part of the current connector contract. At
-context binding and applied execution, the typed GitHub adapter calls
-`GET /user` and binds the provider-returned numeric user ID. It does not trust a
-configured identity label or persist the token or mutable login.
+Authenticated GitHub Cloud capabilities use `MASTER_AGENT_GITHUB_TOKEN` as a
+bearer token. The separate `github.public_repository.list` capability is
+anonymous and never resolves or sends that token, even when it is present in
+the environment. The cloud origin is fixed to `api.github.com`; alternate
+cloud hosts are rejected, and GitHub Enterprise Server is not part of the
+current connector contract. At context binding and applied execution for an
+authenticated capability, the typed GitHub adapter calls `GET /user` and binds
+the provider-returned numeric user ID. It does not trust a configured identity
+label or persist the token or mutable login.
 
 Exact-plan binding records a flow-enforced or provider-verified non-secret
 credential identity, not the token or password. Basic usernames and Entra
