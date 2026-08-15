@@ -28,7 +28,8 @@
   immutable numeric user ID at review time and re-verifies it before applied
   connector execution.
 - a repository-scoped GitHub Copilot custom-agent profile that exposes
-  MasterAgent in the agent picker while preserving the governed CLI boundary.
+  MasterAgent in the agent picker, bootstraps the CLI in a bounded local
+  virtual environment when needed, and preserves the governed runtime boundary.
 
 ### Changed
 

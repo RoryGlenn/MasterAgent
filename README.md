@@ -104,10 +104,13 @@ Open the repository root in a supported Copilot IDE, then select
 loads the repository policy and routes enterprise operations through the
 existing governed CLI rather than direct provider tools.
 
-Cloning does not install the Python runtime. Complete the source installation
-below before asking the custom agent to run `master-agent` commands. See the
-[Copilot custom-agent guide](docs/copilot-custom-agent.md) for discovery,
-security boundaries, GitHub.com and CLI usage, and troubleshooting.
+Cloning does not install the Python runtime. When asked to run a documented
+command, the custom agent can create a repository-local `.venv`, install the
+declared project dependencies, and invoke the CLI through that exact path. It
+will not install anything when the request is read-only or forbids changes. See
+the [Copilot custom-agent guide](docs/copilot-custom-agent.md) for discovery,
+bootstrap behavior, security boundaries, GitHub.com and CLI usage, and
+troubleshooting.
 
 ## Install from the source distribution
 
