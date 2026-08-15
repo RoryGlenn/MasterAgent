@@ -33,9 +33,14 @@
   the first ordinary prompt, reports a stable nontechnical outcome, and
   preserves the governed runtime boundary; repository-inspection and explicit
   no-local-change prompts remain non-mutating.
-- a one-request goal-completion contract that batches necessary reversible
-  read-only prerequisites, uses ephemeral least-privilege connector overlays,
-  and reserves questions for real missing authority or operator-only input;
+- a force-multiplier default-to-action contract that owns setup, connection,
+  in-scope capability implementation, repair, tests, and end-to-end
+  verification, while batching any truly operator-only input into one final
+  request;
+- a provider-neutral `connect` command for Jira, Confluence, Bitbucket, GitHub,
+  Microsoft identity, SharePoint, Outlook, Teams, and OneNote that enables only
+  selected read connectors in memory, adapts strict provider-keyed credentials
+  without rewriting them, and produces optional mode-`0600` reports;
 - a `github-repositories` convenience path that accepts canonical or exact
   legacy GitHub token wrappers without rewriting them, verifies the provider
   identity, evaluates the typed read, and independently verifies the result;
@@ -52,8 +57,9 @@
   command names but do not execute;
 - readiness output states the live connector count, and an empty citation
   lookup reports `no citations found` instead of producing blank output;
-- direct provider-read goals now authorize their minimum in-memory read
-  connector for that one goal without persistently enabling live access;
+- direct provider goals now authorize their minimum in-memory read connector,
+  fixed safe probe, and implied network access for that one goal without
+  persistently enabling live access or prompting again;
 - applied result names are reserved before connector/audit effects and committed
   create-only before human-readable output; audit, artifact, and result
   directories must be pairwise distinct;

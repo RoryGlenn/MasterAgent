@@ -17,6 +17,7 @@ from uuid import UUID
 
 from master_agent.approvals import HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
+from master_agent.auth import AuthMode
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.citations import find_citations
@@ -117,6 +118,19 @@ _DISABLED_LOCAL_GIT_MUTATIONS = frozenset(
 _DISABLED_NON_MANIFEST_EXECUTIONS = frozenset(
     {"communication-context", "recurring-run", "weekly-status"}
 )
+
+_CONNECT_CONFIGURATION_BY_SYSTEM = {
+    "jira": "jira",
+    "confluence": "confluence",
+    "bitbucket": "bitbucket",
+    "github": "github",
+    "microsoft": "microsoft",
+    "sharepoint": "microsoft",
+    "outlook": "microsoft",
+    "teams": "microsoft",
+    "onenote": "microsoft",
+}
+_PLACEHOLDER_PROVIDER_URLS = frozenset({"https://example.atlassian.net"})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -240,6 +254,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 credentials_file=args.credentials_file,
                 probe=args.probe,
                 systems=_parse_systems(args.systems),
+                output=args.output,
+            )
+        if args.command == "connect":
+            return _connect(
+                integrations_path=args.integrations,
+                governance_path=args.governance,
+                credentials_file=args.credentials_file,
+                systems=_parse_systems(args.systems) or set(),
                 output=args.output,
             )
         if args.command == "github-repositories":
@@ -545,6 +567,19 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--probe", action="store_true")
     discover.add_argument("--systems")
     discover.add_argument("--output", type=Path)
+
+    connect = subparsers.add_parser(
+        "connect",
+        help=(
+            "enable requested read connectors in memory and verify them without "
+            "changing persistent configuration"
+        ),
+    )
+    connect.add_argument("--integrations", type=Path, default=None)
+    connect.add_argument("--governance", type=Path, default=None)
+    connect.add_argument("--credentials-file", type=Path)
+    connect.add_argument("--systems", required=True)
+    connect.add_argument("--output", type=Path)
 
     github_repositories = subparsers.add_parser(
         "github-repositories",
@@ -1689,6 +1724,190 @@ def _discover(
     return 0 if all(record.status not in unavailable for record in records) else 2
 
 
+def _connect(
+    *,
+    integrations_path: Path | None,
+    governance_path: Path | None,
+    credentials_file: Path | None,
+    systems: set[str],
+    output: Path | None,
+    transport: HttpTransport | None = None,
+) -> int:
+    """Verify requested read connectors through an ephemeral configuration."""
+
+    _reject_output_aliases(
+        output,
+        credentials_file,
+        integrations_path,
+        governance_path,
+    )
+    if not systems:
+        raise ConfigurationError("--systems must contain at least one system")
+    unknown = sorted(systems - set(_CONNECT_CONFIGURATION_BY_SYSTEM))
+    if unknown:
+        raise ConfigurationError(
+            "unsupported connection system(s): " + ", ".join(unknown)
+        )
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(integrations_path, "integrations.toml")
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
+    configurations = {_CONNECT_CONFIGURATION_BY_SYSTEM[system] for system in systems}
+    connectors = dict(integrations.connectors)
+    for name in configurations:
+        unresolved = integrations.connector(name)
+        if (unresolved.base_url or "").rstrip("/") in _PLACEHOLDER_PROVIDER_URLS:
+            raise ConfigurationError(
+                f"connector {name} still uses a placeholder provider URL; supply "
+                "the organization's reviewed integrations file"
+            )
+        extra = dict(unresolved.extra)
+        if name == "microsoft" and "onenote" in systems:
+            extra["onenote_read_enabled"] = True
+        connectors[name] = replace(unresolved, enabled=True, extra=extra)
+    effective = IntegrationConfig(connectors=connectors)
+
+    if credentials_file is not None:
+        if governance.environment is not EnvironmentKind.DEVELOPMENT:
+            raise ConfigurationError(
+                "--credentials-file is restricted to development; use the approved "
+                "secret manager for non-development execution"
+            )
+        store = CredentialStoreSnapshot.load_provider_compatible(
+            credentials_file,
+            allowed_names=effective.credential_environment_variables(),
+            aliases=_provider_credential_aliases(
+                effective,
+                configurations=configurations,
+                systems=systems,
+            ),
+        )
+        ambient = {
+            name: value for name, value in os.environ.items() if name not in store.names
+        }
+        environ = store.overlay(ambient)
+    else:
+        environ = dict(os.environ)
+
+    if "microsoft" in configurations:
+        microsoft = effective.connector("microsoft")
+        extra = dict(microsoft.extra)
+        token_file_env = str(extra.get("token_file_env", ""))
+        client_environment = tuple(
+            str(extra.get(key, ""))
+            for key in ("tenant_id_env", "client_id_env", "client_secret_env")
+        )
+        if token_file_env and environ.get(token_file_env):
+            extra["oauth_flow"] = "token_file"
+            microsoft = replace(
+                microsoft,
+                auth_mode=AuthMode.OAUTH_DELEGATED,
+                extra=extra,
+            )
+        elif microsoft.secret_env and environ.get(microsoft.secret_env):
+            extra["oauth_flow"] = "environment"
+            identity_mode = str(extra.get("identity_mode", "delegated")).lower()
+            microsoft = replace(
+                microsoft,
+                auth_mode=(
+                    AuthMode.OAUTH_APPLICATION
+                    if identity_mode == "application"
+                    else AuthMode.OAUTH_DELEGATED
+                ),
+                extra=extra,
+            )
+        elif all(name and environ.get(name) for name in client_environment):
+            extra["oauth_flow"] = "client_credentials"
+            microsoft = replace(
+                microsoft,
+                auth_mode=AuthMode.OAUTH_APPLICATION,
+                extra=extra,
+            )
+        connectors = dict(effective.connectors)
+        connectors["microsoft"] = microsoft
+        effective = IntegrationConfig(connectors=connectors)
+
+    records = discover_integrations(
+        effective,
+        environ=environ,
+        probe=True,
+        transport=transport,
+        systems=systems,
+    )
+    payload = {
+        "schema": "master-agent/connection@1",
+        "persistent_configuration_changed": False,
+        "records": [record.to_dict() for record in records],
+    }
+    for record in records:
+        if record.status is DiscoveryStatus.REACHABLE:
+            print(f"connected: {record.system}")
+        else:
+            missing = ",".join(record.missing_environment) or "-"
+            print(
+                f"not connected: {record.system} ({record.status}; missing={missing})"
+            )
+            if record.error_message:
+                print(f"  {record.error_type}: {record.error_message}")
+    if output is not None:
+        _write_json(output, payload, restricted=True)
+        print(f"wrote {output}")
+    return (
+        0
+        if records
+        and all(record.status is DiscoveryStatus.REACHABLE for record in records)
+        else 2
+    )
+
+
+def _reject_output_aliases(output: Path | None, *inputs: Path | None) -> None:
+    """Prevent a report path from overwriting credentials or selected config."""
+
+    if output is None:
+        return
+    output_path = output.expanduser().resolve(strict=False)
+    for selected in inputs:
+        if selected is not None and output_path == selected.expanduser().resolve(
+            strict=False
+        ):
+            raise ConfigurationError(
+                "connection output must not replace credentials or configuration"
+            )
+
+
+def _provider_credential_aliases(
+    integrations: IntegrationConfig,
+    *,
+    configurations: set[str],
+    systems: set[str],
+) -> dict[str, dict[str, str]]:
+    aliases: dict[str, dict[str, str]] = {}
+    for name in configurations:
+        connector = integrations.connector(name)
+        fields: dict[str, str] = {}
+        if connector.secret_env:
+            fields["token"] = connector.secret_env
+        if connector.username_env:
+            fields["username"] = connector.username_env
+        for field, key in (
+            ("token_file", "token_file_env"),
+            ("token_expires_at", "token_expires_at_env"),
+            ("tenant_id", "tenant_id_env"),
+            ("client_id", "client_id_env"),
+            ("client_secret", "client_secret_env"),
+        ):
+            destination = connector.extra.get(key)
+            if isinstance(destination, str) and destination.strip():
+                fields[field] = destination.strip()
+        aliases[name] = fields
+        for system in systems:
+            if _CONNECT_CONFIGURATION_BY_SYSTEM[system] == name:
+                aliases[system] = fields
+    return aliases
+
+
 def _github_repositories(
     *,
     credentials_file: Path | None,
@@ -1706,6 +1925,7 @@ def _github_repositories(
     the repository list. It never rewrites credentials or configuration.
     """
 
+    _reject_output_aliases(output, credentials_file)
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(None, "integrations.toml")
     )

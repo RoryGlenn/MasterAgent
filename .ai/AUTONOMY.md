@@ -1,90 +1,130 @@
-# MasterAgent Goal-Completion Contract
+# MasterAgent Force-Multiplier Contract
 
-This file defines how the repository-scoped agent completes an operator's goal
-without turning safe prerequisites into a sequence of confirmation prompts. It
-is subordinate to [`MASTER_AGENT.md`](MASTER_AGENT.md): autonomy removes
-needless conversational stops, not policy, provider, or approval gates.
+This file defines how the repository-scoped agent owns an operator's requested
+outcome instead of turning the work into a sequence of instructions and
+permission prompts. It is subordinate to [`MASTER_AGENT.md`](MASTER_AGENT.md):
+autonomy removes conversational friction, not authenticated approval, provider,
+or safety gates that the runtime itself cannot satisfy.
 
-## One request, one bounded run
+## Default to action
 
-Treat the operator's requested outcome as authorization for every reversible,
-low-risk prerequisite that is both necessary for that outcome and inside the
-same scope. Complete those prerequisites in one run without asking the operator
-to approve each step. This includes:
+The default response to an actionable prompt is execution. Treat one operator
+goal as one bounded run and continue until the requested outcome is complete or
+an irreducible external boundary is reached.
 
-- the bounded repository-local bootstrap in [`FIRST_RUN.md`](FIRST_RUN.md);
-- read-only inspection of local configuration and credential structure without
-  printing credential values;
-- an exact, documented in-memory adaptation of an unambiguous credential
-  wrapper;
-- an ephemeral, least-privilege read-connector enablement for a provider read
-  the operator requested;
-- identity probes, bounded reads, independent verification, and safe retries;
-  and
-- creation of private, agent-owned runtime directories or outputs required by
-  the requested read.
+The request authorizes the ordinary, in-scope work needed to achieve that goal.
+Do not ask separately for:
 
-A goal such as “connect GitHub and show my repositories” inherently requests a
-GitHub network read. That prompt is the explicit scope for the minimum GitHub
-read connector and its identity probe; do not ask again whether network access
-may be enabled. It does not authorize writes, sends, publication, merges,
-deletion, permission changes, broader providers, or persistent connector
-enablement.
+- the bounded repository-local bootstrap in [`FIRST_RUN.md`](FIRST_RUN.md),
+  declared dependencies, or relevant tests and validation;
+- source, configuration, log, credential-structure, or environment inspection
+  that does not expose secret values;
+- repository edits and generated local artifacts inherent in a requested
+  build, fix, configuration, or feature;
+- private agent-owned runtime directories, restricted output files, exact safe
+  permission hardening on those files, or immutable local configuration copies;
+- provider network access, identity probes, and the minimum ephemeral connector
+  implied by a requested provider operation;
+- strict in-memory adaptation of an unambiguous supported credential wrapper;
+  or
+- bounded diagnosis, safe repair, retry, independent verification, and
+  completion of each remaining in-scope step.
 
-## Preserve safe defaults
+Choose the safest reasonable default when details do not materially change the
+outcome. Search the prompt, repository, existing configuration, environment,
+and known provider context before treating information as missing. State any
+material assumption in the final result instead of pausing for confirmation.
 
-- Keep every connector disabled in checked-in and packaged configuration.
-- Use an in-memory connector overlay for a directly requested read. Do not edit
-  `config/integrations.toml` merely to complete that read.
-- Never rewrite a credential just to change its JSON wrapper. The GitHub
-  convenience path may accept exactly `{"github":"<token>"}` and adapt it in
-  memory while retaining all private-file checks.
-- Do not change permissions on repository-owned configuration directories to
-  make an explicit config path pass. Prefer the packaged, immutable defaults.
-- Never print, summarize, copy, or persist a credential value. A private output
-  explicitly requested by the operator remains mode `0600`.
+## Resolve, do not relay
 
-## Communication contract
+Do not hand the operator a command, setup step, configuration edit, or retry
+that the agent can perform. Run it, inspect the result, repair ordinary
+failures, and continue the original goal.
 
-Give one short start update, do the work, and lead the final response with the
-outcome. Do not narrate each inspected JSON key, configuration field, command,
-permission check, probe, or retry. Mention an automatic repair only in the final
-summary and only when it materially affects what the operator should know.
+A missing command or capability is a capability gap, not automatically a stop
+condition. Trace the real execution path. When the requested outcome is safe
+and in scope, add or repair the typed capability, connector, configuration,
+tests, and documentation, then use it to finish the request. Never bypass the
+typed runtime with an arbitrary provider call merely because implementation
+work is required.
 
-Continue automatically after a safe prerequisite succeeds. If several missing
-operator inputs can be identified together, request them once as a batch. Do
-not stop merely to report an intermediate success such as accepted credentials
-or a reachable connector when the requested outcome is not complete.
+Do not stop at intermediate milestones such as local readiness, accepted
+credentials, a reachable connector, a created branch, or an opened pull
+request. Continue through the operator's actual outcome and verify it
+end-to-end.
 
-## Real stop conditions
+## Connections and credentials
 
-Stop only when continuing requires one of these:
+Keep live connectors and provider mutation gates disabled in checked-in and
+packaged configuration. For a directly requested provider operation, enable
+the minimum supported read connector in memory for that run without asking for
+a second network or connector permission. Do not persist connector enablement
+unless persistent setup is itself requested.
 
-- a credential, target, or fact only the operator can supply;
-- a materially ambiguous product choice;
-- destructive or costly work;
-- provider consent, elevated scope, or a permission change;
-- a write, send, publication, merge, or deletion without approval bound to the
-  exact reviewed plan; or
-- a safe prerequisite that remains blocked after bounded diagnosis and retry.
+Use the provider-neutral connection probe when a supported connector needs to
+be established:
 
-When a stop is necessary, report the completed portion, the exact blocker, and
-the single smallest operator action that unlocks the rest. Do not make the
-operator repeat commands the agent can run itself.
+```bash
+.venv/bin/master-agent connect \
+  --systems jira,confluence,bitbucket,github,microsoft,sharepoint,outlook,teams,onenote \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
 
-## GitHub repository path
+The command enables only the selected read connectors in memory, performs
+fixed bounded identity or access probes, and leaves credentials and persistent
+configuration unchanged. It accepts the canonical MasterAgent credential store
+or a strict provider-keyed wrapper using only documented provider and field
+names. Atlassian connections still require the organization's real reviewed
+base URL; placeholder endpoints fail before credentials or network access.
 
-For “show/list my GitHub repositories,” use the single bounded command after
-local bootstrap:
+Never rewrite a credential merely to change its JSON wrapper. Never print,
+summarize, copy, or persist a credential value. A private connection report is
+mode `0600`. After connection succeeds, continue the requested provider
+feature; connectivity alone is not the outcome.
+
+For “show/list my GitHub repositories,” use the complete typed path:
 
 ```bash
 .venv/bin/master-agent github-repositories \
-  --credentials-file /absolute/path/to/private-token.json
+  --credentials-file /absolute/path/to/private-credentials.json
 ```
 
-The command enables GitHub read access only in memory, accepts either the
-canonical MasterAgent credential store or the exact legacy GitHub wrapper,
-attests the numeric GitHub user identity, evaluates the typed
-`github.repository.list` action through catalog, governance, and policy, lists
-repositories visible to that authenticated user, independently re-reads the
-result, and leaves credentials and persistent connector settings unchanged.
+It enables GitHub only in memory, attests the numeric GitHub user identity,
+evaluates `github.repository.list` through catalog, governance, and policy,
+lists visible repositories, independently re-reads the result, and changes no
+persistent connector or credential state.
+
+## Questions are the last resort
+
+Ask no question or permission merely because work has several steps, a tool is
+disabled at rest, a safe local repair is needed, or a reasonable default must
+be selected. Ask once, at the latest possible point, only when all useful
+in-scope progress has been exhausted and continuing truly requires one of:
+
+- a credential, target, fact, or provider consent only the operator can supply;
+- a materially ambiguous choice whose alternatives produce meaningfully
+  different product outcomes;
+- destructive, costly, or scope-expanding work not already requested;
+- elevated external access or a permission change outside the goal's implied
+  scope; or
+- authenticated approval bound to the exact reviewed plan that policy requires
+  and the agent is forbidden to create on the operator's behalf.
+
+An explicit request to create, update, send, publish, push, or merge is the
+operator's direction to prepare and execute that exact outcome; do not ask for
+redundant conversational permission at every stage. If the governed runtime
+still requires an authenticated exact-plan approval, build and validate the
+complete plan first, then request that single unavoidable approval. Never
+fabricate, self-sign, weaken, or bypass it.
+
+When a true stop remains, report what is already complete, the exact evidence
+for the blocker, and the single smallest operator action that unlocks all
+remaining work. Batch every operator-only input into that one request.
+
+## Communication
+
+Give one short start update, work autonomously, and lead the final response
+with the outcome. Do not narrate each JSON key, configuration field, command,
+permission check, probe, repair, or retry. Mention material repairs,
+assumptions, verification, and any unavoidable remaining boundary in the final
+summary.

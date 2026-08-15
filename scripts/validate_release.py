@@ -47,7 +47,8 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "[`FIRST_RUN.md`](FIRST_RUN.md)",
         "[`AUTONOMY.md`](AUTONOMY.md)",
-        "A direct provider-read goal explicitly authorizes",
+        "The default response to an actionable prompt is",
+        "Treat a missing safe capability as implementation work",
     ),
     _FIRST_RUN_CONTRACT_PATH: (
         "first operator",
@@ -56,41 +57,56 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "I couldn't finish local setup",
         "no live connectors are enabled",
         "[`AUTONOMY.md`](AUTONOMY.md)",
-        "A requested provider read",
+        "A requested provider operation",
+        "force-multiplier",
     ),
     _AUTONOMY_CONTRACT_PATH: (
-        "One request, one bounded run",
-        "do not ask again whether network access",
-        "Do not narrate each inspected JSON key",
+        "Default to action",
+        "The default response to an actionable prompt is execution",
+        "Resolve, do not relay",
+        "capability gap",
+        "master-agent connect",
+        "Ask once, at the latest possible point",
+        "authenticated approval bound to the exact reviewed plan",
         "github-repositories",
-        "persistent connector settings unchanged",
+        "persistent connector or credential state",
     ),
     Path("AGENTS.md"): (
         "[`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md)",
         "[`.ai/AUTONOMY.md`](.ai/AUTONOMY.md)",
         "Apply the first-run contract",
-        "Apply the goal-completion contract",
+        "Apply the force-multiplier contract",
+        "irreducible operator-only boundary",
     ),
-    Path("CHANGELOG.md"): ("first ordinary prompt", "one-request goal-completion"),
+    Path("CHANGELOG.md"): (
+        "first ordinary prompt",
+        "force-multiplier default-to-action",
+        "provider-neutral `connect` command",
+    ),
     Path("README.md"): (
         "[first-run contract](.ai/FIRST_RUN.md)",
-        "[goal-completion contract](.ai/AUTONOMY.md)",
+        "[force-multiplier contract](.ai/AUTONOMY.md)",
         "MasterAgent is ready locally",
         "explicit no-local-change prompt",
+        "master-agent connect",
         "github-repositories",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "[first-run contract](../.ai/FIRST_RUN.md)",
-        "[goal-completion contract](../.ai/AUTONOMY.md)",
+        "[force-multiplier contract](../.ai/AUTONOMY.md)",
         "python3 scripts/bootstrap_agent.py",
         "MasterAgent is ready locally",
         "If automatic setup is blocked",
+        "default response to an actionable prompt is execution",
+        "master-agent connect --systems",
+        "it asks once",
         "without a second confirmation",
     ),
     Path("docs/release-validation.md"): (
         "first-prompt contract",
-        "goal-completion contracts",
+        "force-multiplier default-to-action contract",
         "stable nontechnical responses",
+        "capability-gap ownership",
     ),
     Path("docs/semantic-index.md"): (
         "[`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md)",
@@ -383,7 +399,7 @@ def _validate_copilot_agent(
         "[AGENTS.md](../../AGENTS.md)",
         "[Master Agent repository policy](../../.ai/MASTER_AGENT.md)",
         "[first-run contract](../../.ai/FIRST_RUN.md)",
-        "[goal-completion contract](../../.ai/AUTONOMY.md)",
+        "[force-multiplier contract](../../.ai/AUTONOMY.md)",
     )
     for reference in required_references:
         if reference not in body:
@@ -401,6 +417,10 @@ def _validate_copilot_agent(
         "I couldn't finish local setup",
         "Never use `sudo`",
         "Treat one operator goal as one bounded run",
+        "response to an actionable prompt is execution",
+        "capability gap as implementation work",
+        "connect --systems",
+        "Ask once and only after",
         "github-repositories",
         "python scripts/validate_release.py",
     )
@@ -448,7 +468,7 @@ def _validate_first_run_contract(
 
     if len(errors) == starting_errors:
         checks.append(
-            "first-run and goal-completion contracts are consistent across 9 instruction and onboarding files"
+            "first-run and force-multiplier contracts are consistent across 9 instruction and onboarding files"
         )
 
 

@@ -117,16 +117,17 @@ when needed, installs the declared project dependencies there, and performs the
 offline readiness check. Depending on Copilot's terminal policy, the user may
 need to approve that one command. A successful response starts with
 “MasterAgent is ready locally” and confirms that workplace connections and
-write actions remain off. It then completes the original goal's reversible,
-read-only prerequisites without asking for confirmation at each step.
+write actions remain off. It then treats the original prompt as an outcome to
+own: setup, safe connection, in-scope implementation, repair, tests, and
+verification proceed without repeated permission questions.
 
 A repository-inspection, diagnosis-only, or explicit no-local-change prompt
-never installs anything. A provider read such as “show my GitHub repositories”
-may bootstrap locally and continue the scoped read in the same run. See the
+never installs anything. A provider operation or feature request may bootstrap
+locally and continue to the requested result in the same run. See the
 [Copilot custom-agent guide](docs/copilot-custom-agent.md), authoritative
 [first-run contract](.ai/FIRST_RUN.md), and
-[goal-completion contract](.ai/AUTONOMY.md) for discovery, exact responses,
-safety boundaries, manual recovery, and GitHub.com or CLI usage.
+[force-multiplier contract](.ai/AUTONOMY.md) for default-to-action behavior,
+real stop conditions, safety boundaries, and GitHub.com or CLI usage.
 
 ## Install from the source distribution
 
@@ -246,6 +247,23 @@ master-agent discover \
   --output "$HOME/.master-agent/MasterAgent/discovery-probed.json"
 ```
 
+For an operator-requested connection, keep persistent connectors disabled and
+enable only the requested supported systems in memory:
+
+```bash
+master-agent connect \
+  --systems jira,confluence,bitbucket,github,microsoft,sharepoint,outlook,teams,onenote \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --output "$HOME/.master-agent/MasterAgent/connection.json"
+```
+
+`connect` accepts the canonical credential store or a strict provider-keyed
+wrapper, probes fixed read-only endpoints, writes private output mode `0600`,
+and changes neither the credential file nor persistent configuration. An
+Atlassian connector needs the organization's reviewed base URL through
+`--integrations`; the packaged placeholder is rejected before network access.
+The agent should continue the requested feature after the probe succeeds.
+
 For the common “show my GitHub repositories” request, keep the checked-in
 connector disabled and run the one-command read path:
 
@@ -258,8 +276,9 @@ This command enables GitHub read access only in memory, attests the numeric user
 identity, evaluates `github.repository.list` through catalog, governance, and
 policy, returns repositories visible to that account, and independently
 re-reads the result. It neither edits `integrations.toml` nor rewrites the token
-file. The credential file may use the canonical MasterAgent store or the exact
-legacy shape `{"github":"<token>"}`; both retain the same private-file checks.
+file. The credential file may use the canonical MasterAgent store, the compact
+shape `{"github":"<token>"}`, or the named shape
+`{"github":{"token":"<token>"}}`; all retain the same private-file checks.
 The existing `discover --probe` path remains available for a configuration-only
 connectivity test.
 

@@ -595,9 +595,16 @@ class IntegrationConfig:
             for value in (connector.username_env, connector.secret_env):
                 if value:
                     names.add(value)
-            client_secret = connector.extra.get("client_secret_env")
-            if isinstance(client_secret, str) and client_secret.strip():
-                names.add(client_secret.strip())
+            for key in (
+                "token_file_env",
+                "token_expires_at_env",
+                "tenant_id_env",
+                "client_id_env",
+                "client_secret_env",
+            ):
+                value = connector.extra.get(key)
+                if isinstance(value, str) and value.strip():
+                    names.add(value.strip())
         return tuple(sorted(names))
 
 

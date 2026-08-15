@@ -18,11 +18,12 @@ approval service, or external audit-sink adapter is bundled.
   manifest pass validation.
 - The repository-scoped GitHub Copilot profile is user-invocable,
   policy-bound, constrained to its reviewed tools, and aligned with the
-  first-prompt contract and one-request goal-completion contracts across every
-  instruction and onboarding Markdown file.
+  first-prompt contract and force-multiplier default-to-action contract across
+  every instruction and onboarding Markdown file.
   Its idempotent repository-local bootstrap, stable nontechnical responses,
-  explicit no-local-change safeguards, batched read-only prerequisites, script,
-  and policy are included in the source distribution.
+  explicit no-local-change safeguards, provider-neutral ephemeral connection,
+  capability-gap ownership, last-resort question rules, script, and policy are
+  included in the source distribution.
 - The checked-in demonstration PowerPoint opens as a three-slide presentation;
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
