@@ -12,9 +12,13 @@ Start with `development`, then `non_production`. Do not set `production_approved
 
 For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS API root. For Microsoft, select the correct Graph national-cloud root and capability-specific identity mode. The built-in Teams send connector is delegated-only; any Teams bot must be implemented and approved as a separate connector.
 
-## 4. Register applications and credentials
+## 4. Register only required applications and credentials
 
-Request only the scopes needed for the first workflow. Prefer separate credentials for read, reversible write, and communication. Store persistent secrets in the approved secret manager.
+Request only the scopes needed for the first workflow. If a typed capability is
+explicitly anonymous, such as `github.public_repository.list`, do not provision
+or attach a credential for it. For authenticated capabilities, prefer separate
+credentials for read, reversible write, and communication, and store persistent
+secrets in the approved secret manager.
 
 ## 5. Run offline readiness
 
@@ -49,6 +53,15 @@ master-agent discover \
 Then generate and review the relevant read-only plan. Execute it only through a
 manifest-bound `run --apply`; the legacy weekly-status and communication-context
 package commands are disabled.
+
+For a specified GitHub user's public repositories, validate the anonymous typed
+route directly instead of running an authenticated connection probe:
+
+```bash
+master-agent github-repositories --username USERNAME
+```
+
+This route must not load an ambient token or require a credential file.
 
 ## 7. Validate draft-only output
 
@@ -94,8 +107,8 @@ target/config/source and runtime-manifest binding.
 Before production:
 
 - install and register a typed external, tamper-resistant audit-sink adapter;
-- use an approved secret manager;
-- define incident response and token revocation;
+- use an approved secret manager for every credentialed capability;
+- define incident response and token revocation for authenticated connectors;
 - define evidence retention/legal hold;
 - keep plugin execution disabled; inventory and pin artifacts only for review;
 - review every enabled capability and connector gate;

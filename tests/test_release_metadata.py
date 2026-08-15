@@ -8,11 +8,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.validate_release import (
+    _PUBLIC_READ_DOCUMENT_REQUIREMENTS,
     _validate_copilot_agent,
     _validate_demo_powerpoint,
     _validate_demo_readiness,
     _validate_file_hygiene,
     _validate_first_run_contract,
+    _validate_public_read_contract,
     validate_project,
 )
 
@@ -208,6 +210,39 @@ class ReleaseMetadataTests(unittest.TestCase):
                     and "MasterAgent is ready locally" in error
                     for error in errors
                 )
+            )
+
+    def test_public_read_contract_rejects_blanket_credential_guidance(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in _PUBLIC_READ_DOCUMENT_REQUIREMENTS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_root / relative).read_bytes())
+            readme = root / "README.md"
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_public_read_contract(root, checks, errors)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(checks), 1)
+
+            readme.write_text(
+                readme.read_text(encoding="utf-8")
+                + "\nOrganization-approved HTTPS API endpoints and credentials "
+                "for live use.\n",
+                encoding="utf-8",
+            )
+            checks = []
+            errors = []
+
+            _validate_public_read_contract(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any("blanket credential requirement" in error for error in errors)
             )
 
     def test_demo_readiness_count_must_match_capability_catalog(self) -> None:

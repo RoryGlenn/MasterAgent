@@ -120,6 +120,108 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     ),
 }
 
+_PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
+    Path(".ai/MASTER_AGENT.md"): (
+        "typed anonymous capability",
+        "named GitHub user's public",
+    ),
+    _AUTONOMY_CONTRACT_PATH: (
+        "github-repositories --username USERNAME",
+        "Do not search for, load, or request a GitHub",
+    ),
+    _COPILOT_AGENT_PATH: (
+        "github-repositories",
+        "--username USERNAME",
+        "repositories anonymously",
+    ),
+    Path("README.md"): (
+        "Anonymous public-data capabilities neither require nor load credentials",
+        "github.public_repository.list",
+    ),
+    Path("docs/architecture.md"): (
+        "least-authorized registered route",
+        "does not consult",
+        "credential resolution",
+    ),
+    Path("docs/configuration.md"): (
+        "Authenticated GitHub Cloud capabilities",
+        "never resolves or sends that token",
+    ),
+    Path("docs/cli-reference.md"): (
+        "github-repositories --username USERNAME",
+        "ignores ambient GitHub tokens",
+    ),
+    Path("docs/copilot-custom-agent.md"): (
+        "github-repositories --username USERNAME",
+        "credential-free typed route",
+    ),
+    Path("docs/deployment-runbook.md"): (
+        "do not provision",
+        "github-repositories --username USERNAME",
+    ),
+    Path("docs/implementation-roadmap.md"): (
+        "github.public_repository.list",
+        "operates anonymously",
+    ),
+    Path("docs/github-connector-quickstart.md"): (
+        "Public repositories need no credential",
+        "loads or sends a token",
+    ),
+    Path("docs/integration-matrix.md"): (
+        "Cloud anonymous public reads",
+        "anonymous route omits credentials",
+    ),
+    Path("docs/live-connectors.md"): (
+        "github.public_repository.list",
+        "does not resolve or forward an ambient credential",
+    ),
+    Path("docs/operations.md"): (
+        "authentication class is `none`",
+        "must not resolve one",
+    ),
+    Path("docs/phase-2-read-only.md"): (
+        "explicitly cataloged for anonymous access",
+        "must not resolve or forward ambient credentials",
+    ),
+    Path("docs/phase-2c-authentication.md"): (
+        "cataloged for anonymous public access",
+        "does not acquire, resolve, or",
+    ),
+    Path("docs/release-validation.md"): (
+        "Typed anonymous public-data capabilities require no credential activation",
+        "rejects the stale blanket claims",
+    ),
+    Path("docs/threat-model.md"): (
+        "typed anonymous public-data",
+        "never resolves or forwards an ambient credential",
+    ),
+}
+
+_PUBLIC_READ_FORBIDDEN_CLAIMS = {
+    Path("README.md"): (
+        "Organization-approved HTTPS API endpoints and credentials for live use.",
+    ),
+    Path("docs/configuration.md"): (
+        "GitHub Cloud uses `MASTER_AGENT_GITHUB_TOKEN` as a bearer token.",
+    ),
+    Path("docs/copilot-custom-agent.md"): (
+        "Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams, or OneNote",
+    ),
+    Path("docs/deployment-runbook.md"): (
+        "## 4. Register applications and credentials",
+    ),
+    Path("docs/live-connectors.md"): (
+        "GitHub Cloud connector constructs authenticated-user repository-list",
+    ),
+    Path("docs/phase-2-read-only.md"): (
+        "Available only for explicitly unauthenticated test or internal endpoints.",
+    ),
+    Path("docs/phase-2c-authentication.md"): (
+        "Before live use, administrators must review:",
+    ),
+    Path("docs/release-validation.md"): ("Before live use, administrators must",),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
@@ -176,6 +278,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_capabilities(root, checks, errors)
     _validate_copilot_agent(root, checks, errors)
     _validate_first_run_contract(root, checks, errors)
+    _validate_public_read_contract(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
     _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
@@ -475,6 +578,43 @@ def _validate_first_run_contract(
     if len(errors) == starting_errors:
         checks.append(
             "first-run and force-multiplier contracts are consistent across 9 instruction and onboarding files"
+        )
+
+
+def _validate_public_read_contract(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Keep anonymous public reads distinct from authenticated provider access."""
+
+    starting_errors = len(errors)
+    for relative, requirements in _PUBLIC_READ_DOCUMENT_REQUIREMENTS.items():
+        path = root / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(
+                f"public-read contract document is unreadable: {relative}: {error}"
+            )
+            continue
+        for requirement in requirements:
+            if requirement not in text:
+                errors.append(
+                    "public-read contract document is inconsistent: "
+                    f"{relative} is missing {requirement!r}"
+                )
+        for forbidden in _PUBLIC_READ_FORBIDDEN_CLAIMS.get(relative, ()):
+            if forbidden in text:
+                errors.append(
+                    "public-read contract contains a blanket credential requirement: "
+                    f"{relative} contains {forbidden!r}"
+                )
+
+    if len(errors) == starting_errors:
+        checks.append(
+            "anonymous public-read guidance is consistent across "
+            f"{len(_PUBLIC_READ_DOCUMENT_REQUIREMENTS)} policy and documentation files"
         )
 
 

@@ -94,13 +94,26 @@ the operator. A capability gap that can safely be filled in this repository is
 implementation work: add the typed capability and regression tests, then
 continue the original request.
 
-For an outcome that requires provider access, the request itself authorizes the
-minimum selected read connector, fixed probe, and provider network access in
-memory without a second confirmation. Use
+For an outcome that requires authenticated provider access, the request itself
+authorizes the minimum selected read connector, fixed probe, and provider
+network access in memory without a second confirmation. Use
 `master-agent connect --systems <requested-systems>` for Jira, Confluence,
-Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams, or OneNote;
-then continue the requested feature. The connector setting is never persisted
-unless persistent setup was requested.
+Bitbucket, authenticated GitHub, Microsoft identity, SharePoint, Outlook,
+Teams, or OneNote; then continue the requested feature. The connector setting
+is never persisted unless persistent setup was requested.
+
+GitHub repository discovery is routed by the data the operator requested. When
+the operator names a GitHub user or supplies a public profile URL, extract the
+username and run:
+
+```bash
+master-agent github-repositories --username USERNAME
+```
+
+That credential-free typed route reads only public repositories and never
+resolves, searches for, or requests a GitHub token. Use the authenticated route
+only for “my repositories,” private repositories, or other account-visible
+results.
 
 An explicit request to create, update, send, publish, push, or merge is not
 followed by redundant conversational permission prompts. MasterAgent prepares

@@ -58,6 +58,9 @@ Controls:
   require an owner-controlled `0700` parent and `0600` regular file, reject
   ambient-variable collisions, and bind only the canonical path into applied
   execution; non-development environments require an approved secret manager;
+- capability authentication is authoritative: a typed anonymous public-data
+  route never resolves or forwards an ambient credential and cannot be silently
+  upgraded to a broader authenticated route;
 - GitHub bearer credentials are provider-attested through `GET /user` at bind
   and apply time, with only the immutable numeric user ID approval-bound;
 - other opaque bearer/delegated credentials fail closed for live applied
