@@ -45,6 +45,7 @@ class GitHubConnector(ReadOnlyConnector):
 
     _CAPABILITIES = frozenset(
         {
+            "github.public_repository.list",
             "github.repository.list",
             "github.repository.read",
             "github.pull_request.search",
@@ -109,6 +110,8 @@ class GitHubConnector(ReadOnlyConnector):
         )
 
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
+        if action.capability == "github.public_repository.list":
+            return self._list_public_user_repositories(action)
         if action.capability == "github.repository.list":
             return self._list_authenticated_repositories(action)
         if action.capability == "github.repository.read":
@@ -120,6 +123,61 @@ class GitHubConnector(ReadOnlyConnector):
         if action.capability == "github.checks.read":
             return self._read_checks(action)
         raise ConnectorError(f"unsupported GitHub capability: {action.capability}")
+
+    def _list_public_user_repositories(
+        self,
+        action: AgentAction,
+    ) -> RetrievedPayload:
+        username = _repository_coordinate(
+            string_parameter(action.parameters, "username", required=True),
+            name="username",
+        )
+        limit = integer_parameter(
+            action.parameters,
+            "limit",
+            default=self._config.max_items,
+            maximum=self._config.max_items,
+        )
+        raw, reference = self._list_public_repositories(
+            username=username,
+            limit=limit,
+        )
+        repositories: list[dict[str, Any]] = []
+        for item in raw:
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ConnectorError("GitHub repository response has no valid name")
+            repository = self._normalize_repository(item, username, name)
+            if (
+                repository.get("is_private") is not False
+                or repository.get("visibility") != "public"
+            ):
+                raise ConnectorError(
+                    "GitHub public-user repository response was not public"
+                )
+            repositories.append(repository)
+        source_urls = [reference]
+        source_urls.extend(
+            str(item["web_url"]) for item in repositories if item.get("web_url")
+        )
+        return RetrievedPayload(
+            data={
+                "schema": "master-agent/github-public-repositories@1",
+                "system": "github",
+                "deployment": self._config.deployment,
+                "query": {
+                    "username": username,
+                    "type": "owner",
+                    "visibility": "public",
+                    "sort": "updated",
+                    "direction": "desc",
+                },
+                "returned": len(repositories),
+                "repositories": repositories,
+                "source_urls": list(dict.fromkeys(source_urls)),
+            },
+            connector_reference=reference,
+        )
 
     def _list_authenticated_repositories(self, action: AgentAction) -> RetrievedPayload:
         visibility = string_parameter(
@@ -372,6 +430,46 @@ class GitHubConnector(ReadOnlyConnector):
             if len(mapped) != len(data):
                 raise ConnectorError(
                     "GitHub repository list contains a non-object item"
+                )
+            results.extend(mapped)
+            if len(data) < page_size:
+                break
+        return results[:limit], connector_reference
+
+    def _list_public_repositories(
+        self,
+        *,
+        username: str,
+        limit: int,
+    ) -> tuple[list[Mapping[str, Any]], str]:
+        results: list[Mapping[str, Any]] = []
+        path = f"users/{quote_segment(username)}/repos"
+        connector_reference = path
+        for page_number in range(1, self._config.max_pages + 1):
+            remaining = limit - len(results)
+            if remaining <= 0:
+                break
+            page_size = min(remaining, 100)
+            data, response = self._client.request_json(
+                "GET",
+                path,
+                query={
+                    "type": "owner",
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": page_size,
+                    "page": page_number,
+                },
+            )
+            connector_reference = response.url
+            if not isinstance(data, list):
+                raise ConnectorError(
+                    "GitHub public-user repository list response must be a list"
+                )
+            mapped = [item for item in data if isinstance(item, Mapping)]
+            if len(mapped) != len(data):
+                raise ConnectorError(
+                    "GitHub public-user repository list contains a non-object item"
                 )
             results.extend(mapped)
             if len(data) < page_size:

@@ -113,6 +113,12 @@ enabled = true
 authentication = "configured_connector"
 risk = "read_only"
 
+[capabilities."github.public_repository.list"]
+enabled = true
+authentication = "anonymous_or_configured_connector"
+risk = "read_only"
+description = "List public repositories owned by a specified GitHub user without requiring credentials."
+
 [capabilities."github.repository.list"]
 enabled = true
 authentication = "configured_connector"

@@ -1,14 +1,16 @@
 # MasterAgent GitHub Connector Quickstart
 
 Use this guide when a nontechnical operator wants GitHub context through
-MasterAgent. Give the agent the outcome and the credential-file location; the
-agent owns local setup, minimum in-memory connection, the typed read, and
-verification without asking for permission at each step.
+MasterAgent. Give the agent the outcome; provide a credential-file location
+only for private or account-visible data. The agent owns local setup, the
+minimum typed read, and verification without asking for permission at each
+step.
 
 ## What GitHub access can do
 
 The built-in GitHub connector can:
 
+- list a specified user's public repositories anonymously;
 - list repositories visible to the authenticated user;
 - read repository details;
 - list open, closed, or all pull requests;
@@ -18,7 +20,23 @@ The built-in GitHub connector can:
 It is read-only. It cannot create issues, comment, push code, create a pull
 request, change permissions, or merge a pull request.
 
-## Supply the credential once
+## Public repositories need no credential
+
+For a request such as “show the repositories under
+`https://github.com/rahul-aravind-opti`,” the agent extracts the username and
+runs:
+
+```bash
+.venv/bin/master-agent github-repositories --username rahul-aravind-opti
+```
+
+This route evaluates `github.public_repository.list`, calls GitHub's fixed
+public-user repository endpoint, independently re-reads the result, and never
+loads or sends a token. It rejects `--credentials-file` and non-public
+visibility. The agent must not search for a credential or attest an unrelated
+authenticated GitHub user for this request.
+
+## Supply a credential for account-visible data
 
 Create a GitHub token with read access to the repositories, pull requests, and
 checks you need. Store it outside the repository in a file owned by your user,
@@ -42,9 +60,9 @@ precedence over an ambient GitHub token for the convenience commands.
 The ChatGPT/Codex GitHub App is separate from this runtime connector. Installing
 that app does not supply MasterAgent's token.
 
-## Ask for the outcome
+## Ask for authenticated account data
 
-For the most common request, tell the agent:
+For repositories visible to your authenticated account, tell the agent:
 
 ```text
 Connect GitHub and show the repositories available to my account.
@@ -81,6 +99,7 @@ can run itself.
 Other useful requests include:
 
 - “Read repository `OWNER/REPOSITORY` and summarize its current state.”
+- List the public repositories under GitHub user `USERNAME`.
 - “List the open pull requests and tell me which ones need attention.”
 - “Read pull request #27 and summarize its status.”
 - “Read PR #27, then check CI for its head commit.”

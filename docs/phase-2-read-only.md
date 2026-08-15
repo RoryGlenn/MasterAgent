@@ -20,7 +20,7 @@ added in Phase 2C is documented in
 | Jira | Cloud, Data Center | `jira.server.info`, `jira.issue.search`, `jira.issue.read` |
 | Confluence | Cloud, Data Center | `confluence.page.search`, `confluence.page.read` |
 | Bitbucket | Cloud, Data Center | instance, repository, PR search/read, diffstat, build-status reads |
-| GitHub | Cloud | authenticated-user repository list, repository read, PR search/read, commit check-run reads |
+| GitHub | Cloud | anonymous public-user and authenticated-user repository lists, repository read, PR search/read, commit check-run reads |
 | Microsoft identity | Microsoft Graph | `microsoft.identity.read` |
 | SharePoint/OneDrive | Microsoft Graph | site search/read, drive list, children, metadata, bounded text read |
 | PowerPoint | Local | weekly-status `.pptx` generation |
@@ -112,8 +112,11 @@ The connector does not clone repositories, retrieve arbitrary source trees, comm
 
 ### GitHub
 
+- `github.public_repository.list` uses the fixed public-user endpoint and an
+  anonymous connector. It accepts a validated username, returns only public
+  repositories owned by that user, and never loads or sends a token.
 - Cloud credentials are restricted to `api.github.com` and supplied by
-  `MASTER_AGENT_GITHUB_TOKEN`.
+  `MASTER_AGENT_GITHUB_TOKEN` for authenticated capabilities.
 - Repository owner/name pairs, pull-request numbers, and commit refs are
   validated before URL construction.
 - `github.repository.list` uses GitHub's fixed authenticated-user repository

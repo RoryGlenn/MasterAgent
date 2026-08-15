@@ -270,6 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 limit=args.limit,
                 visibility=args.visibility,
                 output=args.output,
+                username=args.username,
             )
         if args.command == "weekly-status-plan":
             return _weekly_status_plan(
@@ -584,16 +585,27 @@ def _build_parser() -> argparse.ArgumentParser:
     github_repositories = subparsers.add_parser(
         "github-repositories",
         help=(
-            "verify GitHub and list the authenticated user's repositories "
-            "without changing persistent configuration"
+            "list one user's public repositories anonymously, or verify GitHub "
+            "and list repositories visible to the authenticated user"
         ),
     )
     github_repositories.add_argument("--credentials-file", type=Path)
+    github_repositories.add_argument(
+        "--username",
+        help=(
+            "GitHub username whose public repositories should be listed without "
+            "credentials"
+        ),
+    )
     github_repositories.add_argument("--limit", type=int, default=100)
     github_repositories.add_argument(
         "--visibility",
         choices=("all", "public", "private"),
-        default="all",
+        default=None,
+        help=(
+            "authenticated-user visibility (default: all); public-user listing "
+            "accepts only public"
+        ),
     )
     github_repositories.add_argument("--output", type=Path)
 
@@ -1912,17 +1924,20 @@ def _github_repositories(
     *,
     credentials_file: Path | None,
     limit: int,
-    visibility: str,
+    visibility: str | None,
     output: Path | None,
+    username: str | None = None,
     transport: HttpTransport | None = None,
 ) -> int:
-    """Complete the common GitHub read-only onboarding path in one command.
+    """Complete public-user or authenticated GitHub repository discovery.
 
     The packaged GitHub connector remains disabled at rest. This explicit
-    command enables only that read connector in memory for the duration of the
-    request, validates its typed action through the catalog, governance, and
-    policy engine, attests the provider identity, and independently re-reads
-    the repository list. It never rewrites credentials or configuration.
+    command enables only that read connector in memory for the request. With a
+    username it uses GitHub's anonymous public-user endpoint and never loads or
+    sends a credential. Without a username it attests the provider identity and
+    lists repositories visible to that authenticated account. Both paths
+    validate a typed action through catalog, governance, and policy and
+    independently re-read the result without changing persistent configuration.
     """
 
     _reject_output_aliases(output, credentials_file)
@@ -1937,11 +1952,29 @@ def _github_repositories(
         raise ConfigurationError(
             f"GitHub repository limit must be between 1 and {github.max_items}"
         )
-    if visibility not in {"all", "public", "private"}:
+    public_username = username.strip() if username is not None else None
+    if public_username == "":
+        raise ConfigurationError("GitHub username must not be empty")
+    if public_username is not None and credentials_file is not None:
+        raise ConfigurationError(
+            "--credentials-file is unnecessary and not accepted with --username; "
+            "public GitHub repositories are read anonymously"
+        )
+    if public_username is not None and visibility not in {None, "public"}:
+        raise ConfigurationError(
+            "--username lists public repositories only; omit --visibility or use "
+            "--visibility public"
+        )
+    effective_visibility = visibility or (
+        "public" if public_username is not None else "all"
+    )
+    if effective_visibility not in {"all", "public", "private"}:
         raise ConfigurationError(
             "GitHub repository visibility must be all, public, or private"
         )
-    if credentials_file is not None:
+    if public_username is not None:
+        environ = dict(os.environ)
+    elif credentials_file is not None:
         if governance.environment is not EnvironmentKind.DEVELOPMENT:
             raise ConfigurationError(
                 "--credentials-file is restricted to development; use the approved "
@@ -1958,26 +1991,50 @@ def _github_repositories(
     else:
         environ = dict(os.environ)
 
-    action = AgentAction(
-        capability="github.repository.list",
-        target=ResourceRef(
-            system="github",
-            resource_type="repository_collection",
-            resource_id="authenticated-user",
-        ),
-        parameters={"limit": limit, "visibility": visibility},
-        risk=RiskLevel.READ_ONLY,
-        data_classification=DataClassification.INTERNAL,
-        authority_source=AuthoritySource.DIRECT_USER,
-        requires_approval=False,
-        idempotency_key=f"github:repositories:{visibility}:{limit}",
-        justification=(
+    if public_username is not None:
+        capability = "github.public_repository.list"
+        resource_type = "public_repository_collection"
+        resource_id = public_username
+        parameters: dict[str, object] = {
+            "limit": limit,
+            "username": public_username,
+        }
+        classification = DataClassification.PUBLIC
+        idempotency_key = f"github:public-repositories:{public_username}:{limit}"
+        justification = (
+            "List public repositories owned by the directly requested GitHub user."
+        )
+        goal = f"List public repositories owned by GitHub user {public_username}."
+    else:
+        capability = "github.repository.list"
+        resource_type = "repository_collection"
+        resource_id = "authenticated-user"
+        parameters = {"limit": limit, "visibility": effective_visibility}
+        classification = DataClassification.INTERNAL
+        idempotency_key = f"github:repositories:{effective_visibility}:{limit}"
+        justification = (
             "List repositories visible to the directly requesting authenticated "
             "GitHub user."
+        )
+        goal = "List repositories visible to the authenticated GitHub user."
+
+    action = AgentAction(
+        capability=capability,
+        target=ResourceRef(
+            system="github",
+            resource_type=resource_type,
+            resource_id=resource_id,
         ),
+        parameters=parameters,
+        risk=RiskLevel.READ_ONLY,
+        data_classification=classification,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key=idempotency_key,
+        justification=justification,
     )
     plan = ChangePlan(
-        goal="List repositories visible to the authenticated GitHub user.",
+        goal=goal,
         actions=(action,),
         created_by="direct-user",
     )
@@ -2001,9 +2058,14 @@ def _github_repositories(
     if not decision.permitted or decision.approval_required:
         raise ConfigurationError(decision.reason)
 
-    resolved = github.resolve(environ, auth_transport=transport)
+    selected_github = (
+        replace(github, auth_mode=AuthMode.NONE, secret_env=None)
+        if public_username is not None
+        else github
+    )
+    resolved = selected_github.resolve(environ, auth_transport=transport)
     connector = GitHubConnector(resolved, transport=transport)
-    principal = connector.attest_principal()
+    principal = None if public_username is not None else connector.attest_principal()
     result = connector.execute(action)
     verification = connector.verify(action, result)
     if not verification.verified:
@@ -2017,15 +2079,24 @@ def _github_repositories(
     repositories = list((result.after or {}).get("repositories", []))
     payload = {
         **dict(result.after or {}),
-        "authenticated_user": {
+        "verified": True,
+    }
+    if principal is not None:
+        payload["authenticated_user"] = {
             "login": principal.login,
             "user_id": principal.user_id,
             "identity": principal.identity,
-        },
-        "verified": True,
-    }
+        }
+    else:
+        payload["requested_user"] = {
+            "login": public_username,
+            "access": "anonymous_public",
+        }
 
-    print(f"GitHub account: {principal.login}")
+    if principal is not None:
+        print(f"GitHub account: {principal.login}")
+    else:
+        print(f"GitHub public user: {public_username}")
     print(f"Repositories: {len(repositories)}")
     for repository in repositories:
         if not isinstance(repository, Mapping):

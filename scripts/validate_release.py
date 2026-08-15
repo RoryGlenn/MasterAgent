@@ -49,6 +49,8 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "[`AUTONOMY.md`](AUTONOMY.md)",
         "The default response to an actionable prompt is",
         "Treat a missing safe capability as implementation work",
+        "Do not require or search for credentials",
+        "typed anonymous capability",
     ),
     _FIRST_RUN_CONTRACT_PATH: (
         "first operator",
@@ -69,6 +71,8 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "Ask once, at the latest possible point",
         "authenticated approval bound to the exact reviewed plan",
         "github-repositories",
+        "github-repositories --username USERNAME",
+        "public repositories anonymously",
         "persistent connector or credential state",
     ),
     Path("AGENTS.md"): (
@@ -90,6 +94,7 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "explicit no-local-change prompt",
         "master-agent connect",
         "github-repositories",
+        "github-repositories --username USERNAME",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "[first-run contract](../.ai/FIRST_RUN.md)",
@@ -336,10 +341,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 75:
-        errors.append(f"expected 75 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 76:
+        errors.append(f"expected 76 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 75 typed capabilities")
+        checks.append("capability catalog contains 76 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")
@@ -422,6 +427,7 @@ def _validate_copilot_agent(
         "connect --systems",
         "Ask once and only after",
         "github-repositories",
+        "--username USERNAME",
         "python scripts/validate_release.py",
     )
     for boundary in required_boundaries:

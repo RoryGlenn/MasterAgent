@@ -281,6 +281,94 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         )
         self.assertNotIn(token, stdout.getvalue())
 
+    def test_github_repositories_lists_public_user_without_credentials(self) -> None:
+        username = "rahul-aravind-opti"
+        ambient_token = "ambient-token-must-not-be-sent"
+        repository = {
+            "id": 7,
+            "node_id": "R_7",
+            "name": "crossmint-challenge",
+            "full_name": f"{username}/crossmint-challenge",
+            "owner": {"login": username},
+            "private": False,
+            "visibility": "public",
+            "fork": False,
+            "archived": False,
+            "disabled": False,
+            "default_branch": "main",
+            "topics": [],
+            "updated_at": "2025-11-08T10:00:00Z",
+            "pushed_at": "2025-11-08T09:00:00Z",
+            "html_url": f"https://github.com/{username}/crossmint-challenge",
+        }
+        transport = ScriptedTransport()
+        transport.add_json("GET", f"/users/{username}/repos", [repository])
+
+        with private_temporary_directory() as directory:
+            output = Path(directory) / "public-repositories.json"
+            stdout = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GITHUB_TOKEN": ambient_token},
+                    clear=True,
+                ),
+                redirect_stdout(stdout),
+            ):
+                status = _github_repositories(
+                    credentials_file=None,
+                    limit=100,
+                    visibility=None,
+                    output=output,
+                    username=username,
+                    transport=transport,
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["requested_user"]["login"], username)
+        self.assertEqual(payload["requested_user"]["access"], "anonymous_public")
+        self.assertEqual(
+            payload["repositories"][0]["full_name"],
+            f"{username}/crossmint-challenge",
+        )
+        self.assertTrue(payload["verified"])
+        self.assertNotIn("authenticated_user", payload)
+        self.assertIn(f"GitHub public user: {username}", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 2)
+        self.assertTrue(
+            all(
+                "Authorization" not in request.headers for request in transport.requests
+            )
+        )
+        self.assertNotIn(ambient_token, stdout.getvalue())
+
+    def test_github_public_user_rejects_credentials_and_nonpublic_visibility(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "not accepted with --username",
+        ):
+            _github_repositories(
+                credentials_file=Path("/unused/private-token.json"),
+                limit=100,
+                visibility=None,
+                output=None,
+                username="rahul-aravind-opti",
+            )
+
+        with self.assertRaisesRegex(ConfigurationError, "public repositories only"):
+            _github_repositories(
+                credentials_file=None,
+                limit=100,
+                visibility="private",
+                output=None,
+                username="rahul-aravind-opti",
+            )
+
     def test_github_repositories_reports_missing_credential_without_network(
         self,
     ) -> None:
