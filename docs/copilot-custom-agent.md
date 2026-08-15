@@ -9,17 +9,25 @@ execution runtime.
 
 1. Open the repository root as the workspace. Opening only its parent directory
    does not use this repository's default `.github/agents` discovery location.
-2. Install the runtime in a Python 3.12 or newer virtual environment:
+2. Open GitHub Copilot Chat and select **MasterAgent** from the agents dropdown.
+   If it is hidden, open **Configure Custom Agents** and enable its eye icon.
+3. Ask MasterAgent to run a documented command, for example:
+
+   ```text
+   Run the repository's documented readiness check and summarize the result.
+   ```
+
+   If the command is unavailable and the request permits local setup,
+   MasterAgent creates `.venv`, installs this project and its declared
+   dependencies there, and runs `.venv/bin/master-agent readiness`. It uses
+   `python3`, so a system without a `python` alias still works. The equivalent
+   manual commands are:
 
    ```bash
    python3 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install -e .
-   master-agent readiness
+   .venv/bin/python -m pip install -e .
+   .venv/bin/master-agent readiness
    ```
-
-3. Open GitHub Copilot Chat and select **MasterAgent** from the agents dropdown.
-   If it is hidden, open **Configure Custom Agents** and enable its eye icon.
 
 The repository profile is committed to the default branch, so supported
 GitHub.com and Copilot CLI surfaces can discover it as well. In Copilot CLI,
@@ -44,9 +52,18 @@ The profile:
 - preserves every capability, governance, approval, retention, audit, and live
   connector gate already enforced by the runtime.
 
-The profile does not install Python dependencies, provide credentials, enable a
-connector, or grant approval. A tool appearing in Copilot means it is available,
-not that MasterAgent is authorized to use it for an external side effect.
+The profile may perform the bounded `.venv` bootstrap above when the operator
+asks it to run a documented command. It never upgrades pip, installs globally
+or into the user site, uses `sudo` or an OS package manager, modifies persistent
+`PATH`, provides credentials, enables a connector, or grants approval. A tool
+appearing in Copilot means it is available, not that MasterAgent is authorized
+to use it for an external side effect.
+
+Explicit read-only, diagnosis-only, and no-change instructions always take
+precedence. In those modes, the agent inspects `python`, `python3`, pip, the
+project script declaration, and `PATH`, then reports the missing prerequisite
+without creating `.venv` or installing anything. Setup failures must be read
+and reported rather than redirected to an uninspected log.
 
 ## Scope
 
@@ -66,5 +83,6 @@ plans, approvals, provider gates, or audit evidence.
 
 `python scripts/validate_release.py` fails if the profile is missing, malformed,
 not user-invocable, automatically model-invocable, expanded to unreviewed tools,
-or detached from the required policy files. The source-distribution validation
-also requires the profile to be packaged.
+detached from the required policy files, or missing the bounded bootstrap and
+read-only safeguards. The source-distribution validation also requires the
+profile to be packaged.

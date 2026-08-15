@@ -330,6 +330,10 @@ def _validate_copilot_agent(
     required_boundaries = (
         "config/capabilities.toml",
         "Never call a provider directly",
+        "Explicit read-only, diagnosis-only, or no-change instructions take",
+        "a request to run a documented `master-agent` command permits only",
+        ".venv/bin/python -m pip install -e .",
+        "Never use `sudo`",
         "python scripts/validate_release.py",
     )
     for boundary in required_boundaries:

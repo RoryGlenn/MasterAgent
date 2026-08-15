@@ -115,6 +115,58 @@ class ReleaseMetadataTests(unittest.TestCase):
                 any("missing required policy reference" in error for error in errors)
             )
 
+    def test_copilot_agent_requires_bounded_runtime_bootstrap(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            source = (
+                Path(__file__).resolve().parents[1]
+                / ".github/agents/MasterAgent.agent.md"
+            ).read_text(encoding="utf-8")
+            agent.write_text(
+                source.replace(
+                    ".venv/bin/python -m pip install -e .",
+                    "python -m pip install --user -e .",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any("missing required boundary" in error for error in errors)
+            )
+
+    def test_copilot_agent_requires_read_only_bootstrap_guard(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            source = (
+                Path(__file__).resolve().parents[1]
+                / ".github/agents/MasterAgent.agent.md"
+            ).read_text(encoding="utf-8")
+            agent.write_text(
+                source.replace(
+                    "Explicit read-only, diagnosis-only, or no-change instructions take",
+                    "Local setup may always proceed",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any("missing required boundary" in error for error in errors)
+            )
+
     def test_demo_readiness_count_must_match_capability_catalog(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
