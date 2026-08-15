@@ -1,5 +1,7 @@
 environment: development
 ready: True
+live connectors: 0 (safe local mode only)
+  PASS audit_sink
   PASS governance_coverage
 warning: no live connectors are enabled; runtime is safe but not connected
 wrote examples/v1-demo/readiness.json

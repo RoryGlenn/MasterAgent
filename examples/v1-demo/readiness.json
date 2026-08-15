@@ -4,6 +4,14 @@
   "environment": "development",
   "checks": [
     {
+      "name": "audit_sink",
+      "passed": true,
+      "configured": "local-sqlite-for-development",
+      "kind": "local_sqlite",
+      "external": false,
+      "tamper_resistant": false
+    },
+    {
       "name": "governance_coverage",
       "passed": true,
       "covered_capabilities": 74

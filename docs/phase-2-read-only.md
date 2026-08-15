@@ -8,7 +8,10 @@ evidence, independent verification, and weekly-status plan generation. The
 legacy direct weekly-status execution/package command is disabled until it uses
 the immutable manifest and descriptor-pinned output boundary.
 
-This release does not acquire credentials. It consumes already-issued credentials supplied through environment variables at process start.
+The Phase 2A connector path does not acquire credentials. It consumes
+already-issued credentials; the separately gated Microsoft device-code helper
+added in Phase 2C is documented in
+[`phase-2c-authentication.md`](phase-2c-authentication.md).
 
 ## Runtime systems
 
@@ -115,6 +118,9 @@ The connector does not clone repositories, retrieve arbitrary source trees, comm
   validated before URL construction.
 - PR and check-run pagination is bounded by connector page, item, request, and
   response-byte budgets.
+- Discovery probes authenticate through the fixed `GET /user` endpoint.
+  Governed live apply binds and re-verifies the provider-returned numeric user
+  ID, so rotating a token cannot silently change the acting principal.
 - The connector has no GitHub create, update, merge, permission, or generic
   HTTP capability.
 

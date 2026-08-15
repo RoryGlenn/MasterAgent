@@ -4,7 +4,11 @@
 
 Phase 2B extends the read-only foundation into Outlook and Microsoft Teams without enabling send, reply, edit, delete, or publish operations. It also adds the identity, citation, and retention controls required before workplace communications may be used as agent context.
 
-The runtime consumes an already-issued Microsoft Graph access token. It does not acquire, refresh, cache, or persist tokens.
+The Phase 2B read path consumes an already-issued Microsoft Graph access token;
+it does not acquire, refresh, cache, or persist tokens. The separate Phase 2C
+device-code command can acquire a delegated token and write a restricted token
+file, but does not make that opaque credential eligible for governed live
+apply.
 
 ## Runtime capabilities
 

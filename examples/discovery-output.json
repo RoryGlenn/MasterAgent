@@ -44,6 +44,25 @@
       "error_message": null
     },
     {
+      "configuration": "github",
+      "system": "github",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "bearer",
+      "base_url": "https://api.github.com",
+      "required_environment": [
+        "MASTER_AGENT_GITHUB_TOKEN"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_GITHUB_TOKEN"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
       "configuration": "jira",
       "system": "jira",
       "status": "disabled",
@@ -70,13 +89,13 @@
       "status": "disabled",
       "enabled": false,
       "deployment": "cloud",
-      "auth_mode": "bearer",
+      "auth_mode": "oauth_delegated",
       "base_url": "https://graph.microsoft.com/v1.0",
       "required_environment": [
-        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
       ],
       "missing_environment": [
-        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
       ],
       "capabilities": [],
       "probe": null,
@@ -89,13 +108,51 @@
       "status": "disabled",
       "enabled": false,
       "deployment": "cloud",
-      "auth_mode": "bearer",
+      "auth_mode": "oauth_delegated",
       "base_url": "https://graph.microsoft.com/v1.0",
       "required_environment": [
-        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
       ],
       "missing_environment": [
-        "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "microsoft",
+      "system": "outlook",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "oauth_delegated",
+      "base_url": "https://graph.microsoft.com/v1.0",
+      "required_environment": [
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
+      ],
+      "capabilities": [],
+      "probe": null,
+      "error_type": null,
+      "error_message": null
+    },
+    {
+      "configuration": "microsoft",
+      "system": "teams",
+      "status": "disabled",
+      "enabled": false,
+      "deployment": "cloud",
+      "auth_mode": "oauth_delegated",
+      "base_url": "https://graph.microsoft.com/v1.0",
+      "required_environment": [
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
+      ],
+      "missing_environment": [
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
       ],
       "capabilities": [],
       "probe": null,

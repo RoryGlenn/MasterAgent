@@ -87,6 +87,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_packaged_defaults(root, checks, errors)
     _validate_capabilities(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
+    _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
     _validate_file_hygiene(root, checks, errors)
 
@@ -282,6 +283,124 @@ def _validate_markdown_links(
                 count += 1
     if not any(item.startswith("broken Markdown") for item in errors):
         checks.append(f"validated {count} local Markdown links")
+
+
+def _validate_documentation(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Cross-check release documentation and checked-in plan examples."""
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    release_guide = (root / "docs/release-validation.md").read_text(encoding="utf-8")
+    cli_reference = (root / "docs/cli-reference.md").read_text(encoding="utf-8")
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    version = str(pyproject["project"]["version"])
+
+    version_claims = {
+        "README version banner": f"**Version {version} —",
+        "release-validation title": f"# Release Validation — v{version}",
+        "source-distribution filename": f"master_agent-{version}.tar.gz",
+        "wheel filename": f"master_agent-{version}-py3-none-any.whl",
+    }
+    version_text = {
+        "README version banner": readme,
+        "release-validation title": release_guide,
+        "source-distribution filename": readme,
+        "wheel filename": readme,
+    }
+    for label, claim in version_claims.items():
+        if claim not in version_text[label]:
+            errors.append(f"documentation has stale {label}: expected {claim}")
+
+    docs = {path.relative_to(root).as_posix() for path in (root / "docs").glob("*.md")}
+    indexed = {
+        target.split("#", 1)[0]
+        for target in _MARKDOWN_LINK.findall(readme)
+        if target.startswith("docs/")
+    }
+    missing_docs = sorted(docs - indexed)
+    if missing_docs:
+        errors.append(
+            "README documentation index is missing: " + ", ".join(missing_docs)
+        )
+
+    catalog = tomllib.loads(
+        (root / "config/capabilities.toml").read_text(encoding="utf-8")
+    )["capabilities"]
+    risk_counts: dict[str, int] = {}
+    for definition in catalog.values():
+        risk = str(definition["risk"])
+        risk_counts[risk] = risk_counts.get(risk, 0) + 1
+    readme_claims = (
+        f"**{len(catalog)} typed capabilities**",
+        f"{risk_counts.get('read_only', 0)} read-only capabilities",
+        f"{risk_counts.get('local_generation', 0)} local-generation capabilities",
+        f"{risk_counts.get('reversible_write', 0)} reversible-write definitions",
+        f"{risk_counts.get('external_communication', 0)} external-communication capabilities",
+        f"{risk_counts.get('high_impact', 0)} high-impact capability",
+    )
+    for claim in readme_claims:
+        if claim not in readme:
+            errors.append(f"README capability summary is stale: expected {claim}")
+
+    current_changelog = changelog.split("\n## ", 2)[1]
+    changelog_claim = f"a {len(catalog)}-capability catalog"
+    if not current_changelog.startswith(f"{version} "):
+        errors.append(f"CHANGELOG first release section is not version {version}")
+    elif changelog_claim not in current_changelog:
+        errors.append(
+            f"CHANGELOG capability summary is stale: expected {changelog_claim}"
+        )
+
+    models = (root / "src/master_agent/models.py").read_text(encoding="utf-8")
+    schema_match = re.search(r'schema_version: str = "([^"]+)"', models)
+    if schema_match is None:
+        errors.append("could not determine the current ChangePlan schema version")
+    else:
+        current_schema = schema_match.group(1)
+        for path in sorted((root / "examples").glob("*plan.json")):
+            try:
+                plan = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                errors.append(f"example plan could not be read: {path}: {error}")
+                continue
+            if plan.get("schema_version") != current_schema:
+                errors.append(
+                    f"example plan uses stale schema {path}: expected {current_schema}"
+                )
+
+    cli = (root / "src/master_agent/cli.py").read_text(encoding="utf-8")
+    commands = set(re.findall(r'subparsers\.add_parser\(\s*"([^"]+)"', cli))
+    missing_commands = sorted(
+        command for command in commands if f"`{command}`" not in cli_reference
+    )
+    if missing_commands:
+        errors.append(
+            "CLI reference is missing commands: " + ", ".join(missing_commands)
+        )
+
+    if not any(
+        item.startswith(
+            (
+                "documentation has stale",
+                "README documentation index",
+                "README capability summary",
+                "CHANGELOG",
+                "could not determine the current ChangePlan",
+                "example plan",
+                "CLI reference",
+            )
+        )
+        for item in errors
+    ):
+        checks.append(
+            f"documentation matches version {version}, {len(docs)} guides, "
+            f"{len(catalog)} capabilities, {len(commands)} CLI commands, and "
+            "current plan schema"
+        )
 
 
 def _validate_demo(

@@ -1,9 +1,12 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "plan_id": "ff62e966-f2e7-46a1-9f62-24bb71ab0213",
   "goal": "Prepare read-only communication context: Project communication context",
   "created_by": "registered-workflow:communication-context",
   "created_at": "2026-08-13T23:48:18.520990+00:00",
+  "workflow_id": null,
+  "workflow_fingerprint": null,
+  "compensate_on_failure": false,
   "actions": [
     {
       "capability": "identity.person.resolve",
@@ -17,6 +20,7 @@
         "query": "rory"
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "communication-context:identity:rory",
@@ -38,6 +42,7 @@
         "identity": "me"
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "communication-context:outlook:rory",
@@ -62,6 +67,7 @@
         "include_last_message": true
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "communication-context:teams-chats:rory",
@@ -84,6 +90,7 @@
         "limit": 100
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "communication-context:joined-teams:rory",

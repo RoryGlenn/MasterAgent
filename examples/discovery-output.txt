@@ -1,6 +1,9 @@
 disabled             bitbucket    deployment=cloud       missing=MASTER_AGENT_BITBUCKET_USERNAME,MASTER_AGENT_BITBUCKET_TOKEN
 disabled             confluence   deployment=cloud       missing=MASTER_AGENT_CONFLUENCE_USERNAME,MASTER_AGENT_CONFLUENCE_TOKEN
+disabled             github       deployment=cloud       missing=MASTER_AGENT_GITHUB_TOKEN
 disabled             jira         deployment=cloud       missing=MASTER_AGENT_JIRA_USERNAME,MASTER_AGENT_JIRA_TOKEN
-disabled             microsoft    deployment=cloud       missing=MASTER_AGENT_GRAPH_ACCESS_TOKEN
-disabled             sharepoint   deployment=cloud       missing=MASTER_AGENT_GRAPH_ACCESS_TOKEN
+disabled             microsoft    deployment=cloud       missing=MASTER_AGENT_GRAPH_TOKEN_FILE
+disabled             sharepoint   deployment=cloud       missing=MASTER_AGENT_GRAPH_TOKEN_FILE
+disabled             outlook      deployment=cloud       missing=MASTER_AGENT_GRAPH_TOKEN_FILE
+disabled             teams        deployment=cloud       missing=MASTER_AGENT_GRAPH_TOKEN_FILE
 wrote examples/discovery-output.json

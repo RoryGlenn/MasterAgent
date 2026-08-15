@@ -1,9 +1,12 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "plan_id": "afe5fc87-949a-4663-8cb2-bfbe2aaff56d",
   "goal": "Prepare the weekly project status package without publishing or sending.",
   "created_by": "registered_workflow:weekly_status_v1",
   "created_at": "2026-08-13T22:59:07.538964+00:00",
+  "workflow_id": null,
+  "workflow_fingerprint": null,
+  "compensate_on_failure": false,
   "actions": [
     {
       "capability": "jira.issue.search",
@@ -17,6 +20,7 @@
         "query": "current sprint"
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:jira:current-sprint:v1",
@@ -36,6 +40,7 @@
         "state": "OPEN"
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:bitbucket:open-prs:v1",
@@ -53,6 +58,7 @@
       },
       "parameters": {},
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:confluence:project-status:v1",
@@ -84,6 +90,7 @@
         ]
       },
       "risk": "local_generation",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:powerpoint:v1",
@@ -109,6 +116,7 @@
         "send": false
       },
       "risk": "local_generation",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:teams-draft:v1",
@@ -134,6 +142,7 @@
         "send": false
       },
       "risk": "local_generation",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:outlook-draft:v1",

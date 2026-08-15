@@ -26,7 +26,8 @@ The model may propose actions. It cannot bypass policy, grant itself access, cha
 
 ## Release status
 
-All planned software phases are implemented:
+The v1 governed runtime and provider contracts are implemented. Surfaces that
+do not yet meet the release security boundary remain deliberately non-routable:
 
 | Phase | Delivered in v1.0.0 |
 |---|---|
@@ -95,13 +96,13 @@ Supported domains:
   no local Git mutation capability is routable.
 - Organization-approved HTTPS API endpoints and credentials for live use.
 
-## Install from the complete source ZIP
+## Install from the source distribution
 
 **Machine: Ubuntu 24.04 or macOS development computer**
 
 ```bash
-unzip master-agent-v1.0.0.zip
-cd master-agent
+tar -xzf master_agent-1.0.0.tar.gz
+cd master_agent-1.0.0
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -458,10 +459,12 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 ## Documentation
 
 - [Semantic codebase index](docs/semantic-index.md)
+- [CLI reference](docs/cli-reference.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)
 - [Integration matrix](docs/integration-matrix.md)
+- [Live connector contracts](docs/live-connectors.md)
 - [Threat model](docs/threat-model.md)
 - [Phase 2 read-only context](docs/phase-2-read-only.md)
 - [Phase 2B communication context](docs/phase-2b-communication-context.md)

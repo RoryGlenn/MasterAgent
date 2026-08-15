@@ -587,6 +587,19 @@ class IntegrationConfig:
                 f"connector is not configured: {system}"
             ) from error
 
+    def credential_environment_variables(self) -> tuple[str, ...]:
+        """Return the exact connector credential references a store may supply."""
+
+        names: set[str] = set()
+        for connector in self.connectors.values():
+            for value in (connector.username_env, connector.secret_env):
+                if value:
+                    names.add(value)
+            client_secret = connector.extra.get("client_secret_env")
+            if isinstance(client_secret, str) and client_secret.strip():
+                names.add(client_secret.strip())
+        return tuple(sorted(names))
+
 
 _KNOWN_CONNECTOR_KEYS = {
     "enabled",
