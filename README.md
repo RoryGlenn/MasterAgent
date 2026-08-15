@@ -2,7 +2,7 @@
 
 **Version 1.0.0 — governed enterprise-agent runtime**
 
-Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
+Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, GitHub, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
 
 It separates AI planning from authorization and execution:
 
@@ -32,7 +32,7 @@ All planned software phases are implemented:
 |---|---|
 | 0 — environment and governance | Capability catalog, governance ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics |
 | 1 — governed runtime | Immutable plans, approvals, policy, source-of-truth validation, audit, idempotency, verification, and prompt-injection controls |
-| 2 — read-only context | Jira, Confluence, Bitbucket, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
+| 2 — read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
 | 3 — draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests |
 | 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, and byte-verified SharePoint files; local/remote Git and unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
@@ -46,9 +46,9 @@ weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **70 typed capabilities**:
+The catalog contains **74 typed capabilities**:
 
-- 39 read-only capabilities;
+- 43 read-only capabilities;
 - 10 local-generation capabilities;
 - 16 reversible-write definitions, including 2 disabled OneNote writes and 5
   disabled local-Git mutations;
@@ -62,6 +62,7 @@ Supported domains:
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
+| GitHub Cloud | repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
@@ -207,10 +208,24 @@ After administrators approve the deployment, run bounded read-only probes:
 ```bash
 master-agent discover \
   --integrations config/integrations.toml \
-  --systems jira,confluence,bitbucket,microsoft,sharepoint,outlook,teams,onenote \
+  --systems jira,confluence,bitbucket,github,microsoft,sharepoint,outlook,teams,onenote \
   --probe \
   --output "$HOME/.master-agent/MasterAgent/discovery-probed.json"
 ```
+
+For a first GitHub-only connectivity test, enable `[connectors.github]` in a
+reviewed integrations file, inject `MASTER_AGENT_GITHUB_TOKEN`, and run:
+
+```bash
+master-agent discover \
+  --integrations /absolute/path/to/integrations.toml \
+  --systems github \
+  --probe
+```
+
+The probe performs one bounded `GET /user` request and reports only the
+authenticated login and numeric user ID. Repository, pull-request, and check
+content remains available only through the typed read capabilities.
 
 ## Microsoft delegated authentication
 

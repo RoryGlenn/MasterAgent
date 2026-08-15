@@ -17,6 +17,7 @@ This release does not acquire credentials. It consumes already-issued credential
 | Jira | Cloud, Data Center | `jira.server.info`, `jira.issue.search`, `jira.issue.read` |
 | Confluence | Cloud, Data Center | `confluence.page.search`, `confluence.page.read` |
 | Bitbucket | Cloud, Data Center | instance, repository, PR search/read, diffstat, build-status reads |
+| GitHub | Cloud | repository, PR search/read, commit check-run reads |
 | Microsoft identity | Microsoft Graph | `microsoft.identity.read` |
 | SharePoint/OneDrive | Microsoft Graph | site search/read, drive list, children, metadata, bounded text read |
 | PowerPoint | Local | weekly-status `.pptx` generation |
@@ -82,7 +83,7 @@ Then probe only approved systems:
 ```bash
 master-agent discover \
   --integrations config/integrations.toml \
-  --systems jira,confluence,bitbucket,microsoft,sharepoint \
+  --systems jira,confluence,bitbucket,github,microsoft,sharepoint \
   --probe
 ```
 
@@ -105,6 +106,17 @@ A requested `expected_version` is validated against the retrieved page version.
 Cloud and Data Center use separate repository and pull-request paths. The connector can enrich a bounded number of PRs with build/CI statuses and diffstat summaries.
 
 The connector does not clone repositories, retrieve arbitrary source trees, commit, push, or merge.
+
+### GitHub
+
+- Cloud credentials are restricted to `api.github.com` and supplied by
+  `MASTER_AGENT_GITHUB_TOKEN`.
+- Repository owner/name pairs, pull-request numbers, and commit refs are
+  validated before URL construction.
+- PR and check-run pagination is bounded by connector page, item, request, and
+  response-byte budgets.
+- The connector has no GitHub create, update, merge, permission, or generic
+  HTTP capability.
 
 ### Microsoft identity
 

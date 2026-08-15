@@ -32,6 +32,10 @@ TOML contains environment-variable **names**, never secret values. The runtime r
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
 
+GitHub Cloud uses `MASTER_AGENT_GITHUB_TOKEN` as an opaque bearer token. The
+cloud origin is fixed to `api.github.com`; alternate cloud hosts are rejected,
+and GitHub Enterprise Server is not part of the current connector contract.
+
 Exact-plan binding records a flow-enforced non-secret credential identity, not
 the token or password. Basic usernames and Entra client-credential tenant/client
 IDs are derived from their configured environment variables. Their secrets may
@@ -108,6 +112,13 @@ The broad generic flag is retained as a compatibility gate, not as permission to
 ## Atlassian deployment type
 
 Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucket. Cloud and Data Center endpoints and payloads are implemented by separate connector branches rather than pretending the APIs are identical.
+
+## GitHub Cloud
+
+The GitHub connector is read-only and disabled by default. It exposes only
+repository metadata, pull-request search/read, and commit check-run reads.
+`discover --systems github --probe` calls the fixed `/user` endpoint to verify
+the configured bearer token. No GitHub mutation gate exists.
 
 ## Microsoft identity mode
 

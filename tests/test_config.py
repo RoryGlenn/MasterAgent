@@ -19,7 +19,7 @@ class IntegrationConfigTests(unittest.TestCase):
         config = IntegrationConfig.from_toml(root / "config/integrations.toml")
         self.assertEqual(
             set(config.connectors),
-            {"jira", "confluence", "bitbucket", "microsoft"},
+            {"jira", "confluence", "bitbucket", "github", "microsoft"},
         )
         self.assertFalse(config.connector("jira").enabled)
         self.assertEqual(config.connector("jira").auth_mode, AuthMode.BASIC)

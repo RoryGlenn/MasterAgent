@@ -24,6 +24,7 @@ from master_agent.connectors.drafts import (
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
+from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.microsoft import (
@@ -48,6 +49,7 @@ _READ_SYSTEMS = frozenset(
     {
         "jira",
         "confluence",
+        "github",
         "bitbucket",
         "microsoft",
         "sharepoint",
@@ -141,7 +143,7 @@ def build_live_connectors(
         unresolved = config.connectors[name]
         if not unresolved.enabled:
             continue
-        if name not in {"jira", "confluence", "bitbucket", "microsoft"}:
+        if name not in {"jira", "confluence", "bitbucket", "github", "microsoft"}:
             continue
         resolved = unresolved.resolve(
             source,
@@ -181,6 +183,10 @@ def build_live_connectors(
                 connectors.append(
                     BitbucketWriteConnector(resolved, transport=transport)
                 )
+            continue
+
+        if name == "github" and "github" in selected:
+            connectors.append(GitHubConnector(resolved, transport=transport))
             continue
 
         if name != "microsoft":

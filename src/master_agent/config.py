@@ -680,6 +680,8 @@ def _validate_provider_origin(
         valid = hostname.endswith(".atlassian.net") and hostname != "atlassian.net"
     elif system == "bitbucket":
         valid = hostname == "api.bitbucket.org"
+    elif system == "github":
+        valid = hostname == "api.github.com"
     elif system == "microsoft":
         valid = hostname in {
             "graph.microsoft.com",
@@ -712,6 +714,11 @@ _ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
         "secret_env": frozenset({"MASTER_AGENT_BITBUCKET_TOKEN"}),
         "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
         "repository_root_env": frozenset({"MASTER_AGENT_REPOSITORY_ROOT"}),
+    },
+    "github": {
+        "base_url_env": frozenset({"MASTER_AGENT_GITHUB_BASE_URL"}),
+        "secret_env": frozenset({"MASTER_AGENT_GITHUB_TOKEN"}),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
     },
     "microsoft": {
         "base_url_env": frozenset({"MASTER_AGENT_GRAPH_BASE_URL"}),

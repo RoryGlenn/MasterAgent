@@ -158,6 +158,7 @@ def discover_integrations(
         "jira",
         "confluence",
         "bitbucket",
+        "github",
         "microsoft",
         "sharepoint",
         "outlook",

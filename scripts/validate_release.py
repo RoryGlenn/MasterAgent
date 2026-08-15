@@ -246,10 +246,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 70:
-        errors.append(f"expected 70 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 74:
+        errors.append(f"expected 74 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 70 typed capabilities")
+        checks.append("capability catalog contains 74 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")

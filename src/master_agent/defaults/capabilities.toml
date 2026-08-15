@@ -98,6 +98,26 @@ authentication = "local"
 risk = "local_generation"
 description = "Render a local Confluence page-update proposal."
 
+[capabilities."github.checks.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."github.pull_request.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."github.pull_request.search"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
+[capabilities."github.repository.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+
 [capabilities."identity.identifier.resolve"]
 enabled = true
 authentication = "local"
