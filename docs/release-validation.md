@@ -9,12 +9,15 @@ approval service, or external audit-sink adapter is bundled.
 
 - The complete unit, integration-contract, and adversarial regression suite
   passes on Python 3.12, 3.13, and 3.14 in CI.
-- Python bytecode compilation passes for `src/` and `tests/`.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
 - All 74 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
-- Local Markdown links, source-tree hygiene, and the credential-free v1 demonstration manifest pass validation.
-- The generated PowerPoint opens as a three-slide presentation and passes rendered overflow testing.
+- Release/version claims, the README guide index, the complete CLI command
+  reference, capability summaries, checked-in plan schemas, local Markdown
+  links, source-tree hygiene, and the credential-free v1 demonstration
+  manifest pass validation.
+- The checked-in demonstration PowerPoint opens as a three-slide presentation;
+  its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
 - The wheel is installed outside the source tree and exercised with safe defaults before release.
 - Release archives are checked for integrity, forbidden secret/runtime files, and symbolic links.
@@ -22,6 +25,16 @@ approval service, or external audit-sink adapter is bundled.
 Ruff linting and formatting plus strict mypy checks pass without file
 exclusions and are required CI gates. Tool versions are pinned in the project
 development dependencies so local and CI results use the same rule set.
+
+Run the equivalent local gates from the project root:
+
+```bash
+ruff check .
+ruff format --check .
+mypy
+python3 -m unittest discover -s tests -v
+python3 scripts/validate_release.py
+```
 
 ## Deployment boundary
 

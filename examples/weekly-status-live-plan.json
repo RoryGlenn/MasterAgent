@@ -1,9 +1,12 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "plan_id": "0f0f6fa3-99d5-40b2-9792-dda6898896aa",
   "goal": "Collect the read-only weekly status package for Example Project.",
   "created_by": "registered_workflow:weekly_status_v2",
   "created_at": "2026-08-13T22:59:11.517528+00:00",
+  "workflow_id": null,
+  "workflow_fingerprint": null,
+  "compensate_on_failure": false,
   "actions": [
     {
       "capability": "jira.issue.search",
@@ -18,6 +21,7 @@
         "limit": 100
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:live:jira:v2",
@@ -43,6 +47,7 @@
         "workspace": "example-workspace"
       },
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:live:bitbucket:v2",
@@ -60,6 +65,7 @@
       },
       "parameters": {},
       "risk": "read_only",
+      "data_classification": "internal",
       "authority_source": "registered_workflow",
       "requires_approval": false,
       "idempotency_key": "weekly-status:live:confluence:v2",

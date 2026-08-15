@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -31,6 +31,10 @@ from master_agent.connectors.factory import (
 )
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
+from master_agent.credentials import (
+    CredentialStoreSnapshot,
+    canonical_credential_store_path,
+)
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.discovery import DiscoveryStatus, discover_integrations
 from master_agent.errors import (
@@ -44,7 +48,7 @@ from master_agent.execution_context import (
     capture_runtime_execution_paths,
     enforce_execution_context,
 )
-from master_agent.governance import GovernanceProfile
+from master_agent.governance import EnvironmentKind, GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import Approval, ChangePlan
 from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
@@ -138,6 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sources_of_truth_path=args.sources_of_truth,
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
+                credentials_file=args.credentials_file,
                 output=args.output,
             )
         if args.command == "approve":
@@ -173,6 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sources_of_truth_path=args.sources_of_truth,
                 plugin_names=args.plugin,
                 plugin_lock_path=args.plugin_lock,
+                credentials_file=args.credentials_file,
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
@@ -183,6 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 governance_path=args.governance,
                 oauth_path=args.oauth,
                 identities_path=args.identities,
+                credentials_file=args.credentials_file,
                 output=args.output,
             )
         if args.command == "oauth-device-code":
@@ -219,6 +226,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "discover":
             return _discover(
                 integrations_path=args.integrations,
+                governance_path=args.governance,
+                credentials_file=args.credentials_file,
                 probe=args.probe,
                 systems=_parse_systems(args.systems),
                 output=args.output,
@@ -346,6 +355,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bind_context.add_argument("--sources-of-truth", type=Path, default=None)
     bind_context.add_argument("--capabilities", type=Path, default=None)
     bind_context.add_argument("--governance", type=Path, default=None)
+    bind_context.add_argument("--credentials-file", type=Path)
     bind_context.add_argument(
         "--plugin",
         action="append",
@@ -422,6 +432,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--capabilities", type=Path, default=None)
     run.add_argument("--governance", type=Path, default=None)
+    run.add_argument("--credentials-file", type=Path)
     run.add_argument("--policy", type=Path, default=None)
     run.add_argument("--sources-of-truth", type=Path, default=None)
     run.add_argument(
@@ -451,6 +462,7 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--governance", type=Path, default=None)
     readiness.add_argument("--oauth", type=Path, default=None)
     readiness.add_argument("--identities", type=Path, default=None)
+    readiness.add_argument("--credentials-file", type=Path)
     readiness.add_argument("--output", type=Path)
 
     oauth_device = subparsers.add_parser(
@@ -511,6 +523,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="inspect connector configuration and optionally probe live APIs",
     )
     discover.add_argument("--integrations", type=Path, default=None)
+    discover.add_argument("--governance", type=Path, default=None)
+    discover.add_argument("--credentials-file", type=Path)
     discover.add_argument("--probe", action="store_true")
     discover.add_argument("--systems")
     discover.add_argument("--output", type=Path)
@@ -673,6 +687,7 @@ def _bind_context(
     sources_of_truth_path: Path | None,
     capabilities_path: Path | None,
     governance_path: Path | None,
+    credentials_file: Path | None,
     output: Path,
 ) -> int:
     """Write a plan whose fingerprint covers the complete applied runtime."""
@@ -689,6 +704,14 @@ def _bind_context(
         capabilities_path=capabilities_path,
         governance_path=governance_path,
     )
+    governance = GovernanceProfile.from_toml(configuration_sources["governance"])
+    credential_store = _load_credential_store(
+        credentials_file,
+        integrations=integrations,
+        governance=governance,
+        connector_mode=connector_mode,
+    )
+    execution_environ = _credential_environment(credential_store, os.environ)
     plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
     descriptors = (
         resolve_locked_plugin_descriptors(
@@ -700,7 +723,7 @@ def _bind_context(
     )
     context = build_execution_context(
         integrations,
-        environ=os.environ,
+        environ=execution_environ,
         plugin_descriptors=descriptors,
         runtime=build_runtime_execution_binding(
             integrations,
@@ -713,7 +736,8 @@ def _bind_context(
             result_json=result_json,
             evidence_type=evidence_type,
             configuration_sources=configuration_sources,
-            environ=os.environ,
+            credential_file=(credential_store.path if credential_store else None),
+            environ=execution_environ,
         ),
         include_connectors=connector_mode == "live",
     )
@@ -792,6 +816,7 @@ def _run(
     sources_of_truth_path: Path | None,
     plugin_names: list[str],
     plugin_lock_path: Path | None,
+    credentials_file: Path | None,
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -806,6 +831,8 @@ def _run(
         raise ValueError(
             "--result-json requires --apply and an approval-bound runtime manifest"
         )
+    if not apply and credentials_file is not None:
+        raise ValueError("--credentials-file requires --apply")
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
     if approvals and approval_authorities is None:
@@ -859,7 +886,6 @@ def _run(
         return 0 if report.successful else 2
 
     with ExitStack() as runtime_resources:
-        execution_environ = dict(os.environ)
         integrations_source = resolve_config_source(
             integrations_path, "integrations.toml"
         )
@@ -869,6 +895,17 @@ def _run(
             raise ConfigurationError(
                 "applied execution requires an approval-bound runtime path identity"
             )
+        _enforce_approved_credential_file(
+            approved_context.runtime.credential_file, credentials_file
+        )
+        governance = GovernanceProfile.from_toml(configuration_sources["governance"])
+        credential_store = _load_credential_store(
+            credentials_file,
+            integrations=integration_config,
+            governance=governance,
+            connector_mode=connector_mode,
+        )
+        execution_environ = _credential_environment(credential_store, os.environ)
         approved_path_bindings = (
             *approved_context.runtime.runtime_paths,
             *approved_context.runtime.publication_roots,
@@ -900,6 +937,7 @@ def _run(
                 result_json=result_json,
                 evidence_type=evidence_type,
                 configuration_sources=configuration_sources,
+                credential_file=(credential_store.path if credential_store else None),
                 environ=execution_environ,
                 captured_paths=captured_paths,
             ),
@@ -1017,7 +1055,7 @@ def _run(
         current_integrations = IntegrationConfig.from_toml(
             resolve_config_source(integrations_path, "integrations.toml")
         )
-        current_environ = dict(os.environ)
+        current_environ = _credential_environment(credential_store, os.environ)
         enforce_execution_context(
             plan,
             build_execution_context(
@@ -1034,6 +1072,9 @@ def _run(
                     result_json=result_json,
                     evidence_type=evidence_type,
                     configuration_sources=current_configuration_sources,
+                    credential_file=(
+                        credential_store.path if credential_store else None
+                    ),
                     environ=current_environ,
                     captured_paths=captured_paths,
                 ),
@@ -1108,6 +1149,48 @@ def _load_plugin_lock(
     )
 
 
+def _load_credential_store(
+    path: Path | None,
+    *,
+    integrations: IntegrationConfig,
+    governance: GovernanceProfile,
+    connector_mode: str,
+) -> CredentialStoreSnapshot | None:
+    """Load an explicitly selected development-only connector credential store."""
+
+    if path is None:
+        return None
+    if connector_mode != "live":
+        raise ConfigurationError(
+            "--credentials-file is available only with live connectors"
+        )
+    if governance.environment is not EnvironmentKind.DEVELOPMENT:
+        raise ConfigurationError(
+            "--credentials-file is restricted to the development environment; "
+            "use the approved secret manager for non-development execution"
+        )
+    return CredentialStoreSnapshot.load(
+        path, allowed_names=integrations.credential_environment_variables()
+    )
+
+
+def _credential_environment(
+    store: CredentialStoreSnapshot | None, environ: Mapping[str, str]
+) -> dict[str, str]:
+    return store.overlay(environ) if store is not None else dict(environ)
+
+
+def _enforce_approved_credential_file(
+    approved: str | None, selected: Path | None
+) -> None:
+    observed = str(canonical_credential_store_path(selected)) if selected else None
+    if approved != observed:
+        raise ConfigurationError(
+            "applied execution context differs from the approved plan: "
+            "credential file path binding"
+        )
+
+
 def _readiness(
     *,
     integrations_path: Path | None,
@@ -1115,27 +1198,36 @@ def _readiness(
     governance_path: Path | None,
     oauth_path: Path | None,
     identities_path: Path | None,
+    credentials_file: Path | None,
     output: Path | None,
 ) -> int:
     """Assess Phase 0/2C configuration without performing network requests."""
 
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(integrations_path, "integrations.toml")
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
+    credential_store = _load_credential_store(
+        credentials_file,
+        integrations=integrations,
+        governance=governance,
+        connector_mode="live",
+    )
     report = assess_readiness(
         catalog=CapabilityCatalog.from_toml(
             resolve_config_source(capabilities_path, "capabilities.toml")
         ),
-        governance=GovernanceProfile.from_toml(
-            resolve_config_source(governance_path, "governance.toml")
-        ),
-        integrations=IntegrationConfig.from_toml(
-            resolve_config_source(integrations_path, "integrations.toml")
-        ),
+        governance=governance,
+        integrations=integrations,
         oauth_profiles=OAuthProfiles.from_toml(
             resolve_config_source(oauth_path, "oauth.toml")
         ),
         identities=IdentityRegistry.from_toml(
             resolve_config_source(identities_path, "identities.toml")
         ),
-        environ=os.environ,
+        environ=_credential_environment(credential_store, os.environ),
     )
     payload = report.to_dict()
     print(f"environment: {report.environment}")
@@ -1521,6 +1613,8 @@ def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
 def _discover(
     *,
     integrations_path: Path | None,
+    governance_path: Path | None,
+    credentials_file: Path | None,
     probe: bool,
     systems: set[str] | None,
     output: Path | None,
@@ -1528,9 +1622,18 @@ def _discover(
     config = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
+    credential_store = _load_credential_store(
+        credentials_file,
+        integrations=config,
+        governance=governance,
+        connector_mode="live",
+    )
     records = discover_integrations(
         config,
-        environ=os.environ,
+        environ=_credential_environment(credential_store, os.environ),
         probe=probe,
         systems=systems,
     )

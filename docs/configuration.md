@@ -198,8 +198,36 @@ master-agent plugins
 ```
 
 These commands do not import plugin code, publish content, or send communication. `discover --probe` is the explicit network-read step.
+With no path arguments they inspect the packaged safe defaults. To validate a
+deployment, pass every reviewed configuration file explicitly from its private
+trusted directory; the current working directory is never consulted
+implicitly.
 
 The v1 runtime currently implements only the local SQLite development audit
 sink. Naming an external product in `audit_sink` does not make it operational;
 production readiness therefore fails closed until an actual typed external
 sink adapter is installed and registered by the runtime.
+# Restricted local credential files
+
+Development environments may supply connector-declared credential variables from
+one explicitly selected JSON file instead of exporting each variable. The file is
+opt-in and is never loaded by a policy-only dry run:
+
+```json
+{
+  "schema": "master-agent/credential-store@1",
+  "credentials": {
+    "MASTER_AGENT_GITHUB_TOKEN": "replace-with-a-real-token"
+  }
+}
+```
+
+Store it outside the repository in a private (`0700`) directory and set the file
+mode to `0600`. Pass its absolute path with `--credentials-file` to `readiness`,
+`discover`, `bind-context`, and `run --apply`. Only names already referenced by
+the selected `integrations.toml` are accepted. A name present in both the file and
+the ambient environment is rejected. Applied execution binds the canonical file
+path (but not its contents or digest), so bind and apply must select the same file.
+
+This plaintext format is a local-development convenience, not a production secret
+manager. Non-development governance profiles reject it.

@@ -1,6 +1,7 @@
 goal: Prepare the weekly project status package without publishing or sending.
 plan ID: afe5fc87-949a-4663-8cb2-bfbe2aaff56d
-fingerprint: 0adfad8d864c8776196cd80de02e68a4dec5d27798e132394b49916520e489cf
+fingerprint: d62fd59675a6d302bade56cc04b69f8899fdd754d9efbf42f7df42ec53f47080
+execution context: unbound
 actions:
   05ea66fe-6ae2-4956-85d2-c744079315fd  read_only                jira.issue.search                      jira:PROJECT-SPRINT deps=-
   d965f77c-897b-4401-8ed0-72740912bb69  read_only                bitbucket.pull_request.search          bitbucket:open-prs deps=-

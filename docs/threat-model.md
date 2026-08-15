@@ -54,6 +54,10 @@ Controls:
 
 - separate OAuth profiles by read/write/send purpose;
 - disabled defaults;
+- development-only JSON credential stores accept only integration-declared names,
+  require an owner-controlled `0700` parent and `0600` regular file, reject
+  ambient-variable collisions, and bind only the canonical path into applied
+  execution; non-development environments require an approved secret manager;
 - GitHub bearer credentials are provider-attested through `GET /user` at bind
   and apply time, with only the immutable numeric user ID approval-bound;
 - other opaque bearer/delegated credentials fail closed for live applied

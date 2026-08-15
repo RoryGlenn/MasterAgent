@@ -1,10 +1,1 @@
-run ID: cf03467a-92fb-4098-b071-6560a346dab5
-plan fingerprint: 3ab0e872a9429b2697fb7b2ebdb48ea1a1b34d33b99c4040adfb333fbe91b048
-mode: apply
-verified             05ea66fe-6ae2-4956-85d2-c744079315fd jira.issue.search — verified by mock re-read
-verified             d965f77c-897b-4401-8ed0-72740912bb69 bitbucket.pull_request.search — verified by mock re-read
-verified             4d364f13-17e4-47d5-9e10-5014a7b26105 confluence.page.read — verified by mock re-read
-verified             fd25e85c-7f7f-4491-a2ff-9efee3f4ca07 powerpoint.presentation.generate — verified by mock re-read
-verified             d08a2340-c76c-4f9f-84f5-d7269ea3b4fc teams.message.draft — verified by mock re-read
-verified             e8974c33-0ca4-4de2-9ace-992124a05978 outlook.email.draft — verified by mock re-read
-successful: True
+error: ConfigurationError: applied execution requires an approval-bound runtime path identity

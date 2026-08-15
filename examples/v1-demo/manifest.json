@@ -65,8 +65,8 @@
     },
     {
       "path": "draft-package.txt",
-      "size": 1018,
-      "sha256": "d7c1cb823ec681809728808ebcd14e58d45c4d89432ab44756b254ad95cb8e94"
+      "size": 1029,
+      "sha256": "88211d6e7daebb351c9227bcc5ed1ba1ec36350c396803753a2397de7eac2925"
     },
     {
       "path": "plugins.json",
@@ -85,13 +85,13 @@
     },
     {
       "path": "readiness.json",
-      "size": 324,
-      "sha256": "a8562695093bd76864df81b828fbf2a8749d5b63d4d3db8552e3dee8f16baa9f"
+      "size": 526,
+      "sha256": "efd108a661e8efd77c74c3b33925e57684f871f99afeeaac1158341d450f60c3"
     },
     {
       "path": "readiness.txt",
-      "size": 177,
-      "sha256": "e06c6a25f907966ecc4031812808666767271df5cd757c2256321cb829741409"
+      "size": 237,
+      "sha256": "abea12e6a0d9dfc63a3a84d0c59e8a4bf09231610722806bdb426912d37e6761"
     },
     {
       "path": "recurring-status.json",

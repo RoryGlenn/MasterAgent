@@ -22,19 +22,28 @@ Request only the scopes needed for the first workflow. Prefer separate credentia
 mkdir -p "$HOME/.master-agent/MasterAgent"
 chmod 700 "$HOME/.master-agent" "$HOME/.master-agent/MasterAgent"
 master-agent readiness \
+  --integrations /trusted/config/integrations.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --oauth /trusted/config/oauth.toml \
+  --identities /trusted/config/identities.toml \
   --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
 Resolve every error and review every warning. `ready: True` validates the
 selected configuration; also confirm that the reported live connector count
-matches the intended deployment.
+matches the intended deployment. Omitting the configuration arguments validates
+the packaged safe defaults, not files in the current checkout.
 
 ## 6. Validate read-only access
 
 Enable one read connector at a time and run:
 
 ```bash
-master-agent discover --systems jira --probe
+master-agent discover \
+  --integrations /trusted/config/integrations.toml \
+  --systems jira \
+  --probe
 ```
 
 Then generate and review the relevant read-only plan. Execute it only through a
@@ -44,9 +53,18 @@ package commands are disabled.
 ## 7. Validate draft-only output
 
 Run `master-agent demo` for a credential-free smoke test. For deployment
-configuration, run `master-agent draft-package` with explicit, distinct private
-artifact and audit directories outside the source checkout. Review the
-generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
+configuration, create distinct private artifact and audit directories outside
+the source checkout, then run:
+
+```bash
+mkdir -m 700 /absolute/state/draft-package /absolute/state/audit
+master-agent draft-package \
+  --workflow /trusted/config/draft-package.toml \
+  --output-dir /absolute/state/draft-package \
+  --database /absolute/state/audit/draft-package.sqlite3
+```
+
+Review the generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
 
 ## 8. Validate reversible writes in non-production
 
@@ -61,7 +79,13 @@ Use designated test recipients/chats/channels. Approve exact content. Verify pro
 
 ## 10. Inspect recurring registrations
 
-Use `master-agent recurring-status` for due-state review. Do not install a
+Use the reviewed registration for due-state inspection:
+
+```bash
+master-agent recurring-status --recurring /trusted/config/recurring.toml
+```
+
+Do not install a
 `recurring-run` scheduler invocation; execution is disabled pending exact
 target/config/source and runtime-manifest binding.
 
@@ -69,7 +93,7 @@ target/config/source and runtime-manifest binding.
 
 Before production:
 
-- use a non-local audit sink or export process;
+- install and register a typed external, tamper-resistant audit-sink adapter;
 - use an approved secret manager;
 - define incident response and token revocation;
 - define evidence retention/legal hold;

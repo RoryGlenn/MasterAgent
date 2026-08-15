@@ -446,6 +446,7 @@ class RuntimeExecutionBinding:
     evidence_type: str | None
     configurations: tuple[ConfigurationExecutionBinding, ...]
     runtime_paths: tuple[RuntimePathExecutionBinding, ...]
+    credential_file: str | None = None
     publication_roots: tuple[RuntimePathExecutionBinding, ...] = ()
     schema: str = "master-agent/runtime-execution-binding@2"
 
@@ -467,6 +468,7 @@ class RuntimeExecutionBinding:
         for name, optional_value in (
             ("workspace_root", self.workspace_root),
             ("result_json", self.result_json),
+            ("credential_file", self.credential_file),
         ):
             if optional_value is not None and (
                 not optional_value.strip() or not Path(optional_value).is_absolute()
@@ -530,7 +532,7 @@ class RuntimeExecutionBinding:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the runtime binding."""
 
-        return {
+        payload: dict[str, Any] = {
             "schema": self.schema,
             "connector_mode": self.connector_mode,
             "include_writes": self.include_writes,
@@ -544,6 +546,9 @@ class RuntimeExecutionBinding:
             "runtime_paths": [item.to_dict() for item in self.runtime_paths],
             "publication_roots": [item.to_dict() for item in self.publication_roots],
         }
+        if self.credential_file is not None:
+            payload["credential_file"] = self.credential_file
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> RuntimeExecutionBinding:
@@ -584,6 +589,11 @@ class RuntimeExecutionBinding:
             result_json=(
                 str(data["result_json"])
                 if data.get("result_json") is not None
+                else None
+            ),
+            credential_file=(
+                str(data["credential_file"])
+                if data.get("credential_file") is not None
                 else None
             ),
             evidence_type=(

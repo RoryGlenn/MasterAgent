@@ -219,6 +219,7 @@ def build_runtime_execution_binding(
     result_json: Path | None,
     evidence_type: str,
     configuration_sources: Mapping[str, ConfigSource],
+    credential_file: Path | None = None,
     environ: Mapping[str, str] | None = None,
     captured_paths: Sequence[CapturedRuntimePath] | None = None,
 ) -> RuntimeExecutionBinding:
@@ -274,6 +275,7 @@ def build_runtime_execution_binding(
         for name, config_source in configuration_sources.items()
     )
     normalized_result = _canonical_path(result_json)
+    normalized_credential_file = _canonical_path(credential_file)
     try:
         return RuntimeExecutionBinding(
             connector_mode=connector_mode,
@@ -283,6 +285,7 @@ def build_runtime_execution_binding(
             artifact_root=_canonical_path(artifact_root) or "",
             workspace_root=normalized_workspace,
             result_json=normalized_result,
+            credential_file=normalized_credential_file,
             evidence_type=evidence_type if normalized_result is not None else None,
             configurations=configurations,
             runtime_paths=tuple(
