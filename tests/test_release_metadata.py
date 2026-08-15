@@ -12,6 +12,7 @@ from scripts.validate_release import (
     _validate_demo_powerpoint,
     _validate_demo_readiness,
     _validate_file_hygiene,
+    _validate_first_run_contract,
     validate_project,
 )
 
@@ -165,6 +166,47 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(checks, [])
             self.assertTrue(
                 any("missing required boundary" in error for error in errors)
+            )
+
+    def test_first_run_contract_rejects_inconsistent_onboarding_markdown(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        relative_paths = (
+            Path(".ai/MASTER_AGENT.md"),
+            Path(".ai/FIRST_RUN.md"),
+            Path("AGENTS.md"),
+            Path("CHANGELOG.md"),
+            Path("README.md"),
+            Path("docs/copilot-custom-agent.md"),
+            Path("docs/release-validation.md"),
+            Path("docs/semantic-index.md"),
+            Path("scripts/bootstrap_agent.py"),
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in relative_paths:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_root / relative).read_bytes())
+            guide = root / "docs/copilot-custom-agent.md"
+            guide.write_text(
+                guide.read_text(encoding="utf-8").replace(
+                    "MasterAgent is ready locally",
+                    "Setup probably worked",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_first_run_contract(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any(
+                    "docs/copilot-custom-agent.md" in error
+                    and "MasterAgent is ready locally" in error
+                    for error in errors
+                )
             )
 
     def test_demo_readiness_count_must_match_capability_catalog(self) -> None:

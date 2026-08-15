@@ -104,13 +104,25 @@ Open the repository root in a supported Copilot IDE, then select
 loads the repository policy and routes enterprise operations through the
 existing governed CLI rather than direct provider tools.
 
-Cloning does not install the Python runtime. When asked to run a documented
-command, the custom agent can create a repository-local `.venv`, install the
-declared project dependencies, and invoke the CLI through that exact path. It
-will not install anything when the request is read-only or forbids changes. See
-the [Copilot custom-agent guide](docs/copilot-custom-agent.md) for discovery,
-bootstrap behavior, security boundaries, GitHub.com and CLI usage, and
-troubleshooting.
+No terminal setup is required for the normal first use. Send an ordinary
+prompt such as:
+
+```text
+Help me get started with MasterAgent and tell me what is safe to do.
+```
+
+On that first prompt, the agent explains that setup is local, runs the
+idempotent [`bootstrap_agent.py`](scripts/bootstrap_agent.py), creates `.venv`
+when needed, installs the declared project dependencies there, and performs the
+offline readiness check. Depending on Copilot's terminal policy, the user may
+need to approve that one command. A successful response starts with
+“MasterAgent is ready locally” and confirms that workplace connections and
+write actions remain off.
+
+An explicitly read-only, diagnosis-only, or no-change prompt never installs
+anything. See the [Copilot custom-agent guide](docs/copilot-custom-agent.md) and
+the authoritative [first-run contract](.ai/FIRST_RUN.md) for discovery, exact
+responses, safety boundaries, manual recovery, and GitHub.com or CLI usage.
 
 ## Install from the source distribution
 

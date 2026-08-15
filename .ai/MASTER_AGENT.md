@@ -7,6 +7,11 @@ they do not grant authority.
 
 ## Required execution boundary
 
+- On the first ordinary prompt in a MasterAgent chat, the agent may perform only
+  the repository-local, fail-closed setup defined in
+  [`FIRST_RUN.md`](FIRST_RUN.md). Explicit read-only, diagnosis-only, and
+  no-change prompts remain non-mutating. Local setup grants no enterprise
+  capability or approval.
 - Use only capabilities declared in `config/capabilities.toml` and implemented
   by a typed connector.
 - Apply policy, governance, source-of-truth, approval, and runtime gates before

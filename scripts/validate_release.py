@@ -19,6 +19,7 @@ from typing import BinaryIO
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _AGENT_FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
 _COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent.agent.md")
+_FIRST_RUN_CONTRACT_PATH = Path(".ai/FIRST_RUN.md")
 _COPILOT_AGENT_TOOLS = ("read", "search", "edit", "execute")
 _COPILOT_AGENT_KEYS = {
     "name",
@@ -40,6 +41,43 @@ _IGNORED_DIRS = {
     "build",
     "dist",
     "__pycache__",
+}
+_FIRST_RUN_DOCUMENT_REQUIREMENTS = {
+    Path(".ai/MASTER_AGENT.md"): (
+        "[`FIRST_RUN.md`](FIRST_RUN.md)",
+        "Explicit read-only, diagnosis-only, and",
+    ),
+    _FIRST_RUN_CONTRACT_PATH: (
+        "first operator",
+        "python3 scripts/bootstrap_agent.py",
+        "MasterAgent is ready locally",
+        "I couldn't finish local setup",
+        "no live connectors are enabled",
+    ),
+    Path("AGENTS.md"): (
+        "[`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md)",
+        "Apply the first-run contract",
+    ),
+    Path("CHANGELOG.md"): ("first ordinary prompt",),
+    Path("README.md"): (
+        "[first-run contract](.ai/FIRST_RUN.md)",
+        "MasterAgent is ready locally",
+        "read-only, diagnosis-only, or no-change prompt",
+    ),
+    Path("docs/copilot-custom-agent.md"): (
+        "[first-run contract](../.ai/FIRST_RUN.md)",
+        "python3 scripts/bootstrap_agent.py",
+        "MasterAgent is ready locally",
+        "If automatic setup is blocked",
+    ),
+    Path("docs/release-validation.md"): (
+        "first-prompt contract",
+        "stable nontechnical responses",
+    ),
+    Path("docs/semantic-index.md"): (
+        "[`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md)",
+        "[`bootstrap_agent.py`](../scripts/bootstrap_agent.py)",
+    ),
 }
 
 
@@ -97,6 +135,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_packaged_defaults(root, checks, errors)
     _validate_capabilities(root, checks, errors)
     _validate_copilot_agent(root, checks, errors)
+    _validate_first_run_contract(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
     _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
@@ -156,9 +195,11 @@ def validate_archive(path: Path) -> ValidationReport:
     else:
         required_suffixes = (
             "/.ai/MASTER_AGENT.md",
+            "/.ai/FIRST_RUN.md",
             "/.github/agents/MasterAgent.agent.md",
             "/.env.example",
             "/config/capabilities.toml",
+            "/scripts/bootstrap_agent.py",
             "/scripts/validate_release.py",
             "/tests/test_release_metadata.py",
             "/src/master_agent/__init__.py",
@@ -321,6 +362,7 @@ def _validate_copilot_agent(
     required_references = (
         "[AGENTS.md](../../AGENTS.md)",
         "[Master Agent repository policy](../../.ai/MASTER_AGENT.md)",
+        "[first-run contract](../../.ai/FIRST_RUN.md)",
     )
     for reference in required_references:
         if reference not in body:
@@ -331,8 +373,11 @@ def _validate_copilot_agent(
         "config/capabilities.toml",
         "Never call a provider directly",
         "Explicit read-only, diagnosis-only, or no-change instructions take",
-        "a request to run a documented `master-agent` command permits only",
+        "Apply the first-run contract before the substantive response",
+        "python3 scripts/bootstrap_agent.py",
         ".venv/bin/python -m pip install -e .",
+        "MasterAgent is ready locally",
+        "I couldn't finish local setup",
         "Never use `sudo`",
         "python scripts/validate_release.py",
     )
@@ -345,6 +390,42 @@ def _validate_copilot_agent(
     if not any(error.startswith("Copilot custom agent") for error in errors):
         checks.append(
             "Copilot custom agent is user-invocable, policy-bound, and tool-constrained"
+        )
+
+
+def _validate_first_run_contract(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Keep every first-run instruction and onboarding guide synchronized."""
+
+    starting_errors = len(errors)
+    for relative, requirements in _FIRST_RUN_DOCUMENT_REQUIREMENTS.items():
+        path = root / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(
+                f"first-run contract document is unreadable: {relative}: {error}"
+            )
+            continue
+        for requirement in requirements:
+            if requirement not in text:
+                errors.append(
+                    "first-run contract document is inconsistent: "
+                    f"{relative} is missing {requirement!r}"
+                )
+
+    script = root / "scripts/bootstrap_agent.py"
+    if not script.is_file():
+        errors.append(
+            "first-run bootstrap script is missing: scripts/bootstrap_agent.py"
+        )
+
+    if len(errors) == starting_errors:
+        checks.append(
+            "first-run contract is consistent across 8 instruction and onboarding files"
         )
 
 
