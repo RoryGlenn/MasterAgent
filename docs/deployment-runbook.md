@@ -19,10 +19,15 @@ Request only the scopes needed for the first workflow. Prefer separate credentia
 ## 5. Run offline readiness
 
 ```bash
-master-agent readiness --output .master-agent/readiness.json
+mkdir -p "$HOME/.master-agent/MasterAgent"
+chmod 700 "$HOME/.master-agent" "$HOME/.master-agent/MasterAgent"
+master-agent readiness \
+  --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
-Resolve every error and review every warning.
+Resolve every error and review every warning. `ready: True` validates the
+selected configuration; also confirm that the reported live connector count
+matches the intended deployment.
 
 ## 6. Validate read-only access
 
@@ -38,7 +43,10 @@ package commands are disabled.
 
 ## 7. Validate draft-only output
 
-Run `master-agent draft-package`. Review the generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
+Run `master-agent demo` for a credential-free smoke test. For deployment
+configuration, run `master-agent draft-package` with explicit, distinct private
+artifact and audit directories outside the source checkout. Review the
+generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
 
 ## 8. Validate reversible writes in non-production
 

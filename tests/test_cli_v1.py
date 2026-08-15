@@ -86,6 +86,7 @@ class VersionOneCliTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 0, stderr)
                 self.assertIn("ready: True", stdout)
+                self.assertIn("live connectors: 0 (safe local mode only)", stdout)
                 readiness = json.loads((root / "readiness.json").read_text())
                 self.assertTrue(readiness["ready"])
 
@@ -115,6 +116,47 @@ class VersionOneCliTests(unittest.TestCase):
             self.assertTrue(
                 expected.issubset({item.name for item in (root / "drafts").iterdir()})
             )
+
+    def test_demo_runs_complete_safe_workflow_in_fresh_private_workspace(
+        self,
+    ) -> None:
+        """One command should produce and verify a credential-free review package."""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            checkout = root / "checkout"
+            home.mkdir(mode=0o700)
+            checkout.mkdir(mode=0o700)
+            original = Path.cwd()
+            try:
+                os.chdir(checkout)
+                with (
+                    patch("master_agent.cli.Path.home", return_value=home),
+                    patch("master_agent.cli.build_live_registry") as live_registry,
+                ):
+                    status, stdout, stderr = _run_cli(["demo"])
+            finally:
+                os.chdir(original)
+
+            product_root = home / ".master-agent" / "MasterAgent"
+            workspaces = tuple(product_root.glob("demo-*"))
+            self.assertEqual(len(workspaces), 1)
+            workspace = workspaces[0].resolve()
+            self.assertEqual(status, 0, stderr)
+            self.assertIn("mode: safe local demonstration", stdout)
+            self.assertIn(f"demo workspace: {workspace}", stdout)
+            self.assertIn("mode: local generation", stdout)
+            self.assertNotIn("mode: apply", stdout)
+            self.assertIn("successful: True", stdout)
+            self.assertIn("verified 8 audit events", stdout)
+            live_registry.assert_not_called()
+            self.assertFalse((checkout / ".master-agent").exists())
+            self.assertTrue((workspace / "artifacts" / "manifest.json").is_file())
+            self.assertTrue((workspace / "artifacts" / "change-package.pptx").is_file())
+            self.assertTrue((workspace / "state" / "audit.sqlite3").is_file())
+            self.assertEqual(product_root.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(workspace.stat().st_mode & 0o777, 0o700)
 
     def test_draft_package_rejects_shared_audit_and_artifact_directory(self) -> None:
         with TemporaryDirectory() as directory:
@@ -179,6 +221,18 @@ class VersionOneCliTests(unittest.TestCase):
                 os.chdir(original)
             self.assertEqual(status, 1)
             self.assertIn("recurring-run execution is disabled", stderr)
+
+    def test_citations_reports_when_result_contains_no_citations(self) -> None:
+        """An empty successful lookup should be visible instead of printing nothing."""
+
+        with TemporaryDirectory() as directory:
+            result = Path(directory) / "result.json"
+            result.write_text("{}", encoding="utf-8")
+
+            status, stdout, stderr = _run_cli(["citations", str(result)])
+
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(stdout, "no citations found\n")
 
     def test_unbound_execution_commands_fail_before_configs_clients_or_audit(
         self,
