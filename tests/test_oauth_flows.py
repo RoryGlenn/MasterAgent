@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +17,7 @@ from master_agent.oauth import (
     write_token_file,
 )
 from tests.fakes import ScriptedTransport
+from tests.helpers import private_temporary_directory
 
 
 class OAuthFlowTests(unittest.TestCase):
@@ -109,7 +109,7 @@ class OAuthFlowTests(unittest.TestCase):
         )
 
     def test_restricted_token_file_round_trip_and_permission_enforcement(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             path = Path(directory) / "graph-token.json"
             token = AccessToken(
                 value="delegated-token",
@@ -129,7 +129,7 @@ class OAuthFlowTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "symlink safety requires POSIX")
     def test_token_write_does_not_follow_predictable_or_target_symlinks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             victim = root / "victim.txt"
             victim.write_text("do-not-overwrite\n", encoding="utf-8")
@@ -155,7 +155,7 @@ class OAuthFlowTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "directory race test requires POSIX")
     def test_token_write_rejects_parent_directory_swap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             parent = root / "tokens"
             parent.mkdir()

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
 from master_agent.cli import main
+from tests.helpers import private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +20,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
     def test_readiness_reports_safe_unconnected_defaults(self) -> None:
         """Phase 2C readiness should pass while warning that nothing is connected."""
 
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             output = Path(directory) / "readiness.json"
             stdout = StringIO()
             stderr = StringIO()
@@ -34,10 +34,12 @@ class PhaseCompletionCliTests(unittest.TestCase):
     def test_draft_package_command_generates_all_local_artifacts(self) -> None:
         """Phase 3 CLI should create a complete package without publishing."""
 
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             output = root / "drafts"
             output.mkdir(mode=0o700)
+            workflow = root / "draft-package.toml"
+            workflow.write_bytes((ROOT / "config/draft-package.toml").read_bytes())
             stdout = StringIO()
             stderr = StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -45,7 +47,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
                     [
                         "draft-package",
                         "--workflow",
-                        str(ROOT / "config/draft-package.toml"),
+                        str(workflow),
                         "--output-dir",
                         str(output),
                         "--database",
@@ -63,7 +65,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
     def test_recurring_status_uses_disabled_packaged_defaults(self) -> None:
         """Phase 6 defaults should register workflows without scheduling them."""
 
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             output = Path(directory) / "status.json"
             stdout = StringIO()
             stderr = StringIO()
@@ -77,7 +79,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
     def test_evidence_prune_apply_is_disabled_before_traversal(self) -> None:
         """Destructive recursive maintenance must remain non-routable."""
 
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             missing = Path(directory) / "does-not-exist"
             stderr = StringIO()
             with redirect_stderr(stderr):

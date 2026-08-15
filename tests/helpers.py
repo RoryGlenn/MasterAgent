@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import os
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from master_agent.auth import AuthMode, ResolvedAuth
@@ -13,6 +16,23 @@ from master_agent.models import (
     ResourceRef,
     RiskLevel,
 )
+
+
+@contextmanager
+def private_temporary_directory() -> Iterator[str]:
+    """Create test fixtures under a restrictive process umask.
+
+    Trusted configuration and runtime paths deliberately reject group- or
+    world-writable inputs. Keep permission-sensitive fixtures deterministic
+    when a developer's interactive shell uses a collaborative umask.
+    """
+
+    previous_umask = os.umask(0o077)
+    try:
+        with TemporaryDirectory() as directory:
+            yield directory
+    finally:
+        os.umask(previous_umask)
 
 
 def resolved_config(

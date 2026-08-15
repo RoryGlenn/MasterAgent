@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,7 +14,7 @@ from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import AgentAction, RiskLevel
 from tests.fakes import ScriptedTransport
-from tests.helpers import action_for, resolved_config
+from tests.helpers import action_for, private_temporary_directory, resolved_config
 
 
 class JiraWriteConnectorTests(unittest.TestCase):
@@ -862,7 +861,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
     """Validate bounded overwrite and provider-version compensation."""
 
     def test_exact_lifecycle_requires_sufficient_request_budget(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory) / "artifacts"
             with self.assertRaisesRegex(ConnectorError, "at least 12"):
                 SharePointWriteConnector(
@@ -877,7 +876,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
     def test_existing_file_is_overwritten_and_restored(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             local = root / "status.txt"
             local.write_bytes(b"new content")
@@ -940,7 +939,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             self.assertIn("POST", methods)
 
     def test_same_size_provider_substitution_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             local = root / "status.txt"
             local.write_bytes(b"GOOD")
@@ -960,7 +959,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                 connector.execute(action)
 
     def test_fresh_content_verification_rejects_later_substitution(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             local = root / "status.txt"
             local.write_bytes(b"GOOD")
@@ -982,7 +981,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
             self.assertFalse(connector.verify(action, result).verified)
 
     def test_restore_rejects_same_size_wrong_prior_bytes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             local = root / "status.txt"
             local.write_bytes(b"GOOD")
@@ -1008,7 +1007,7 @@ class SharePointWriteConnectorTests(unittest.TestCase):
                 connector.compensate(action, result)
 
     def test_file_outside_artifact_root_is_rejected_before_network(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with private_temporary_directory() as directory:
             root = Path(directory)
             approved = root / "approved"
             approved.mkdir()
