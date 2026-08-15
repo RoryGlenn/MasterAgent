@@ -98,6 +98,39 @@ auth_mode = "none"
             all(item.status is DiscoveryStatus.DISABLED for item in report.connectors)
         )
 
+    def test_explicit_onenote_discovery_builds_the_opted_in_runtime(self) -> None:
+        config = _config(
+            """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+identity_mode = "delegated"
+onenote_read_enabled = true
+"""
+        )
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/v1.0/me/onenote/notebooks",
+            {"value": []},
+        )
+
+        records = discover_integrations(
+            config,
+            environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "opaque-token"},
+            probe=True,
+            transport=transport,
+            systems={"onenote"},
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].system, "onenote")
+        self.assertEqual(records[0].status, DiscoveryStatus.REACHABLE)
+        self.assertEqual(len(transport.requests), 1)
+
 
 def _config(content: str) -> IntegrationConfig:
     directory = TemporaryDirectory()

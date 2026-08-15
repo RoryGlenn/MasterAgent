@@ -51,10 +51,22 @@ class CredentialStoreTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertNotIn(_SECRET, repr(snapshot))
 
-    def test_github_compatibility_rejects_ambiguous_or_nested_shapes(self) -> None:
+    def test_github_compatibility_accepts_named_token_object(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "github.json"
+            original = json.dumps({"github": {"token": _SECRET}})
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_github_compatible(path)
+
+            self.assertEqual(snapshot.overlay({})[_NAME], _SECRET)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_github_compatibility_rejects_ambiguous_shapes(self) -> None:
         documents = (
             {"github": _SECRET, "other": "value"},
-            {"github": {"token": _SECRET}},
+            {"github": {"password": _SECRET}},
             {"github": ""},
         )
         with private_temporary_directory() as directory:
@@ -64,6 +76,77 @@ class CredentialStoreTests(unittest.TestCase):
                 path.chmod(0o600)
                 with self.subTest(index=index), self.assertRaises(ConfigurationError):
                     CredentialStoreSnapshot.load_github_compatible(path)
+
+    def test_provider_compatibility_adapts_selected_named_fields_in_memory(
+        self,
+    ) -> None:
+        jira_token = "jira-token-canary"
+        jira_username = "operator@example.test"
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "providers.json"
+            original = json.dumps(
+                {
+                    "jira": {
+                        "username": jira_username,
+                        "token": jira_token,
+                    }
+                }
+            )
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                allowed_names=("JIRA_USERNAME", "JIRA_TOKEN"),
+                aliases={
+                    "jira": {
+                        "username": "JIRA_USERNAME",
+                        "token": "JIRA_TOKEN",
+                    }
+                },
+            )
+            environ = snapshot.overlay({})
+
+            self.assertEqual(environ["JIRA_USERNAME"], jira_username)
+            self.assertEqual(environ["JIRA_TOKEN"], jira_token)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertNotIn(jira_token, repr(snapshot))
+
+    def test_provider_compatibility_rejects_unknown_and_duplicate_aliases(
+        self,
+    ) -> None:
+        cases = (
+            (
+                {"unknown": _SECRET},
+                {"github": {"token": _NAME}},
+            ),
+            (
+                {"github": {"password": _SECRET}},
+                {"github": {"token": _NAME}},
+            ),
+            (
+                {"github": {}},
+                {"github": {"token": _NAME}},
+            ),
+            (
+                {"github": _SECRET, "git": _SECRET},
+                {
+                    "github": {"token": _NAME},
+                    "git": {"token": _NAME},
+                },
+            ),
+        )
+        with private_temporary_directory() as directory:
+            for index, (document, aliases) in enumerate(cases):
+                path = Path(directory) / f"providers-invalid-{index}.json"
+                path.write_text(json.dumps(document), encoding="utf-8")
+                path.chmod(0o600)
+                with self.subTest(index=index), self.assertRaises(ConfigurationError):
+                    CredentialStoreSnapshot.load_provider_compatible(
+                        path,
+                        allowed_names=(_NAME,),
+                        aliases=aliases,
+                    )
 
     def test_permissions_symlinks_and_owner_fail_closed(self) -> None:
         with private_temporary_directory() as directory:

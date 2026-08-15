@@ -11,7 +11,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from master_agent.cli import _github_repositories, main
+from master_agent.cli import _connect, _github_repositories, main
+from master_agent.errors import ConfigurationError
 from master_agent.planners.static import build_weekly_status_plan
 from tests.fakes import ScriptedTransport
 from tests.helpers import private_temporary_directory
@@ -293,6 +294,226 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
 
         self.assertEqual(status, 1)
         self.assertIn("MASTER_AGENT_GITHUB_TOKEN", stderr.getvalue())
+
+    def test_connect_enables_github_only_in_memory_and_prefers_explicit_store(
+        self,
+    ) -> None:
+        token = "provider-github-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json("GET", "/user", {"login": "RoryGlenn", "id": 42})
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            credentials = root / "providers.json"
+            original = json.dumps({"github": token})
+            credentials.write_text(original, encoding="utf-8")
+            credentials.chmod(0o600)
+            output = root / "connection.json"
+            stdout = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GITHUB_TOKEN": "ambient-token-is-ignored"},
+                    clear=True,
+                ),
+                redirect_stdout(stdout),
+            ):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"github"},
+                    output=output,
+                    transport=transport,
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(credentials.read_text(encoding="utf-8"), original)
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+        self.assertEqual(status, 0)
+        self.assertFalse(payload["persistent_configuration_changed"])
+        self.assertEqual(payload["records"][0]["status"], "reachable")
+        self.assertEqual(payload["records"][0]["probe"]["user_id"], 42)
+        self.assertIn("connected: github", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(
+            transport.requests[0].headers["Authorization"],
+            f"Bearer {token}",
+        )
+        self.assertNotIn(token, stdout.getvalue())
+
+    def test_connect_adapts_named_jira_credentials_without_persisting_config(
+        self,
+    ) -> None:
+        username = "operator@example.test"
+        token = "provider-jira-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/3/serverInfo",
+            {
+                "baseUrl": "https://tenant.atlassian.net",
+                "version": "1001.0.0",
+                "deploymentType": "Cloud",
+            },
+        )
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            integrations = root / "integrations.toml"
+            original_config = (
+                "[connectors.jira]\n"
+                "enabled = false\n"
+                'deployment = "cloud"\n'
+                'base_url = "https://tenant.atlassian.net"\n'
+                'auth_mode = "basic"\n'
+                'username_env = "MASTER_AGENT_JIRA_USERNAME"\n'
+                'secret_env = "MASTER_AGENT_JIRA_TOKEN"\n'
+            )
+            integrations.write_text(original_config, encoding="utf-8")
+            credentials = root / "providers.json"
+            original_credentials = json.dumps(
+                {"jira": {"username": username, "token": token}}
+            )
+            credentials.write_text(original_credentials, encoding="utf-8")
+            credentials.chmod(0o600)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                status = _connect(
+                    integrations_path=integrations,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"jira"},
+                    output=None,
+                    transport=transport,
+                )
+
+            self.assertEqual(integrations.read_text(encoding="utf-8"), original_config)
+            self.assertEqual(
+                credentials.read_text(encoding="utf-8"),
+                original_credentials,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertIn("connected: jira", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 1)
+        authorization = transport.requests[0].headers["Authorization"]
+        self.assertTrue(authorization.startswith("Basic "))
+        self.assertNotIn(username, authorization)
+        self.assertNotIn(token, authorization)
+        self.assertNotIn(token, stdout.getvalue())
+
+    def test_connect_rejects_placeholder_provider_before_network(self) -> None:
+        transport = ScriptedTransport()
+        with self.assertRaisesRegex(ConfigurationError, "placeholder provider URL"):
+            _connect(
+                integrations_path=None,
+                governance_path=None,
+                credentials_file=None,
+                systems={"jira"},
+                output=None,
+                transport=transport,
+            )
+        self.assertEqual(transport.requests, [])
+
+    def test_connect_never_uses_a_credential_file_as_its_output(self) -> None:
+        token = "provider-github-token-canary"
+        transport = ScriptedTransport()
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "providers.json"
+            original = json.dumps({"github": token})
+            credentials.write_text(original, encoding="utf-8")
+            credentials.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigurationError, "must not replace"):
+                _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"github"},
+                    output=credentials,
+                    transport=transport,
+                )
+
+            self.assertEqual(credentials.read_text(encoding="utf-8"), original)
+        self.assertEqual(transport.requests, [])
+
+    def test_connect_selects_microsoft_environment_token_automatically(self) -> None:
+        token = "provider-graph-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/v1.0/me",
+            {
+                "id": "user-42",
+                "displayName": "Rory Glenn",
+                "userPrincipalName": "rory@example.test",
+            },
+        )
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            credentials = root / "providers.json"
+            credentials.write_text(
+                json.dumps({"microsoft": token}),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"microsoft"},
+                    output=None,
+                    transport=transport,
+                )
+
+        self.assertEqual(status, 0)
+        self.assertIn("connected: microsoft", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(
+            transport.requests[0].headers["Authorization"],
+            f"Bearer {token}",
+        )
+        self.assertNotIn(token, stdout.getvalue())
+
+    def test_connect_enables_explicit_onenote_read_only_in_memory(self) -> None:
+        token = "provider-onenote-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/v1.0/me/onenote/notebooks",
+            {"value": []},
+        )
+
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "providers.json"
+            credentials.write_text(
+                json.dumps({"microsoft": {"token": token}}),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"onenote"},
+                    output=None,
+                    transport=transport,
+                )
+
+        self.assertEqual(status, 0)
+        self.assertIn("connected: onenote", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(
+            transport.requests[0].headers["Authorization"],
+            f"Bearer {token}",
+        )
 
     def test_packaged_defaults_build_communication_plan_outside_repository(
         self,

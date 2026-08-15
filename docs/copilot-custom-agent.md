@@ -41,9 +41,9 @@ execution runtime.
 
 For a non-mutating first interaction, say so explicitly: “Inspect the
 repository without changing or installing anything.” MasterAgent will answer
-without creating `.venv` or running pip. A provider read such as “show my
-GitHub repositories” is an operational request, so the agent may perform the
-bounded local bootstrap and continue that scoped read in the same run.
+without creating `.venv` or running pip. A provider operation, feature, build,
+or fix is an operational request, so the agent performs the bounded local
+bootstrap when needed and continues to the requested outcome in the same run.
 
 The repository profile is committed to the default branch, so supported
 GitHub.com and Copilot CLI surfaces can discover it as well. In Copilot CLI,
@@ -63,11 +63,11 @@ The profile:
 - loads [`AGENTS.md`](../AGENTS.md) and the authoritative
   [repository policy](../.ai/MASTER_AGENT.md), then applies the
   [first-run contract](../.ai/FIRST_RUN.md) and
-  [goal-completion contract](../.ai/AUTONOMY.md) before work begins;
+  [force-multiplier contract](../.ai/AUTONOMY.md) before work begins;
 - limits Copilot to repository read, search, edit, and command-execution tools;
-- gives nontechnical users a stable success or blocked response, continues
-  their original request after setup, and batches reversible read-only
-  prerequisites without repeated confirmation prompts;
+- gives nontechnical users a stable success or blocked response, defaults to
+  action, and owns setup, connection, implementation, repair, tests, and
+  verification without repeated confirmation prompts;
 - requires enterprise operations to use the existing typed `master-agent`
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
@@ -87,18 +87,32 @@ reports the missing prerequisite without creating `.venv` or installing
 anything. Setup failures must be read and reported rather than redirected to an
 uninspected log.
 
-For an outcome that inherently requires a provider read, the request itself is
-the exact read scope. MasterAgent may enable only that connector in memory,
-probe identity, execute and verify the typed read, and retry safe transient
-steps without a second confirmation. It does not persist the connector setting
-or infer permission for a write, send, merge, delete, or permission change. The
-agent gives one brief start update and does not narrate each key, config field,
-command, probe, or retry.
+The default response to an actionable prompt is execution. MasterAgent searches
+existing context, chooses safe reasonable defaults, runs every ordinary
+in-scope prerequisite, and resolves errors rather than handing commands back to
+the operator. A capability gap that can safely be filled in this repository is
+implementation work: add the typed capability and regression tests, then
+continue the original request.
+
+For an outcome that requires provider access, the request itself authorizes the
+minimum selected read connector, fixed probe, and provider network access in
+memory without a second confirmation. Use
+`master-agent connect --systems <requested-systems>` for Jira, Confluence,
+Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams, or OneNote;
+then continue the requested feature. The connector setting is never persisted
+unless persistent setup was requested.
+
+An explicit request to create, update, send, publish, push, or merge is not
+followed by redundant conversational permission prompts. MasterAgent prepares
+and validates the exact outcome automatically. If policy requires
+authenticated exact-plan approval that the agent cannot create, it asks once
+at that final unavoidable boundary. It never self-signs or bypasses approval.
 
 ## If automatic setup is blocked
 
-MasterAgent reports the exact prerequisite it could not satisfy and confirms
-that nothing was connected or enabled. Common blockers are Python older than
+Only after safe alternatives are exhausted, MasterAgent reports the exact
+prerequisite it could not satisfy and confirms what remained unchanged. Common
+blockers are Python older than
 3.12, a Python installation without the `venv` module, an existing incomplete
 or symbolic-link `.venv`, or unavailable package-index access. The agent never
 deletes or replaces an existing environment and never repairs the operating
@@ -129,5 +143,5 @@ not user-invocable, automatically model-invocable, expanded to unreviewed tools,
 detached from the required policy files, inconsistent with the first-run
 contract, or missing the bounded bootstrap, stable response text, and read-only
 safeguards. The source-distribution validation also requires the profile,
-first-run contract, goal-completion contract, and bootstrap script to be
+first-run contract, force-multiplier contract, and bootstrap script to be
 packaged.

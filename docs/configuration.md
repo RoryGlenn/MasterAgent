@@ -114,6 +114,33 @@ and publication transactions share one descriptor-bound repository identity.
 
 The broad generic flag is retained as a compatibility gate, not as permission to enable every mutation.
 
+## Ephemeral operator-requested connections
+
+The checked-in and packaged connector settings remain disabled at rest. For an
+explicit operator-requested connection, `connect` creates an in-memory overlay
+for only the selected read systems and runs their fixed bounded probes:
+
+```bash
+master-agent connect \
+  --systems jira,confluence,bitbucket,github,microsoft,sharepoint,outlook,teams,onenote \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --output /absolute/path/to/private-connection-report.json
+```
+
+This does not edit `integrations.toml`, the credential file, or any connector
+gate. Explicit credential-file values win over ambient values for the names in
+that file. The optional report is mode `0600` and contains only redacted
+discovery metadata. Jira and Confluence packaged URLs are deliberate
+placeholders; select the organization's permission-checked integrations file
+before connecting either system. Placeholder URLs fail before credentials are
+loaded or a network request is made.
+
+Microsoft runtime systems share one connector configuration. `connect` selects
+delegated token-file, delegated environment-token, or application
+client-credentials authentication from the available declared values in that
+order. OneNote read access is enabled only in the in-memory overlay when
+OneNote is explicitly selected.
+
 ## Atlassian deployment type
 
 Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucket. Cloud and Data Center endpoints and payloads are implemented by separate connector branches rather than pretending the APIs are identical.
@@ -243,7 +270,23 @@ path (but not its contents or digest), so bind and apply must select the same fi
 This plaintext format is a local-development convenience, not a production secret
 manager. Non-development governance profiles reject it.
 
-For `github-repositories` only, an existing restricted file whose entire JSON
-document is `{"github":"<token>"}` is also accepted and adapted in memory. The
-file is not rewritten. Extra fields, nested wrappers, loose permissions,
-symlinks, and ambiguous shapes still fail closed.
+For `connect` and `github-repositories`, an existing restricted provider-keyed
+file is also accepted and adapted in memory. A provider may contain a token
+string or an object using only applicable fields from `token`, `username`,
+`token_file`, `token_expires_at`, `tenant_id`, `client_id`, and
+`client_secret`, for example:
+
+```json
+{
+  "jira": {
+    "username": "operator@example.com",
+    "token": "replace-with-a-real-token"
+  },
+  "github": "replace-with-a-real-token"
+}
+```
+
+Only providers selected by `--systems` and fields mapped by the selected
+integration configuration are accepted. Unknown or duplicate mappings, loose
+permissions, symlinks, and ambiguous shapes fail closed. The file is never
+rewritten.

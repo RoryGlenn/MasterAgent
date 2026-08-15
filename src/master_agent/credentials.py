@@ -55,25 +55,48 @@ class CredentialStoreSnapshot:
         *,
         credential_name: str = "MASTER_AGENT_GITHUB_TOKEN",
     ) -> CredentialStoreSnapshot:
-        """Load the canonical store or one unambiguous legacy GitHub token file.
+        """Load the canonical store or an unambiguous GitHub token wrapper.
 
-        The compatibility shape is exactly ``{"github": "<token>"}``. It is
-        adapted in memory only so onboarding never needs to rewrite a credential.
-        All normal path, ownership, permission, size, duplicate-key, and value
-        checks still apply.
+        Compatibility accepts ``{"github": "<token>"}`` or the named form
+        ``{"github": {"token": "<token>"}}``. It is adapted in memory only so
+        onboarding never needs to rewrite a credential. All normal path,
+        ownership, permission, size, duplicate-key, and value checks apply.
+        """
+
+        return cls.load_provider_compatible(
+            path,
+            allowed_names=(credential_name,),
+            aliases={"github": {"token": credential_name}},
+        )
+
+    @classmethod
+    def load_provider_compatible(
+        cls,
+        path: Path,
+        *,
+        allowed_names: Sequence[str],
+        aliases: Mapping[str, Mapping[str, str]],
+    ) -> CredentialStoreSnapshot:
+        """Load a canonical store or a strict provider-keyed compatibility file.
+
+        A provider value may be a token string or an object whose keys are
+        explicitly mapped by ``aliases``. Adaptation is in memory only. Unknown
+        providers, unknown fields, duplicate destinations, and ambiguous values
+        fail closed without rendering credential material.
         """
 
         canonical, payload = _read_restricted_file(path)
         raw = _decode_document(payload)
-        if set(raw) == {"github"}:
-            credentials = _validate_credentials(
-                {credential_name: raw["github"]},
-                allowed_names=(credential_name,),
-            )
-        else:
+        if "schema" in raw or "credentials" in raw:
             credentials = _parse_credentials_document(
                 raw,
-                allowed_names=(credential_name,),
+                allowed_names=allowed_names,
+            )
+        else:
+            credentials = _parse_provider_credentials(
+                raw,
+                allowed_names=allowed_names,
+                aliases=aliases,
             )
         return cls(canonical, credentials)
 
@@ -220,6 +243,61 @@ def _validate_credentials(
             )
         result[name] = value
     return result
+
+
+def _parse_provider_credentials(
+    raw: Mapping[str, Any],
+    *,
+    allowed_names: Sequence[str],
+    aliases: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    if not raw:
+        raise ConfigurationError("provider credential store must not be empty")
+    if len(raw) > _MAX_CREDENTIALS:
+        raise ConfigurationError(
+            "provider credential store contains too many providers"
+        )
+    values: dict[str, Any] = {}
+    for provider, provider_value in raw.items():
+        fields = aliases.get(provider)
+        if fields is None or not fields:
+            raise ConfigurationError(
+                "credential store contains an unselected or unknown provider"
+            )
+        if isinstance(provider_value, str):
+            destination = fields.get("token")
+            if destination is None:
+                raise ConfigurationError(
+                    f"provider credential requires named fields: {provider}"
+                )
+            provider_fields: Mapping[str, Any] = {"token": provider_value}
+        elif isinstance(provider_value, Mapping):
+            provider_fields = provider_value
+        else:
+            raise ConfigurationError(
+                f"provider credential must be a string or object: {provider}"
+            )
+        if not provider_fields:
+            raise ConfigurationError(
+                f"provider credential fields must not be empty: {provider}"
+            )
+        unknown = sorted(str(key) for key in set(provider_fields) - set(fields))
+        if unknown:
+            raise ConfigurationError(
+                f"provider credential contains unknown fields: {provider}"
+            )
+        for provider_field, value in provider_fields.items():
+            destination = fields[str(provider_field)]
+            if destination in values:
+                raise ConfigurationError(
+                    "provider credential fields map to the same destination"
+                )
+            values[destination] = value
+            if len(values) > _MAX_CREDENTIALS:
+                raise ConfigurationError(
+                    "provider credential store contains too many credentials"
+                )
+    return _validate_credentials(values, allowed_names=allowed_names)
 
 
 def _without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

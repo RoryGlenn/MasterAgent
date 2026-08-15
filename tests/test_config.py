@@ -23,6 +23,16 @@ class IntegrationConfigTests(unittest.TestCase):
         )
         self.assertFalse(config.connector("jira").enabled)
         self.assertEqual(config.connector("jira").auth_mode, AuthMode.BASIC)
+        self.assertTrue(
+            {
+                "MASTER_AGENT_GRAPH_TOKEN_FILE",
+                "MASTER_AGENT_GRAPH_ACCESS_TOKEN",
+                "MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT",
+                "MASTER_AGENT_ENTRA_TENANT_ID",
+                "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
+                "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",
+            }.issubset(config.credential_environment_variables())
+        )
 
     def test_enabled_connector_reports_missing_environment(self) -> None:
         with private_temporary_directory() as directory:

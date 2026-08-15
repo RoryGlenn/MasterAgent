@@ -304,7 +304,7 @@ def discover_integrations(
 
 def _runtime_systems(configuration: str) -> tuple[str, ...]:
     if configuration == "microsoft":
-        return ("microsoft", "sharepoint", "outlook", "teams")
+        return ("microsoft", "sharepoint", "outlook", "teams", "onenote")
     return (configuration,)
 
 
