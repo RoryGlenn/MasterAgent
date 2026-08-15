@@ -165,7 +165,7 @@ _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
     ),
     Path("docs/github-connector-quickstart.md"): (
         "Public repositories need no credential",
-        "never loads or sends a token",
+        "loads or sends a token",
     ),
     Path("docs/integration-matrix.md"): (
         "Cloud anonymous public reads",

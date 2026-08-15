@@ -221,14 +221,22 @@ class ReleaseMetadataTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((source_root / relative).read_bytes())
             readme = root / "README.md"
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_public_read_contract(root, checks, errors)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(checks), 1)
+
             readme.write_text(
                 readme.read_text(encoding="utf-8")
                 + "\nOrganization-approved HTTPS API endpoints and credentials "
                 "for live use.\n",
                 encoding="utf-8",
             )
-            checks: list[str] = []
-            errors: list[str] = []
+            checks = []
+            errors = []
 
             _validate_public_read_contract(root, checks, errors)
 
