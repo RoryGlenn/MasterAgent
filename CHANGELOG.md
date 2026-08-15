@@ -6,9 +6,10 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- a 74-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
-- a bounded, read-only GitHub Cloud connector for repository metadata,
-  pull-request search/read, and commit check-run reads;
+- a 75-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
+- a bounded, read-only GitHub Cloud connector for authenticated-user repository
+  listing, repository metadata, pull-request search/read, and commit check-run
+  reads;
 - Phase 3 complete local draft packages containing Jira and Confluence proposals, Outlook `.eml`, Teams draft, PowerPoint, repository patch, summary, and integrity manifest;
 - approved Jira field updates, comments, transitions, version checks, and compensation;
 - approved Confluence page creation/update and compensation for Cloud and Data Center contracts;
@@ -30,8 +31,14 @@
 - a repository-scoped GitHub Copilot custom-agent profile that exposes
   MasterAgent in the agent picker, performs an idempotent bounded local setup on
   the first ordinary prompt, reports a stable nontechnical outcome, and
-  preserves the governed runtime boundary; explicit read-only prompts remain
-  non-mutating.
+  preserves the governed runtime boundary; repository-inspection and explicit
+  no-local-change prompts remain non-mutating.
+- a one-request goal-completion contract that batches necessary reversible
+  read-only prerequisites, uses ephemeral least-privilege connector overlays,
+  and reserves questions for real missing authority or operator-only input;
+- a `github-repositories` convenience path that accepts canonical or exact
+  legacy GitHub token wrappers without rewriting them, verifies the provider
+  identity, evaluates the typed read, and independently verifies the result;
 
 ### Changed
 
@@ -45,6 +52,8 @@
   command names but do not execute;
 - readiness output states the live connector count, and an empty citation
   lookup reports `no citations found` instead of producing blank output;
+- direct provider-read goals now authorize their minimum in-memory read
+  connector for that one goal without persistently enabling live access;
 - applied result names are reserved before connector/audit effects and committed
   create-only before human-readable output; audit, artifact, and result
   directories must be pairwise distinct;

@@ -39,9 +39,11 @@ execution runtime.
    The agent then continues the original request. The warning that no live
    connectors are enabled is the expected safe starting state.
 
-For a read-only first interaction, say so explicitly: “Inspect the repository
-without changing or installing anything.” MasterAgent will answer without
-creating `.venv` or running pip.
+For a non-mutating first interaction, say so explicitly: “Inspect the
+repository without changing or installing anything.” MasterAgent will answer
+without creating `.venv` or running pip. A provider read such as “show my
+GitHub repositories” is an operational request, so the agent may perform the
+bounded local bootstrap and continue that scoped read in the same run.
 
 The repository profile is committed to the default branch, so supported
 GitHub.com and Copilot CLI surfaces can discover it as well. In Copilot CLI,
@@ -60,10 +62,12 @@ The profile:
   model invocation;
 - loads [`AGENTS.md`](../AGENTS.md) and the authoritative
   [repository policy](../.ai/MASTER_AGENT.md), then applies the
-  [first-run contract](../.ai/FIRST_RUN.md) before work begins;
+  [first-run contract](../.ai/FIRST_RUN.md) and
+  [goal-completion contract](../.ai/AUTONOMY.md) before work begins;
 - limits Copilot to repository read, search, edit, and command-execution tools;
-- gives nontechnical users a stable success or blocked response and continues
-  their original request after setup;
+- gives nontechnical users a stable success or blocked response, continues
+  their original request after setup, and batches reversible read-only
+  prerequisites without repeated confirmation prompts;
 - requires enterprise operations to use the existing typed `master-agent`
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
@@ -76,11 +80,20 @@ a connector, or grants approval. A tool appearing in Copilot means it is
 available, not that MasterAgent is authorized to use it for an external side
 effect.
 
-Explicit read-only, diagnosis-only, and no-change instructions always take
-precedence. In those modes, the agent inspects `python`, `python3`, pip, the
-project script declaration, and `PATH`, then reports the missing prerequisite
-without creating `.venv` or installing anything. Setup failures must be read
-and reported rather than redirected to an uninspected log.
+Repository-inspection, diagnosis-only, and explicit no-local-change
+instructions always take precedence. In those modes, the agent inspects
+`python`, `python3`, pip, the project script declaration, and `PATH`, then
+reports the missing prerequisite without creating `.venv` or installing
+anything. Setup failures must be read and reported rather than redirected to an
+uninspected log.
+
+For an outcome that inherently requires a provider read, the request itself is
+the exact read scope. MasterAgent may enable only that connector in memory,
+probe identity, execute and verify the typed read, and retry safe transient
+steps without a second confirmation. It does not persist the connector setting
+or infer permission for a write, send, merge, delete, or permission change. The
+agent gives one brief start update and does not narrate each key, config field,
+command, probe, or retry.
 
 ## If automatic setup is blocked
 
@@ -116,4 +129,5 @@ not user-invocable, automatically model-invocable, expanded to unreviewed tools,
 detached from the required policy files, inconsistent with the first-run
 contract, or missing the bounded bootstrap, stable response text, and read-only
 safeguards. The source-distribution validation also requires the profile,
-first-run contract, and bootstrap script to be packaged.
+first-run contract, goal-completion contract, and bootstrap script to be
+packaged.

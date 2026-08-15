@@ -119,6 +119,63 @@ class GitHubConnectorTests(unittest.TestCase):
         self.assertNotIn(token, str(result.after))
         transport.assert_drained()
 
+    def test_repository_list_uses_authenticated_affiliations_and_pagination(
+        self,
+    ) -> None:
+        first_page = [_repository(number) for number in range(1, 101)]
+        transport = QueueTransport(
+            ExpectedRequest(
+                method="GET",
+                url_contains=(
+                    "/user/repos?visibility=all&affiliation="
+                    "owner%2Ccollaborator%2Corganization_member&sort=updated&"
+                    "direction=desc&per_page=100&page=1"
+                ),
+                payload=first_page,
+            ),
+            ExpectedRequest(
+                method="GET",
+                url_contains="direction=desc&per_page=1&page=2",
+                payload=[_repository(101)],
+            ),
+        )
+        connector = GitHubConnector(
+            _config(max_pages=2, max_items=150),
+            transport=transport,
+        )
+
+        result = connector.execute(
+            _action(
+                capability="github.repository.list",
+                resource_id="authenticated-user",
+                parameters={"visibility": "all", "limit": 101},
+            )
+        )
+
+        self.assertEqual(result.after["schema"], "master-agent/github-repositories@1")
+        self.assertEqual(result.after["returned"], 101)
+        self.assertEqual(
+            result.after["repositories"][0]["full_name"],
+            "RoryGlenn/repository-1",
+        )
+        self.assertEqual(
+            result.after["query"]["affiliation"],
+            "owner,collaborator,organization_member",
+        )
+        self.assertEqual(len(transport.requests), 2)
+        transport.assert_drained()
+
+    def test_repository_list_rejects_invalid_visibility_before_http(self) -> None:
+        connector = GitHubConnector(_config(), transport=QueueTransport())
+        with self.assertRaisesRegex(ConnectorError, "visibility"):
+            connector.execute(
+                _action(
+                    capability="github.repository.list",
+                    resource_id="authenticated-user",
+                    parameters={"visibility": "internal", "limit": 10},
+                )
+            )
+
     def test_pull_request_search_uses_bounded_numbered_pagination(self) -> None:
         first_page = [_pull_request(number) for number in range(1, 101)]
         transport = QueueTransport(
@@ -504,6 +561,25 @@ def _pull_request(number: int) -> dict[str, object]:
         "labels": [{"name": "enhancement"}],
         "updated_at": "2026-08-15T10:00:00Z",
         "html_url": f"https://github.com/RoryGlenn/MasterAgent/pull/{number}",
+    }
+
+
+def _repository(number: int) -> dict[str, object]:
+    name = f"repository-{number}"
+    return {
+        "id": number,
+        "node_id": f"R_{number}",
+        "name": name,
+        "full_name": f"RoryGlenn/{name}",
+        "owner": {"login": "RoryGlenn"},
+        "description": f"Repository {number}",
+        "private": number % 2 == 0,
+        "visibility": "private" if number % 2 == 0 else "public",
+        "default_branch": "main",
+        "topics": ["master-agent"],
+        "updated_at": "2026-08-15T10:00:00Z",
+        "pushed_at": "2026-08-15T09:00:00Z",
+        "html_url": f"https://github.com/RoryGlenn/{name}",
     }
 
 

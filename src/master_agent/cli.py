@@ -29,6 +29,7 @@ from master_agent.connectors.factory import (
     build_live_registry,
     register_draft_connectors,
 )
+from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
 from master_agent.credentials import (
@@ -49,8 +50,17 @@ from master_agent.execution_context import (
     enforce_execution_context,
 )
 from master_agent.governance import EnvironmentKind, GovernanceProfile
+from master_agent.http import HttpTransport
 from master_agent.identity import IdentityRegistry
-from master_agent.models import Approval, ChangePlan
+from master_agent.models import (
+    AgentAction,
+    Approval,
+    AuthoritySource,
+    ChangePlan,
+    DataClassification,
+    ResourceRef,
+    RiskLevel,
+)
 from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
@@ -230,6 +240,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 credentials_file=args.credentials_file,
                 probe=args.probe,
                 systems=_parse_systems(args.systems),
+                output=args.output,
+            )
+        if args.command == "github-repositories":
+            return _github_repositories(
+                credentials_file=args.credentials_file,
+                limit=args.limit,
+                visibility=args.visibility,
                 output=args.output,
             )
         if args.command == "weekly-status-plan":
@@ -528,6 +545,22 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--probe", action="store_true")
     discover.add_argument("--systems")
     discover.add_argument("--output", type=Path)
+
+    github_repositories = subparsers.add_parser(
+        "github-repositories",
+        help=(
+            "verify GitHub and list the authenticated user's repositories "
+            "without changing persistent configuration"
+        ),
+    )
+    github_repositories.add_argument("--credentials-file", type=Path)
+    github_repositories.add_argument("--limit", type=int, default=100)
+    github_repositories.add_argument(
+        "--visibility",
+        choices=("all", "public", "private"),
+        default="all",
+    )
+    github_repositories.add_argument("--output", type=Path)
 
     weekly_plan = subparsers.add_parser(
         "weekly-status-plan",
@@ -1654,6 +1687,138 @@ def _discover(
         print(f"wrote {output}")
     unavailable = {DiscoveryStatus.MISSING_ENVIRONMENT, DiscoveryStatus.FAILED}
     return 0 if all(record.status not in unavailable for record in records) else 2
+
+
+def _github_repositories(
+    *,
+    credentials_file: Path | None,
+    limit: int,
+    visibility: str,
+    output: Path | None,
+    transport: HttpTransport | None = None,
+) -> int:
+    """Complete the common GitHub read-only onboarding path in one command.
+
+    The packaged GitHub connector remains disabled at rest. This explicit
+    command enables only that read connector in memory for the duration of the
+    request, validates its typed action through the catalog, governance, and
+    policy engine, attests the provider identity, and independently re-reads
+    the repository list. It never rewrites credentials or configuration.
+    """
+
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(None, "integrations.toml")
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(None, "governance.toml")
+    )
+    github = replace(integrations.connector("github"), enabled=True)
+    if limit <= 0 or limit > github.max_items:
+        raise ConfigurationError(
+            f"GitHub repository limit must be between 1 and {github.max_items}"
+        )
+    if visibility not in {"all", "public", "private"}:
+        raise ConfigurationError(
+            "GitHub repository visibility must be all, public, or private"
+        )
+    if credentials_file is not None:
+        if governance.environment is not EnvironmentKind.DEVELOPMENT:
+            raise ConfigurationError(
+                "--credentials-file is restricted to development; use the approved "
+                "secret manager for non-development execution"
+            )
+        store = CredentialStoreSnapshot.load_github_compatible(
+            credentials_file,
+            credential_name=github.secret_env or "MASTER_AGENT_GITHUB_TOKEN",
+        )
+        ambient = {
+            name: value for name, value in os.environ.items() if name not in store.names
+        }
+        environ = store.overlay(ambient)
+    else:
+        environ = dict(os.environ)
+
+    action = AgentAction(
+        capability="github.repository.list",
+        target=ResourceRef(
+            system="github",
+            resource_type="repository_collection",
+            resource_id="authenticated-user",
+        ),
+        parameters={"limit": limit, "visibility": visibility},
+        risk=RiskLevel.READ_ONLY,
+        data_classification=DataClassification.INTERNAL,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key=f"github:repositories:{visibility}:{limit}",
+        justification=(
+            "List repositories visible to the directly requesting authenticated "
+            "GitHub user."
+        ),
+    )
+    plan = ChangePlan(
+        goal="List repositories visible to the authenticated GitHub user.",
+        actions=(action,),
+        created_by="direct-user",
+    )
+    catalog = CapabilityCatalog.from_toml(
+        resolve_config_source(None, "capabilities.toml")
+    )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(None, "policy.toml"))
+    )
+    catalog_ok, catalog_reason = catalog.validate_action(action)
+    if not catalog_ok:
+        raise ConfigurationError(catalog_reason)
+    governance_ok, governance_reason = governance.validate_action(action)
+    if not governance_ok:
+        raise ConfigurationError(governance_reason)
+    decision = policy.evaluate(
+        plan,
+        action,
+        minimum_distinct_approvers=governance.minimum_approvers(action.capability),
+    )
+    if not decision.permitted or decision.approval_required:
+        raise ConfigurationError(decision.reason)
+
+    resolved = github.resolve(environ, auth_transport=transport)
+    connector = GitHubConnector(resolved, transport=transport)
+    principal = connector.attest_principal()
+    result = connector.execute(action)
+    verification = connector.verify(action, result)
+    if not verification.verified:
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+    if not verification.verified:
+        raise ConfigurationError(
+            "GitHub repositories changed during two verification attempts; retry "
+            "the read"
+        )
+    repositories = list((result.after or {}).get("repositories", []))
+    payload = {
+        **dict(result.after or {}),
+        "authenticated_user": {
+            "login": principal.login,
+            "user_id": principal.user_id,
+            "identity": principal.identity,
+        },
+        "verified": True,
+    }
+
+    print(f"GitHub account: {principal.login}")
+    print(f"Repositories: {len(repositories)}")
+    for repository in repositories:
+        if not isinstance(repository, Mapping):
+            continue
+        name = str(repository.get("full_name", "unknown"))
+        access = str(repository.get("visibility") or "unknown")
+        url = str(repository.get("web_url") or "")
+        suffix = f" — {url}" if url else ""
+        print(f"- {name} ({access}){suffix}")
+    if output is not None:
+        _write_json(output, payload, restricted=True)
+        print(f"wrote {output}")
+    return 0
 
 
 def _weekly_status_plan(

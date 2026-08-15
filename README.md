@@ -47,9 +47,9 @@ weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **74 typed capabilities**:
+The catalog contains **75 typed capabilities**:
 
-- 43 read-only capabilities;
+- 44 read-only capabilities;
 - 10 local-generation capabilities;
 - 16 reversible-write definitions, including 2 disabled OneNote writes and 5
   disabled local-Git mutations;
@@ -63,7 +63,7 @@ Supported domains:
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
-| GitHub Cloud | repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
+| GitHub Cloud | authenticated-user repository list, repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
@@ -117,12 +117,16 @@ when needed, installs the declared project dependencies there, and performs the
 offline readiness check. Depending on Copilot's terminal policy, the user may
 need to approve that one command. A successful response starts with
 “MasterAgent is ready locally” and confirms that workplace connections and
-write actions remain off.
+write actions remain off. It then completes the original goal's reversible,
+read-only prerequisites without asking for confirmation at each step.
 
-An explicitly read-only, diagnosis-only, or no-change prompt never installs
-anything. See the [Copilot custom-agent guide](docs/copilot-custom-agent.md) and
-the authoritative [first-run contract](.ai/FIRST_RUN.md) for discovery, exact
-responses, safety boundaries, manual recovery, and GitHub.com or CLI usage.
+A repository-inspection, diagnosis-only, or explicit no-local-change prompt
+never installs anything. A provider read such as “show my GitHub repositories”
+may bootstrap locally and continue the scoped read in the same run. See the
+[Copilot custom-agent guide](docs/copilot-custom-agent.md), authoritative
+[first-run contract](.ai/FIRST_RUN.md), and
+[goal-completion contract](.ai/AUTONOMY.md) for discovery, exact responses,
+safety boundaries, manual recovery, and GitHub.com or CLI usage.
 
 ## Install from the source distribution
 
@@ -242,19 +246,22 @@ master-agent discover \
   --output "$HOME/.master-agent/MasterAgent/discovery-probed.json"
 ```
 
-For a first GitHub-only connectivity test, enable `[connectors.github]` in a
-reviewed integrations file, inject `MASTER_AGENT_GITHUB_TOKEN`, and run:
+For the common “show my GitHub repositories” request, keep the checked-in
+connector disabled and run the one-command read path:
 
 ```bash
-master-agent discover \
-  --integrations /absolute/path/to/integrations.toml \
-  --systems github \
-  --probe
+master-agent github-repositories \
+  --credentials-file /absolute/path/to/private-token.json
 ```
 
-The probe performs one bounded `GET /user` request and reports only the
-authenticated login and numeric user ID. Repository, pull-request, and check
-content remains available only through the typed read capabilities.
+This command enables GitHub read access only in memory, attests the numeric user
+identity, evaluates `github.repository.list` through catalog, governance, and
+policy, returns repositories visible to that account, and independently
+re-reads the result. It neither edits `integrations.toml` nor rewrites the token
+file. The credential file may use the canonical MasterAgent store or the exact
+legacy shape `{"github":"<token>"}`; both retain the same private-file checks.
+The existing `discover --probe` path remains available for a configuration-only
+connectivity test.
 
 For governed live execution, `bind-context` performs the same provider-backed
 identity check and binds only `github:user:<numeric-id>` into the reviewed

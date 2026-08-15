@@ -16,7 +16,7 @@ All HTTP connectors use a constrained client that enforces:
 
 ## Read connectors
 
-Read results are normalized into stable schemas, marked as untrusted content, scanned for prompt-injection indicators, and independently re-read for verification where practical. The GitHub Cloud connector constructs repository, pull-request, check-run, and authenticated-user endpoints internally and uses bounded numbered pagination; it exposes no write or arbitrary-request surface. Its authenticated-user request binds the provider-returned numeric principal during context review and re-verifies that principal before applied reads. Communication bodies and document content remain in memory unless explicit evidence output and retention rules permit persistence.
+Read results are normalized into stable schemas, marked as untrusted content, scanned for prompt-injection indicators, and independently re-read for verification where practical. The GitHub Cloud connector constructs authenticated-user repository-list, repository, pull-request, check-run, and identity endpoints internally and uses bounded numbered pagination; it exposes no write or arbitrary-request surface. Its authenticated-user request binds the provider-returned numeric principal during context review and re-verifies that principal before applied reads. Communication bodies and document content remain in memory unless explicit evidence output and retention rules permit persistence.
 
 ## Mutation connectors
 

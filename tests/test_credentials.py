@@ -36,6 +36,35 @@ class CredentialStoreTests(unittest.TestCase):
         self.assertNotIn(_SECRET, str(raised.exception))
         self.assertNotIn("ambient-secret-canary", str(raised.exception))
 
+    def test_github_compatibility_shape_is_adapted_only_in_memory(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "github.json"
+            original = json.dumps({"github": _SECRET})
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_github_compatible(path)
+            environ = snapshot.overlay({})
+
+            self.assertEqual(snapshot.names, (_NAME,))
+            self.assertEqual(environ[_NAME], _SECRET)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertNotIn(_SECRET, repr(snapshot))
+
+    def test_github_compatibility_rejects_ambiguous_or_nested_shapes(self) -> None:
+        documents = (
+            {"github": _SECRET, "other": "value"},
+            {"github": {"token": _SECRET}},
+            {"github": ""},
+        )
+        with private_temporary_directory() as directory:
+            for index, document in enumerate(documents):
+                path = Path(directory) / f"github-invalid-{index}.json"
+                path.write_text(json.dumps(document), encoding="utf-8")
+                path.chmod(0o600)
+                with self.subTest(index=index), self.assertRaises(ConfigurationError):
+                    CredentialStoreSnapshot.load_github_compatible(path)
+
     def test_permissions_symlinks_and_owner_fail_closed(self) -> None:
         with private_temporary_directory() as directory:
             root = Path(directory)

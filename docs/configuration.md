@@ -120,12 +120,23 @@ Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucke
 
 ## GitHub Cloud
 
-The GitHub connector is read-only and disabled by default. It exposes only
-repository metadata, pull-request search/read, and commit check-run reads.
+The GitHub connector is read-only and disabled by default. It exposes an
+authenticated-user repository list, repository metadata, pull-request
+search/read, and commit check-run reads.
 `discover --systems github --probe` calls the fixed `/user` endpoint to verify
 the configured bearer token. `bind-context` and `run --apply` also call that
 endpoint to bind and re-verify the numeric GitHub user ID before governed live
 reads. No GitHub mutation gate exists.
+
+The convenience command below keeps the persistent connector disabled. The
+command enables only GitHub read access in memory, attests the user, evaluates
+the typed read through catalog/governance/policy, lists visible repositories,
+and independently verifies the result:
+
+```bash
+master-agent github-repositories \
+  --credentials-file /absolute/path/to/private-token.json
+```
 
 ## Microsoft identity mode
 
@@ -231,3 +242,8 @@ path (but not its contents or digest), so bind and apply must select the same fi
 
 This plaintext format is a local-development convenience, not a production secret
 manager. Non-development governance profiles reject it.
+
+For `github-repositories` only, an existing restricted file whose entire JSON
+document is `{"github":"<token>"}` is also accepted and adapted in memory. The
+file is not rewritten. Extra fields, nested wrappers, loose permissions,
+symlinks, and ambiguous shapes still fail closed.

@@ -11,17 +11,18 @@ approval service, or external audit-sink adapter is bundled.
   passes on Python 3.12, 3.13, and 3.14 in CI.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
-- All 74 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
+- All 75 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
 - Release/version claims, the README guide index, the complete CLI command
   reference, capability summaries, checked-in plan schemas, local Markdown
   links, source-tree hygiene, and the credential-free v1 demonstration
   manifest pass validation.
 - The repository-scoped GitHub Copilot profile is user-invocable,
   policy-bound, constrained to its reviewed tools, and aligned with the
-  first-prompt contract across every instruction and onboarding Markdown file.
+  first-prompt contract and one-request goal-completion contracts across every
+  instruction and onboarding Markdown file.
   Its idempotent repository-local bootstrap, stable nontechnical responses,
-  explicit read-only safeguards, script, and policy are included in the source
-  distribution.
+  explicit no-local-change safeguards, batched read-only prerequisites, script,
+  and policy are included in the source distribution.
 - The checked-in demonstration PowerPoint opens as a three-slide presentation;
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
