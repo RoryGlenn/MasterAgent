@@ -54,6 +54,18 @@ branch_prefix = "agent/"
 # Legacy compatibility alias. Keep false unless a granular flag is reviewed.
 write_enabled = false
 
+[connectors.github]
+enabled = false
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
+timeout_seconds = 20
+max_pages = 10
+max_items = 100
+max_response_bytes = 10485760
+
 [connectors.microsoft]
 enabled = false
 deployment = "cloud"

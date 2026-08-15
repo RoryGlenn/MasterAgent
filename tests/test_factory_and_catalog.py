@@ -28,6 +28,7 @@ from master_agent.connectors.drafts import (
 from master_agent.connectors.factory import build_live_connectors
 from master_agent.connectors.git_remote import GitBranchPushConnector
 from master_agent.connectors.git_workspace import GitWorkspaceConnector
+from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
@@ -170,6 +171,7 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
             RepositoryDraftConnector,
             GitBranchPushConnector,
             GitWorkspaceConnector,
+            GitHubConnector,
             IdentityMapConnector,
             JiraConnector,
             JiraWriteConnector,

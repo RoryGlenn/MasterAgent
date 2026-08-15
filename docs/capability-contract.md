@@ -10,6 +10,10 @@ jira.issue.read
 confluence.page.search
 confluence.page.read
 bitbucket.pull_request.search
+github.repository.read
+github.pull_request.search
+github.pull_request.read
+github.checks.read
 microsoft.identity.search
 outlook.message.search
 outlook.message.read
