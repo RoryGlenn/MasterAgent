@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
+import stat
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from master_agent.cli import main
+from master_agent.cli import _github_repositories, main
 from master_agent.planners.static import build_weekly_status_plan
+from tests.fakes import ScriptedTransport
 from tests.helpers import private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -208,6 +211,88 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             self.assertEqual(status, 0, stderr.getvalue())
             self.assertIn("disabled", stdout.getvalue())
             self.assertIn("jira", stdout.getvalue())
+
+    def test_github_repositories_completes_read_only_onboarding_in_memory(
+        self,
+    ) -> None:
+        token = "legacy-github-token-canary"
+        repository = {
+            "id": 1,
+            "node_id": "R_1",
+            "name": "MasterAgent",
+            "full_name": "RoryGlenn/MasterAgent",
+            "owner": {"login": "RoryGlenn"},
+            "private": True,
+            "visibility": "private",
+            "default_branch": "main",
+            "topics": ["agents"],
+            "updated_at": "2026-08-15T10:00:00Z",
+            "pushed_at": "2026-08-15T09:00:00Z",
+            "html_url": "https://github.com/RoryGlenn/MasterAgent",
+        }
+        transport = ScriptedTransport()
+        transport.add_json("GET", "/user", {"login": "RoryGlenn", "id": 42})
+        transport.add_json("GET", "/user/repos", [repository])
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            credentials = root / "github.json"
+            original = json.dumps({"github": token})
+            credentials.write_text(original, encoding="utf-8")
+            credentials.chmod(0o600)
+            output = root / "repositories.json"
+            stdout = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GITHUB_TOKEN": "ambient-token-is-ignored"},
+                    clear=True,
+                ),
+                redirect_stdout(stdout),
+            ):
+                status = _github_repositories(
+                    credentials_file=credentials,
+                    limit=100,
+                    visibility="all",
+                    output=output,
+                    transport=transport,
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(credentials.read_text(encoding="utf-8"), original)
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["authenticated_user"]["login"], "RoryGlenn")
+        self.assertEqual(
+            payload["repositories"][0]["full_name"],
+            "RoryGlenn/MasterAgent",
+        )
+        self.assertTrue(payload["verified"])
+        self.assertIn("GitHub account: RoryGlenn", stdout.getvalue())
+        self.assertIn("RoryGlenn/MasterAgent", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 3)
+        self.assertTrue(
+            all(
+                request.headers["Authorization"] == f"Bearer {token}"
+                for request in transport.requests
+            )
+        )
+        self.assertNotIn(token, stdout.getvalue())
+
+    def test_github_repositories_reports_missing_credential_without_network(
+        self,
+    ) -> None:
+        stderr = StringIO()
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            redirect_stdout(StringIO()),
+            redirect_stderr(stderr),
+        ):
+            status = main(["github-repositories"])
+
+        self.assertEqual(status, 1)
+        self.assertIn("MASTER_AGENT_GITHUB_TOKEN", stderr.getvalue())
 
     def test_packaged_defaults_build_communication_plan_outside_repository(
         self,

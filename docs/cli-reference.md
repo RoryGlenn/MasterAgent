@@ -20,6 +20,7 @@ or filesystem side effects.
 | `recurring-status` | Inspect registered schedules and due state | No provider access; may mark expired claims in an existing configured SQLite state database and can write optional local JSON output |
 | `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
 | `discover` | Inspect connector configuration | Offline unless `--probe`; probing performs bounded read-only provider requests |
+| `github-repositories` | Verify the GitHub identity and list repositories visible to it | Explicit bounded read-only GitHub requests; enables only the GitHub read connector in memory and never edits credentials or persistent configuration |
 | `weekly-status-plan` | Build a read-only weekly-status plan | Writes only the selected local plan |
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
@@ -35,6 +36,12 @@ Connector-aware `readiness`, `discover`, `bind-context`, and applied `run`
 commands accept `--credentials-file /absolute/path/credentials.json` in a
 development governance profile. Policy-only `run` commands do not read secrets.
 The selected canonical path is part of the bound execution context.
+
+`github-repositories` accepts the same canonical store or the exact legacy
+shape `{"github":"<token>"}`. The legacy shape is adapted in memory only. An
+explicit credential file wins over an ambient GitHub token for this convenience
+command; neither value is printed or persisted. Its output file, when selected,
+is written mode `0600`.
 
 ## Configuration behavior
 

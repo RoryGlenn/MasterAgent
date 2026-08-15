@@ -20,6 +20,7 @@ _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _AGENT_FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
 _COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent.agent.md")
 _FIRST_RUN_CONTRACT_PATH = Path(".ai/FIRST_RUN.md")
+_AUTONOMY_CONTRACT_PATH = Path(".ai/AUTONOMY.md")
 _COPILOT_AGENT_TOOLS = ("read", "search", "edit", "execute")
 _COPILOT_AGENT_KEYS = {
     "name",
@@ -45,7 +46,8 @@ _IGNORED_DIRS = {
 _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "[`FIRST_RUN.md`](FIRST_RUN.md)",
-        "Explicit read-only, diagnosis-only, and",
+        "[`AUTONOMY.md`](AUTONOMY.md)",
+        "A direct provider-read goal explicitly authorizes",
     ),
     _FIRST_RUN_CONTRACT_PATH: (
         "first operator",
@@ -53,29 +55,46 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "MasterAgent is ready locally",
         "I couldn't finish local setup",
         "no live connectors are enabled",
+        "[`AUTONOMY.md`](AUTONOMY.md)",
+        "A requested provider read",
+    ),
+    _AUTONOMY_CONTRACT_PATH: (
+        "One request, one bounded run",
+        "do not ask again whether network access",
+        "Do not narrate each inspected JSON key",
+        "github-repositories",
+        "persistent connector settings unchanged",
     ),
     Path("AGENTS.md"): (
         "[`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md)",
+        "[`.ai/AUTONOMY.md`](.ai/AUTONOMY.md)",
         "Apply the first-run contract",
+        "Apply the goal-completion contract",
     ),
-    Path("CHANGELOG.md"): ("first ordinary prompt",),
+    Path("CHANGELOG.md"): ("first ordinary prompt", "one-request goal-completion"),
     Path("README.md"): (
         "[first-run contract](.ai/FIRST_RUN.md)",
+        "[goal-completion contract](.ai/AUTONOMY.md)",
         "MasterAgent is ready locally",
-        "read-only, diagnosis-only, or no-change prompt",
+        "explicit no-local-change prompt",
+        "github-repositories",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "[first-run contract](../.ai/FIRST_RUN.md)",
+        "[goal-completion contract](../.ai/AUTONOMY.md)",
         "python3 scripts/bootstrap_agent.py",
         "MasterAgent is ready locally",
         "If automatic setup is blocked",
+        "without a second confirmation",
     ),
     Path("docs/release-validation.md"): (
         "first-prompt contract",
+        "goal-completion contracts",
         "stable nontechnical responses",
     ),
     Path("docs/semantic-index.md"): (
         "[`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md)",
+        "[`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md)",
         "[`bootstrap_agent.py`](../scripts/bootstrap_agent.py)",
     ),
 }
@@ -196,6 +215,7 @@ def validate_archive(path: Path) -> ValidationReport:
         required_suffixes = (
             "/.ai/MASTER_AGENT.md",
             "/.ai/FIRST_RUN.md",
+            "/.ai/AUTONOMY.md",
             "/.github/agents/MasterAgent.agent.md",
             "/.env.example",
             "/config/capabilities.toml",
@@ -300,10 +320,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 74:
-        errors.append(f"expected 74 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 75:
+        errors.append(f"expected 75 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 74 typed capabilities")
+        checks.append("capability catalog contains 75 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")
@@ -363,6 +383,7 @@ def _validate_copilot_agent(
         "[AGENTS.md](../../AGENTS.md)",
         "[Master Agent repository policy](../../.ai/MASTER_AGENT.md)",
         "[first-run contract](../../.ai/FIRST_RUN.md)",
+        "[goal-completion contract](../../.ai/AUTONOMY.md)",
     )
     for reference in required_references:
         if reference not in body:
@@ -372,13 +393,15 @@ def _validate_copilot_agent(
     required_boundaries = (
         "config/capabilities.toml",
         "Never call a provider directly",
-        "Explicit read-only, diagnosis-only, or no-change instructions take",
+        "Repository-inspection, diagnosis-only, or explicit no-local-change",
         "Apply the first-run contract before the substantive response",
         "python3 scripts/bootstrap_agent.py",
         ".venv/bin/python -m pip install -e .",
         "MasterAgent is ready locally",
         "I couldn't finish local setup",
         "Never use `sudo`",
+        "Treat one operator goal as one bounded run",
+        "github-repositories",
         "python scripts/validate_release.py",
     )
     for boundary in required_boundaries:
@@ -425,7 +448,7 @@ def _validate_first_run_contract(
 
     if len(errors) == starting_errors:
         checks.append(
-            "first-run contract is consistent across 8 instruction and onboarding files"
+            "first-run and goal-completion contracts are consistent across 9 instruction and onboarding files"
         )
 
 

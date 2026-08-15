@@ -3,7 +3,8 @@
 This file defines the repository-local setup behavior for the MasterAgent
 GitHub Copilot custom agent. It is subordinate to
 [`MASTER_AGENT.md`](MASTER_AGENT.md): setup prepares the local Python runtime
-but never grants enterprise authority.
+but never grants enterprise authority. After setup, apply the batching and
+response rules in [`AUTONOMY.md`](AUTONOMY.md).
 
 ## Trigger
 
@@ -11,10 +12,13 @@ After reading [`AGENTS.md`](../AGENTS.md) and
 [`MASTER_AGENT.md`](MASTER_AGENT.md), apply this contract to the first operator
 prompt in each MasterAgent chat.
 
-- If the prompt explicitly requests read-only inspection, diagnosis only, or no
-  changes, do not create or modify `.venv` and do not install anything. Inspect
-  prerequisites without mutation, answer the request, and identify any missing
-  prerequisite precisely.
+- If the prompt requests only repository inspection, diagnosis, or explicitly
+  no local changes, do not create or modify `.venv` and do not install anything.
+  Inspect prerequisites without mutation, answer the request, and identify any
+  missing prerequisite precisely.
+- A requested provider read, such as listing the operator's GitHub repositories,
+  is an ordinary operational prompt. Perform this bounded local setup when
+  needed, then continue the read in the same run under `AUTONOMY.md`.
 - For every other prompt, make one transparent first-run attempt before doing
   substantive work. Tell the operator: **“I’m preparing MasterAgent locally;
   this does not connect to workplace systems.”** Then run:
@@ -65,6 +69,9 @@ Keep the first-run response useful to a nontechnical operator:
   virtual environment or repeat commands the agent can run itself.
 - Treat the normal warning that no live connectors are enabled as the expected
   safe starting state, not as a failed installation.
+- Do not stop after local readiness when the original prompt requested an
+  operation. Continue through its safe prerequisites and return the requested
+  outcome under the goal-completion contract.
 - Do not dump raw installer output into the conversational summary. Inspect the
   output, quote only the relevant error, and keep the complete tool result
   available for technical troubleshooting.

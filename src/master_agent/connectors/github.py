@@ -21,6 +21,8 @@ from master_agent.models import AgentAction
 
 _REPOSITORY_COORDINATE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _PULL_REQUEST_STATES = frozenset({"open", "closed", "all"})
+_REPOSITORY_VISIBILITIES = frozenset({"all", "public", "private"})
+_REPOSITORY_AFFILIATIONS = "owner,collaborator,organization_member"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,7 @@ class GitHubConnector(ReadOnlyConnector):
 
     _CAPABILITIES = frozenset(
         {
+            "github.repository.list",
             "github.repository.read",
             "github.pull_request.search",
             "github.pull_request.read",
@@ -106,6 +109,8 @@ class GitHubConnector(ReadOnlyConnector):
         )
 
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
+        if action.capability == "github.repository.list":
+            return self._list_authenticated_repositories(action)
         if action.capability == "github.repository.read":
             return self._read_repository(action)
         if action.capability == "github.pull_request.search":
@@ -115,6 +120,49 @@ class GitHubConnector(ReadOnlyConnector):
         if action.capability == "github.checks.read":
             return self._read_checks(action)
         raise ConnectorError(f"unsupported GitHub capability: {action.capability}")
+
+    def _list_authenticated_repositories(self, action: AgentAction) -> RetrievedPayload:
+        visibility = string_parameter(
+            action.parameters,
+            "visibility",
+            default="all",
+        ).casefold()
+        if visibility not in _REPOSITORY_VISIBILITIES:
+            raise ConnectorError(
+                "GitHub repository visibility must be all, public, or private"
+            )
+        limit = integer_parameter(
+            action.parameters,
+            "limit",
+            default=self._config.max_items,
+            maximum=self._config.max_items,
+        )
+        raw, reference = self._list_repositories(
+            visibility=visibility,
+            limit=limit,
+        )
+        repositories = [self._normalize_repository(item) for item in raw]
+        source_urls = [reference]
+        source_urls.extend(
+            str(item["web_url"]) for item in repositories if item.get("web_url")
+        )
+        return RetrievedPayload(
+            data={
+                "schema": "master-agent/github-repositories@1",
+                "system": "github",
+                "deployment": self._config.deployment,
+                "query": {
+                    "visibility": visibility,
+                    "affiliation": _REPOSITORY_AFFILIATIONS,
+                    "sort": "updated",
+                    "direction": "desc",
+                },
+                "returned": len(repositories),
+                "repositories": repositories,
+                "source_urls": list(dict.fromkeys(source_urls)),
+            },
+            connector_reference=reference,
+        )
 
     def _read_repository(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
@@ -292,6 +340,44 @@ class GitHubConnector(ReadOnlyConnector):
                 break
         return results[:limit], connector_reference
 
+    def _list_repositories(
+        self,
+        *,
+        visibility: str,
+        limit: int,
+    ) -> tuple[list[Mapping[str, Any]], str]:
+        results: list[Mapping[str, Any]] = []
+        connector_reference = "user/repos"
+        for page_number in range(1, self._config.max_pages + 1):
+            remaining = limit - len(results)
+            if remaining <= 0:
+                break
+            page_size = min(remaining, 100)
+            data, response = self._client.request_json(
+                "GET",
+                "user/repos",
+                query={
+                    "visibility": visibility,
+                    "affiliation": _REPOSITORY_AFFILIATIONS,
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": page_size,
+                    "page": page_number,
+                },
+            )
+            connector_reference = response.url
+            if not isinstance(data, list):
+                raise ConnectorError("GitHub repository list response must be a list")
+            mapped = [item for item in data if isinstance(item, Mapping)]
+            if len(mapped) != len(data):
+                raise ConnectorError(
+                    "GitHub repository list contains a non-object item"
+                )
+            results.extend(mapped)
+            if len(data) < page_size:
+                break
+        return results[:limit], connector_reference
+
     def _list_check_runs(
         self,
         *,
@@ -341,24 +427,35 @@ class GitHubConnector(ReadOnlyConnector):
     @staticmethod
     def _normalize_repository(
         data: Mapping[str, Any],
-        owner: str,
-        repository: str,
+        owner: str | None = None,
+        repository: str | None = None,
     ) -> dict[str, Any]:
         raw_owner = data.get("owner")
         raw_owner = raw_owner if isinstance(raw_owner, Mapping) else {}
         topics = data.get("topics")
         full_name = data.get("full_name")
+        name = data.get("name")
+        owner_login = raw_owner.get("login")
         if (
             not isinstance(full_name, str)
-            or full_name.casefold() != f"{owner}/{repository}".casefold()
+            or not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(owner_login, str)
+            or not owner_login.strip()
+            or full_name.casefold() != f"{owner_login}/{name}".casefold()
+            or (
+                owner is not None
+                and repository is not None
+                and full_name.casefold() != f"{owner}/{repository}".casefold()
+            )
         ):
             raise ConnectorError("GitHub repository response identity did not match")
         return {
             "id": data.get("id"),
             "node_id": data.get("node_id"),
-            "name": data.get("name", repository),
+            "name": name,
             "full_name": full_name,
-            "owner": raw_owner.get("login", owner),
+            "owner": owner_login,
             "description": data.get("description"),
             "is_private": data.get("private"),
             "visibility": data.get("visibility"),

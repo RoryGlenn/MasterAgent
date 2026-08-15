@@ -48,6 +48,35 @@ class CredentialStoreSnapshot:
         canonical, payload = _read_restricted_file(path)
         return cls(canonical, _parse_credentials(payload, allowed_names=allowed_names))
 
+    @classmethod
+    def load_github_compatible(
+        cls,
+        path: Path,
+        *,
+        credential_name: str = "MASTER_AGENT_GITHUB_TOKEN",
+    ) -> CredentialStoreSnapshot:
+        """Load the canonical store or one unambiguous legacy GitHub token file.
+
+        The compatibility shape is exactly ``{"github": "<token>"}``. It is
+        adapted in memory only so onboarding never needs to rewrite a credential.
+        All normal path, ownership, permission, size, duplicate-key, and value
+        checks still apply.
+        """
+
+        canonical, payload = _read_restricted_file(path)
+        raw = _decode_document(payload)
+        if set(raw) == {"github"}:
+            credentials = _validate_credentials(
+                {credential_name: raw["github"]},
+                allowed_names=(credential_name,),
+            )
+        else:
+            credentials = _parse_credentials_document(
+                raw,
+                allowed_names=(credential_name,),
+            )
+        return cls(canonical, credentials)
+
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._credentials))
@@ -132,6 +161,13 @@ def _read_bounded(descriptor: int) -> bytes:
 def _parse_credentials(
     payload: bytes, *, allowed_names: Sequence[str]
 ) -> dict[str, str]:
+    return _parse_credentials_document(
+        _decode_document(payload),
+        allowed_names=allowed_names,
+    )
+
+
+def _decode_document(payload: bytes) -> Mapping[str, Any]:
     try:
         raw = json.loads(payload.decode("utf-8"), object_pairs_hook=_without_duplicates)
     except UnicodeDecodeError as error:
@@ -140,6 +176,12 @@ def _parse_credentials(
         raise ConfigurationError("credential store is not valid JSON") from error
     if not isinstance(raw, Mapping):
         raise ConfigurationError("credential store must be a JSON object")
+    return raw
+
+
+def _parse_credentials_document(
+    raw: Mapping[str, Any], *, allowed_names: Sequence[str]
+) -> dict[str, str]:
     if set(raw) - {"schema", "credentials"}:
         raise ConfigurationError("credential store contains unknown top-level fields")
     if raw.get("schema") != _SCHEMA:
@@ -151,6 +193,12 @@ def _parse_credentials(
         )
     if len(values) > _MAX_CREDENTIALS:
         raise ConfigurationError("credential store contains too many credentials")
+    return _validate_credentials(values, allowed_names=allowed_names)
+
+
+def _validate_credentials(
+    values: Mapping[Any, Any], *, allowed_names: Sequence[str]
+) -> dict[str, str]:
     allowed = frozenset(allowed_names)
     result: dict[str, str] = {}
     for name, value in values.items():

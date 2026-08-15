@@ -14,7 +14,7 @@
     {
       "name": "governance_coverage",
       "passed": true,
-      "covered_capabilities": 74
+      "covered_capabilities": 75
     }
   ],
   "errors": [],

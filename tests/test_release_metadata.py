@@ -142,7 +142,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                 any("missing required boundary" in error for error in errors)
             )
 
-    def test_copilot_agent_requires_read_only_bootstrap_guard(self) -> None:
+    def test_copilot_agent_requires_no_local_change_bootstrap_guard(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             agent = root / ".github/agents/MasterAgent.agent.md"
@@ -153,7 +153,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             agent.write_text(
                 source.replace(
-                    "Explicit read-only, diagnosis-only, or no-change instructions take",
+                    "Repository-inspection, diagnosis-only, or explicit no-local-change",
                     "Local setup may always proceed",
                 ),
                 encoding="utf-8",
@@ -173,6 +173,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         relative_paths = (
             Path(".ai/MASTER_AGENT.md"),
             Path(".ai/FIRST_RUN.md"),
+            Path(".ai/AUTONOMY.md"),
             Path("AGENTS.md"),
             Path("CHANGELOG.md"),
             Path("README.md"),
