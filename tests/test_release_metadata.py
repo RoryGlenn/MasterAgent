@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.validate_release import (
+    _validate_copilot_agent,
     _validate_demo_powerpoint,
     _validate_demo_readiness,
     _validate_file_hygiene,
@@ -42,6 +43,77 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             self.assertEqual(checks, [])
             self.assertTrue(any("runtime directory" in error for error in errors))
+
+    def test_copilot_agent_rejects_unsafe_tool_expansion(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            source = (
+                Path(__file__).resolve().parents[1]
+                / ".github/agents/MasterAgent.agent.md"
+            ).read_text(encoding="utf-8")
+            agent.write_text(
+                source.replace("  - execute\n", "  - execute\n  - web\n"),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(any("tools must be exactly" in error for error in errors))
+
+    def test_copilot_agent_profile_is_required(self) -> None:
+        with TemporaryDirectory() as directory:
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(Path(directory), checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(any("missing or unreadable" in error for error in errors))
+
+    def test_copilot_agent_rejects_malformed_frontmatter(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            agent.write_text("# Missing frontmatter\n", encoding="utf-8")
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(any("frontmatter" in error for error in errors))
+
+    def test_copilot_agent_requires_policy_references(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            source = (
+                Path(__file__).resolve().parents[1]
+                / ".github/agents/MasterAgent.agent.md"
+            ).read_text(encoding="utf-8")
+            agent.write_text(
+                source.replace(
+                    "[AGENTS.md](../../AGENTS.md)",
+                    "AGENTS.md",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any("missing required policy reference" in error for error in errors)
+            )
 
     def test_demo_readiness_count_must_match_capability_catalog(self) -> None:
         with TemporaryDirectory() as directory:
