@@ -17,9 +17,11 @@ approval service, or external audit-sink adapter is bundled.
   links, source-tree hygiene, and the credential-free v1 demonstration
   manifest pass validation.
 - The repository-scoped GitHub Copilot profile is user-invocable,
-  policy-bound, constrained to its reviewed tools, limited to a repository-local
-  runtime bootstrap with explicit read-only safeguards, and included in the
-  source distribution.
+  policy-bound, constrained to its reviewed tools, and aligned with the
+  first-prompt contract across every instruction and onboarding Markdown file.
+  Its idempotent repository-local bootstrap, stable nontechnical responses,
+  explicit read-only safeguards, script, and policy are included in the source
+  distribution.
 - The checked-in demonstration PowerPoint opens as a three-slide presentation;
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
