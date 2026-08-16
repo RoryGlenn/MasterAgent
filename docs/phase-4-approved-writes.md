@@ -28,6 +28,7 @@ because their complete poststate and rollback cannot yet be derived exactly.
 
 ### Confluence
 
+- Cloud space creation with exact key/name verification and created-space removal;
 - page creation;
 - version-checked page update;
 - prior-version/body restoration.
