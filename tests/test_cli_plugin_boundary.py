@@ -69,6 +69,9 @@ class CliPluginBoundaryTests(unittest.TestCase):
             authorities.write_text(
                 "[authorities.operator]\n"
                 'subject = "trusted@example.test"\n'
+                'issuer = "master-agent.test"\n'
+                'tenant = "test-tenant"\n'
+                'roles = ["change-approver"]\n'
                 'secret_env = "TRUSTED_APPROVAL_SECRET"\n',
                 encoding="utf-8",
             )
@@ -86,6 +89,9 @@ class CliPluginBoundaryTests(unittest.TestCase):
                 authorities.write_text(
                     "[authorities.operator]\n"
                     'subject = "attacker@example.test"\n'
+                    'issuer = "master-agent.test"\n'
+                    'tenant = "test-tenant"\n'
+                    'roles = ["change-approver"]\n'
                     'secret_env = "ATTACKER_APPROVAL_SECRET"\n',
                     encoding="utf-8",
                 )
@@ -195,6 +201,9 @@ class CliPluginBoundaryTests(unittest.TestCase):
             authorities_path.write_text(
                 "[authorities.operator]\n"
                 'subject = "operator@example.test"\n'
+                'issuer = "master-agent.test"\n'
+                'tenant = "test-tenant"\n'
+                'roles = ["change-approver"]\n'
                 'secret_env = "PLUGIN_TEST_APPROVAL_SECRET"\n',
                 encoding="utf-8",
             )
@@ -204,6 +213,9 @@ class CliPluginBoundaryTests(unittest.TestCase):
                         key_id="operator",
                         subject="operator@example.test",
                         secret=b"plugin-boundary-test-secret-32-bytes",
+                        issuer="master-agent.test",
+                        tenant="test-tenant",
+                        roles=("change-approver",),
                     )
                 }
             )

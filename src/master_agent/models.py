@@ -880,6 +880,9 @@ class Approval:
     plan_fingerprint: str
     approved_action_ids: tuple[UUID, ...]
     approved_by: str
+    issuer: str
+    tenant: str
+    roles: tuple[str, ...]
     issued_at: datetime
     expires_at: datetime
     key_id: str
@@ -893,16 +896,36 @@ class Approval:
         if not self.approved_action_ids:
             raise ValidationError("approval must cover at least one action")
         object.__setattr__(self, "approved_action_ids", tuple(self.approved_action_ids))
-        if not self.approved_by.strip():
-            raise ValidationError("approved_by must not be empty")
-        if self.approved_by != self.approved_by.strip():
-            raise ValidationError("approved_by must not contain surrounding whitespace")
-        if not self.key_id.strip() or self.key_id != self.key_id.strip():
-            raise ValidationError("key_id must be a non-empty normalized identifier")
+        _validate_approval_claim(self.approved_by, "approved_by")
+        _validate_approval_claim(self.issuer, "approval issuer")
+        _validate_approval_claim(self.tenant, "approval tenant")
+        if not self.roles:
+            raise ValidationError("approval roles must not be empty")
+        normalized_roles: list[str] = []
+        role_keys: set[str] = set()
+        for role in self.roles:
+            _validate_approval_claim(role, "approval role")
+            role_key = unicodedata.normalize("NFKC", role).casefold()
+            if role_key in role_keys:
+                raise ValidationError("approval roles must be unique")
+            role_keys.add(role_key)
+            normalized_roles.append(role)
+        object.__setattr__(
+            self,
+            "roles",
+            tuple(sorted(normalized_roles, key=lambda item: item.casefold())),
+        )
+        _validate_approval_claim(self.key_id, "approval key_id")
         if not self.signature.strip():
             raise ValidationError("approval signature must not be empty")
         if not self.signature_scheme.strip():
             raise ValidationError("approval signature scheme must not be empty")
+        for value, name in (
+            (self.issued_at, "approval issued_at"),
+            (self.expires_at, "approval expires_at"),
+        ):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValidationError(f"{name} must include a timezone offset")
         if self.expires_at <= self.issued_at:
             raise ValidationError("approval must expire after it is issued")
 
@@ -923,6 +946,9 @@ class Approval:
             "plan_fingerprint": self.plan_fingerprint,
             "approved_action_ids": [str(item) for item in self.approved_action_ids],
             "approved_by": self.approved_by,
+            "issuer": self.issuer,
+            "tenant": self.tenant,
+            "roles": list(self.roles),
             "issued_at": self.issued_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
             "key_id": self.key_id,
@@ -953,7 +979,10 @@ class Approval:
             approved_action_ids=tuple(
                 UUID(str(item)) for item in data["approved_action_ids"]
             ),
-            approved_by=str(data["approved_by"]),
+            approved_by=_required_approval_string(data, "approved_by"),
+            issuer=_required_approval_string(data, "issuer"),
+            tenant=_required_approval_string(data, "tenant"),
+            roles=_approval_roles_from_data(data),
             issued_at=datetime.fromisoformat(str(data["issued_at"])),
             expires_at=datetime.fromisoformat(str(data["expires_at"])),
             key_id=str(data["key_id"]),
@@ -1245,6 +1274,30 @@ def _reject_control_characters(value: str, name: str) -> None:
 
     if any(unicodedata.category(character) in {"Cc", "Cf"} for character in value):
         raise ValidationError(f"{name} must not contain control characters")
+
+
+def _validate_approval_claim(value: str, name: str) -> None:
+    """Require one stable, printable, Unicode-normalized approval claim."""
+
+    if not value or value != value.strip():
+        raise ValidationError(f"{name} must be a non-empty normalized value")
+    if unicodedata.normalize("NFC", value) != value:
+        raise ValidationError(f"{name} must use Unicode NFC normalization")
+    _reject_control_characters(value, name)
+
+
+def _required_approval_string(data: Mapping[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValidationError(f"approval {key} must be a string")
+    return value
+
+
+def _approval_roles_from_data(data: Mapping[str, Any]) -> tuple[str, ...]:
+    roles = data.get("roles")
+    if not isinstance(roles, list) or not all(isinstance(role, str) for role in roles):
+        raise ValidationError("approval roles must be a string list")
+    return tuple(roles)
 
 
 def _validate_acyclic(actions: tuple[AgentAction, ...]) -> None:

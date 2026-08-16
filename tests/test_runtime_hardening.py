@@ -165,6 +165,9 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 "rory": ApprovalAuthority(
                     key_id="rory",
                     subject="rory@example.test",
+                    issuer="master-agent.test",
+                    tenant="test-tenant",
+                    roles=("change-approver",),
                     secret=b"runtime-hardening-test-secret-32-bytes",
                 )
             }
@@ -254,6 +257,9 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             authorities.write_text(
                 "[authorities.rory]\n"
                 'subject = "rory@example.test"\n'
+                'issuer = "master-agent.test"\n'
+                'tenant = "test-tenant"\n'
+                'roles = ["change-approver"]\n'
                 'secret_env = "TEST_APPROVAL_SECRET"\n',
                 encoding="utf-8",
             )

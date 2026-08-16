@@ -473,11 +473,16 @@ master-agent approve bound-change-plan.json \
 ```
 
 Approval JSON is not authority by itself. The signature is verified against the
-explicit operator-controlled key ring, which binds each key ID to one identity.
-Unsigned, tampered, unknown-key, or identity-edited artifacts cannot authorize an
-apply. Keep the key ring outside repositories being operated on; use
-`config/approval-authorities.example` only as a schema example. A
-dual-approval capability requires a second valid key bound to a different identity.
+explicit operator-controlled key ring, which binds each key ID to one normalized
+issuer, tenant, human subject, and non-empty role set. Those claims, the issuance and
+expiry times, exact plan fingerprint, and selected action IDs are all inside the
+signature. The trusted authority configuration can revoke one approval ID or all
+approvals issued at or before a timestamp. Unsigned, expired, revoked, tampered,
+unknown-key, or claim-edited artifacts cannot authorize an apply. Keep the key
+ring outside repositories being operated on; use
+`config/approval-authorities.example` only as a schema example. A dual-approval
+capability requires a second valid key bound to a different canonical
+issuer/tenant/subject identity.
 
 ## Execute approved reversible writes
 

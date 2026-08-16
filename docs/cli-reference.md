@@ -83,11 +83,15 @@ master-agent resume-approval /private/drafts/approval-request-....json \
 ```
 
 For dual approval, repeat `approve-request` with a distinct configured human
-identity. If only one valid approval is supplied, `resume-approval` creates a
-new request that carries the first approval path forward; supply the second
-artifact to that new request. Changed request bytes, a changed referenced plan
-or authority configuration, unsafe permissions, symlinks, or an apply-time
-context mismatch fail before the pending provider action executes.
+identity. Distinctness is based on the normalized issuer, tenant, and subject;
+case or Unicode-compatibility aliases cannot count twice. The signed artifact
+also binds the authority's roles and validity window, while trusted
+`revoked_before` and `revoked_approval_ids` configuration can invalidate it. If
+only one valid approval is supplied, `resume-approval` creates a new request
+that carries the first approval path forward; supply the second artifact to
+that new request. Changed request bytes, a changed referenced plan or authority
+configuration, unsafe permissions, symlinks, or an apply-time context mismatch
+fail before the pending provider action executes.
 
 `connect` accepts a comma-separated `--systems` selection from Jira,
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,

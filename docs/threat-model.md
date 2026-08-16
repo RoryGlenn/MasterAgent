@@ -98,6 +98,9 @@ Controls:
 - SHA-256 fingerprint of the complete immutable plan;
 - approval bound to fingerprint and explicit action IDs;
 - expiry and distinct approver requirements;
+- signature-bound issuer, tenant, subject, and role claims;
+- canonical principal comparison plus authority-side timestamp and artifact-ID
+  revocation;
 - approval invalidation after any plan mutation.
 - approval-authority configuration bound before review;
 - mode-`0600`, create-only resumable requests beneath the pinned artifact root;

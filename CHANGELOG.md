@@ -1,5 +1,9 @@
 # Changelog
 
+- Authenticate approval issuer, tenant, subject, and role claims; compare dual
+  approvers by a Unicode-normalized canonical principal; and support trusted
+  timestamp and approval-ID revocation without weakening exact-plan binding.
+
 - Automatically reuse a related Jira/Confluence Cloud account email and API
   token when the selected connector's dedicated names are absent, without
   rewriting the credential store or activating the related connector. Add

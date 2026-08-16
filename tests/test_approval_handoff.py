@@ -340,12 +340,18 @@ def _workspace(root: Path, *, dual: bool = False) -> _Paths:
     authority_payload = (
         "[authorities.alice]\n"
         'subject = "alice@example.test"\n'
+        'issuer = "master-agent.test"\n'
+        'tenant = "test-tenant"\n'
+        'roles = ["change-approver"]\n'
         'secret_env = "TEST_APPROVAL_SECRET_ALICE"\n'
     )
     if dual:
         authority_payload += (
             "\n[authorities.bob]\n"
             'subject = "bob@example.test"\n'
+            'issuer = "master-agent.test"\n'
+            'tenant = "test-tenant"\n'
+            'roles = ["change-approver"]\n'
             'secret_env = "TEST_APPROVAL_SECRET_BOB"\n'
         )
     paths.authorities.write_text(
