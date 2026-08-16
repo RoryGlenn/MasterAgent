@@ -11,6 +11,7 @@ from master_agent.connectors.base import CompensatingConnector
 from master_agent.connectors.utils import enforce_expected_version, quote_segment
 from master_agent.errors import (
     ConnectorError,
+    ConnectorHttpError,
     ResourceNotFoundError,
     VersionConflictError,
 )
@@ -472,11 +473,18 @@ class ConfluenceWriteConnector(CompensatingConnector):
             }
             if message:
                 payload["version"]["message"] = message
-            _, response = self._client.request_json(
-                "PUT",
-                f"wiki/api/v2/pages/{quote_segment(page_id)}",
-                json_body=payload,
-            )
+            try:
+                _, response = self._client.request_json(
+                    "PUT",
+                    f"wiki/api/v2/pages/{quote_segment(page_id)}",
+                    json_body=payload,
+                )
+            except ConnectorHttpError as error:
+                if error.status_code == 409:
+                    raise VersionConflictError(
+                        "Confluence page changed before the versioned update"
+                    ) from error
+                raise
         else:
             space_key = str(
                 action.parameters.get("space_key", before.get("space_key") or "")
@@ -493,11 +501,18 @@ class ConfluenceWriteConnector(CompensatingConnector):
             }
             if message:
                 payload["version"]["message"] = message
-            _, response = self._client.request_json(
-                "PUT",
-                f"rest/api/content/{quote_segment(page_id)}",
-                json_body=payload,
-            )
+            try:
+                _, response = self._client.request_json(
+                    "PUT",
+                    f"rest/api/content/{quote_segment(page_id)}",
+                    json_body=payload,
+                )
+            except ConnectorHttpError as error:
+                if error.status_code == 409:
+                    raise VersionConflictError(
+                        "Confluence page changed before the versioned update"
+                    ) from error
+                raise
 
         observed = self._read_page(page_id, representation=representation)
         expected = _approved_poststate(

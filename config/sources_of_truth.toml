@@ -4,8 +4,13 @@
 [[rules]]
 field = "project_status_narrative"
 canonical_system = "confluence"
+canonical_resource_type = "page"
 canonical_resource_id = "project-status"
-projections = ["powerpoint:weekly-status", "teams:weekly-status-draft", "outlook:weekly-status-draft"]
+projections = [
+  { system = "powerpoint", resource_type = "presentation", resource_id = "weekly-status" },
+  { system = "teams", resource_type = "message", resource_id = "weekly-status-draft" },
+  { system = "outlook", resource_type = "draft", resource_id = "weekly-status-draft" },
+]
 direction = "outbound_only"
 canonical_extractors = { "confluence.page.update" = ["body"] }
 projection_extractors = { "teams.message.draft" = ["body"], "outlook.email.draft" = ["body"] }

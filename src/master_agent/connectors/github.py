@@ -32,6 +32,7 @@ class GitHubPrincipalAttestation:
     user_id: int
     login: str
     reference: str
+    scopes: tuple[str, ...] = ()
 
     @property
     def identity(self) -> str:
@@ -107,6 +108,13 @@ class GitHubConnector(ReadOnlyConnector):
             user_id=user_id,
             login=login,
             reference=response.url,
+            scopes=tuple(
+                sorted(
+                    scope.strip()
+                    for scope in response.headers.get("x-oauth-scopes", "").split(",")
+                    if scope.strip()
+                )
+            ),
         )
 
     def _fetch(self, action: AgentAction) -> RetrievedPayload:

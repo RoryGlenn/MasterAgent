@@ -111,9 +111,10 @@
         "expected_version": null
       },
       "parameters": {
-        "audience": "project team",
-        "format": "summary, blockers, decisions, next actions",
-        "send": false
+        "recipient_type": "team",
+        "recipient_id": "project-team",
+        "body": "Weekly status draft: review the generated presentation for current progress, blockers, decisions, and next actions.",
+        "output_name": "weekly-status-teams.md"
       },
       "risk": "local_generation",
       "data_classification": "internal",
@@ -137,9 +138,12 @@
         "expected_version": null
       },
       "parameters": {
-        "audience": "stakeholders",
+        "to": [
+          "stakeholders@example.invalid"
+        ],
         "subject": "Weekly project status",
-        "send": false
+        "body": "The weekly project status package is ready for review. No content has been published or sent by this workflow.",
+        "output_name": "weekly-status-email.eml"
       },
       "risk": "local_generation",
       "data_classification": "internal",

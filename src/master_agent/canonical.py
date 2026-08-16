@@ -21,13 +21,29 @@ class SourceRule:
     """Ownership rule for one logical field."""
 
     field: str
-    canonical_uri: str
-    projection_uris: frozenset[str]
+    canonical_resource: tuple[str, str, str]
+    projection_resources: frozenset[tuple[str, str, str]]
     direction: str
     canonical_capabilities: frozenset[str]
     projection_capabilities: frozenset[str]
     canonical_extractors: tuple[tuple[str, tuple[str, ...]], ...]
     projection_extractors: tuple[tuple[str, tuple[str, ...]], ...]
+
+    @property
+    def canonical_identity(self) -> tuple[object, ...]:
+        """Return the exact resource, field, and selectors that own the value."""
+
+        return (
+            *self.canonical_resource,
+            self.field,
+            self.canonical_extractors,
+        )
+
+    @property
+    def canonical_uri(self) -> str:
+        """Render the typed canonical resource for diagnostics."""
+
+        return ":".join(self.canonical_resource)
 
 
 _SUPPORTED_PARAMETER_SELECTORS: dict[str, frozenset[str]] = {
@@ -54,6 +70,11 @@ class SourceOfTruthRegistry:
             raw = tomllib.load(handle)
         rules: list[SourceRule] = []
         for item in raw.get("rules", []):
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("source-of-truth rule must be a table")
+            field = str(item.get("field", "")).strip()
+            if not field:
+                raise ConfigurationError("source-of-truth field must not be empty")
             direction = str(item["direction"])
             if direction != "outbound_only":
                 raise ConfigurationError(
@@ -75,11 +96,9 @@ class SourceOfTruthRegistry:
             )
             rules.append(
                 SourceRule(
-                    field=str(item["field"]),
-                    canonical_uri=(
-                        f"{item['canonical_system']}:{item['canonical_resource_id']}"
-                    ),
-                    projection_uris=frozenset(str(uri) for uri in item["projections"]),
+                    field=field,
+                    canonical_resource=_canonical_resource(item),
+                    projection_resources=_projection_resources(item.get("projections")),
                     direction=direction,
                     canonical_capabilities=canonical_capabilities,
                     projection_capabilities=projection_capabilities,
@@ -98,7 +117,7 @@ class SourceOfTruthRegistry:
         """
 
         for rule in self._rules:
-            if action.target.uri not in rule.projection_uris:
+            if _resource_identity(action) not in rule.projection_resources:
                 continue
             if action.capability not in rule.projection_capabilities:
                 if action.risk is RiskLevel.READ_ONLY:
@@ -120,15 +139,18 @@ class SourceOfTruthRegistry:
                     ),
                 )
             canonical_writes = {
-                candidate.action_id: _parameter_digests(
-                    candidate,
-                    _selectors_for(
-                        rule.canonical_extractors,
-                        candidate.capability,
+                candidate.action_id: (
+                    rule.canonical_identity,
+                    _parameter_digests(
+                        candidate,
+                        _selectors_for(
+                            rule.canonical_extractors,
+                            candidate.capability,
+                        ),
                     ),
                 )
                 for candidate in plan.actions
-                if candidate.target.uri == rule.canonical_uri
+                if _resource_identity(candidate) == rule.canonical_resource
                 and candidate.risk
                 not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
                 and candidate.capability in rule.canonical_capabilities
@@ -144,8 +166,8 @@ class SourceOfTruthRegistry:
             ancestors = _dependency_ancestors(plan, action)
             matching_ancestors = {
                 action_id
-                for action_id, digests in canonical_writes.items()
-                if digests == projection_digests
+                for action_id, (identity, digests) in canonical_writes.items()
+                if identity == rule.canonical_identity and digests == projection_digests
             }
             if matching_ancestors.isdisjoint(ancestors):
                 return (
@@ -175,6 +197,75 @@ def _dependency_ancestors(
         ancestors.add(dependency)
         pending.extend(by_id[dependency].dependencies)
     return frozenset(ancestors)
+
+
+def _projection_resources(value: object) -> frozenset[tuple[str, str, str]]:
+    """Parse exact typed projection resources and reject legacy URI strings."""
+
+    if not isinstance(value, list) or not value:
+        raise ConfigurationError(
+            "source-of-truth projections must be a non-empty array of tables"
+        )
+    resources: set[tuple[str, str, str]] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ConfigurationError(
+                "source-of-truth projection must declare system, resource_type, "
+                "and resource_id"
+            )
+        try:
+            identity = tuple(
+                str(item[name]).strip()
+                for name in ("system", "resource_type", "resource_id")
+            )
+        except KeyError as error:
+            raise ConfigurationError(
+                "source-of-truth projection must declare system, resource_type, "
+                "and resource_id"
+            ) from error
+        if len(identity) != 3 or any(not part for part in identity):
+            raise ConfigurationError(
+                "source-of-truth projection identity values must not be empty"
+            )
+        resource = (identity[0], identity[1], identity[2])
+        if resource in resources:
+            raise ConfigurationError(
+                "source-of-truth projection identities must be unique"
+            )
+        resources.add(resource)
+    return frozenset(resources)
+
+
+def _canonical_resource(item: Mapping[str, object]) -> tuple[str, str, str]:
+    """Parse the exact typed canonical identity."""
+
+    try:
+        identity = tuple(
+            str(item[name]).strip()
+            for name in (
+                "canonical_system",
+                "canonical_resource_type",
+                "canonical_resource_id",
+            )
+        )
+    except KeyError as error:
+        raise ConfigurationError(
+            "source-of-truth canonical resource must declare system, "
+            "resource_type, and resource_id"
+        ) from error
+    if len(identity) != 3 or any(not part for part in identity):
+        raise ConfigurationError(
+            "source-of-truth canonical resource identity values must not be empty"
+        )
+    return identity[0], identity[1], identity[2]
+
+
+def _resource_identity(action: AgentAction) -> tuple[str, str, str]:
+    return (
+        action.target.system,
+        action.target.resource_type,
+        action.target.resource_id,
+    )
 
 
 def _extractor_bindings(

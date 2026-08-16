@@ -21,9 +21,10 @@ scanned for prompt-injection indicators, and independently re-read for
 verification where practical. The GitHub Cloud connector constructs fixed
 public-user and authenticated-user repository-list, repository, pull-request,
 check-run, and identity endpoints internally and uses bounded numbered
-pagination. Separately constructed GitHub mutation connectors expose only
-issue/PR creation, allowlisted repository settings, and existing-collaborator
-built-in-role updates; no connector exposes an arbitrary-request surface.
+pagination. Separately constructed GitHub mutation connectors implement
+issue/PR creation plus typed administration adapters; catalog and governance
+permit only issue/PR creation because the administration endpoints lack a
+documented provider compare-and-swap. No connector exposes an arbitrary-request surface.
 `github.public_repository.list` uses the public-user endpoint anonymously and
 does not resolve or forward an ambient credential. Authenticated GitHub reads
 bind the provider-returned numeric principal during context review and
@@ -52,7 +53,7 @@ the requested outcome.
 
 ## Mutation connectors
 
-Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects.
+Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, effective principal/scopes, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects. A modifying provider route is enabled only when its write carries a provider-side conditional precondition.
 
 Local Git mutation internals are quarantined. Their capability definitions are
 disabled, governance marks them prohibited, and the live factory does not
@@ -66,21 +67,22 @@ metadata boundary is descriptor-backed and adversarially verified.
 
 Compensation is connector-specific:
 
-- Jira restores captured fields, removes the comment created by the workflow, or applies a configured reverse transition;
+- Jira removes the comment created by the workflow; issue mutation and restoration remain disabled pending provider CAS;
 - Confluence restores the captured prior page version/body or removes the exact page created by the workflow;
 - Bitbucket declines the exact PR created by the workflow;
-- SharePoint restores the captured prior version only after hashing the prior, uploaded, and restored provider bytes;
+- the non-routable SharePoint replacement adapter can restore a captured prior
+  version after byte proofs, but remains disabled until its write is atomic;
 - Git mutation and compensation are not exposed by the live registry.
 
 A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
 
-SharePoint byte verification uses the bounded Graph content endpoint and never
+The disabled SharePoint adapter's byte verification uses the bounded Graph content endpoint and never
 forwards credentials across an origin change. Tenants that return a cross-origin
 download redirect therefore remain fail-closed until a destination-attested,
 no-auth download broker is implemented. The full upload/verify/restore lifecycle
 requires at least 12 requests; packaged Microsoft defaults reserve 16 and cap
 approved uploads at 1,000,000 bytes so repeated byte proofs remain inside the
-shared response budget.
+shared response budget. Those checks do not substitute for provider CAS.
 
 ## Communication connectors
 

@@ -591,6 +591,21 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
         self.assertEqual(writes[0]["version"]["number"], 5)
         self.assertEqual(writes[1]["version"]["number"], 6)
 
+    def test_cloud_version_conflict_is_reported_as_concurrency_failure(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        transport.add_json("GET", path, _confluence_page("Status", "<p>Old</p>", 4))
+        transport.add_json("PUT", path, {"message": "conflict"}, status=409)
+        connector = _confluence_connector(transport)
+
+        with self.assertRaisesRegex(VersionConflictError, "versioned update"):
+            connector.execute(_confluence_update_action("<p>Approved</p>"))
+
+        self.assertEqual(
+            [request.method for request in transport.requests],
+            ["GET", "PUT"],
+        )
+
     def test_update_rejects_provider_altered_first_poststate(self) -> None:
         transport = ScriptedTransport()
         path = "/wiki/api/v2/pages/42"

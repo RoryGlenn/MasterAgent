@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -24,6 +25,21 @@ from master_agent.http import (
 )
 from master_agent.models import AgentAction
 from master_agent.text import excerpt
+
+
+@dataclass(frozen=True, slots=True)
+class MicrosoftPrincipalAttestation:
+    """Provider-verified delegated identity and granted OAuth scopes."""
+
+    user_id: str
+    reference: str
+    scopes: tuple[str, ...]
+
+    @property
+    def identity(self) -> str:
+        """Return the stable, secret-free identity bound into approvals."""
+
+        return f"microsoft:user:{self.user_id}"
 
 
 class MicrosoftIdentityConnector(ReadOnlyConnector):
@@ -52,6 +68,26 @@ class MicrosoftIdentityConnector(ReadOnlyConnector):
             "display_name": user.get("display_name"),
             "reference": reference,
         }
+
+    def attest_principal(self) -> MicrosoftPrincipalAttestation:
+        """Resolve the delegated token's immutable Graph user and scopes."""
+
+        if self._config.auth.token_provider is None:
+            raise ConnectorError(
+                "Microsoft delegated principal attestation requires a token provider"
+            )
+        token = self._config.auth.token_provider.get_token()
+        user, reference = self._read_identity("me", ("id",))
+        user_id = user.get("id")
+        if not isinstance(user_id, str) or not user_id.strip():
+            raise ConnectorError(
+                "Microsoft Graph /me response has no valid immutable identity"
+            )
+        return MicrosoftPrincipalAttestation(
+            user_id=user_id.strip(),
+            reference=reference,
+            scopes=tuple(sorted(set(token.scopes))),
+        )
 
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
         if action.capability == "microsoft.identity.search":

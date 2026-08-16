@@ -10,7 +10,7 @@ from fnmatch import fnmatch
 from types import MappingProxyType
 from typing import Any
 
-from master_agent.capabilities import CapabilityCatalog
+from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
 from master_agent.models import AgentAction, DataClassification, RiskLevel
@@ -213,6 +213,32 @@ class GovernanceProfile:
                 ),
             )
         return True, f"governed by {rule.owner} ({rule.approval_tier})"
+
+    def validate_external_model(
+        self,
+        action: AgentAction,
+        definition: CapabilityDefinition,
+    ) -> tuple[bool, str]:
+        """Enforce the organization's declared external-model data boundary."""
+
+        if not definition.uses_external_model:
+            return True, "capability does not use an external model"
+        configured = self.metadata.get("external_model_approved_classifications", [])
+        if not isinstance(configured, list) or not all(
+            isinstance(item, str) for item in configured
+        ):
+            return False, "external-model approved classifications are invalid"
+        allowed = frozenset(configured)
+        if str(action.data_classification) not in allowed:
+            return (
+                False,
+                (
+                    f"external-model policy {self.external_model_policy} does not "
+                    f"approve {action.data_classification} data for "
+                    f"{action.capability}"
+                ),
+            )
+        return True, "external-model policy explicitly permits this classification"
 
     def approval_tier_for(self, capability: str) -> ApprovalTier | None:
         """Return the effective approval tier for a capability."""

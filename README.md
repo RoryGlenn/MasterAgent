@@ -35,7 +35,7 @@ do not yet meet the release security boundary remain deliberately non-routable:
 | 1 — governed runtime | Immutable plans, approvals, policy, source-of-truth validation, audit, idempotency, verification, and prompt-injection controls |
 | 2 — read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention |
 | 3 — draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests |
-| 4 — approved reversible writes | Jira, Confluence, Bitbucket PRs, and byte-verified SharePoint files; local/remote Git and unsafe OneNote writes are disabled |
+| 4 — approved reversible writes | Jira comments, Confluence, Bitbucket PRs, and GitHub issue/PR creation; SharePoint replacement, other Jira mutations, GitHub administration, local/remote Git, and unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
 | 6 — recurring workflow registration | Status and plan-generation surfaces; recurring execution is disabled pending exact target/config and runtime-path binding |
 
@@ -52,25 +52,25 @@ The catalog contains **82 typed capabilities**:
 
 - 46 read-only capabilities;
 - 10 local-generation capabilities;
-- 20 reversible-write definitions, including 2 disabled OneNote writes and 5
-  disabled local-Git mutations;
+- 20 reversible-write definitions, including provider adapters that remain
+  disabled when they cannot enforce atomic concurrency;
 - 4 external-communication capabilities;
-- 2 high-impact capability definitions: the dual-approved GitHub collaborator
-  role action and the deliberately disabled `bitbucket.pull_request.merge`.
+- 2 high-impact capability definitions, both disabled: GitHub collaborator-role
+  administration and `bitbucket.pull_request.merge`.
 
 Supported domains:
 
 | Domain | Read | Draft/local generation | Approved mutation |
 |---|---|---|---|
-| Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
+| Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | comment creation; update/transition/compensation disabled pending provider CAS |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | Cloud space creation; page create, update, compensation |
 | Bitbucket Cloud/Data Center | anonymous public-workspace repository lists; authenticated repo, PR, diffstat/changes, and CI status reads | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
-| GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | issue/PR creation; allowlisted repository settings and existing-collaborator role administration |
+| GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | issue/PR creation; administration disabled pending provider CAS |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
-| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
+| SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | replacement disabled pending provider CAS on the exact content endpoint |
 | OneNote | notebooks, sections, pages | generated HTML/proposals | disabled pending exact target-aware DOM verification |
-| PowerPoint | — | local `.pptx` generation | upload through the separately gated SharePoint connector |
+| PowerPoint | — | local `.pptx` generation | publishing disabled with SharePoint replacement |
 | Git workspace | repository state | branch/patch plan | mutation disabled until all Git metadata transactions are descriptor-bound |
 | Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
 
@@ -342,8 +342,9 @@ The existing `discover --probe` path remains available for a configuration-only
 connectivity test.
 
 For governed live execution, `bind-context` performs the same provider-backed
-identity check and binds only `github:user:<numeric-id>` into the reviewed
-execution context. `run --apply` repeats the check before connector actions.
+identity check and binds `github:user:<numeric-id>` plus GitHub's reported OAuth
+scopes into the reviewed execution context. `run --apply` repeats the check
+before connector actions.
 Token rotation for the same numeric GitHub user remains valid; a token for a
 different user fails closed. Configuration-only `readiness` verifies that this
 adapter and its required environment reference are available but performs no
@@ -360,7 +361,11 @@ master-agent oauth-device-code \
   --token-file "$HOME/.master-agent/MasterAgent/tokens/microsoft.json"
 ```
 
-Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. The CLI does not automate tenant consent or administrator approval.
+Point `MASTER_AGENT_GRAPH_TOKEN_FILE` at that mode-`0600` token file. During
+binding and apply, MasterAgent calls Graph `/me` and binds the immutable user
+object ID plus the token file's granted scopes. A principal or scope change
+invalidates the reviewed runtime context before connector effects. The CLI does
+not automate tenant consent or administrator approval.
 
 ## Exact-plan approvals
 
@@ -599,7 +604,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 
 | File | Purpose |
 |---|---|
-| `config/capabilities.toml` | Typed capability enablement, risk, authentication, reversibility |
+| `config/capabilities.toml` | Executable capability target/parameter/auth/scope/version/reversibility contracts |
 | `config/governance.toml` | Owners, environments, classifications, approval tiers |
 | `config/policy.toml` | Runtime risk policy and hard prohibitions |
 | `config/integrations.toml` | Provider endpoints, credential variable names, granular live gates |

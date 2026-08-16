@@ -40,6 +40,7 @@ class PrincipalAttestationAdapter(StrEnum):
     """Implemented provider-backed credential identity adapters."""
 
     GITHUB_AUTHENTICATED_USER = "github_authenticated_user"
+    MICROSOFT_DELEGATED_USER = "microsoft_delegated_user"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +333,14 @@ class ConnectorConfig:
             and oauth_flow == "environment"
         ):
             return PrincipalAttestationAdapter.GITHUB_AUTHENTICATED_USER
+        if (
+            self.system == "microsoft"
+            and self.auth_mode is AuthMode.OAUTH_DELEGATED
+            and oauth_flow in {"environment", "token_file"}
+            and str(self.extra.get("identity_mode", "delegated")).casefold()
+            == "delegated"
+        ):
+            return PrincipalAttestationAdapter.MICROSOFT_DELEGATED_USER
         return None
 
     def principal_attestation_error(self) -> str | None:
