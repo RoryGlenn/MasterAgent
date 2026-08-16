@@ -13,8 +13,8 @@
 
 This phase governs capabilities that require authentication. A capability
 explicitly cataloged for anonymous public access does not acquire, resolve, or
-forward a credential; `github.public_repository.list` is the current production
-example.
+forward a credential; `github.public_repository.list` and
+`bitbucket.public_repository.list` are the current production examples.
 
 ## Safe readiness
 

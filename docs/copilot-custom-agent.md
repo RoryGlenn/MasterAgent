@@ -154,6 +154,16 @@ resolves, searches for, or requests a GitHub token. Use the authenticated route
 only for “my repositories,” private repositories, or other account-visible
 results.
 
+For a named public Bitbucket Cloud workspace, run:
+
+```bash
+master-agent bitbucket-repositories --workspace WORKSPACE
+```
+
+This credential-free typed route ignores ambient Bitbucket credentials,
+returns only repositories explicitly marked public, and independently verifies
+the bounded result.
+
 An explicit request to create, update, send, publish, push, or merge is not
 followed by redundant conversational permission prompts. MasterAgent prepares
 and validates the exact outcome automatically. If policy requires

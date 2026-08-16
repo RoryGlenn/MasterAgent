@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from master_agent.cli import (
+    _bitbucket_repositories,
     _connect,
     _github_repositories,
     _parse_credential_mappings,
@@ -452,6 +453,63 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                 output=None,
                 username="rahul-aravind-opti",
             )
+
+    def test_bitbucket_repositories_lists_public_workspace_anonymously(self) -> None:
+        workspace = "public-workspace"
+        ambient_token = "ambient-bitbucket-token-must-not-be-sent"
+        repository = {
+            "uuid": "{repo-1}",
+            "name": "public-project",
+            "slug": "public-project",
+            "is_private": False,
+            "links": {
+                "html": {"href": f"https://bitbucket.org/{workspace}/public-project"}
+            },
+        }
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            f"/2.0/repositories/{workspace}",
+            {"values": [repository], "next": None},
+        )
+
+        with private_temporary_directory() as directory:
+            output = Path(directory) / "public-repositories.json"
+            stdout = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "MASTER_AGENT_BITBUCKET_TOKEN": ambient_token,
+                        "MASTER_AGENT_BITBUCKET_USERNAME": "ambient-user",
+                    },
+                    clear=True,
+                ),
+                redirect_stdout(stdout),
+            ):
+                status = _bitbucket_repositories(
+                    workspace=workspace,
+                    limit=100,
+                    output=output,
+                    transport=transport,
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["query"]["workspace"], workspace)
+        self.assertEqual(payload["query"]["visibility"], "public")
+        self.assertEqual(payload["repositories"][0]["slug"], "public-project")
+        self.assertTrue(payload["verified"])
+        self.assertIn(f"Bitbucket public workspace: {workspace}", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 2)
+        self.assertTrue(
+            all(
+                "Authorization" not in request.headers for request in transport.requests
+            )
+        )
+        self.assertNotIn(ambient_token, stdout.getvalue())
 
     def test_github_repositories_reports_missing_credential_without_network(
         self,

@@ -155,19 +155,25 @@ _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "typed anonymous capability",
         "named GitHub user's public",
+        "named Bitbucket Cloud",
     ),
     _AUTONOMY_CONTRACT_PATH: (
         "github-repositories --username USERNAME",
         "Do not search for, load, or request a GitHub",
+        "bitbucket-repositories --workspace WORKSPACE",
+        "request Bitbucket credentials",
     ),
     _COPILOT_AGENT_PATH: (
         "github-repositories",
         "--username USERNAME",
         "repositories anonymously",
+        "bitbucket-repositories --workspace WORKSPACE",
+        "ignores ambient Bitbucket credentials",
     ),
     Path("README.md"): (
         "Anonymous public-data capabilities neither require nor load credentials",
         "github.public_repository.list",
+        "bitbucket.public_repository.list",
     ),
     Path("docs/architecture.md"): (
         "least-authorized registered route",
@@ -177,22 +183,31 @@ _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
     Path("docs/configuration.md"): (
         "Authenticated GitHub Cloud capabilities",
         "never resolves or sends that token",
+        "bitbucket.public_repository.list",
+        "resolves or sends ambient Bitbucket credentials",
     ),
     Path("docs/cli-reference.md"): (
         "github-repositories --username USERNAME",
         "ignores ambient GitHub tokens",
+        "bitbucket-repositories --workspace WORKSPACE",
+        "constructs an anonymous Bitbucket Cloud connector",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "github-repositories --username USERNAME",
         "credential-free typed route",
+        "bitbucket-repositories --workspace WORKSPACE",
+        "ignores ambient Bitbucket credentials",
     ),
     Path("docs/deployment-runbook.md"): (
         "do not provision",
         "github-repositories --username USERNAME",
+        "bitbucket-repositories --workspace WORKSPACE",
+        "ignore ambient Bitbucket credentials",
     ),
     Path("docs/implementation-roadmap.md"): (
         "github.public_repository.list",
-        "operates anonymously",
+        "bitbucket.public_repository.list",
+        "operate anonymously",
     ),
     Path("docs/github-connector-quickstart.md"): (
         "Public repositories need no credential",
@@ -201,10 +216,13 @@ _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
     Path("docs/integration-matrix.md"): (
         "Cloud anonymous public reads",
         "anonymous route omits credentials",
+        "public-workspace repository lists",
     ),
     Path("docs/live-connectors.md"): (
         "github.public_repository.list",
         "does not resolve or forward an ambient credential",
+        "bitbucket.public_repository.list",
+        "Bitbucket Cloud workspace-repositories endpoint",
     ),
     Path("docs/operations.md"): (
         "authentication class is `none`",
@@ -213,10 +231,12 @@ _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
     Path("docs/phase-2-read-only.md"): (
         "explicitly cataloged for anonymous access",
         "must not resolve or forward ambient credentials",
+        "bitbucket.public_repository.list",
     ),
     Path("docs/phase-2c-authentication.md"): (
         "cataloged for anonymous public access",
         "does not acquire, resolve, or",
+        "bitbucket.public_repository.list",
     ),
     Path("docs/release-validation.md"): (
         "Typed anonymous public-data capabilities require no credential activation",
@@ -483,10 +503,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 81:
-        errors.append(f"expected 81 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 82:
+        errors.append(f"expected 82 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 81 typed capabilities")
+        checks.append("capability catalog contains 82 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")

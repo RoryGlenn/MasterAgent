@@ -12,7 +12,7 @@ Typed anonymous public-data capabilities require no credential activation.
   passes on Python 3.12, 3.13, and 3.14 in CI.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
-- All 81 typed capabilities have governance coverage; GitHub administration
+- All 82 typed capabilities have governance coverage; GitHub administration
   requires dual approval and the high-impact Bitbucket merge remains disabled.
 - Release/version claims, the README guide index, the complete CLI command
   reference, capability summaries, checked-in plan schemas, local Markdown

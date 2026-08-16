@@ -14,7 +14,7 @@
     {
       "name": "governance_coverage",
       "passed": true,
-      "covered_capabilities": 81
+      "covered_capabilities": 82
     },
     {
       "name": "connector:bitbucket",

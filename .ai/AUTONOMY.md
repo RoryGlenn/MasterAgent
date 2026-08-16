@@ -152,6 +152,18 @@ public-user repository endpoint, lists public repositories anonymously, and
 independently re-reads the result. Do not search for, load, or request a GitHub
 token, and do not attest an unrelated authenticated user for this request.
 
+For “show/list the public repositories in Bitbucket workspace `WORKSPACE`,”
+use the credential-free typed path:
+
+```bash
+.venv/bin/master-agent bitbucket-repositories --workspace WORKSPACE
+```
+
+This evaluates `bitbucket.public_repository.list`, calls only Bitbucket
+Cloud's fixed workspace repository endpoint, rejects repositories not
+explicitly marked public, and independently re-reads the bounded result. Do
+not search for, load, or request Bitbucket credentials for this request.
+
 For “show/list my GitHub repositories,” use the complete typed path:
 
 ```bash

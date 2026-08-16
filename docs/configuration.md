@@ -45,6 +45,11 @@ authenticated capability, the typed GitHub adapter calls `GET /user` and binds
 the provider-returned numeric user ID. It does not trust a configured identity
 label or persist the token or mutable login.
 
+Authenticated Bitbucket capabilities use the configured username/token pair.
+The separate `bitbucket.public_repository.list` capability constructs an
+anonymous connector from the fixed `api.bitbucket.org` Cloud root and never
+resolves or sends ambient Bitbucket credentials.
+
 Exact-plan binding records a flow-enforced or provider-verified non-secret
 credential identity, not the token or password. Basic usernames and Entra
 client-credential tenant/client IDs are derived from their configured
@@ -226,6 +231,16 @@ does not load an ambient token and rejects a credential file:
 
 ```bash
 master-agent github-repositories --username USERNAME
+```
+
+For a specified Bitbucket Cloud workspace's public repositories, the separate
+convenience command constructs an anonymous in-memory connector, evaluates
+`bitbucket.public_repository.list`, calls only
+`/repositories/{workspace}`, rejects any repository not explicitly marked
+public, and independently verifies the bounded result:
+
+```bash
+master-agent bitbucket-repositories --workspace WORKSPACE
 ```
 
 For repositories visible to the authenticated account, the same command keeps

@@ -15,10 +15,11 @@ For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS
 ## 4. Register only required applications and credentials
 
 Request only the scopes needed for the first workflow. If a typed capability is
-explicitly anonymous, such as `github.public_repository.list`, do not provision
-or attach a credential for it. For authenticated capabilities, prefer separate
-credentials for read, reversible write, and communication, and store persistent
-secrets in the approved secret manager.
+explicitly anonymous, such as `github.public_repository.list` or
+`bitbucket.public_repository.list`, do not provision or attach a credential for
+it. For authenticated capabilities, prefer separate credentials for read,
+reversible write, and communication, and store persistent secrets in the
+approved secret manager.
 
 ## 5. Run offline readiness
 
@@ -62,6 +63,16 @@ master-agent github-repositories --username USERNAME
 ```
 
 This route must not load an ambient token or require a credential file.
+
+Validate the equivalent anonymous route for a specified Bitbucket Cloud
+workspace without an authenticated connection probe:
+
+```bash
+master-agent bitbucket-repositories --workspace WORKSPACE
+```
+
+This route must ignore ambient Bitbucket credentials and reject any repository
+not explicitly marked public.
 
 ## 7. Validate draft-only output
 

@@ -8,7 +8,7 @@ from master_agent.config import DeploymentType
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.jira import JiraConnector
-from master_agent.errors import ConnectorHttpError
+from master_agent.errors import ConnectorError, ConnectorHttpError
 from tests.fakes import ScriptedTransport
 from tests.helpers import read_action, resolved_config
 
@@ -180,6 +180,132 @@ class ConfluenceConnectorTests(unittest.TestCase):
 
 class BitbucketConnectorTests(unittest.TestCase):
     """Verify PR and CI enrichment across deployment families."""
+
+    def test_public_workspace_repository_list_is_anonymous_and_verified(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/blahdeblahblahblah",
+            {
+                "values": [
+                    {
+                        "uuid": "{repo-1}",
+                        "name": "public-project",
+                        "slug": "public-project",
+                        "is_private": False,
+                        "links": {
+                            "html": {
+                                "href": (
+                                    "https://bitbucket.org/"
+                                    "blahdeblahblahblah/public-project"
+                                )
+                            }
+                        },
+                    }
+                ],
+                "next": None,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "bitbucket.public_repository.list",
+            system="bitbucket",
+            resource_type="public_repository_collection",
+            resource_id="blahdeblahblahblah",
+            parameters={"workspace": "blahdeblahblahblah", "limit": 10},
+        )
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(result.after["returned"], 1)
+        self.assertEqual(
+            result.after["repositories"][0]["slug"],
+            "public-project",
+        )
+        self.assertNotIn("Authorization", transport.requests[0].headers)
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_public_workspace_repository_list_rejects_private_response(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/blahdeblahblahblah",
+            {
+                "values": [{"name": "private-project", "is_private": True}],
+                "next": None,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "was not public"):
+            connector.execute(
+                read_action(
+                    "bitbucket.public_repository.list",
+                    system="bitbucket",
+                    resource_type="public_repository_collection",
+                    resource_id="blahdeblahblahblah",
+                    parameters={
+                        "workspace": "blahdeblahblahblah",
+                        "limit": 10,
+                    },
+                )
+            )
+
+    def test_public_workspace_repository_list_rejects_off_path_pagination(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/blahdeblahblahblah",
+            {
+                "values": [
+                    {
+                        "name": "public-project",
+                        "slug": "public-project",
+                        "is_private": False,
+                    }
+                ],
+                "next": "https://api.bitbucket.org/2.0/user",
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "left the fixed workspace"):
+            connector.execute(
+                read_action(
+                    "bitbucket.public_repository.list",
+                    system="bitbucket",
+                    resource_type="public_repository_collection",
+                    resource_id="blahdeblahblahblah",
+                    parameters={
+                        "workspace": "blahdeblahblahblah",
+                        "limit": 10,
+                    },
+                )
+            )
+
+        self.assertEqual(len(transport.requests), 1)
 
     def test_cloud_pull_requests_include_ci_summary(self) -> None:
         transport = ScriptedTransport()
