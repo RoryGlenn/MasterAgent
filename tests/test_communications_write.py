@@ -59,9 +59,12 @@ class OutlookSendConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         verification = connector.verify(action, result)
+        idempotency_record = connector.idempotency_record(action, result)
 
         self.assertTrue(verification.verified)
         self.assertTrue(result.after["non_reversible"])
+        self.assertEqual(idempotency_record["draft_id"], "draft-1")
+        self.assertNotIn("Release is ready.", str(idempotency_record))
         self.assertEqual(result.after["provider_status"], 202)
         self.assertEqual(
             [item.method for item in transport.requests], ["POST", "GET", "POST"]
@@ -145,10 +148,22 @@ class TeamsSendConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         verification = connector.verify(action, result)
+        record = connector.idempotency_record(action, result)
+        transport.add_json(
+            "GET",
+            item,
+            {
+                "id": "message-1",
+                "body": {"contentType": "text", "content": "Release is ready."},
+            },
+        )
+        reconciliation = connector.verify_completed(action, record)
 
         self.assertTrue(verification.verified)
+        self.assertTrue(reconciliation.verified)
         self.assertEqual(result.after["message_id"], "message-1")
         self.assertTrue(result.after["non_reversible"])
+        self.assertNotIn("Release is ready.", str(record))
 
     def test_application_mode_is_rejected_before_network(self) -> None:
         transport = ScriptedTransport()

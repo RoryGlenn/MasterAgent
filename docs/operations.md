@@ -33,12 +33,16 @@ the request JSON as approval.
 
 - `planned`: permitted dry run;
 - `verified`: provider/local state re-read matched expectations;
+- `reused`: an equivalent completed or formerly indeterminate effect was
+  independently reverified without repeating the side effect;
 - `skipped`: dependency, idempotency, or prior stop prevented execution;
 - `approval_required`: immutable approval absent or insufficient; applied runs
   emit a resumable private approval request when the authority was bound;
 - `prohibited`: policy, catalog, governance, or source-of-truth denial;
 - `conflicted`: version or remote state changed;
-- `failed`: connector or verification failure;
+- `failed`: a certified pre-effect or local connector failure occurred;
+- `indeterminate`: a side effect may have occurred but exact poststate could not
+  be established, so automatic retry is blocked;
 - `compensated`: reversible side effect was rolled back and verified;
 - `compensation_failed`: rollback could not be proven.
 
@@ -48,6 +52,9 @@ the request JSON as approval.
 - Preserve plan, approval, audit database/export, and explicit retained evidence.
 - Verify the audit chain.
 - Re-read affected provider resources independently.
+- Never retry an indeterminate write or send unless its typed connector can
+  reconcile the exact provider resource. A Microsoft Graph `client-request-id`
+  is diagnostic correlation, not an idempotency guarantee.
 - Use automatic compensation only when the exact connector supports it and the target remains unchanged.
 - For sent communications, create a separate correction plan.
 - For advanced branches or edited resources, do not force rollback; escalate to the system owner.

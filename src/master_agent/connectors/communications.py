@@ -147,6 +147,27 @@ class OutlookSendConnector:
             ),
         )
 
+    def idempotency_record(
+        self,
+        action: AgentAction,
+        result: ExecutionResult,
+    ) -> Mapping[str, Any]:
+        """Return content-free provider references for incident investigation."""
+
+        self._validate(action)
+        after = result.after or {}
+        draft_id = str(after.get("draft_id", "")).strip()
+        if not draft_id:
+            raise ConnectorError("Outlook idempotency record omitted the draft ID")
+        return {
+            "schema": "master-agent/outlook-send-idempotency@1",
+            "draft_id": draft_id,
+            "approved_digest": after.get("approved_digest"),
+            "provider_draft_digest": after.get("provider_draft_digest"),
+            "provider_status": after.get("provider_status"),
+            "provider_accepted": after.get("provider_accepted"),
+        }
+
     def _read_draft(self, root: str, message_id: str) -> dict[str, Any]:
         data, _ = self._client.request_json(
             "GET",
@@ -322,6 +343,85 @@ class TeamsSendConnector:
                 "verified Teams message content by provider re-read"
                 if verified
                 else "Teams message content did not match the approved action"
+            ),
+        )
+
+    def idempotency_record(
+        self,
+        action: AgentAction,
+        result: ExecutionResult,
+    ) -> Mapping[str, Any]:
+        """Return the exact message ID and digests needed for reconciliation."""
+
+        self._validate(action)
+        after = result.after or {}
+        message_id = str(after.get("message_id", "")).strip()
+        if not message_id:
+            raise ConnectorError("Teams idempotency record omitted the message ID")
+        return {
+            "schema": "master-agent/teams-send-idempotency@1",
+            "message_id": message_id,
+            "approved_digest": after.get("approved_digest"),
+            "provider_digest": after.get("provider_digest"),
+            "provider_status": after.get("provider_status"),
+            "provider_accepted": after.get("provider_accepted"),
+        }
+
+    def verify_completed(
+        self,
+        action: AgentAction,
+        prior_result: Mapping[str, Any],
+    ) -> VerificationResult:
+        """Re-read an exact prior Teams message before suppressing a retry."""
+
+        self._validate(action)
+        if prior_result.get("schema") != "master-agent/teams-send-idempotency@1":
+            raise ConnectorError("Teams idempotency record schema is unsupported")
+        message_id = str(prior_result.get("message_id", "")).strip()
+        if not message_id:
+            raise ConnectorError("Teams idempotency record omitted the message ID")
+        observed, _response = self._client.request_json(
+            "GET",
+            self._read_path(action, message_id),
+        )
+        if not isinstance(observed, Mapping):
+            raise ConnectorError("Teams reconciliation response must be an object")
+        body_value = observed.get("body")
+        body: Mapping[str, Any] = body_value if isinstance(body_value, Mapping) else {}
+        observed_digest = _digest(
+            {
+                "body": {
+                    "contentType": str(body.get("contentType", "")).lower(),
+                    "content": str(body.get("content", "")),
+                }
+            }
+        )
+        expected_digest = _digest(
+            {
+                "body": {
+                    "contentType": str(
+                        action.parameters.get("content_type", "text")
+                    ).lower(),
+                    "content": _required(action.parameters, "body"),
+                }
+            }
+        )
+        verified = bool(
+            observed.get("id") == message_id
+            and observed_digest == expected_digest
+            and prior_result.get("approved_digest") == expected_digest
+        )
+        return VerificationResult(
+            action_id=action.action_id,
+            verified=verified,
+            observed={
+                "message_id": message_id,
+                "provider_digest": observed_digest,
+            },
+            message=(
+                "reconciled the exact prior Teams message by provider re-read"
+                if verified
+                else "prior Teams message no longer matches the approved action"
             ),
         )
 

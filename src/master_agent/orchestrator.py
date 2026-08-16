@@ -6,6 +6,7 @@ import hashlib
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID, uuid4
 
 from master_agent.audit import AuditLog, IdempotencyClaimState
@@ -14,6 +15,7 @@ from master_agent.capabilities import CapabilityCatalog
 from master_agent.connectors.base import (
     CompensatingConnector,
     Connector,
+    IdempotencyRecordingConnector,
     IdempotencyVerifyingConnector,
 )
 from master_agent.errors import (
@@ -397,11 +399,40 @@ class WorkflowOrchestrator:
                                 dry_run=dry_run,
                             )
                             continue
-                        with activate_http_action_budget(http_budget):
-                            reuse_verification = connector.verify_completed(
-                                action,
-                                claim.result or {},
+                        try:
+                            with activate_http_action_budget(http_budget):
+                                reuse_verification = connector.verify_completed(
+                                    action,
+                                    claim.result or {},
+                                )
+                        except (
+                            ConnectorError,
+                            KeyError,
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                        ) as error:
+                            report = ActionReport(
+                                action_id=action.action_id,
+                                capability=action.capability,
+                                state=ActionState.CONFLICTED,
+                                message=(
+                                    "prior idempotent completion could not be "
+                                    "independently reverified: " + type(error).__name__
+                                ),
                             )
+                            reports.append(report)
+                            state_by_id[action.action_id] = report.state
+                            self._record_action(run_id, plan, action, report)
+                            abort_remaining = self._maybe_compensate(
+                                run_id=run_id,
+                                plan=plan,
+                                reports=reports,
+                                executed=verified_side_effects,
+                                dry_run=dry_run,
+                            )
+                            continue
                         if not reuse_verification.verified:
                             report = ActionReport(
                                 action_id=action.action_id,
@@ -467,9 +498,84 @@ class WorkflowOrchestrator:
                             action_id=action.action_id,
                             capability=action.capability,
                             state=ActionState.CONFLICTED,
+                            message=("idempotent action is already in progress"),
+                        )
+                        reports.append(report)
+                        state_by_id[action.action_id] = report.state
+                        self._record_action(run_id, plan, action, report)
+                        abort_remaining = self._maybe_compensate(
+                            run_id=run_id,
+                            plan=plan,
+                            reports=reports,
+                            executed=verified_side_effects,
+                            dry_run=dry_run,
+                        )
+                        continue
+                    if claim.state is IdempotencyClaimState.INDETERMINATE:
+                        reconciliation_record = _indeterminate_result(claim.result)
+                        reconciliation_message: str | None = None
+                        if reconciliation_record is not None and isinstance(
+                            connector, IdempotencyVerifyingConnector
+                        ):
+                            try:
+                                with activate_http_action_budget(http_budget):
+                                    reconciliation = connector.verify_completed(
+                                        action,
+                                        reconciliation_record,
+                                    )
+                                if reconciliation.verified:
+                                    self._audit.resolve_indeterminate_action(
+                                        idempotency_key=action.idempotency_key,
+                                        action_fingerprint=action.effect_fingerprint,
+                                        expected_outcome=claim.result or {},
+                                        completed_result=reconciliation_record,
+                                    )
+                                    report = ActionReport(
+                                        action_id=action.action_id,
+                                        capability=action.capability,
+                                        state=ActionState.REUSED,
+                                        message=(
+                                            "durable indeterminate outcome was "
+                                            "independently reconciled against "
+                                            "provider state"
+                                        ),
+                                    )
+                                    reports.append(report)
+                                    state_by_id[action.action_id] = report.state
+                                    self._record_action(
+                                        run_id,
+                                        plan,
+                                        action,
+                                        report,
+                                        extra={"prior_result": reconciliation_record},
+                                    )
+                                    continue
+                                reconciliation_message = reconciliation.message
+                            except (
+                                ConnectorError,
+                                KeyError,
+                                OSError,
+                                RuntimeError,
+                                TypeError,
+                                ValueError,
+                            ) as error:
+                                reconciliation_message = type(error).__name__
+                        report = ActionReport(
+                            action_id=action.action_id,
+                            capability=action.capability,
+                            state=ActionState.CONFLICTED,
                             message=(
-                                "idempotent action is already in progress or has "
-                                "an indeterminate prior side effect"
+                                "idempotent action has a durable indeterminate "
+                                "outcome; provider reconciliation or operator "
+                                "resolution is required before retry"
+                                + (
+                                    ""
+                                    if reconciliation_message is None
+                                    else (
+                                        "; reconciliation did not verify: "
+                                        + reconciliation_message
+                                    )
+                                )
                             ),
                         )
                         reports.append(report)
@@ -490,6 +596,14 @@ class WorkflowOrchestrator:
                     result = connector.execute(action)
                     verification = connector.verify(action, result)
                 if not verification.verified:
+                    outcome_persisted = self._persist_idempotency_outcome(
+                        action=action,
+                        claim_token=claim_token,
+                        state=IdempotencyClaimState.INDETERMINATE,
+                        message=verification.message,
+                        result=result,
+                        connector=connector,
+                    )
                     report = ActionReport(
                         action_id=action.action_id,
                         capability=action.capability,
@@ -497,6 +611,11 @@ class WorkflowOrchestrator:
                         message=(
                             "connector may have produced a side effect but "
                             f"verification failed: {verification.message}"
+                            + (
+                                ""
+                                if outcome_persisted
+                                else "; durable outcome could not be finalized"
+                            )
                         ),
                         result=result,
                     )
@@ -513,69 +632,87 @@ class WorkflowOrchestrator:
                             idempotency_key=action.idempotency_key,
                             action_fingerprint=action.effect_fingerprint,
                             claim_token=claim_token or "",
-                            result=result_audit_summary(result),
+                            result=_idempotency_record(connector, action, result),
                         )
             except VersionConflictError as error:
-                claim_released = result is None and claim_token is None
+                failure_persisted = result is None and claim_token is None
                 if result is None and claim_token is not None:
-                    try:
-                        claim_released = self._audit.release_action_claim(
-                            idempotency_key=action.idempotency_key,
-                            action_fingerprint=action.effect_fingerprint,
-                            claim_token=claim_token,
-                        )
-                    except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
-                        claim_released = False
+                    failure_persisted = self._persist_idempotency_outcome(
+                        action=action,
+                        claim_token=claim_token,
+                        state=IdempotencyClaimState.FAILED,
+                        message=str(error),
+                        result=None,
+                        connector=connector,
+                    )
+                elif result is not None and claim_token is not None:
+                    self._persist_idempotency_outcome(
+                        action=action,
+                        claim_token=claim_token,
+                        state=IdempotencyClaimState.INDETERMINATE,
+                        message=str(error),
+                        result=result,
+                        connector=connector,
+                    )
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
                     state=(
                         ActionState.CONFLICTED
-                        if claim_released
+                        if failure_persisted
                         else ActionState.INDETERMINATE
                     ),
                     message=(
                         str(error)
                         + (
                             ""
-                            if claim_released
+                            if failure_persisted
                             else (
                                 "; conflict occurred after connector execution"
                                 if result is not None
-                                else "; idempotency claim could not be released"
+                                else "; durable failure outcome could not be recorded"
                             )
                         )
                     ),
                     result=result,
                 )
             except PreEffectError as error:
-                claim_released = result is None and claim_token is None
+                failure_persisted = result is None and claim_token is None
                 if result is None and claim_token is not None:
-                    try:
-                        claim_released = self._audit.release_action_claim(
-                            idempotency_key=action.idempotency_key,
-                            action_fingerprint=action.effect_fingerprint,
-                            claim_token=claim_token,
-                        )
-                    except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
-                        claim_released = False
+                    failure_persisted = self._persist_idempotency_outcome(
+                        action=action,
+                        claim_token=claim_token,
+                        state=IdempotencyClaimState.FAILED,
+                        message=f"{type(error).__name__}: {error}",
+                        result=None,
+                        connector=connector,
+                    )
+                elif result is not None and claim_token is not None:
+                    self._persist_idempotency_outcome(
+                        action=action,
+                        claim_token=claim_token,
+                        state=IdempotencyClaimState.INDETERMINATE,
+                        message=f"{type(error).__name__}: {error}",
+                        result=result,
+                        connector=connector,
+                    )
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
                     state=(
                         ActionState.FAILED
-                        if claim_released
+                        if failure_persisted
                         else ActionState.INDETERMINATE
                     ),
                     message=(
                         f"{type(error).__name__}: {error}"
                         + (
                             ""
-                            if claim_released
+                            if failure_persisted
                             else (
                                 "; exception occurred after connector execution"
                                 if result is not None
-                                else "; idempotency claim could not be released"
+                                else "; durable failure outcome could not be recorded"
                             )
                         )
                     ),
@@ -589,6 +726,14 @@ class WorkflowOrchestrator:
                 TypeError,
                 ValueError,
             ) as error:  # Connector boundary preserves partial state.
+                outcome_persisted = self._persist_idempotency_outcome(
+                    action=action,
+                    claim_token=claim_token,
+                    state=IdempotencyClaimState.INDETERMINATE,
+                    message=f"{type(error).__name__}: {error}",
+                    result=result,
+                    connector=connector,
+                )
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
@@ -597,7 +742,14 @@ class WorkflowOrchestrator:
                         if result is not None or claim_token is not None
                         else ActionState.FAILED
                     ),
-                    message=f"{type(error).__name__}: {error}",
+                    message=(
+                        f"{type(error).__name__}: {error}"
+                        + (
+                            ""
+                            if outcome_persisted
+                            else "; durable outcome could not be finalized"
+                        )
+                    ),
                     result=result,
                 )
 
@@ -818,6 +970,110 @@ class WorkflowOrchestrator:
             event_type="action_state",
             payload=payload,
         )
+
+    def _persist_idempotency_outcome(
+        self,
+        *,
+        action: AgentAction,
+        claim_token: str | None,
+        state: IdempotencyClaimState,
+        message: str,
+        result: ExecutionResult | None,
+        connector: Connector | None,
+    ) -> bool:
+        """Finalize one held claim without retaining provider content or errors."""
+
+        if claim_token is None:
+            return True
+        outcome: dict[str, object] = {
+            "error": audit_message_metadata(
+                message,
+                default_code=(
+                    "action_failed"
+                    if state is IdempotencyClaimState.FAILED
+                    else "action_indeterminate"
+                ),
+            )
+        }
+        if result is not None:
+            outcome["result"] = _idempotency_record(connector, action, result)
+        try:
+            if state is IdempotencyClaimState.FAILED:
+                self._audit.fail_action(
+                    idempotency_key=action.idempotency_key,
+                    action_fingerprint=action.effect_fingerprint,
+                    claim_token=claim_token,
+                    outcome=outcome,
+                )
+            elif state is IdempotencyClaimState.INDETERMINATE:
+                self._audit.mark_action_indeterminate(
+                    idempotency_key=action.idempotency_key,
+                    action_fingerprint=action.effect_fingerprint,
+                    claim_token=claim_token,
+                    outcome=outcome,
+                )
+            else:  # pragma: no cover - internal invariant.
+                raise ValueError("unsupported idempotency outcome state")
+        except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
+            return False
+        return True
+
+
+def _idempotency_record(
+    connector: Connector | None,
+    action: AgentAction,
+    result: ExecutionResult,
+) -> dict[str, Any]:
+    """Return connector reconciliation metadata or the content-free fallback."""
+
+    if isinstance(connector, IdempotencyRecordingConnector):
+        try:
+            record = connector.idempotency_record(action, result)
+            return _validate_idempotency_record(record)
+        except (ConnectorError, KeyError, TypeError, ValueError):
+            pass
+    return result_audit_summary(result)
+
+
+def _validate_idempotency_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Allow only bounded, flat identifiers and digests in retry metadata."""
+
+    normalized: dict[str, Any] = {}
+    allowed_suffixes = (
+        "_accepted",
+        "_count",
+        "_digest",
+        "_id",
+        "_reference",
+        "_status",
+        "_version",
+    )
+    for key, value in record.items():
+        if not isinstance(key, str) or (
+            key != "schema" and not key.endswith(allowed_suffixes)
+        ):
+            raise StructuredDataTypeError(
+                "idempotency record contains content-bearing metadata"
+            )
+        if not isinstance(value, (str, bool, int, type(None))):
+            raise StructuredDataTypeError(
+                "idempotency record values must be scalar metadata"
+            )
+        if isinstance(value, str) and len(value.encode("utf-8")) > 2048:
+            raise StructuredDataTypeError("idempotency record value is too large")
+        normalized[key] = value
+    if len(normalized) > 32:
+        raise StructuredDataTypeError("idempotency record has too many fields")
+    return normalized
+
+
+def _indeterminate_result(
+    outcome: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if outcome is None:
+        return None
+    result = outcome.get("result")
+    return result if isinstance(result, Mapping) else None
 
 
 def _topological_order(actions: tuple[AgentAction, ...]) -> tuple[AgentAction, ...]:

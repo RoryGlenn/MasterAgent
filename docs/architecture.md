@@ -129,13 +129,20 @@ The orchestrator:
 1. validates capability and source-of-truth rules;
 2. evaluates approvals;
 3. resolves dependencies;
-4. checks idempotency for side effects;
+4. atomically claims side effects by action fingerprint and records explicit
+   pending, completed, failed, or indeterminate outcomes;
 5. executes one typed connector capability;
 6. invokes independent verification;
 7. records action state;
 8. compensates previously verified reversible actions when `compensate_on_failure` is enabled.
 
 There is no claim of an atomic transaction across external systems. Partial results are explicit.
+
+A certified pre-effect failure is durable but can be atomically claimed by a
+later explicit retry. An indeterminate effect remains blocked. It can become a
+reused completion only when a connector stored bounded content-free provider
+metadata and independently re-reads the exact provider resource successfully;
+otherwise operator reconciliation is required.
 
 When policy returns `approval_required`, the CLI publishes a mode-`0600`,
 create-only request inside the already pinned artifact root. The request copies
