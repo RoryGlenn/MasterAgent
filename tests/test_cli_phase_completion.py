@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class PhaseCompletionCliTests(unittest.TestCase):
     """Exercise installed-facing commands without workplace credentials."""
 
-    def test_readiness_reports_safe_unconnected_defaults(self) -> None:
-        """Phase 2C readiness should pass while warning that nothing is connected."""
+    def test_readiness_reports_available_but_inactive_defaults(self) -> None:
+        """Readiness should pass without credentials or opening a connection."""
 
         with private_temporary_directory() as directory:
             output = Path(directory) / "readiness.json"
@@ -29,7 +29,17 @@ class PhaseCompletionCliTests(unittest.TestCase):
             self.assertEqual(status, 0, stderr.getvalue())
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertTrue(payload["ready"])
-            self.assertIn("not connected", " ".join(payload["warnings"]))
+            self.assertIn("available but inactive", " ".join(payload["warnings"]))
+            connector_checks = [
+                item
+                for item in payload["checks"]
+                if item["name"].startswith("connector:")
+            ]
+            self.assertEqual(len(connector_checks), 5)
+            self.assertTrue(all(item["passed"] for item in connector_checks))
+            self.assertTrue(
+                all(not item["credential_ready"] for item in connector_checks)
+            )
 
     def test_draft_package_command_generates_all_local_artifacts(self) -> None:
         """Phase 3 CLI should create a complete package without publishing."""

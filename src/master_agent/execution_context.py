@@ -78,15 +78,16 @@ def capture_connector_executions(
     integrations: IntegrationConfig,
     *,
     environ: Mapping[str, str] | None = None,
+    systems: set[str] | None = None,
     require_trusted_principal: bool = True,
     principal_transport: HttpTransport | None = None,
 ) -> tuple[CapturedConnectorExecution, ...]:
-    """Capture enabled destinations and, when required, trusted principals."""
+    """Capture selected enabled destinations and trusted principals."""
 
     source = environ if environ is not None else os.environ
     captured: list[CapturedConnectorExecution] = []
     for config in integrations.connectors.values():
-        if not config.enabled:
+        if not config.enabled or not _connector_is_selected(config.system, systems):
             continue
         target = config.capture_execution_target(source)
         ca_bundle = target.ca_bundle
@@ -129,6 +130,7 @@ def build_execution_context(
     plugin_descriptors: Sequence[PluginDescriptor] = (),
     runtime: RuntimeExecutionBinding | None = None,
     include_connectors: bool = True,
+    systems: set[str] | None = None,
     principal_transport: HttpTransport | None = None,
 ) -> ExecutionContext:
     """Resolve a secret-free snapshot suitable for plan approval binding."""
@@ -143,6 +145,7 @@ def build_execution_context(
             for item in capture_connector_executions(
                 integrations,
                 environ=environ,
+                systems=systems,
                 principal_transport=principal_transport,
             )
         )
@@ -178,6 +181,18 @@ def build_execution_context(
         plugins=tuple(plugin_bindings),
         runtime=runtime,
     )
+
+
+def _connector_is_selected(system: str, systems: set[str] | None) -> bool:
+    """Return whether one configured provider backs a requested runtime system."""
+
+    if systems is None:
+        return True
+    if system == "microsoft":
+        return bool(
+            systems & {"microsoft", "sharepoint", "outlook", "teams", "onenote"}
+        )
+    return system in systems
 
 
 def _credential_identity(

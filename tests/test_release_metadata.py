@@ -212,6 +212,48 @@ class ReleaseMetadataTests(unittest.TestCase):
                 )
             )
 
+    def test_first_run_contract_rejects_capability_gap_as_final_answer(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        relative_paths = (
+            Path(".ai/MASTER_AGENT.md"),
+            Path(".ai/FIRST_RUN.md"),
+            Path(".ai/AUTONOMY.md"),
+            Path("AGENTS.md"),
+            Path("CHANGELOG.md"),
+            Path("README.md"),
+            Path("docs/copilot-custom-agent.md"),
+            Path("docs/release-validation.md"),
+            Path("docs/semantic-index.md"),
+            Path("scripts/bootstrap_agent.py"),
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in relative_paths:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_root / relative).read_bytes())
+            autonomy = root / ".ai/AUTONOMY.md"
+            autonomy.write_text(
+                autonomy.read_text(encoding="utf-8").replace(
+                    "Never end an actionable request",
+                    "You may end an actionable request",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_first_run_contract(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any(
+                    ".ai/AUTONOMY.md" in error
+                    and "Never end an actionable request" in error
+                    for error in errors
+                )
+            )
+
     def test_public_read_contract_rejects_blanket_credential_guidance(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as directory:

@@ -21,7 +21,7 @@ class IntegrationConfigTests(unittest.TestCase):
             set(config.connectors),
             {"jira", "confluence", "bitbucket", "github", "microsoft"},
         )
-        self.assertFalse(config.connector("jira").enabled)
+        self.assertTrue(config.connector("jira").enabled)
         self.assertEqual(config.connector("jira").auth_mode, AuthMode.BASIC)
         self.assertTrue(
             {
@@ -140,7 +140,10 @@ secret_env = "AWS_SECRET_ACCESS_KEY"
             finally:
                 os.chdir(original)
 
-        self.assertFalse(config.connector("jira").enabled)
+        self.assertTrue(config.connector("jira").enabled)
+        self.assertEqual(
+            config.connector("jira").base_url, "https://example.atlassian.net"
+        )
 
     def test_connector_config_cannot_select_an_unrelated_environment_secret(
         self,

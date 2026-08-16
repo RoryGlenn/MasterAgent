@@ -48,7 +48,7 @@ class OAuthReadinessTests(unittest.TestCase):
         self.assertIs(cache.get_token(), cache.get_token())
         self.assertNotIn("secret-token", repr(token))
 
-    def test_safe_defaults_are_governed_but_not_connected(self) -> None:
+    def test_safe_defaults_are_available_but_not_connected(self) -> None:
         report = assess_readiness(
             catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
             governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
@@ -57,7 +57,9 @@ class OAuthReadinessTests(unittest.TestCase):
             environ={},
         )
         self.assertTrue(report.ready, report.errors)
-        self.assertTrue(any("not connected" in item for item in report.warnings))
+        self.assertTrue(
+            any("available but inactive" in item for item in report.warnings)
+        )
         self.assertFalse(any("principal" in item for item in report.errors))
 
     def test_enabled_opaque_connector_reports_missing_principal_adapter(self) -> None:
@@ -194,7 +196,7 @@ scopes = ["User.Read"]
         rendered = "\n".join(report.errors)
         self.assertFalse(report.ready)
         self.assertIn("organization must not be a placeholder", rendered)
-        self.assertIn("requires an enabled connector", rendered)
+        self.assertNotIn("requires an enabled connector", rendered)
         self.assertIn("identity is a placeholder", rendered)
 
 

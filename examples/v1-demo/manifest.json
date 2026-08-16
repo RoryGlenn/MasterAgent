@@ -85,13 +85,13 @@
     },
     {
       "path": "readiness.json",
-      "size": 526,
-      "sha256": "beba42b744ba5801118afb69d13ce915902ee73468c45f8c0a3c27a61f594c4f"
+      "size": 2415,
+      "sha256": "029f675a302583126a50ff77dde5961b423a95a009aeb74e9d78897c6aaeeeec"
     },
     {
       "path": "readiness.txt",
-      "size": 237,
-      "sha256": "abea12e6a0d9dfc63a3a84d0c59e8a4bf09231610722806bdb426912d37e6761"
+      "size": 745,
+      "sha256": "65a931e2197ea0e235f1dc6f85740ba9216d1da9915a6717080cb33f730dad5e"
     },
     {
       "path": "recurring-status.json",

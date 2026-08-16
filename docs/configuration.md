@@ -9,7 +9,10 @@ Each CLI configuration option resolves in this order:
 
 The current working directory is never an implicit configuration authority.
 
-Packaged defaults are intended for installation verification. They enable no live connector, write, send, or recurring schedule.
+Packaged defaults make every supported read connector available. A connector is
+resolved only when selected for an operation, so availability alone neither
+requires credentials nor opens a provider connection. Mutation, administration,
+send, and recurring-schedule gates remain disabled.
 
 ## Files
 
@@ -104,6 +107,8 @@ Examples of granular flags:
 - Jira/Confluence: `writes_enabled`;
 - Bitbucket: `pull_request_writes_enabled`; `branch_push_enabled` is retained
   only to reject attempted local-Git publication explicitly;
+- GitHub: `writes_enabled` for issue/PR creation and `admin_enabled` for
+  allowlisted repository settings and existing-collaborator role changes;
 - Microsoft: `sharepoint_writes_enabled`, `onenote_read_enabled`, `outlook_send_enabled`, `teams_send_enabled`.
 
 OneNote write flags are intentionally not part of the runtime surface. Legacy
@@ -119,9 +124,9 @@ The broad generic flag is retained as a compatibility gate, not as permission to
 
 ## Ephemeral operator-requested connections
 
-The checked-in and packaged connector settings remain disabled at rest. For an
-explicit operator-requested connection, `connect` creates an in-memory overlay
-for only the selected read systems and runs their fixed bounded probes:
+The checked-in and packaged read connectors are available at rest. For an
+explicit operator-requested connection, `connect` selects only the requested
+read systems and runs their fixed bounded probes:
 
 ```bash
 master-agent connect \
@@ -130,8 +135,8 @@ master-agent connect \
   --output /absolute/path/to/private-connection-report.json
 ```
 
-This does not edit `integrations.toml`, the credential file, or any connector
-gate. Explicit credential-file values win over ambient values for the names in
+This does not edit `integrations.toml`, the credential file, or any mutation or
+communication gate. Explicit credential-file values win over ambient values for the names in
 that file. The optional report is mode `0600` and contains only redacted
 discovery metadata. Jira and Confluence packaged URLs are deliberate
 placeholders; select the organization's permission-checked integrations file
@@ -150,13 +155,37 @@ Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucke
 
 ## GitHub Cloud
 
-The GitHub connector is read-only and disabled by default. It exposes an
+The GitHub connector is available by default. Its read surface exposes an
 anonymous public-user repository list, an authenticated-user repository list,
 repository metadata, pull-request search/read, and commit check-run reads.
 `discover --systems github --probe` calls the fixed `/user` endpoint to verify
 the configured bearer token. `bind-context` and `run --apply` also call that
 endpoint to bind and re-verify the numeric GitHub user ID before governed live
-reads. No GitHub mutation gate exists.
+reads.
+
+Mutation construction requires `--enable-writes`, `write_enabled = true`, and
+one of two independent granular gates. `writes_enabled = true` permits only
+`github.issue.create` and `github.pull_request.create`; both are independently
+re-read and can be compensated by closing the exact created resource after a
+conflict check. `admin_enabled = true` permits only
+`github.repository.settings.update` and `github.collaborator.access.update`.
+Governance requires two distinct approvers for both administration actions;
+repository settings are reversible writes, while collaborator access is
+high-impact and non-reversible. Repository settings accept only the boolean
+allowlist and capture exact prior values for restoration. Collaborator access
+accepts only GitHub's five built-in roles and only for a collaborator already
+present on the repository; it does not support inviting, removing, or assigning
+a custom role. If concurrent removal makes GitHub return an invitation, the
+connector cancels that invitation and fails the action. It cannot automatically
+roll back a role because GitHub reports the highest effective role rather than
+the source grant.
+
+Use a fine-grained token whose repository permissions cover only the selected
+operation. GitHub documents the endpoint-specific permissions for
+[issues](https://docs.github.com/en/rest/issues/issues#create-an-issue),
+[pull requests](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request),
+[repository updates](https://docs.github.com/en/rest/repos/repos#update-a-repository),
+and [collaborator access](https://docs.github.com/en/rest/collaborators/collaborators#add-a-repository-collaborator).
 
 For a specified user's public repositories, the convenience command constructs
 an anonymous in-memory connector, evaluates `github.public_repository.list`,

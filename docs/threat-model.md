@@ -239,7 +239,8 @@ external compliance record.
 - protected-branch write;
 - force push;
 - pull-request merge;
-- permission changes;
+- arbitrary permission changes, invitations, and custom roles; the separately
+  gated existing-GitHub-collaborator role update requires dual approval;
 - arbitrary deletion;
 - arbitrary HTTP;
 - arbitrary shell execution;

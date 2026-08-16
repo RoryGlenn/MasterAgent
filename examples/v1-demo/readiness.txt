@@ -1,7 +1,16 @@
 environment: development
 ready: True
-live connectors: 0 (safe local mode only)
+live connectors: 5 available, 0 credential-ready
   PASS audit_sink
   PASS governance_coverage
-warning: no live connectors are enabled; runtime is safe but not connected
+  PASS connector:bitbucket
+  PASS connector:confluence
+  PASS connector:github
+  PASS connector:jira
+  PASS connector:microsoft
+warning: bitbucket: connector is available but inactive until its credentials are supplied
+warning: confluence: connector is available but inactive until its credentials are supplied
+warning: github: connector is available but inactive until its credentials are supplied
+warning: jira: connector is available but inactive until its credentials are supplied
+warning: microsoft: connector is available but inactive until its credentials are supplied
 wrote examples/v1-demo/readiness.json

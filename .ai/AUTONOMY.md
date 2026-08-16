@@ -48,6 +48,38 @@ tests, and documentation, then use it to finish the request. Never bypass the
 typed runtime with an arbitrary provider call merely because implementation
 work is required.
 
+Never end an actionable request with “there is no governed capability,” “the
+connector is read-only,” or a list of code that would need to be written. Those
+facts start repository implementation; they are not an operator-facing outcome.
+Creating or editing the necessary Python modules, typed catalog entries,
+factory wiring, policy and governance rules, planners, tests, and documentation
+is ordinary in-scope work and needs no additional permission.
+
+For every capability gap:
+
+1. inspect the nearest connector and provider contract;
+2. implement the smallest complete typed capability through the existing
+   policy, approval, audit, verification, and compensation boundaries;
+3. add adversarial tests and update durable documentation;
+4. run the relevant and release validation; and
+5. resume the original provider request in the same run.
+
+This protocol applies to every connector—first-party, newly added, and plugin
+provided—and to every provider domain. Jira, Confluence, Bitbucket, GitHub,
+Microsoft, SharePoint, OneNote, Outlook, Teams, and future connectors get the
+same implement-then-continue behavior. Do not create a connector-specific
+exception that turns missing repository code into an operator blocker.
+
+Do all useful local implementation before asking for any operator-only input.
+Use prompt-derived safe defaults for cosmetic names and initial content. For
+example, “create a Kanban board and create the first todo item” permits a board
+named `Kanban Board` and an item named `First todo item`. Discover a unique
+usable Jira project before asking for a project key. If Jira exposes zero or
+multiple materially different targets, finish and validate the missing board
+and issue capabilities first, then ask one final target question. A credential,
+provider-selected target, or authenticated exact-plan approval may block the
+live mutation; missing repository code may not.
+
 Do not stop at intermediate milestones such as local readiness, accepted
 credentials, a reachable connector, a created branch, or an opened pull
 request. Continue through the operator's actual outcome and verify it
@@ -55,11 +87,11 @@ end-to-end.
 
 ## Connections and credentials
 
-Keep live connectors and provider mutation gates disabled in checked-in and
-packaged configuration. For a directly requested provider operation, enable
-the minimum supported read connector in memory for that run without asking for
-a second network or connector permission. Do not persist connector enablement
-unless persistent setup is itself requested.
+Keep supported read connectors available in checked-in and packaged
+configuration, but resolve and activate only the provider selected by the
+current goal. Provider mutation and communication gates remain disabled. A
+directly requested provider operation needs no second network or connector
+permission, and an unused connector must never demand credentials or connect.
 
 Use the provider-neutral connection probe when a supported connector needs to
 be established:
@@ -70,9 +102,9 @@ be established:
   --credentials-file /absolute/path/to/private-credentials.json
 ```
 
-The command enables only the selected read connectors in memory, performs
-fixed bounded identity or access probes, and leaves credentials and persistent
-configuration unchanged. It accepts the canonical MasterAgent credential store,
+The command selects only the requested read connectors, performs fixed bounded
+identity or access probes, and leaves credentials and persistent configuration
+unchanged. Other available connectors remain inactive. It accepts the canonical MasterAgent credential store,
 a provider-keyed wrapper, exact declared environment names, or flat friendly
 keys whose provider and field have one clear interpretation. If a key has zero
 or multiple interpretations, ask the operator once what that key represents,

@@ -14,11 +14,73 @@
     {
       "name": "governance_coverage",
       "passed": true,
-      "covered_capabilities": 76
+      "covered_capabilities": 80
+    },
+    {
+      "name": "connector:bitbucket",
+      "passed": true,
+      "deployment": "cloud",
+      "credential_ready": false,
+      "missing_environment": [
+        "MASTER_AGENT_BITBUCKET_USERNAME",
+        "MASTER_AGENT_BITBUCKET_TOKEN"
+      ],
+      "principal_attestation": "flow_enforced",
+      "errors": []
+    },
+    {
+      "name": "connector:confluence",
+      "passed": true,
+      "deployment": "cloud",
+      "credential_ready": false,
+      "missing_environment": [
+        "MASTER_AGENT_CONFLUENCE_USERNAME",
+        "MASTER_AGENT_CONFLUENCE_TOKEN"
+      ],
+      "principal_attestation": "flow_enforced",
+      "errors": []
+    },
+    {
+      "name": "connector:github",
+      "passed": true,
+      "deployment": "cloud",
+      "credential_ready": false,
+      "missing_environment": [
+        "MASTER_AGENT_GITHUB_TOKEN"
+      ],
+      "principal_attestation": "github_authenticated_user",
+      "errors": []
+    },
+    {
+      "name": "connector:jira",
+      "passed": true,
+      "deployment": "cloud",
+      "credential_ready": false,
+      "missing_environment": [
+        "MASTER_AGENT_JIRA_USERNAME",
+        "MASTER_AGENT_JIRA_TOKEN"
+      ],
+      "principal_attestation": "flow_enforced",
+      "errors": []
+    },
+    {
+      "name": "connector:microsoft",
+      "passed": true,
+      "deployment": "cloud",
+      "credential_ready": false,
+      "missing_environment": [
+        "MASTER_AGENT_GRAPH_TOKEN_FILE"
+      ],
+      "principal_attestation": "flow_enforced",
+      "errors": []
     }
   ],
   "errors": [],
   "warnings": [
-    "no live connectors are enabled; runtime is safe but not connected"
+    "bitbucket: connector is available but inactive until its credentials are supplied",
+    "confluence: connector is available but inactive until its credentials are supplied",
+    "github: connector is available but inactive until its credentials are supplied",
+    "jira: connector is available but inactive until its credentials are supplied",
+    "microsoft: connector is available but inactive until its credentials are supplied"
   ]
 }

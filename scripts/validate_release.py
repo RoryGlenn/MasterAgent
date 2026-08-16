@@ -57,7 +57,7 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "python3 scripts/bootstrap_agent.py",
         "MasterAgent is ready locally",
         "I couldn't finish local setup",
-        "no live connectors are enabled",
+        "available but inactive",
         "[`AUTONOMY.md`](AUTONOMY.md)",
         "A requested provider operation",
         "force-multiplier",
@@ -67,6 +67,9 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "The default response to an actionable prompt is execution",
         "Resolve, do not relay",
         "capability gap",
+        "Never end an actionable request",
+        "missing repository code may not",
+        "This protocol applies to every connector",
         "master-agent connect",
         "Ask once, at the latest possible point",
         "authenticated approval bound to the exact reviewed plan",
@@ -81,11 +84,15 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "Apply the first-run contract",
         "Apply the force-multiplier contract",
         "irreducible operator-only boundary",
+        "missing connector capability is implementation work",
+        "every current and future connector",
     ),
     Path("CHANGELOG.md"): (
         "first ordinary prompt",
         "force-multiplier default-to-action",
         "provider-neutral `connect` command",
+        "capability gaps now trigger immediate governed runtime implementation",
+        "implement-validate-resume contract applies uniformly",
     ),
     Path("README.md"): (
         "[first-run contract](.ai/FIRST_RUN.md)",
@@ -95,6 +102,7 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "master-agent connect",
         "github-repositories",
         "github-repositories --username USERNAME",
+        "the connector is read-only",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "[first-run contract](../.ai/FIRST_RUN.md)",
@@ -103,6 +111,9 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "MasterAgent is ready locally",
         "If automatic setup is blocked",
         "default response to an actionable prompt is execution",
+        "No governed capability exists",
+        "create a Kanban board",
+        "behavior is universal rather than Jira-specific",
         "master-agent connect --systems",
         "it asks once",
         "without a second confirmation",
@@ -417,16 +428,24 @@ def _validate_packaged_defaults(
 
     integrations = tomllib.loads((defaults_dir / "integrations.toml").read_text())
     connectors = integrations.get("connectors", {})
+    read_gates = {("microsoft", "onenote_read_enabled")}
     for name, connector in connectors.items():
-        if bool(connector.get("enabled", False)):
-            errors.append(f"packaged connector is enabled: {name}")
+        if not bool(connector.get("enabled", False)):
+            errors.append(f"packaged connector is unavailable: {name}")
         for key, value in connector.items():
-            if key.endswith("_enabled") and bool(value):
+            if (
+                key.endswith("_enabled")
+                and bool(value)
+                and (name, key) not in read_gates
+                and key != "enabled"
+            ):
                 errors.append(f"packaged provider gate is enabled: {name}.{key}")
-    if connectors and not any(
+    if connectors and all(
         bool(value.get("enabled", False)) for value in connectors.values()
     ):
-        checks.append("all packaged live connectors and provider gates are disabled")
+        checks.append(
+            "all packaged read connectors are available and mutation gates are disabled"
+        )
 
     recurring = tomllib.loads((defaults_dir / "recurring.toml").read_text())
     workflows = recurring.get("workflows", {})
@@ -444,10 +463,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 76:
-        errors.append(f"expected 76 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 80:
+        errors.append(f"expected 80 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 76 typed capabilities")
+        checks.append("capability catalog contains 80 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")
@@ -527,6 +546,9 @@ def _validate_copilot_agent(
         "Treat one operator goal as one bounded run",
         "response to an actionable prompt is execution",
         "capability gap as implementation work",
+        "Never end the request",
+        "Implement the Python connector path",
+        "This applies to every connector and provider",
         "connect --systems",
         "Ask once and only after",
         "github-repositories",
@@ -766,7 +788,8 @@ def _validate_documentation(
             errors.append(f"README capability summary is stale: expected {claim}")
 
     current_changelog = changelog.split("\n## ", 2)[1]
-    changelog_claim = f"a {len(catalog)}-capability catalog"
+    article = "an" if str(len(catalog))[0] in "8" else "a"
+    changelog_claim = f"{article} {len(catalog)}-capability catalog"
     if not current_changelog.startswith(f"{version} "):
         errors.append(f"CHANGELOG first release section is not version {version}")
     elif changelog_claim not in current_changelog:

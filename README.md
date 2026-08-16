@@ -42,19 +42,21 @@ do not yet meet the release security boundary remain deliberately non-routable:
 The implemented runtime surfaces remain fail closed until a particular company
 deployment approves applications, scopes, retention, data handling, Conditional
 Access, secrets, connector URLs, and production governance. Packaged defaults
-keep all live connectors, writes, sends, and schedules disabled. Non-manifest
+make read connectors available but inactive until selected with valid
+credentials; writes, sends, and schedules remain disabled. Non-manifest
 weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **76 typed capabilities**:
+The catalog contains **80 typed capabilities**:
 
 - 45 read-only capabilities;
 - 10 local-generation capabilities;
-- 16 reversible-write definitions, including 2 disabled OneNote writes and 5
+- 19 reversible-write definitions, including 2 disabled OneNote writes and 5
   disabled local-Git mutations;
 - 4 external-communication capabilities;
-- 1 high-impact capability, `bitbucket.pull_request.merge`, deliberately disabled.
+- 2 high-impact capability definitions: the dual-approved GitHub collaborator
+  role action and the deliberately disabled `bitbucket.pull_request.merge`.
 
 Supported domains:
 
@@ -63,7 +65,7 @@ Supported domains:
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
 | Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
-| GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | unavailable; the connector exposes no write methods |
+| GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | issue/PR creation; allowlisted repository settings and existing-collaborator role administration |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
 | SharePoint/OneDrive | sites, drives, folders, metadata, bounded text | local files/decks | bounded versioned upload with exact prior/uploaded/restored byte hashes |
@@ -78,7 +80,7 @@ Supported domains:
 - **Three independent live gates:** runtime flag, provider-specific TOML flag, and capability/governance permission.
 - **Immutable approvals:** approvals bind to a SHA-256 plan fingerprint and exact action IDs; any mutation invalidates them.
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
-- **Version preconditions:** Jira, Confluence, and SharePoint operations stop on stale state.
+- **Version preconditions:** Jira, Confluence, GitHub repository settings, and SharePoint operations stop on stale state.
 - **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.
@@ -122,6 +124,14 @@ need to approve that one command. A successful response starts with
 write actions remain off. It then treats the original prompt as an outcome to
 own: setup, safe connection, in-scope implementation, repair, tests, and
 verification proceed without repeated permission questions.
+
+If a requested provider action has no typed capability yet, MasterAgent does
+not stop with “the connector is read-only.” It implements the smallest complete
+governed path in this repository—connector code, catalog and policy wiring,
+verification or compensation, tests, and documentation—then resumes the
+original request. Only a credential, genuinely ambiguous provider target, or
+authenticated exact-plan approval that only the operator can supply may remain
+as the final blocker.
 
 A repository-inspection, diagnosis-only, or explicit no-local-change prompt
 never installs anything. A provider operation or feature request may bootstrap
@@ -228,8 +238,9 @@ master-agent readiness \
 ```
 
 `ready: True` means the selected configuration is internally safe. The CLI
-also prints the live connector count; the packaged default is
-`live connectors: 0 (safe local mode only)`.
+also distinguishes available connectors from credential-ready connectors; the
+packaged default reports `live connectors: 5 available, 0 credential-ready`
+without opening a provider connection.
 
 Safe connector discovery:
 
@@ -249,8 +260,8 @@ master-agent discover \
   --output "$HOME/.master-agent/MasterAgent/discovery-probed.json"
 ```
 
-For an operator-requested connection, keep persistent connectors disabled and
-enable only the requested supported systems in memory:
+For an operator-requested connection, select only the requested supported
+systems; unused connectors remain inactive and do not require credentials:
 
 ```bash
 master-agent connect \
@@ -554,7 +565,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 - arbitrary HTTP or arbitrary shell execution;
 - protected-branch writes or force pushes;
 - autonomous pull-request merges;
-- permission changes;
+- arbitrary permission changes, invitations, custom roles, and automatic collaborator-role rollback;
 - broad deletion capabilities;
 - approval derived solely from retrieved content;
 - automatic use of new recipients discovered in content;

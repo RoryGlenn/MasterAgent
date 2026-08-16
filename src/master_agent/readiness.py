@@ -95,11 +95,23 @@ def assess_readiness(
         if not connector.enabled:
             continue
         enabled_connectors += 1
-        attestation_error = connector.principal_attestation_error()
+        missing_environment = connector.missing_environment_variables(environ)
+        missing_errors = {
+            f"environment variable {variable} is missing"
+            for variable in missing_environment
+        }
+        static_errors = tuple(
+            item
+            for item in connector.configuration_errors(environ)
+            if item not in missing_errors
+        )
+        attestation_error = (
+            connector.principal_attestation_error() if not missing_environment else None
+        )
         connector_errors = tuple(
             dict.fromkeys(
                 (
-                    *connector.configuration_errors(environ),
+                    *static_errors,
                     *((attestation_error,) if attestation_error is not None else ()),
                 )
             )
@@ -109,6 +121,8 @@ def assess_readiness(
                 "name": f"connector:{name}",
                 "passed": not connector_errors,
                 "deployment": str(connector.deployment),
+                "credential_ready": not missing_environment,
+                "missing_environment": list(missing_environment),
                 "principal_attestation": (
                     str(connector.principal_attestation_adapter)
                     if connector.principal_attestation_adapter is not None
@@ -118,10 +132,13 @@ def assess_readiness(
             }
         )
         errors.extend(f"{name}: {item}" for item in connector_errors)
+        if missing_environment:
+            warnings.append(
+                f"{name}: connector is available but inactive until its "
+                "credentials are supplied"
+            )
     if enabled_connectors == 0:
-        warnings.append(
-            "no live connectors are enabled; runtime is safe but not connected"
-        )
+        warnings.append("no live connectors are available")
 
     if governance.environment is not EnvironmentKind.DEVELOPMENT:
         deployment_errors = _non_development_placeholder_errors(

@@ -90,7 +90,9 @@ The most specific matching rule wins. Uncovered capabilities fail closed. Dual a
 - reversible writes, external communication, and high impact require approval;
 - destructive actions are prohibited;
 - retrieved content cannot authorize writes;
-- merge, deletion, permission changes, and protected-branch operations are denied.
+- merge, deletion, generic permission changes, invitations, and protected-branch
+  operations are denied; the sole access-management route is the typed,
+  dual-approved update of an existing GitHub collaborator's built-in role.
 
 ### Source-of-truth registry
 

@@ -25,9 +25,10 @@ master-agent readiness \
   --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
-Readiness performs no network calls. A safe unconnected installation may be `ready=true` with a warning that no live connectors are enabled, because the configuration and governance are internally valid but not activated.
-The human-readable CLI output makes that state explicit as
-`live connectors: 0 (safe local mode only)`.
+Readiness performs no network calls. A safe unconnected installation may be
+`ready=true` while warning that available connectors are inactive until their
+credentials are supplied. The human-readable CLI output makes that state
+explicit as `live connectors: 5 available, 0 credential-ready`.
 
 ## Device code
 
