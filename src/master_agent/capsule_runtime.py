@@ -201,12 +201,12 @@ class CapsuleWorker:
         }
         with tempfile.TemporaryDirectory(prefix="master-agent-capsule-") as directory:
             os.chmod(directory, 0o700)
-            with tempfile.TemporaryFile() as output:
+            with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
                 process = subprocess.Popen(
                     command,
                     stdin=subprocess.PIPE,
                     stdout=output,
-                    stderr=subprocess.DEVNULL,
+                    stderr=errors,
                     cwd=directory,
                     env=safe_environment,
                     start_new_session=True,
@@ -226,11 +226,20 @@ class CapsuleWorker:
                     )
                 output.seek(0)
                 payload = output.read()
+                errors.seek(0, os.SEEK_END)
+                error_size = errors.tell()
+                errors.seek(0)
+                diagnostic = errors.read(4_096) if error_size <= 4_096 else b""
         try:
             response = json.loads(payload.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError) as error:
             raise ConnectorError(
-                "capability capsule worker response is malformed"
+                "capability capsule worker response is malformed: "
+                + _classify_worker_launch_failure(
+                    process.returncode,
+                    diagnostic,
+                    diagnostic_overflow=error_size > 4_096,
+                )
             ) from error
         if (
             not isinstance(response, Mapping)
@@ -735,6 +744,31 @@ def _group_write_is_owner_private(metadata: os.stat_result) -> bool:
     except (KeyError, OSError):
         return False
     return members <= {owner}
+
+
+def _classify_worker_launch_failure(
+    returncode: int,
+    diagnostic: bytes,
+    *,
+    diagnostic_overflow: bool = False,
+) -> str:
+    """Return a content-free reason for a pre-protocol worker failure."""
+
+    if diagnostic_overflow:
+        return "launch_diagnostic_overflow"
+    normalized = diagnostic.lower()
+    if b"operation not permitted" in normalized or (
+        b"permission denied" in normalized
+        and (b"namespace" in normalized or b"bwrap" in normalized)
+    ):
+        return "sandbox_permission_denied"
+    if b"no such file or directory" in normalized:
+        return "sandbox_runtime_missing"
+    if b"error while loading shared libraries" in normalized:
+        return "interpreter_dependency_missing"
+    if returncode < 0:
+        return "worker_terminated_by_signal"
+    return "worker_failed_before_protocol"
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:

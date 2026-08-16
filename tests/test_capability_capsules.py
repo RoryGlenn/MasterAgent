@@ -21,6 +21,7 @@ from master_agent.capsule_promotion import CapabilityPromotionService, Promotion
 from master_agent.capsule_runtime import (
     CapsuleValidator,
     CapsuleWorker,
+    _classify_worker_launch_failure,
     _validate_worker_artifact,
     activate_capsule,
     context_with_capsules,
@@ -367,6 +368,29 @@ class CapabilityCapsuleTests(unittest.TestCase):
             artifact.chmod(0o666)
             with self.assertRaisesRegex(ConfigurationError, "world_writable"):
                 _validate_worker_artifact(artifact, executable=False)
+
+    def test_worker_launch_diagnostics_are_bounded_reason_codes(self) -> None:
+        self.assertEqual(
+            _classify_worker_launch_failure(
+                1,
+                b"bwrap: Creating new namespace failed: Operation not permitted\n",
+            ),
+            "sandbox_permission_denied",
+        )
+        self.assertEqual(
+            _classify_worker_launch_failure(
+                1, b"secret path: No such file or directory"
+            ),
+            "sandbox_runtime_missing",
+        )
+        self.assertEqual(
+            _classify_worker_launch_failure(
+                1,
+                b"never expose me",
+                diagnostic_overflow=True,
+            ),
+            "launch_diagnostic_overflow",
+        )
 
     def test_exact_resume_rejects_changed_plan_and_terminal_replay(self) -> None:
         with private_temporary_directory() as directory:
