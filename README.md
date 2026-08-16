@@ -22,7 +22,7 @@ Independent verification
 Compensation, audit, evidence retention, and reporting
 ```
 
-The model may propose actions. It cannot bypass policy, grant itself access, change an approved plan, send arbitrary HTTP requests, treat retrieved content as authority, or silently overwrite a newer resource version.
+The model may propose actions. It cannot bypass policy, grant itself access, change an approved plan, send arbitrary HTTP requests, treat retrieved content as authority, or silently overwrite a newer resource version. Untrusted findings and provider diagnostics also pass through a bounded terminal-safe renderer, so control sequences cannot rewrite what the operator sees.
 
 ## Release status
 

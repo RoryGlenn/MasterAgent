@@ -104,6 +104,11 @@ from master_agent.retention import (
     write_retained_json,
 )
 from master_agent.security import PromptInjectionGuard
+from master_agent.terminal import (
+    MAX_TERMINAL_EXCERPT_CHARACTERS,
+    MAX_TERMINAL_FIELD_CHARACTERS,
+    render_terminal_text,
+)
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
     build_communication_context_plan,
@@ -385,7 +390,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         TypeError,
         ValueError,
     ) as error:
-        print(f"error: {type(error).__name__}: {error}", file=sys.stderr)
+        error_type = render_terminal_text(type(error).__name__, max_characters=80)
+        error_message = render_terminal_text(
+            str(error),
+            max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
+        )
+        print(f"error: {error_type}: {error_message}", file=sys.stderr)
         return 1
 
 
@@ -864,7 +874,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _sample_plan(output: Path) -> int:
     plan = build_weekly_status_plan()
     _write_json(output, plan.to_dict())
-    print(f"wrote {output}")
+    print(f"wrote {_terminal_field(output)}")
     print(f"plan fingerprint: {plan.fingerprint}")
     return 0
 
@@ -1060,7 +1070,7 @@ def _inspect_approval_request(path: Path) -> int:
     print(json.dumps(request.run.to_dict(), indent=2, ensure_ascii=True))
     print("pending approval actions:")
     for item in request.required_approvals:
-        print(f"  {item.action.action_id}  {item.reason}")
+        print(f"  {item.action.action_id}  {_terminal_field(item.reason)}")
         print(json.dumps(item.action.to_dict(), indent=4, ensure_ascii=True))
     print(
         "This request is not approval. A trusted operator must use "
@@ -1615,7 +1625,10 @@ def _plugins(*, output: Path | None) -> int:
     plugins = discover_connector_plugins()
     for item in plugins:
         distribution = item.distribution or "unknown-distribution"
-        print(f"{item.name:<24} {distribution:<28} {item.value}")
+        name = _terminal_field(item.name, max_characters=80)
+        safe_distribution = _terminal_field(distribution, max_characters=120)
+        value = _terminal_field(item.value)
+        print(f"{name:<24} {safe_distribution:<28} {value}")
     if not plugins:
         print("no connector plugins installed")
     if output is not None:
@@ -1756,7 +1769,7 @@ def _readiness(
         ),
     )
     payload = report.to_dict()
-    print(f"environment: {report.environment}")
+    print(f"environment: {_terminal_field(report.environment, max_characters=80)}")
     print(f"ready: {report.ready}")
     connector_checks = tuple(
         check
@@ -1774,11 +1787,12 @@ def _readiness(
     else:
         print("live connectors: 0 available")
     for check in report.checks:
-        print(f"  {'PASS' if check.get('passed') else 'FAIL'} {check.get('name')}")
+        name = _terminal_field(check.get("name"), max_characters=240)
+        print(f"  {'PASS' if check.get('passed') else 'FAIL'} {name}")
     for warning in report.warnings:
-        print(f"warning: {warning}")
+        print(f"warning: {_terminal_field(warning)}")
     for error in report.errors:
-        print(f"error: {error}")
+        print(f"error: {_terminal_field(error)}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -1805,7 +1819,8 @@ def _oauth_device_code(
         message = getattr(challenge, "message", "")
         verification_uri = getattr(challenge, "verification_uri", "")
         user_code = getattr(challenge, "user_code", "")
-        print(message or f"Open {verification_uri} and enter code {user_code}")
+        display = message or f"Open {verification_uri} and enter code {user_code}"
+        print(_terminal_field(display))
 
     provider.set_challenge_callback(display_challenge)
     token = provider.get_token()
@@ -1952,9 +1967,11 @@ def _recurring_status(
         runner.due_status(workflow).to_dict() for workflow in config.workflows.values()
     ]
     for record in records:
+        name = _terminal_field(record["name"], max_characters=160)
+        reason = _terminal_field(record["reason"])
         print(
-            f"{record['name']:<28} enabled={record['enabled']!s:<5} "
-            f"due={record['due']!s:<5} {record['reason']}"
+            f"{name:<28} enabled={record['enabled']!s:<5} "
+            f"due={record['due']!s:<5} {reason}"
         )
     if output is not None:
         _write_json(
@@ -2199,13 +2216,20 @@ def _discover(
         "records": [record.to_dict() for record in records],
     }
     for record in records:
-        missing = ",".join(record.missing_environment) or "-"
+        status = _terminal_field(record.status, max_characters=80)
+        system = _terminal_field(record.system, max_characters=80)
+        deployment = _terminal_field(record.deployment, max_characters=80)
+        missing = _terminal_field(
+            ",".join(record.missing_environment) or "-",
+            max_characters=320,
+        )
         print(
-            f"{record.status:<20} {record.system:<12} "
-            f"deployment={record.deployment:<11} missing={missing}"
+            f"{status:<20} {system:<12} deployment={deployment:<11} missing={missing}"
         )
         if record.error_message:
-            print(f"  {record.error_type}: {record.error_message}")
+            error_type = _terminal_field(record.error_type, max_characters=80)
+            error_message = _terminal_field(record.error_message)
+            print(f"  {error_type}: {error_message}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -2361,15 +2385,20 @@ def _connect(
         "records": [record.to_dict() for record in records],
     }
     for record in records:
+        system = _terminal_field(record.system, max_characters=80)
         if record.status is DiscoveryStatus.REACHABLE:
-            print(f"connected: {record.system}")
+            print(f"connected: {system}")
         else:
-            missing = ",".join(record.missing_environment) or "-"
-            print(
-                f"not connected: {record.system} ({record.status}; missing={missing})"
+            status = _terminal_field(record.status, max_characters=80)
+            missing = _terminal_field(
+                ",".join(record.missing_environment) or "-",
+                max_characters=320,
             )
+            print(f"not connected: {system} ({status}; missing={missing})")
             if record.error_message:
-                print(f"  {record.error_type}: {record.error_message}")
+                error_type = _terminal_field(record.error_type, max_characters=80)
+                error_message = _terminal_field(record.error_message)
+                print(f"  {error_type}: {error_message}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -2774,16 +2803,24 @@ def _github_repositories(
         }
 
     if principal is not None:
-        print(f"GitHub account: {principal.login}")
+        print(f"GitHub account: {_terminal_field(principal.login, max_characters=160)}")
     else:
-        print(f"GitHub public user: {public_username}")
+        print(
+            "GitHub public user: "
+            f"{_terminal_field(public_username, max_characters=160)}"
+        )
     print(f"Repositories: {len(repositories)}")
     for repository in repositories:
         if not isinstance(repository, Mapping):
             continue
-        name = str(repository.get("full_name", "unknown"))
-        access = str(repository.get("visibility") or "unknown")
-        url = str(repository.get("web_url") or "")
+        name = _terminal_field(
+            repository.get("full_name", "unknown"), max_characters=320
+        )
+        access = _terminal_field(
+            repository.get("visibility") or "unknown",
+            max_characters=80,
+        )
+        url = _terminal_field(repository.get("web_url") or "", max_characters=512)
         suffix = f" — {url}" if url else ""
         print(f"- {name} ({access}){suffix}")
     if output is not None:
@@ -2881,16 +2918,17 @@ def _bitbucket_repositories(
         )
     repositories = list((result.after or {}).get("repositories", []))
     payload = {**dict(result.after or {}), "verified": True}
-    print(f"Bitbucket public workspace: {workspace}")
+    safe_workspace = _terminal_field(workspace, max_characters=160)
+    print(f"Bitbucket public workspace: {safe_workspace}")
     print(f"Repositories: {len(repositories)}")
     for repository in repositories:
         if not isinstance(repository, Mapping):
             continue
-        name = str(repository.get("name", "unknown"))
-        slug = str(repository.get("slug") or name)
-        url = str(repository.get("web_url") or "")
+        name = _terminal_field(repository.get("name", "unknown"), max_characters=320)
+        slug = _terminal_field(repository.get("slug") or name, max_characters=320)
+        url = _terminal_field(repository.get("web_url") or "", max_characters=512)
         suffix = f" - {url}" if url else ""
-        print(f"- {workspace}/{slug}{suffix}")
+        print(f"- {safe_workspace}/{slug}{suffix}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -2968,12 +3006,18 @@ def _identity_resolve(
     if system is not None:
         payload["resolved_system"] = system
         payload["resolved_identifier"] = registry.resolve_identifier(query, system)
-    print(f"identity: {person.key} — {person.display_name}")
+    person_key = _terminal_field(person.key, max_characters=160)
+    display_name = _terminal_field(person.display_name, max_characters=320)
+    print(f"identity: {person_key} — {display_name}")
     if system is not None:
-        print(f"{system}: {payload['resolved_identifier']}")
+        safe_system = _terminal_field(system, max_characters=80)
+        identifier = _terminal_field(payload["resolved_identifier"], max_characters=320)
+        print(f"{safe_system}: {identifier}")
     else:
         for name, value in sorted(person.identifiers.items()):
-            print(f"{name}: {value}")
+            safe_name = _terminal_field(name, max_characters=80)
+            safe_value = _terminal_field(value, max_characters=320)
+            print(f"{safe_name}: {safe_value}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -3017,9 +3061,9 @@ def _evidence_prune(*, root: Path, apply: bool, output: Path | None) -> int:
     print(f"scanned manifests: {result.scanned_manifests}")
     print(f"expired manifests: {result.expired_manifests}")
     for path in result.removed_files:
-        print(f"{'deleted' if apply else 'would delete'}: {path}")
+        print(f"{'deleted' if apply else 'would delete'}: {_terminal_field(path)}")
     for error in result.errors:
-        print(f"error: {error}")
+        print(f"error: {_terminal_field(error)}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -3037,9 +3081,9 @@ def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
     print(f"scanned files: {result.scanned_files}")
     print(f"orphaned files: {len(result.orphaned_files)}")
     for path in result.quarantined_files:
-        print(f"quarantined: {path!r}")
+        print(f"quarantined: {_terminal_field(repr(path))}")
     for error in result.errors:
-        print(f"error: {error!r}")
+        print(f"error: {_terminal_field(repr(error))}")
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -3052,13 +3096,21 @@ def _citations(path: Path, *, output: Path | None) -> int:
     if not citations:
         print("no citations found")
     for citation in citations:
-        marker = citation.get("marker") or citation.get("citation_id")
-        title = citation.get("title") or citation.get("resource_id")
-        url = citation.get("url") or "-"
-        print(
-            f"{marker} {citation.get('system')}:{citation.get('resource_type')} "
-            f"{title} — {url}"
+        marker = _terminal_field(
+            citation.get("marker") or citation.get("citation_id"),
+            max_characters=160,
         )
+        system = _terminal_field(citation.get("system"), max_characters=80)
+        resource_type = _terminal_field(
+            citation.get("resource_type"),
+            max_characters=80,
+        )
+        title = _terminal_field(
+            citation.get("title") or citation.get("resource_id"),
+            max_characters=320,
+        )
+        url = _terminal_field(citation.get("url") or "-", max_characters=512)
+        print(f"{marker} {system}:{resource_type} {title} — {url}")
     if output is not None:
         _write_json(
             output,
@@ -3159,13 +3211,19 @@ def _scan(*, text: str | None, file: Path | None) -> int:
         print("no heuristic findings; content remains untrusted data")
         return 0
     for finding in findings:
-        print(f"{finding.severity:<6} {finding.category}: {finding.excerpt}")
+        severity = render_terminal_text(finding.severity, max_characters=16)
+        category = render_terminal_text(finding.category, max_characters=80)
+        rendered_excerpt = render_terminal_text(
+            finding.excerpt,
+            max_characters=MAX_TERMINAL_EXCERPT_CHARACTERS,
+        )
+        print(f"{severity:<6} {category}: {rendered_excerpt}")
     return 3
 
 
 def _audit_verify(database: Path) -> int:
     valid, message = AuditLog.verify_existing(database)
-    print(message)
+    print(_terminal_field(message))
     return 0 if valid else 4
 
 
@@ -3369,6 +3427,16 @@ def _optional_path(value: str | None) -> Path | None:
     return Path(value) if value is not None else None
 
 
+def _terminal_field(
+    value: object,
+    *,
+    max_characters: int = MAX_TERMINAL_FIELD_CHARACTERS,
+) -> str:
+    """Render one dynamic CLI field without terminal control effects."""
+
+    return render_terminal_text(str(value), max_characters=max_characters)
+
+
 def _write_json(
     path: Path,
     payload: object,
@@ -3383,10 +3451,10 @@ def _print_report(report: RunReport, *, mode_label: str | None = None) -> None:
     print(f"plan fingerprint: {report.plan_fingerprint}")
     print(f"mode: {mode_label or ('dry-run' if report.dry_run else 'apply')}")
     for item in report.actions:
-        print(
-            f"{item.state:<20} {item.action_id!s:<36} "
-            f"{item.capability} — {item.message}"
-        )
+        state = _terminal_field(item.state, max_characters=80)
+        capability = _terminal_field(item.capability, max_characters=240)
+        message = _terminal_field(item.message)
+        print(f"{state:<20} {item.action_id!s:<36} {capability} — {message}")
     print(f"successful: {report.successful}")
 
 

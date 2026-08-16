@@ -43,7 +43,7 @@ each invocation; commands never create the parent or overwrite prior output.
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
-| `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only |
+| `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only; displayed excerpts are terminal-safe and bounded while raw input is not printed |
 | `audit-verify` | Verify an existing SQLite audit hash chain | Read-only verification; missing or malformed state is rejected without creation |
 
 Connector-aware `readiness`, `discover`, `bind-context`, and applied `run`

@@ -43,6 +43,10 @@ Controls:
 - authority-source field on every action;
 - retrieved content cannot authorize writes or communications;
 - prompt-injection scanning and untrusted-content metadata;
+- one bounded terminal renderer for untrusted findings and provider
+  diagnostics: C0/C1, escape sequences, carriage return, backspace, Unicode
+  line separators, and bidirectional formatting controls are visible inert
+  text rather than terminal instructions;
 - exact capability catalog and parameter validation;
 - recipient/target cannot be introduced solely by retrieved content.
 

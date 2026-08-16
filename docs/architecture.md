@@ -193,6 +193,13 @@ and read back the exact serialized bytes, and fsync the file and directory.
 Publication never creates a security-boundary directory or replaces an
 existing name.
 
+Structured artifacts preserve reviewed raw content only inside those explicit
+restricted outputs. Terminal diagnostics use a separate centralized renderer:
+ordinary Unicode remains readable, while terminal controls and bidirectional
+formatting controls become visible `\uXXXX` text and each dynamic field has a
+hard rendered-length ceiling. A retrieved excerpt therefore cannot erase or
+reorder its diagnostic prefix.
+
 Local draft connectors share one bounded artifact budget for the complete run.
 They check each capability's declared bundle quota and the shared budget before
 creating any final name. Artifact readback and later verification hash bounded
