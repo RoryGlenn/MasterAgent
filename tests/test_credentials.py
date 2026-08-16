@@ -69,6 +69,44 @@ class CredentialStoreTests(unittest.TestCase):
                 canonical_loader.overlay({})["MASTER_AGENT_JIRA_TOKEN"], _SECRET
             )
 
+    def test_canonical_store_accepts_provider_email_and_metadata(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "tokens.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "master-agent/credential-store@1",
+                        "credentials": {
+                            "JIRA_EMAIL": "operator@example.test",
+                            "MASTER_AGENT_JIRA_TOKEN": _SECRET,
+                            "JIRA_FULLNAME": "Operator",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                allowed_names=(
+                    "MASTER_AGENT_JIRA_USERNAME",
+                    "MASTER_AGENT_JIRA_TOKEN",
+                ),
+                aliases={
+                    "jira": {
+                        "username": "MASTER_AGENT_JIRA_USERNAME",
+                        "token": "MASTER_AGENT_JIRA_TOKEN",
+                    }
+                },
+            )
+
+        self.assertEqual(
+            snapshot.overlay({})["MASTER_AGENT_JIRA_USERNAME"],
+            "operator@example.test",
+        )
+        self.assertEqual(snapshot.overlay({})["MASTER_AGENT_JIRA_TOKEN"], _SECRET)
+
     def test_unrelated_name_is_not_guessed_into_selected_provider(self) -> None:
         with private_temporary_directory() as directory:
             path = Path(directory) / "tokens.json"
