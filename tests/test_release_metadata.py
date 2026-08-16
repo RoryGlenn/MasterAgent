@@ -71,6 +71,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(workflow.count('python -m venv "$'), 7)
         self.assertEqual(workflow.count("name: Seal hosted Python runtime"), 5)
         self.assertEqual(workflow.count('sudo chmod -R go-w -- "$pythonLocation"'), 5)
+        self.assertEqual(workflow.count("apparmor-profiles bubblewrap"), 3)
+        self.assertEqual(workflow.count("sudo apparmor_parser -r"), 3)
+        self.assertNotIn("apparmor_restrict_unprivileged_userns=0", workflow)
         self.assertNotIn("run: python -m pip install", workflow)
         self.assertNotIn("\n          python -m pip install", workflow)
 

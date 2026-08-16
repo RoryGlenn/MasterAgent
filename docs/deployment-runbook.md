@@ -138,6 +138,9 @@ target/config/source and runtime-manifest binding.
 
 Before production:
 
+- on Ubuntu 24.04 with AppArmor user-namespace restrictions, install and load
+  the distribution-provided `bwrap-userns-restrict` profile; do not disable the
+  host-wide `kernel.apparmor_restrict_unprivileged_userns` control;
 - install and register a typed external, tamper-resistant audit-sink adapter;
 - use an approved secret manager for every credentialed capability;
 - keep capability-capsule production promotion disabled until bubblewrap, a

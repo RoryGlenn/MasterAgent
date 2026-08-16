@@ -78,6 +78,13 @@ virtual environments under umask `077`. Hosted jobs first remove group/other
 write access from the exact setup-python runtime tree. A worker or interpreter
 writable by another OS account fails closed.
 
+Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor. Where
+that control is active, load the distribution-provided
+`bwrap-userns-restrict` profile before capsule validation. CI installs the
+profile from the signed Ubuntu package and loads that narrow profile; it never
+disables the host-wide `kernel.apparmor_restrict_unprivileged_userns` control.
+If the profile is absent or cannot be loaded, isolation readiness fails closed.
+
 There is no automatic subprocess fallback. A non-isolated subprocess backend
 can be selected only by direct test code and is never production-ready.
 
