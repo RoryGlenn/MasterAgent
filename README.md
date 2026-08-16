@@ -593,6 +593,11 @@ Write an exact operator-reviewed lock without importing plugin code:
 master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
+Inventory fails closed before reading when a distribution reports an unsafe
+path. Valid artifacts are opened descriptor-relatively beneath one pinned
+owner-checked root, with 4,096-file, 32 MiB per-file, and 128 MiB aggregate
+limits.
+
 Plugin inventory can be bound to a plan fingerprint for review without
 importing plugin code:
 

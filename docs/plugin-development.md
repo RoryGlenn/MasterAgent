@@ -36,6 +36,17 @@ digest:
 master-agent plugins --output /trusted/config/connector-plugins.json
 ```
 
+The installed distribution inventory is untrusted input. Discovery validates
+the complete list before locating or opening any artifact, accepts only unique
+normalized relative POSIX paths, and rejects absolute, dot, parent-relative,
+backslash, symlink-parent, hardlink, and non-regular entries. It pins one
+current-user- or root-owned distribution root, opens every component relative
+to descriptors without following links, and requires each directory and file
+to have the root's owner, a stable identity, and no world-write permission. One
+distribution is limited to 4,096 files, 32 MiB per file, and 128 MiB total. Any
+invalid or changing entry aborts the inventory; it is never silently omitted
+from the lock or snapshot.
+
 Bind the selected plugin and live integrations identity into the plan before a
 human approves its new fingerprint:
 

@@ -22,15 +22,23 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import machinery, metadata
+from itertools import islice
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from master_agent.config_sources import ConfigSource
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.registry import ConnectorRegistry
 
 CONNECTOR_ENTRY_POINT_GROUP = "master_agent.connectors"
 PLUGIN_LOCK_SCHEMA = "master-agent/plugins@1"
+_MAX_DISTRIBUTION_FILES = 4_096
+_MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
+_MAX_DISTRIBUTION_BYTES = 128 * 1024 * 1024
+_MAX_ARTIFACT_DEPTH = 64
+_MAX_ARTIFACT_PATH_CHARACTERS = 4_096
+_READ_BLOCK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,75 +387,60 @@ def _descriptor(entry: Any) -> PluginDescriptor:
 def _distribution_artifact_sha256(distribution: Any) -> str | None:
     """Hash the currently installed files owned by a plugin distribution."""
 
-    if distribution is None or not getattr(distribution, "files", None):
+    if distribution is None:
         return None
-    return _hash_distribution(distribution, snapshot_root=None)
+    artifacts = _validated_distribution_artifacts(distribution)
+    if not artifacts:
+        return None
+    return _hash_distribution(
+        distribution,
+        snapshot_root=None,
+        artifacts=artifacts,
+    )
 
 
-def _hash_distribution(distribution: Any, *, snapshot_root: Path | None) -> str:
+def _hash_distribution(
+    distribution: Any,
+    *,
+    snapshot_root: Path | None,
+    artifacts: tuple[tuple[str, Path], ...] | None = None,
+) -> str:
     manifest: list[dict[str, object]] = []
-    files = getattr(distribution, "files", None)
-    if not files:
+    selected = artifacts or _validated_distribution_artifacts(distribution)
+    if not selected:
         raise ConfigurationError("connector plugin distribution has no artifacts")
     try:
-        for relative in sorted(files, key=str):
-            relative_text = str(relative)
-            source = Path(distribution.locate_file(relative))
-            path_metadata = source.lstat()
-            if stat.S_ISLNK(path_metadata.st_mode) or not stat.S_ISREG(
-                path_metadata.st_mode
-            ):
+        root_path = _distribution_root(distribution)
+        aggregate = 0
+        with PinnedDirectory.open(root_path, require_private=False) as root:
+            owner = root.identity.owner
+            if owner not in {os.geteuid(), 0} or root.identity.mode & stat.S_IWOTH:
                 raise ConfigurationError(
-                    "connector plugin distribution contains a non-regular artifact"
+                    "connector plugin distribution root is not owner-controlled"
                 )
-            destination: Path | None = None
-            safe_relative = _safe_snapshot_relative(relative_text)
-            if snapshot_root is not None and safe_relative is not None:
-                destination = snapshot_root / safe_relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-            digest = hashlib.sha256()
-            total = 0
-            with source.open("rb") as source_handle:
-                opened_metadata = os.fstat(source_handle.fileno())
-                if (
-                    not stat.S_ISREG(opened_metadata.st_mode)
-                    or opened_metadata.st_dev != path_metadata.st_dev
-                    or opened_metadata.st_ino != path_metadata.st_ino
-                ):
-                    raise ConfigurationError(
-                        "connector plugin artifact changed during verification"
-                    )
-                destination_handle = (
-                    destination.open("xb") if destination is not None else None
+            for relative_text, relative in selected:
+                destination: Path | None = None
+                if snapshot_root is not None:
+                    destination = snapshot_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                digest, total = _hash_distribution_artifact(
+                    root,
+                    relative,
+                    expected_owner=owner,
+                    remaining_bytes=_MAX_DISTRIBUTION_BYTES - aggregate,
+                    destination=destination,
                 )
-                try:
-                    for block in iter(lambda: source_handle.read(1024 * 1024), b""):
-                        total += len(block)
-                        digest.update(block)
-                        if destination_handle is not None:
-                            destination_handle.write(block)
-                finally:
-                    if destination_handle is not None:
-                        destination_handle.close()
-                final_metadata = os.fstat(source_handle.fileno())
-            if (
-                total != opened_metadata.st_size
-                or final_metadata.st_size != opened_metadata.st_size
-                or final_metadata.st_mtime_ns != opened_metadata.st_mtime_ns
-            ):
-                raise ConfigurationError(
-                    "connector plugin artifact changed during verification"
+                aggregate += total
+                manifest.append(
+                    {
+                        "path": relative_text,
+                        "size": total,
+                        "sha256": digest,
+                    }
                 )
-            manifest.append(
-                {
-                    "path": relative_text,
-                    "size": total,
-                    "sha256": digest.hexdigest(),
-                }
-            )
     except ConfigurationError:
         raise
-    except (OSError, TypeError) as error:
+    except (OSError, TypeError, ValueError) as error:
         raise ConfigurationError(
             "connector plugin distribution artifacts could not be verified"
         ) from error
@@ -458,6 +451,259 @@ def _hash_distribution(distribution: Any, *, snapshot_root: Path | None) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _validated_distribution_artifacts(
+    distribution: Any,
+) -> tuple[tuple[str, Path], ...]:
+    """Validate the complete untrusted inventory before any path lookup or open."""
+
+    try:
+        files = getattr(distribution, "files", None)
+        if files is None:
+            return ()
+        raw_artifacts = tuple(islice(iter(files), _MAX_DISTRIBUTION_FILES + 1))
+    except Exception as error:
+        raise ConfigurationError(
+            "connector plugin distribution inventory is invalid"
+        ) from error
+    if len(raw_artifacts) > _MAX_DISTRIBUTION_FILES:
+        raise ConfigurationError(
+            "connector plugin distribution exceeds the 4096-file limit"
+        )
+    artifacts: list[tuple[str, Path]] = []
+    for raw in raw_artifacts:
+        try:
+            relative_text = str(raw)
+        except Exception as error:
+            raise ConfigurationError(
+                "connector plugin distribution inventory is invalid"
+            ) from error
+        relative = _strict_distribution_relative(relative_text)
+        artifacts.append((relative_text, relative))
+    artifacts.sort(key=lambda item: item[0])
+    if len({item[0] for item in artifacts}) != len(artifacts):
+        raise ConfigurationError(
+            "connector plugin distribution artifact paths must be unique"
+        )
+    return tuple(artifacts)
+
+
+def _strict_distribution_relative(value: str) -> Path:
+    if (
+        not value
+        or len(value) > _MAX_ARTIFACT_PATH_CHARACTERS
+        or value in {".", ".."}
+        or "\\" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ConfigurationError(
+            "connector plugin distribution contains an unsafe artifact path"
+        )
+    pure = PurePosixPath(value)
+    if (
+        pure.is_absolute()
+        or not pure.parts
+        or len(pure.parts) > _MAX_ARTIFACT_DEPTH
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or pure.as_posix() != value
+        or (len(pure.parts[0]) == 2 and pure.parts[0][1] == ":")
+    ):
+        raise ConfigurationError(
+            "connector plugin distribution contains an unsafe artifact path"
+        )
+    return Path(*pure.parts)
+
+
+def _distribution_root(distribution: Any) -> Path:
+    try:
+        selected = Path(distribution.locate_file(PurePosixPath()))
+    except Exception as error:
+        raise ConfigurationError(
+            "connector plugin distribution root could not be located"
+        ) from error
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    return selected
+
+
+def _hash_distribution_artifact(
+    root: PinnedDirectory,
+    relative: Path,
+    *,
+    expected_owner: int,
+    remaining_bytes: int,
+    destination: Path | None,
+) -> tuple[str, int]:
+    """Hash one descriptor-relative regular file beneath a pinned root."""
+
+    directory_fds: list[int] = []
+    directory_edges: list[
+        tuple[int, str, tuple[int, int, int, int, int, int, int, int]]
+    ] = []
+    file_fd = -1
+    destination_handle = None
+    try:
+        current_fd = root.fileno()
+        for part in relative.parts[:-1]:
+            child_fd = os.open(
+                part,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current_fd,
+            )
+            directory_fds.append(child_fd)
+            child_metadata = os.fstat(child_fd)
+            _validate_distribution_directory(
+                child_metadata,
+                expected_owner=expected_owner,
+            )
+            child_identity = _artifact_identity(child_metadata)
+            if (
+                _artifact_identity(
+                    os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+                )
+                != child_identity
+            ):
+                raise ConfigurationError(
+                    "connector plugin artifact parent changed during verification"
+                )
+            directory_edges.append((current_fd, part, child_identity))
+            current_fd = child_fd
+
+        file_fd = os.open(
+            relative.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=current_fd,
+        )
+        opened = os.fstat(file_fd)
+        _validate_distribution_file(opened, expected_owner=expected_owner)
+        if opened.st_size > _MAX_ARTIFACT_BYTES:
+            raise ConfigurationError(
+                "connector plugin artifact exceeds the 32 MiB limit"
+            )
+        if opened.st_size > remaining_bytes:
+            raise ConfigurationError(
+                "connector plugin distribution exceeds the 128 MiB limit"
+            )
+        opened_identity = _artifact_identity(opened)
+        if (
+            _artifact_identity(
+                os.stat(relative.name, dir_fd=current_fd, follow_symlinks=False)
+            )
+            != opened_identity
+        ):
+            raise ConfigurationError(
+                "connector plugin artifact changed during verification"
+            )
+
+        if destination is not None:
+            destination_handle = destination.open("xb")
+        digest = hashlib.sha256()
+        total = 0
+        remaining = opened.st_size
+        while remaining:
+            block = os.read(file_fd, min(_READ_BLOCK_BYTES, remaining))
+            if not block:
+                raise ConfigurationError(
+                    "connector plugin artifact changed during verification"
+                )
+            total += len(block)
+            remaining -= len(block)
+            digest.update(block)
+            if destination_handle is not None:
+                destination_handle.write(block)
+        if os.read(file_fd, 1):
+            raise ConfigurationError(
+                "connector plugin artifact changed during verification"
+            )
+        final = os.fstat(file_fd)
+        if _artifact_identity(final) != opened_identity:
+            raise ConfigurationError(
+                "connector plugin artifact changed during verification"
+            )
+        if (
+            _artifact_identity(
+                os.stat(relative.name, dir_fd=current_fd, follow_symlinks=False)
+            )
+            != opened_identity
+        ):
+            raise ConfigurationError(
+                "connector plugin artifact changed during verification"
+            )
+        for parent_fd, part, expected in reversed(directory_edges):
+            if (
+                _artifact_identity(
+                    os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+                )
+                != expected
+            ):
+                raise ConfigurationError(
+                    "connector plugin artifact parent changed during verification"
+                )
+        root.validate()
+        return digest.hexdigest(), total
+    except ConfigurationError:
+        raise
+    except OSError as error:
+        raise ConfigurationError(
+            "connector plugin distribution contains an unsafe artifact"
+        ) from error
+    finally:
+        if destination_handle is not None:
+            destination_handle.close()
+        if file_fd >= 0:
+            os.close(file_fd)
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
+
+
+def _validate_distribution_directory(
+    value: os.stat_result,
+    *,
+    expected_owner: int,
+) -> None:
+    if (
+        not stat.S_ISDIR(value.st_mode)
+        or value.st_uid != expected_owner
+        or stat.S_IMODE(value.st_mode) & stat.S_IWOTH
+    ):
+        raise ConfigurationError(
+            "connector plugin artifact parent is not an owner-controlled directory"
+        )
+
+
+def _validate_distribution_file(
+    value: os.stat_result,
+    *,
+    expected_owner: int,
+) -> None:
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or value.st_uid != expected_owner
+        or value.st_nlink != 1
+        or stat.S_IMODE(value.st_mode) & stat.S_IWOTH
+    ):
+        raise ConfigurationError(
+            "connector plugin distribution contains an unsafe regular artifact"
+        )
+
+
+def _artifact_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        stat.S_IMODE(value.st_mode),
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _load_from_verified_snapshot(
@@ -647,13 +893,6 @@ def _purge_snapshot_modules(root: Path) -> None:
     for name, module in tuple(sys.modules.items()):
         if module is not None and _module_from_snapshot(module, root):
             sys.modules.pop(name, None)
-
-
-def _safe_snapshot_relative(value: str) -> Path | None:
-    pure = PurePosixPath(value.replace("\\", "/"))
-    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
-        return None
-    return Path(*pure.parts)
 
 
 def _requested_names(enabled_names: Sequence[str]) -> tuple[str, ...]:

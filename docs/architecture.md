@@ -130,8 +130,12 @@ Authenticated routes are reserved for private, account-visible, or otherwise
 identity-bound data.
 
 Plugin connectors are discovered, locked, and bound to plans without import.
-They are not loaded during apply: the CLI fails closed until a separate worker
-can seal the plugin and transitive dependency closure before execution.
+Before hashing, the complete bounded distribution inventory must pass strict
+relative-path validation. Every artifact is then opened without following
+links beneath one descriptor-pinned, owner-checked distribution root; type,
+owner, identity, per-file size, and aggregate size are verified. They are not
+loaded during apply: the CLI fails closed until a separate worker can seal the
+plugin and transitive dependency closure before execution.
 
 ### Orchestrator
 
