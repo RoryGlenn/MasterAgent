@@ -1,5 +1,10 @@
 # Changelog
 
+- Persist explicit pending, completed, failed, and indeterminate idempotency
+  outcomes; retry only certified pre-effect failures; independently reconcile
+  provider-addressable Teams messages; and keep uncertain sends blocked rather
+  than treating a diagnostic request ID as duplicate suppression.
+
 - Authenticate approval issuer, tenant, subject, and role claims; compare dual
   approvers by a Unicode-normalized canonical principal; and support trusted
   timestamp and approval-ID revocation without weakening exact-plan binding.

@@ -27,6 +27,8 @@ class IdempotencyClaimState(StrEnum):
 
     CLAIMED = "claimed"
     COMPLETED = "completed"
+    FAILED = "failed"
+    INDETERMINATE = "indeterminate"
     IN_PROGRESS = "in_progress"
     CONFLICT = "conflict"
 
@@ -38,6 +40,7 @@ class IdempotencyClaim:
     state: IdempotencyClaimState
     token: str | None = None
     result: Mapping[str, Any] | None = None
+    prior_state: IdempotencyClaimState | None = None
 
 
 class AuditSinkKind(StrEnum):
@@ -253,12 +256,50 @@ class AuditLog:
             if stored_fingerprint != action_fingerprint:
                 return IdempotencyClaim(state=IdempotencyClaimState.CONFLICT)
             if status == "completed":
-                result = json.loads(str(result_json))
                 return IdempotencyClaim(
                     state=IdempotencyClaimState.COMPLETED,
-                    result=result,
+                    result=_idempotency_result(result_json),
                 )
-            return IdempotencyClaim(state=IdempotencyClaimState.IN_PROGRESS)
+            if status == "failed":
+                prior_result = _idempotency_result(result_json)
+                cursor = connection.execute(
+                    """
+                    UPDATE completed_actions
+                    SET plan_id = ?, action_id = ?, status = 'pending',
+                        claim_token = ?, result_json = '{}', claimed_at = ?,
+                        completed_at = ?
+                    WHERE idempotency_key = ?
+                      AND action_fingerprint = ?
+                      AND status = 'failed'
+                    """,
+                    (
+                        str(plan_id),
+                        str(action_id),
+                        token,
+                        claimed_at,
+                        claimed_at,
+                        idempotency_key,
+                        action_fingerprint,
+                    ),
+                )
+                if cursor.rowcount != 1:  # pragma: no cover - write lock invariant.
+                    raise RuntimeError(
+                        "failed idempotency outcome changed during retry"
+                    )
+                return IdempotencyClaim(
+                    state=IdempotencyClaimState.CLAIMED,
+                    token=token,
+                    result=prior_result,
+                    prior_state=IdempotencyClaimState.FAILED,
+                )
+            if status == "indeterminate":
+                return IdempotencyClaim(
+                    state=IdempotencyClaimState.INDETERMINATE,
+                    result=_idempotency_result(result_json),
+                )
+            if status == "pending":
+                return IdempotencyClaim(state=IdempotencyClaimState.IN_PROGRESS)
+            return IdempotencyClaim(state=IdempotencyClaimState.INDETERMINATE)
 
     def complete_action(
         self,
@@ -300,21 +341,166 @@ class AuditLog:
         action_fingerprint: str,
         claim_token: str,
     ) -> bool:
-        """Release an exact reservation after a certified pre-effect failure."""
+        """Durably fail an exact reservation for compatibility with old callers.
+
+        The row is intentionally retained so a crash or retry cannot erase the
+        execution history. New callers should use :meth:`fail_action` and
+        provide a structured outcome.
+        """
 
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
-                DELETE FROM completed_actions
+                UPDATE completed_actions
+                SET status = 'failed', claim_token = NULL,
+                    result_json = '{"error":{"code":"legacy_pre_effect_failure"}}',
+                    completed_at = ?
                 WHERE idempotency_key = ?
                   AND action_fingerprint = ?
                   AND status = 'pending'
                   AND claim_token = ?
                 """,
-                (idempotency_key, action_fingerprint, claim_token),
+                (
+                    datetime.now(UTC).isoformat(),
+                    idempotency_key,
+                    action_fingerprint,
+                    claim_token,
+                ),
             )
         return cursor.rowcount == 1
+
+    def fail_action(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        claim_token: str,
+        outcome: Mapping[str, Any],
+    ) -> None:
+        """Persist a certified pre-effect failure while allowing explicit retry."""
+
+        self._finish_action_claim(
+            idempotency_key=idempotency_key,
+            action_fingerprint=action_fingerprint,
+            claim_token=claim_token,
+            status="failed",
+            outcome=outcome,
+        )
+
+    def mark_action_indeterminate(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        claim_token: str,
+        outcome: Mapping[str, Any],
+    ) -> None:
+        """Persist an uncertain side effect that automatic retry must not repeat."""
+
+        self._finish_action_claim(
+            idempotency_key=idempotency_key,
+            action_fingerprint=action_fingerprint,
+            claim_token=claim_token,
+            status="indeterminate",
+            outcome=outcome,
+        )
+
+    def resolve_indeterminate_action(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        expected_outcome: Mapping[str, Any],
+        completed_result: Mapping[str, Any],
+    ) -> None:
+        """Promote only the exact independently reconciled outcome to completed."""
+
+        expected_json = json.dumps(expected_outcome, sort_keys=True, default=str)
+        result_json = json.dumps(completed_result, sort_keys=True, default=str)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE completed_actions
+                SET status = 'completed', result_json = ?, completed_at = ?
+                WHERE idempotency_key = ?
+                  AND action_fingerprint = ?
+                  AND status = 'indeterminate'
+                  AND result_json = ?
+                """,
+                (
+                    result_json,
+                    datetime.now(UTC).isoformat(),
+                    idempotency_key,
+                    action_fingerprint,
+                    expected_json,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("indeterminate idempotency outcome changed")
+
+    def idempotency_outcome(
+        self,
+        idempotency_key: str,
+        *,
+        action_fingerprint: str,
+    ) -> IdempotencyClaimState | None:
+        """Read the durable outcome for diagnostics without changing it."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT action_fingerprint, status
+                FROM completed_actions WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        if row[0] != action_fingerprint:
+            return IdempotencyClaimState.CONFLICT
+        return {
+            "pending": IdempotencyClaimState.IN_PROGRESS,
+            "completed": IdempotencyClaimState.COMPLETED,
+            "failed": IdempotencyClaimState.FAILED,
+            "indeterminate": IdempotencyClaimState.INDETERMINATE,
+        }.get(str(row[1]), IdempotencyClaimState.INDETERMINATE)
+
+    def _finish_action_claim(
+        self,
+        *,
+        idempotency_key: str,
+        action_fingerprint: str,
+        claim_token: str,
+        status: str,
+        outcome: Mapping[str, Any],
+    ) -> None:
+        if status not in {"failed", "indeterminate"}:  # pragma: no cover - internal.
+            raise ValueError("unsupported idempotency terminal outcome")
+        result_json = json.dumps(outcome, sort_keys=True, default=str)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE completed_actions
+                SET status = ?, claim_token = NULL, result_json = ?, completed_at = ?
+                WHERE idempotency_key = ?
+                  AND action_fingerprint = ?
+                  AND status = 'pending'
+                  AND claim_token = ?
+                """,
+                (
+                    status,
+                    result_json,
+                    datetime.now(UTC).isoformat(),
+                    idempotency_key,
+                    action_fingerprint,
+                    claim_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("idempotency reservation was lost or replaced")
 
     def completed_result(
         self,
@@ -533,3 +719,13 @@ class AuditLog:
 
         with self._state.connect() as connection:
             yield connection
+
+
+def _idempotency_result(value: object) -> dict[str, Any] | None:
+    """Decode only a JSON object from an untrusted durable outcome row."""
+
+    try:
+        decoded = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, dict) else None

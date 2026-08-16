@@ -59,6 +59,18 @@ class IdempotencyVerifyingConnector(Protocol):
 
 
 @runtime_checkable
+class IdempotencyRecordingConnector(Protocol):
+    """Optional contract for a minimal provider-reconciliation record."""
+
+    def idempotency_record(
+        self,
+        action: AgentAction,
+        result: ExecutionResult,
+    ) -> Mapping[str, Any]:
+        """Return bounded, content-free metadata needed to reconcile a retry."""
+
+
+@runtime_checkable
 class CompensatingConnector(Protocol):
     """Optional connector contract for verified rollback operations."""
 

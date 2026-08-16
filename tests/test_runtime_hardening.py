@@ -352,6 +352,33 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
         self.assertTrue(retry.successful)
         self.assertEqual(connector.execute_count, 1)
 
+    def test_content_bearing_connector_retry_metadata_is_not_persisted(self) -> None:
+        class UnsafeRecordConnector(_StateConnector):
+            def idempotency_record(self, action, result):
+                return {"body": "SECRET-CANARY"}
+
+        connector = UnsafeRecordConnector()
+        action = _write_action("one", "approved", key="safe-record")
+        plan = _plan(action)
+        approval = _approval(self.authenticator, plan)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            report = _orchestrator(
+                connector,
+                audit,
+                self.authenticator,
+            ).run(plan, approvals=(approval,), dry_run=False)
+            prior = audit.claim_action(
+                idempotency_key=action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+                plan_id=plan.plan_id,
+                action_id=action.action_id,
+            )
+
+        self.assertTrue(report.successful)
+        self.assertEqual(prior.state, IdempotencyClaimState.COMPLETED)
+        self.assertNotIn("SECRET-CANARY", str(prior.result))
+
     def test_exception_after_mutation_claim_is_indeterminate(self) -> None:
         connector = _StateConnector(raise_after_effect=True)
         action = _write_action("one", "possibly-written", key="claimed-write")
@@ -366,6 +393,10 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 approvals=(approval,),
                 dry_run=False,
             )
+            first_outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
             retry = orchestrator.run(
                 plan,
                 approvals=(approval,),
@@ -374,10 +405,11 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
 
         self.assertEqual(connector.state["one"], "possibly-written")
         self.assertEqual(first.actions[0].state, ActionState.INDETERMINATE)
+        self.assertEqual(first_outcome, IdempotencyClaimState.INDETERMINATE)
         self.assertEqual(retry.actions[0].state, ActionState.CONFLICTED)
-        self.assertIn("indeterminate prior side effect", retry.actions[0].message)
+        self.assertIn("durable indeterminate outcome", retry.actions[0].message)
 
-    def test_certified_pre_effect_failure_releases_claim_for_retry(self) -> None:
+    def test_certified_pre_effect_failure_is_durable_and_retryable(self) -> None:
         connector = _StateConnector(raise_before_effect_once=True)
         action = _write_action("one", "written-on-retry", key="retryable-write")
         plan = _plan(action)
@@ -391,6 +423,10 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 approvals=(approval,),
                 dry_run=False,
             )
+            failed_outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
             retry = orchestrator.run(
                 plan,
                 approvals=(approval,),
@@ -398,6 +434,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             )
 
         self.assertEqual(first.actions[0].state, ActionState.FAILED)
+        self.assertEqual(failed_outcome, IdempotencyClaimState.FAILED)
         self.assertEqual(retry.actions[0].state, ActionState.VERIFIED)
         self.assertEqual(connector.execute_count, 2)
         self.assertEqual(connector.state["one"], "written-on-retry")
@@ -416,17 +453,27 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 approvals=(approval,),
                 dry_run=False,
             )
+            first_outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
             retry = orchestrator.run(
                 plan,
                 approvals=(approval,),
                 dry_run=False,
             )
+            reconciled_outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
 
         self.assertEqual(first.actions[0].state, ActionState.INDETERMINATE)
-        self.assertEqual(retry.actions[0].state, ActionState.CONFLICTED)
+        self.assertEqual(first_outcome, IdempotencyClaimState.INDETERMINATE)
+        self.assertEqual(retry.actions[0].state, ActionState.REUSED)
+        self.assertEqual(reconciled_outcome, IdempotencyClaimState.COMPLETED)
         self.assertEqual(connector.execute_count, 1)
 
-    def test_version_conflict_releases_exact_claim_for_retry(self) -> None:
+    def test_version_conflict_is_durable_and_retryable(self) -> None:
         connector = _StateConnector(raise_version_conflict_once=True)
         action = _write_action("one", "written-on-retry", key="versioned-write")
         plan = _plan(action)
@@ -440,6 +487,10 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
                 approvals=(approval,),
                 dry_run=False,
             )
+            failed_outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
             retry = orchestrator.run(
                 plan,
                 approvals=(approval,),
@@ -447,6 +498,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             )
 
         self.assertEqual(first.actions[0].state, ActionState.CONFLICTED)
+        self.assertEqual(failed_outcome, IdempotencyClaimState.FAILED)
         self.assertEqual(retry.actions[0].state, ActionState.VERIFIED)
         self.assertEqual(connector.execute_count, 2)
 
@@ -526,6 +578,40 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
         self.assertEqual(second.actions[0].state, ActionState.CONFLICTED)
         self.assertNotIn("two", connector.state)
 
+    def test_failed_claim_is_durable_and_atomically_retryable(self) -> None:
+        action = _write_action("one", "approved", key="failed-retry")
+        plan = _plan(action)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            first = audit.claim_action(
+                idempotency_key=action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+                plan_id=plan.plan_id,
+                action_id=action.action_id,
+            )
+            audit.fail_action(
+                idempotency_key=action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+                claim_token=first.token or "",
+                outcome={"error": {"reason_code": "pre_effect_failure"}},
+            )
+            failed = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
+            retry = audit.claim_action(
+                idempotency_key=action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+                plan_id=plan.plan_id,
+                action_id=action.action_id,
+            )
+
+        self.assertEqual(first.state, IdempotencyClaimState.CLAIMED)
+        self.assertEqual(failed, IdempotencyClaimState.FAILED)
+        self.assertEqual(retry.state, IdempotencyClaimState.CLAIMED)
+        self.assertEqual(retry.prior_state, IdempotencyClaimState.FAILED)
+        self.assertNotEqual(first.token, retry.token)
+
     def test_legacy_idempotency_rows_migrate_fail_closed(self) -> None:
         action = _write_action("one", "approved", key="legacy")
         plan = _plan(action)
@@ -594,9 +680,10 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             capabilities=frozenset({"ok.item.read"}),
         )
         with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
             report = _orchestrator(
                 connector,
-                AuditLog(Path(directory) / "audit.sqlite3"),
+                audit,
                 self.authenticator,
             ).run(plan, dry_run=False)
 
@@ -617,19 +704,25 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             compensate_on_failure=True,
         )
         with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
             report = _orchestrator(
                 connector,
-                AuditLog(Path(directory) / "audit.sqlite3"),
+                audit,
                 self.authenticator,
             ).run(
                 plan,
                 approvals=(_approval(self.authenticator, plan),),
                 dry_run=False,
             )
+            outcome = audit.idempotency_outcome(
+                action.idempotency_key,
+                action_fingerprint=action.effect_fingerprint,
+            )
 
         self.assertEqual(report.actions[0].state, ActionState.COMPENSATION_FAILED)
         self.assertEqual(connector.compensate_count, 0)
         self.assertEqual(connector.state["one"], "possibly-written")
+        self.assertEqual(outcome, IdempotencyClaimState.INDETERMINATE)
         self.assertIn("no longer matches", report.actions[0].message)
 
 

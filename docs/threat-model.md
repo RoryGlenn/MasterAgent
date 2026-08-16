@@ -130,7 +130,11 @@ A retry may send duplicate email/message or repeat a write.
 
 Controls:
 
-- idempotency records for side effects;
+- atomic action-digest-bound reservations with explicit pending, completed,
+  failed, and indeterminate outcomes;
+- retries only for durable certified pre-effect failures;
+- independent provider reconciliation before an indeterminate Teams message can
+  be reused; other uncertain sends remain blocked;
 - unsafe POST/PUT retry disabled;
 - provider draft/content preflight for Outlook;
 - recurring execution disabled pending exact target/config/runtime binding;

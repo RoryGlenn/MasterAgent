@@ -32,7 +32,8 @@ non-routable.
 
 - immutable plans and exact-plan approvals;
 - policy and canonical-source enforcement;
-- idempotency, dependency handling, audit hash chain, prompt-injection scanning;
+- atomic action-bound idempotency with durable failure/indeterminate outcomes,
+  dependency handling, audit hash chain, and prompt-injection scanning;
 - independent verification.
 
 ### Phase 2
