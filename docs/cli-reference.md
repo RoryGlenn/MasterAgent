@@ -25,6 +25,7 @@ or filesystem side effects.
 | `discover` | Inspect connector configuration | Offline unless `--probe`; probing performs bounded read-only provider requests |
 | `connect` | Enable selected supported read connectors in memory and verify access | Fixed bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
 | `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; selects only the GitHub read connector and never edits credentials or persistent configuration |
+| `bitbucket-repositories` | List a Bitbucket Cloud workspace's public repositories anonymously with `--workspace` | Explicit bounded read-only Bitbucket requests; selects no credentials and never edits persistent configuration |
 | `weekly-status-plan` | Build a read-only weekly-status plan | Writes only the selected local plan |
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
@@ -96,6 +97,11 @@ URL supplied through `--connector-url` replaces the packaged placeholder only
 in memory; Data Center still requires an explicit reviewed integrations file.
 This command verifies connectivity; the agent must continue with a typed
 feature command to complete the requested outcome.
+
+`bitbucket-repositories --workspace WORKSPACE` is also credential-free. It
+constructs an anonymous Bitbucket Cloud connector, ignores ambient Bitbucket
+credentials, accepts no credential-file option, returns only repositories
+explicitly marked public, and independently verifies the bounded result.
 
 `github-repositories --username USERNAME` is credential-free and accepts only
 public visibility. It ignores ambient GitHub tokens by constructing an

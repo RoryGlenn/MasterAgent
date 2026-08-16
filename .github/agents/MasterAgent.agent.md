@@ -164,3 +164,7 @@ attest an unrelated authenticated user. Omit `--username` and use the governed
 credential path only for “my repositories,” private repositories, or other
 account-visible results. Both paths evaluate a typed action and independently
 verify the result.
+For a named public Bitbucket Cloud workspace, use
+`.venv/bin/master-agent bitbucket-repositories --workspace WORKSPACE`; this
+typed route ignores ambient Bitbucket credentials, returns only repositories
+explicitly marked public, and independently verifies the bounded result.

@@ -22,6 +22,7 @@ confluence.page.search
 confluence.page.read
 confluence.space.create
 bitbucket.pull_request.search
+bitbucket.public_repository.list
 github.public_repository.list
 github.repository.list
 github.repository.read

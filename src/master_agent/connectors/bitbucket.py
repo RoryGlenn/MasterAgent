@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
@@ -25,6 +26,7 @@ class BitbucketConnector(ReadOnlyConnector):
     _CAPABILITIES = frozenset(
         {
             "bitbucket.instance.read",
+            "bitbucket.public_repository.list",
             "bitbucket.repository.read",
             "bitbucket.pull_request.search",
             "bitbucket.pull_request.read",
@@ -68,6 +70,8 @@ class BitbucketConnector(ReadOnlyConnector):
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
         if action.capability == "bitbucket.instance.read":
             return self._read_instance()
+        if action.capability == "bitbucket.public_repository.list":
+            return self._list_public_workspace_repositories(action)
         if action.capability == "bitbucket.repository.read":
             return self._read_repository(action)
         if action.capability == "bitbucket.pull_request.search":
@@ -79,6 +83,100 @@ class BitbucketConnector(ReadOnlyConnector):
         if action.capability == "bitbucket.build_status.read":
             return self._read_build_status(action)
         raise ConnectorError(f"unsupported Bitbucket capability: {action.capability}")
+
+    def _list_public_workspace_repositories(
+        self,
+        action: AgentAction,
+    ) -> RetrievedPayload:
+        if self._config.deployment is not DeploymentType.CLOUD:
+            raise ConnectorError(
+                "Bitbucket public workspace repositories require Bitbucket Cloud"
+            )
+        workspace = string_parameter(
+            action.parameters,
+            "workspace",
+            required=True,
+        )
+        limit = integer_parameter(
+            action.parameters,
+            "limit",
+            default=self._config.max_items,
+            maximum=self._config.max_items,
+        )
+        repositories: list[dict[str, Any]] = []
+        next_url: str | None = None
+        reference = ""
+        path = f"repositories/{quote_segment(workspace)}"
+        expected_path = urlsplit(self._client.resolve_url(path)).path
+        for _ in range(self._config.max_pages):
+            remaining = limit - len(repositories)
+            if remaining <= 0:
+                break
+            if next_url:
+                data, response = self._client.request_json("GET", next_url)
+            else:
+                data, response = self._client.request_json(
+                    "GET",
+                    path,
+                    query={"pagelen": min(remaining, 100)},
+                )
+            reference = response.url
+            if not isinstance(data, Mapping):
+                raise ConnectorError(
+                    "Bitbucket public repository response must be an object"
+                )
+            page = data.get("values", [])
+            if not isinstance(page, list):
+                raise ConnectorError(
+                    "Bitbucket public repository values must be a list"
+                )
+            for item in page:
+                if not isinstance(item, Mapping):
+                    raise ConnectorError(
+                        "Bitbucket public repository values must contain objects"
+                    )
+                if item.get("is_private") is not False:
+                    raise ConnectorError(
+                        "Bitbucket public repository response was not public"
+                    )
+                name = item.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ConnectorError(
+                        "Bitbucket public repository response has no valid name"
+                    )
+                repositories.append(self._normalize_repository(item, workspace, name))
+            next_value = data.get("next")
+            if next_value:
+                next_url = self._client.resolve_url(str(next_value))
+                if urlsplit(next_url).path != expected_path:
+                    raise ConnectorError(
+                        "Bitbucket public repository pagination left the fixed "
+                        "workspace endpoint"
+                    )
+            else:
+                next_url = None
+            if not page or not next_url:
+                break
+        repositories = repositories[:limit]
+        source_urls = [reference]
+        source_urls.extend(
+            str(item["web_url"]) for item in repositories if item.get("web_url")
+        )
+        return RetrievedPayload(
+            data={
+                "schema": "master-agent/bitbucket-public-repositories@1",
+                "system": "bitbucket",
+                "deployment": self._config.deployment,
+                "query": {
+                    "workspace": workspace,
+                    "visibility": "public",
+                },
+                "returned": len(repositories),
+                "repositories": repositories,
+                "source_urls": list(dict.fromkeys(source_urls)),
+            },
+            connector_reference=reference,
+        )
 
     def _read_instance(self) -> RetrievedPayload:
         if self._config.deployment is DeploymentType.CLOUD:

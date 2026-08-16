@@ -34,6 +34,7 @@ from master_agent.compensation import build_compensation_plan
 from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
 from master_agent.config_sources import ConfigSource, resolve_config_source
 from master_agent.connectors.base import ClosableConnector
+from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
@@ -304,6 +305,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 visibility=args.visibility,
                 output=args.output,
                 username=args.username,
+            )
+        if args.command == "bitbucket-repositories":
+            return _bitbucket_repositories(
+                workspace=args.workspace,
+                limit=args.limit,
+                output=args.output,
             )
         if args.command == "weekly-status-plan":
             return _weekly_status_plan(
@@ -716,6 +723,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     github_repositories.add_argument("--output", type=Path)
+
+    bitbucket_repositories = subparsers.add_parser(
+        "bitbucket-repositories",
+        help="list a Bitbucket Cloud workspace's public repositories anonymously",
+    )
+    bitbucket_repositories.add_argument(
+        "--workspace",
+        required=True,
+        help="Bitbucket Cloud workspace slug",
+    )
+    bitbucket_repositories.add_argument("--limit", type=int, default=100)
+    bitbucket_repositories.add_argument("--output", type=Path)
 
     weekly_plan = subparsers.add_parser(
         "weekly-status-plan",
@@ -2725,6 +2744,111 @@ def _github_repositories(
         url = str(repository.get("web_url") or "")
         suffix = f" — {url}" if url else ""
         print(f"- {name} ({access}){suffix}")
+    if output is not None:
+        _write_json(output, payload, restricted=True)
+        print(f"wrote {output}")
+    return 0
+
+
+def _bitbucket_repositories(
+    *,
+    workspace: str,
+    limit: int,
+    output: Path | None,
+    transport: HttpTransport | None = None,
+) -> int:
+    """List public Bitbucket Cloud workspace repositories anonymously."""
+
+    workspace = workspace.strip()
+    if not workspace:
+        raise ConfigurationError("Bitbucket workspace must not be empty")
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(None, "integrations.toml")
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(None, "governance.toml")
+    )
+    bitbucket = replace(
+        integrations.connector("bitbucket"),
+        enabled=True,
+        auth_mode=AuthMode.NONE,
+        username_env=None,
+        secret_env=None,
+    )
+    if bitbucket.deployment is not DeploymentType.CLOUD:
+        raise ConfigurationError(
+            "Bitbucket public workspace repositories require Bitbucket Cloud"
+        )
+    if limit <= 0 or limit > bitbucket.max_items:
+        raise ConfigurationError(
+            f"Bitbucket repository limit must be between 1 and {bitbucket.max_items}"
+        )
+    action = AgentAction(
+        capability="bitbucket.public_repository.list",
+        target=ResourceRef(
+            system="bitbucket",
+            resource_type="public_repository_collection",
+            resource_id=workspace,
+        ),
+        parameters={"workspace": workspace, "limit": limit},
+        risk=RiskLevel.READ_ONLY,
+        data_classification=DataClassification.PUBLIC,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key=f"bitbucket:public-repositories:{workspace}:{limit}",
+        justification=(
+            "List public repositories in the directly requested Bitbucket workspace."
+        ),
+    )
+    plan = ChangePlan(
+        goal=f"List public repositories in Bitbucket workspace {workspace}.",
+        actions=(action,),
+        created_by="direct-user",
+    )
+    catalog = CapabilityCatalog.from_toml(
+        resolve_config_source(None, "capabilities.toml")
+    )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(None, "policy.toml"))
+    )
+    catalog_ok, catalog_reason = catalog.validate_action(action)
+    if not catalog_ok:
+        raise ConfigurationError(catalog_reason)
+    governance_ok, governance_reason = governance.validate_action(action)
+    if not governance_ok:
+        raise ConfigurationError(governance_reason)
+    decision = policy.evaluate(
+        plan,
+        action,
+        minimum_distinct_approvers=governance.minimum_approvers(action.capability),
+    )
+    if not decision.permitted or decision.approval_required:
+        raise ConfigurationError(decision.reason)
+
+    resolved = bitbucket.resolve({}, auth_transport=transport)
+    connector = BitbucketConnector(resolved, transport=transport)
+    result = connector.execute(action)
+    verification = connector.verify(action, result)
+    if not verification.verified:
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+    if not verification.verified:
+        raise ConfigurationError(
+            "Bitbucket repositories changed during two verification attempts; retry "
+            "the read"
+        )
+    repositories = list((result.after or {}).get("repositories", []))
+    payload = {**dict(result.after or {}), "verified": True}
+    print(f"Bitbucket public workspace: {workspace}")
+    print(f"Repositories: {len(repositories)}")
+    for repository in repositories:
+        if not isinstance(repository, Mapping):
+            continue
+        name = str(repository.get("name", "unknown"))
+        slug = str(repository.get("slug") or name)
+        url = str(repository.get("web_url") or "")
+        suffix = f" - {url}" if url else ""
+        print(f"- {workspace}/{slug}{suffix}")
     if output is not None:
         _write_json(output, payload, restricted=True)
         print(f"wrote {output}")

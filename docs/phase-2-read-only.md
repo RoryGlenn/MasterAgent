@@ -19,7 +19,7 @@ added in Phase 2C is documented in
 |---|---|---|
 | Jira | Cloud, Data Center | `jira.server.info`, `jira.issue.search`, `jira.issue.read` |
 | Confluence | Cloud, Data Center | `confluence.page.search`, `confluence.page.read` |
-| Bitbucket | Cloud, Data Center | instance, repository, PR search/read, diffstat, build-status reads |
+| Bitbucket | Cloud, Data Center | instance, repository, PR search/read, diffstat, build-status reads; anonymous public workspace repository listing on Cloud |
 | GitHub | Cloud | anonymous public-user and authenticated-user repository lists, repository read, PR search/read, commit check-run reads |
 | Microsoft identity | Microsoft Graph | `microsoft.identity.read` |
 | SharePoint/OneDrive | Microsoft Graph | site search/read, drive list, children, metadata, bounded text read |
@@ -53,8 +53,8 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 Used only by capabilities explicitly cataloged for anonymous access. An
 authentication-free capability must not resolve or forward ambient credentials
 and may call only its fixed public or internal endpoint.
-`github.public_repository.list` uses this mode in production for a specified
-GitHub user's public repositories.
+`github.public_repository.list` and `bitbucket.public_repository.list` use this
+mode in production for a specified GitHub user or Bitbucket Cloud workspace.
 
 ## Configuration resolution
 
@@ -111,6 +111,10 @@ A requested `expected_version` is validated against the retrieved page version.
 ### Bitbucket
 
 Cloud and Data Center use separate repository and pull-request paths. The connector can enrich a bounded number of PRs with build/CI statuses and diffstat summaries.
+
+`bitbucket.public_repository.list` uses Bitbucket Cloud's fixed workspace
+repository endpoint anonymously, returns only repositories marked public by the
+provider, and independently verifies the bounded result.
 
 The connector does not clone repositories, retrieve arbitrary source trees, commit, push, or merge.
 

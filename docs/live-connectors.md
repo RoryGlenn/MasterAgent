@@ -31,6 +31,11 @@ re-verify that principal before applied reads. Communication bodies and
 document content remain in memory unless explicit evidence output and
 retention rules permit persistence.
 
+`bitbucket.public_repository.list` similarly constructs only the fixed
+Bitbucket Cloud workspace-repositories endpoint, ignores ambient Bitbucket
+credentials, rejects repositories not explicitly marked public, and uses the
+shared same-origin pagination boundary.
+
 `master-agent connect --systems ...` is the provider-neutral readiness path
 when operator-requested access requires authentication. It enables only the
 selected supported read connectors in memory, accepts canonical or strictly
@@ -40,9 +45,10 @@ Cloud Basic-auth connectors may reuse the other product's configured Atlassian
 account pair in memory when their own names are absent. `--connector-url`
 normalizes an operator-supplied Atlassian UI URL to the selected tenant origin;
 bind/apply include that origin in the execution context. It is not a
-prerequisite for the anonymous GitHub public-user repository list. It is not a
-generic HTTP surface and does not execute a feature action; the agent continues
-through the typed capability that produces the requested outcome.
+prerequisite for the anonymous GitHub public-user or Bitbucket public-workspace
+repository lists. It is not a generic HTTP surface and does not execute a
+feature action; the agent continues through the typed capability that produces
+the requested outcome.
 
 ## Mutation connectors
 

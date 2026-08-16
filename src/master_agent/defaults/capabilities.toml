@@ -19,6 +19,12 @@ enabled = true
 authentication = "configured_connector"
 risk = "read_only"
 
+[capabilities."bitbucket.public_repository.list"]
+enabled = true
+authentication = "anonymous_or_configured_connector"
+risk = "read_only"
+description = "List public repositories in a specified Bitbucket Cloud workspace without requiring credentials."
+
 [capabilities."bitbucket.pull_request.create"]
 enabled = true
 authentication = "configured_connector"
