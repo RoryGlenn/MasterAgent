@@ -1,5 +1,11 @@
 # Changelog
 
+- Add a default-branch-only Confluence Cloud sandbox workflow that exercises
+  the normal connection probe, private authenticated-approval resume, exact
+  page create/read/versioned-update verification, always-run fresh cleanup,
+  bounded HMAC-owned stale-page recovery, and a separately gated disposable
+  space lifecycle without exposing secrets or retrieved page bodies.
+
 - Persist explicit pending, completed, failed, and indeterminate idempotency
   outcomes; retry only certified pre-effect failures; independently reconcile
   provider-addressable Teams messages; and keep uncertain sends blocked rather

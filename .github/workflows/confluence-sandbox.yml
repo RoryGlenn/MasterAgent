@@ -1,0 +1,247 @@
+name: Confluence Cloud sandbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_space_lifecycle:
+        description: Run the separately protected disposable-space lifecycle
+        required: false
+        type: boolean
+        default: false
+      reaper_mode:
+        description: Preview or delete stale, authenticated sandbox pages
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - preview
+          - delete
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: confluence-cloud-sandbox
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  page-lifecycle:
+    name: Governed page lifecycle
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      vars.CONFLUENCE_SANDBOX_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: confluence-sandbox
+    env:
+      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-page-${{ github.run_id }}-${{ github.run_attempt }}
+      RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-page
+      SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
+      ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
+      NON_PRODUCTION: ${{ vars.CONFLUENCE_SANDBOX_NON_PRODUCTION }}
+      SPACE_ID: ${{ vars.CONFLUENCE_SANDBOX_SPACE_ID }}
+      SPACE_KEY: ${{ vars.CONFLUENCE_SANDBOX_SPACE_KEY }}
+      PARENT_ID: ${{ vars.CONFLUENCE_SANDBOX_PARENT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Reject an unsafe destination before provider access
+        run: >-
+          python3 scripts/confluence_sandbox.py preflight
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+          --space-id "$SPACE_ID"
+          --space-key "$SPACE_KEY"
+          --parent-id "$PARENT_ID"
+          --require-space
+      - name: Install the reviewed runtime
+        run: python3 -m pip install .
+      - name: Create a private ephemeral runtime root
+        id: private-root
+        run: install -d -m 0700 "$SANDBOX_ROOT"
+      - name: Create, independently read, and version-update one page
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py page-lifecycle
+          --root "$SANDBOX_ROOT"
+          --run-label "$RUN_LABEL"
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+          --space-id "$SPACE_ID"
+          --space-key "$SPACE_KEY"
+          --parent-id "$PARENT_ID"
+      - name: Always remove the exact owned page and verify provider state
+        if: always() && steps.private-root.outcome == 'success'
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py cleanup-page
+          --root "$SANDBOX_ROOT"
+
+  stale-page-reaper:
+    name: Bounded stale-page reaper
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      vars.CONFLUENCE_SANDBOX_ENABLED == 'true' &&
+      (github.event_name == 'schedule' || inputs.reaper_mode != 'none')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: confluence-sandbox
+    env:
+      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
+      RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-reaper
+      SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
+      ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
+      NON_PRODUCTION: ${{ vars.CONFLUENCE_SANDBOX_NON_PRODUCTION }}
+      SPACE_ID: ${{ vars.CONFLUENCE_SANDBOX_SPACE_ID }}
+      SPACE_KEY: ${{ vars.CONFLUENCE_SANDBOX_SPACE_KEY }}
+      PARENT_ID: ${{ vars.CONFLUENCE_SANDBOX_PARENT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Reject an unsafe destination before provider access
+        run: >-
+          python3 scripts/confluence_sandbox.py preflight
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+          --space-id "$SPACE_ID"
+          --space-key "$SPACE_KEY"
+          --parent-id "$PARENT_ID"
+          --require-space
+      - name: Require the separately reviewed deletion gate
+        if: github.event_name == 'workflow_dispatch' && inputs.reaper_mode == 'delete'
+        env:
+          REAPER_DELETE_ENABLED: ${{ vars.CONFLUENCE_SANDBOX_ENABLE_STALE_DELETE }}
+        run: test "$REAPER_DELETE_ENABLED" = "true"
+      - name: Install the reviewed runtime
+        run: python3 -m pip install .
+      - name: Create a private ephemeral runtime root
+        run: install -d -m 0700 "$SANDBOX_ROOT"
+      - name: Preview stale exact-marker candidates
+        if: github.event_name == 'schedule' || inputs.reaper_mode == 'preview'
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py reap
+          --root "$SANDBOX_ROOT"
+          --run-label "$RUN_LABEL"
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+          --space-id "$SPACE_ID"
+          --space-key "$SPACE_KEY"
+          --parent-id "$PARENT_ID"
+          --mode preview
+          --min-age-hours 24
+          --max-resources 5
+      - name: Delete only stale authenticated-marker candidates
+        if: github.event_name == 'workflow_dispatch' && inputs.reaper_mode == 'delete'
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py reap
+          --root "$SANDBOX_ROOT"
+          --run-label "$RUN_LABEL"
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+          --space-id "$SPACE_ID"
+          --space-key "$SPACE_KEY"
+          --parent-id "$PARENT_ID"
+          --mode delete
+          --min-age-hours 24
+          --max-resources 5
+
+  space-lifecycle:
+    name: Separately gated disposable-space lifecycle
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.event_name == 'workflow_dispatch' && inputs.run_space_lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: confluence-space-sandbox
+    env:
+      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-space-${{ github.run_id }}-${{ github.run_attempt }}
+      RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-space
+      SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
+      ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
+      NON_PRODUCTION: ${{ vars.CONFLUENCE_SANDBOX_NON_PRODUCTION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Reject an unsafe destination before provider access
+        run: >-
+          python3 scripts/confluence_sandbox.py preflight
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+      - name: Require the separately reviewed space-creation gate
+        env:
+          SPACE_LIFECYCLE_ENABLED: ${{ vars.CONFLUENCE_SANDBOX_ENABLE_SPACE_LIFECYCLE }}
+        run: test "$SPACE_LIFECYCLE_ENABLED" = "true"
+      - name: Install the reviewed runtime
+        run: python3 -m pip install .
+      - name: Create a private ephemeral runtime root
+        id: private-root
+        run: install -d -m 0700 "$SANDBOX_ROOT"
+      - name: Create and verify an owned space and disposable page
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py space-lifecycle
+          --root "$SANDBOX_ROOT"
+          --run-label "$RUN_LABEL"
+          --origin "$SANDBOX_ORIGIN"
+          --allowlisted-origin "$ALLOWLISTED_ORIGIN"
+          --non-production "$NON_PRODUCTION"
+      - name: Always remove owned content, then the exact empty space
+        if: always() && steps.private-root.outcome == 'success'
+        env:
+          CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_EMAIL }}
+          CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_API_TOKEN }}
+          CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_APPROVAL_SECRET }}
+          CONFLUENCE_SANDBOX_OWNERSHIP_KEY: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_OWNERSHIP_KEY }}
+        run: >-
+          python3 scripts/confluence_sandbox.py cleanup-space
+          --root "$SANDBOX_ROOT"
