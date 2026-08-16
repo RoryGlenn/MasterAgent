@@ -64,6 +64,8 @@ Typed anonymous public-data capabilities require no credential activation.
   never from the hosted runner's shared site-packages. The exact setup-python
   runtime tree is made non-writable by group/others before those environments
   are created.
+- The source archive includes both workflow definitions alongside the
+  workflow-contract tests that validate them.
 
 Ruff linting and formatting plus strict mypy checks pass without file
 exclusions and are required CI gates. Tool versions are pinned in the project

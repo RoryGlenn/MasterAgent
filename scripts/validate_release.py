@@ -454,6 +454,8 @@ def validate_archive(path: Path) -> ValidationReport:
             "/.ai/FIRST_RUN.md",
             "/.ai/AUTONOMY.md",
             "/.github/agents/MasterAgent.agent.md",
+            "/.github/workflows/ci.yml",
+            "/.github/workflows/confluence-sandbox.yml",
             "/.env.example",
             "/LICENSE",
             "/setup.py",
