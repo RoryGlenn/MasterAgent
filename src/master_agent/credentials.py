@@ -248,26 +248,55 @@ def _validate_credentials(
     values: Mapping[Any, Any], *, allowed_names: Sequence[str]
 ) -> dict[str, str]:
     allowed = frozenset(allowed_names)
+    username_names = tuple(name for name in allowed if name.endswith("_USERNAME"))
     result: dict[str, str] = {}
     for name, value in values.items():
-        if not isinstance(name, str) or name not in allowed:
+        destination = name
+        if isinstance(name, str) and name.endswith("_EMAIL"):
+            provider = name.removesuffix("_EMAIL")
+            candidates = tuple(
+                candidate
+                for candidate in username_names
+                if candidate.removeprefix("MASTER_AGENT_").removesuffix(
+                    "_USERNAME"
+                )
+                == provider
+            )
+            if len(candidates) == 1 and candidates[0] not in result:
+                destination = candidates[0]
+        if not isinstance(destination, str) or destination not in allowed:
+            if isinstance(name, str) and _is_descriptive_metadata_name(name):
+                continue
             raise ConfigurationError(
                 "credential store contains a name not declared by integrations"
             )
         if not isinstance(value, str) or not value:
             raise ConfigurationError(
-                f"credential store value must be a non-empty string: {name}"
+                f"credential store value must be a non-empty string: {destination}"
             )
         if "\x00" in value:
             raise ConfigurationError(
-                f"credential store value contains a prohibited NUL: {name}"
+                f"credential store value contains a prohibited NUL: {destination}"
             )
         if len(value.encode()) > _MAX_VALUE_BYTES:
             raise ConfigurationError(
-                f"credential store value exceeds the 64 KiB limit: {name}"
+                f"credential store value exceeds the 64 KiB limit: {destination}"
             )
-        result[name] = value
+        if destination in result:
+            raise ConfigurationError(
+                "credential store contains duplicate credential aliases: "
+                + destination
+            )
+        result[destination] = value
+    if not result:
+        raise ConfigurationError("credential store contains no declared credentials")
     return result
+
+
+def _is_descriptive_metadata_name(name: str) -> bool:
+    """Allow non-secret identity metadata alongside declared credentials."""
+
+    return name.endswith(("_EMAIL", "_FULLNAME"))
 
 
 def _parse_provider_credentials(
