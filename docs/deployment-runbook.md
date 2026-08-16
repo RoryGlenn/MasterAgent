@@ -95,7 +95,9 @@ Review the generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
 Use disposable Jira issues, Confluence pages, GitHub issues/pull requests and
 test repositories. Capture
 expected versions. Obtain exact approvals. Enable only one granular provider
-flag. Execute, verify, and test compensation. Do not enable local Git or OneNote
+flag. Execute and verify; test automatic compensation only for atomic
+version/ref-precondition adapters and test manual descriptors for the rest. Do
+not enable local Git or OneNote
 writes; their catalog, governance, and live-registry routes are disabled.
 
 Exercise the approval handoff itself: bind the approval-authority configuration,

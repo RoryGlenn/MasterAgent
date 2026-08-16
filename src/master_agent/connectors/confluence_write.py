@@ -305,12 +305,6 @@ class ConfluenceWriteConnector(CompensatingConnector):
             raise ConnectorError(
                 "Confluence create-space provider poststate did not match approved identity"
             )
-        observed["compensation"] = {
-            "capability": "confluence.space.delete_created",
-            "space_id": space_id,
-            "space_key": key,
-            "created_by_action": True,
-        }
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -320,13 +314,13 @@ class ConfluenceWriteConnector(CompensatingConnector):
             message="Confluence space created",
             compensation=CompensationDescriptor(
                 kind="delete_created_space",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=space_id,
                 reason=(
-                    "created-space deletion is available only through the "
-                    "originating connector run"
+                    "created-space deletion has no adapter-enforced atomic "
+                    "precondition and requires manual re-review"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def _delete_created_space(
@@ -421,11 +415,6 @@ class ConfluenceWriteConnector(CompensatingConnector):
             deployment=self._config.deployment,
         )
         _require_poststate(after, expected, "create")
-        after["compensation"] = {
-            "capability": "confluence.page.delete_created",
-            "page_id": page_id,
-            "created_by_action": True,
-        }
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -435,13 +424,13 @@ class ConfluenceWriteConnector(CompensatingConnector):
             message="Confluence page created",
             compensation=CompensationDescriptor(
                 kind="delete_created_page",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=page_id,
                 reason=(
-                    "created-page deletion is available only through the "
-                    "originating connector run"
+                    "created-page deletion has no adapter-enforced atomic "
+                    "precondition and requires manual re-review"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def _update(self, action: AgentAction, *, compensating: bool) -> ExecutionResult:
@@ -522,14 +511,15 @@ class ConfluenceWriteConnector(CompensatingConnector):
             deployment=self._config.deployment,
         )
         _require_poststate(observed, expected, "update")
-        observed["compensation"] = {
-            "capability": "confluence.page.compensate",
+        compensation_parameters: dict[str, Any] = {
             "title": before.get("title"),
             "body": before.get("body"),
             "representation": before.get("representation", "storage"),
-            "space_key": before.get("space_key"),
-            "expected_version": observed.get("version"),
         }
+        for optional in ("space_key", "status"):
+            value = before.get(optional)
+            if isinstance(value, str) and value:
+                compensation_parameters[optional] = value
         return ExecutionResult(
             action_id=action.action_id,
             state=ActionState.SUCCEEDED,
@@ -541,9 +531,14 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 if compensating
                 else "Confluence page update accepted"
             ),
-            compensation=CompensationDescriptor.from_dict(
-                observed["compensation"]
-            ).to_dict(),
+            compensation=CompensationDescriptor(
+                kind="restore_previous_page",
+                mode=CompensationMode.PLAN,
+                capability="confluence.page.compensate",
+                parameters=compensation_parameters,
+                expected_version=str(observed.get("version")),
+                target_resource_id=page_id,
+            ),
         )
 
     def _approved_result_poststate(

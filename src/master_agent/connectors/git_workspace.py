@@ -1734,11 +1734,11 @@ class GitWorkspaceConnector(CompensatingConnector):
             raise ConnectorError("Git mutations must use reversible_write risk")
 
 
-def _compensation_descriptor(after: Mapping[str, Any]) -> dict[str, Any]:
+def _compensation_descriptor(after: Mapping[str, Any]) -> CompensationDescriptor:
     raw = after.get("compensation")
     if not isinstance(raw, Mapping):
         raise ConnectorError("Git result omitted typed compensation metadata")
-    return CompensationDescriptor.from_dict(raw).to_dict()
+    return CompensationDescriptor.from_dict(raw)
 
 
 def _in_process_compensation(kind: str) -> dict[str, Any]:

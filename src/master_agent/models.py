@@ -7,6 +7,7 @@ import json
 import math
 import unicodedata
 from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -1034,6 +1035,8 @@ class CompensationDescriptor:
     schema: str = "master-agent/compensation@1"
 
     def __post_init__(self) -> None:
+        if self.schema != "master-agent/compensation@1":
+            raise ValidationError("unsupported compensation descriptor schema")
         if not self.kind.strip():
             raise ValidationError("compensation kind must not be empty")
         if self.mode is CompensationMode.PLAN and not (
@@ -1064,65 +1067,34 @@ class CompensationDescriptor:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> CompensationDescriptor:
-        """Parse a versioned descriptor or a supported legacy descriptor."""
+        """Parse the one supported versioned compensation descriptor."""
 
-        if data.get("schema") == "master-agent/compensation@1":
-            parameters = data.get("parameters", {})
-            if not isinstance(parameters, Mapping):
-                raise ValidationError("compensation parameters must be an object")
-            return cls(
-                schema=str(data["schema"]),
-                kind=str(data["kind"]),
-                mode=CompensationMode(str(data["mode"])),
-                capability=(
-                    str(data["capability"])
-                    if data.get("capability") is not None
-                    else None
-                ),
-                parameters=dict(parameters),
-                expected_version=(
-                    str(data["expected_version"])
-                    if data.get("expected_version") is not None
-                    else None
-                ),
-                target_resource_id=(
-                    str(data["target_resource_id"])
-                    if data.get("target_resource_id") is not None
-                    else None
-                ),
-                reason=(
-                    str(data["reason"]) if data.get("reason") is not None else None
-                ),
+        if data.get("schema") != "master-agent/compensation@1":
+            raise ValidationError(
+                "compensation descriptor must use master-agent/compensation@1"
             )
-
-        capability = str(data.get("capability", "")).strip()
-        excluded = {
-            "capability",
-            "expected_version",
-            "kind",
-            "automatic_delete_disabled",
-            "automatic_remote_branch_delete_disabled",
-        }
-        if capability:
-            return cls(
-                kind=str(data.get("kind", "legacy_plan_compensation")),
-                mode=CompensationMode.PLAN,
-                capability=capability,
-                parameters={
-                    str(key): value
-                    for key, value in data.items()
-                    if key not in excluded and value is not None
-                },
-                expected_version=(
-                    str(data["expected_version"])
-                    if data.get("expected_version") is not None
-                    else None
-                ),
-            )
+        parameters = data.get("parameters", {})
+        if not isinstance(parameters, Mapping):
+            raise ValidationError("compensation parameters must be an object")
         return cls(
-            kind=str(data.get("kind", "legacy_in_process_compensation")),
-            mode=CompensationMode.IN_PROCESS,
-            reason="connector only exposes in-process compensation",
+            schema=str(data["schema"]),
+            kind=str(data["kind"]),
+            mode=CompensationMode(str(data["mode"])),
+            capability=(
+                str(data["capability"]) if data.get("capability") is not None else None
+            ),
+            parameters=dict(parameters),
+            expected_version=(
+                str(data["expected_version"])
+                if data.get("expected_version") is not None
+                else None
+            ),
+            target_resource_id=(
+                str(data["target_resource_id"])
+                if data.get("target_resource_id") is not None
+                else None
+            ),
+            reason=(str(data["reason"]) if data.get("reason") is not None else None),
         )
 
 
@@ -1136,11 +1108,46 @@ class ExecutionResult:
     after: Mapping[str, Any] | None
     connector_reference: str | None = None
     message: str = ""
-    compensation: Mapping[str, Any] | None = None
+    compensation: CompensationDescriptor | None = None
+    _before_digest: str = field(init=False, repr=False, compare=False)
+    _after_digest: str = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.before is not None:
+            _freeze_json_mapping(self.before)
+            object.__setattr__(
+                self,
+                "before",
+                deepcopy(dict(self.before)),
+            )
+        if self.after is not None:
+            _freeze_json_mapping(self.after)
+            object.__setattr__(
+                self,
+                "after",
+                deepcopy(dict(self.after)),
+            )
+        if self.compensation is not None and not isinstance(
+            self.compensation, CompensationDescriptor
+        ):
+            raise ValidationError(
+                "execution result compensation must be a CompensationDescriptor"
+            )
+        object.__setattr__(self, "_before_digest", _result_state_digest(self.before))
+        object.__setattr__(self, "_after_digest", _result_state_digest(self.after))
+
+    def validate_integrity(self) -> None:
+        """Reject mutation of the connector snapshot after it was returned."""
+
+        if _result_state_digest(self.before) != self._before_digest:
+            raise ValidationError("execution result before-state changed after return")
+        if _result_state_digest(self.after) != self._after_digest:
+            raise ValidationError("execution result after-state changed after return")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the result to JSON-compatible data."""
 
+        self.validate_integrity()
         return {
             "action_id": str(self.action_id),
             "state": str(self.state),
@@ -1148,7 +1155,9 @@ class ExecutionResult:
             "after": _jsonable(self.after),
             "connector_reference": self.connector_reference,
             "message": self.message,
-            "compensation": _jsonable(self.compensation),
+            "compensation": (
+                self.compensation.to_dict() if self.compensation is not None else None
+            ),
         }
 
     @classmethod
@@ -1178,7 +1187,9 @@ class ExecutionResult:
             ),
             message=str(data.get("message", "")),
             compensation=(
-                dict(compensation) if isinstance(compensation, Mapping) else None
+                CompensationDescriptor.from_dict(compensation)
+                if isinstance(compensation, Mapping)
+                else None
             ),
         )
 
@@ -1235,6 +1246,17 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (tuple, list, set)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _result_state_digest(value: Mapping[str, Any] | None) -> str:
+    payload = json.dumps(
+        _jsonable(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _freeze_json_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:

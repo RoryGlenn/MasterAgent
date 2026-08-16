@@ -56,7 +56,7 @@ class CompensationPlanTests(unittest.TestCase):
                 parameters={"value": "old"},
                 expected_version="2",
                 target_resource_id="provider-42",
-            ).to_dict(),
+            ),
         )
         report = RunReport(
             run_id=uuid4(),
@@ -74,9 +74,15 @@ class CompensationPlanTests(unittest.TestCase):
             ),
         )
 
+        persisted_report = RunReport.from_dict(report.to_dict())
+        self.assertIsInstance(
+            persisted_report.actions[0].result.compensation,
+            CompensationDescriptor,
+        )
+
         compensation = build_compensation_plan(
             original,
-            report,
+            persisted_report,
             created_by="operator",
         )
 
@@ -112,6 +118,44 @@ class CompensationPlanTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValidationError, "complete separately approvable"):
             build_compensation_plan(original, report, created_by="operator")
+
+    def test_unversioned_legacy_compensation_metadata_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "compensation descriptor must"):
+            ExecutionResult.from_dict(
+                {
+                    "action_id": str(uuid4()),
+                    "state": "succeeded",
+                    "before": None,
+                    "after": None,
+                    "compensation": {
+                        "capability": "example.resource.restore",
+                        "value": "old",
+                    },
+                }
+            )
+
+    def test_execution_result_requires_typed_compensation_in_memory(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "CompensationDescriptor"):
+            ExecutionResult(
+                action_id=uuid4(),
+                state=ActionState.SUCCEEDED,
+                before=None,
+                after={"value": "new"},
+                compensation={"kind": "legacy"},  # type: ignore[arg-type]
+            )
+
+    def test_execution_result_rejects_snapshot_mutation(self) -> None:
+        result = ExecutionResult(
+            action_id=uuid4(),
+            state=ActionState.SUCCEEDED,
+            before={"value": "old"},
+            after={"value": "new"},
+        )
+        assert result.after is not None
+        result.after["value"] = "rewritten"
+
+        with self.assertRaisesRegex(ValidationError, "after-state changed"):
+            result.to_dict()
 
 
 def _action(resource_id: str) -> AgentAction:
@@ -151,7 +195,7 @@ def _report(action: AgentAction, mode: CompensationMode) -> ActionReport:
             state=ActionState.SUCCEEDED,
             before=None,
             after=None,
-            compensation=descriptor.to_dict(),
+            compensation=descriptor,
         ),
     )
 

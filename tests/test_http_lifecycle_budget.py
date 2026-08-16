@@ -16,6 +16,8 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -65,7 +67,11 @@ class _LifecycleConnector:
             state=ActionState.SUCCEEDED,
             before={"value": "before"},
             after={"value": "changed"},
-            compensation={"kind": "restore"},
+            compensation=CompensationDescriptor(
+                kind="restore",
+                mode=CompensationMode.IN_PROCESS,
+                reason="test connector restores state in process",
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:

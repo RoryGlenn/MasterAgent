@@ -23,6 +23,7 @@ from master_agent.errors import (
     ConnectorError,
     PreEffectError,
     StructuredDataTypeError,
+    ValidationError,
     VersionConflictError,
 )
 from master_agent.evidence import audit_message_metadata, result_audit_summary
@@ -37,6 +38,7 @@ from master_agent.models import (
     AgentAction,
     Approval,
     ChangePlan,
+    CompensationMode,
     ExecutionResult,
     RiskLevel,
 )
@@ -222,7 +224,7 @@ class WorkflowOrchestrator:
         approvals_tuple = tuple(approvals)
         reports: list[ActionReport] = []
         state_by_id: dict[UUID, ActionState] = {}
-        verified_side_effects: list[_ExecutedAction] = []
+        side_effects_may_have_occurred: list[_ExecutedAction] = []
         ordered = _topological_order(plan.actions)
         abort_remaining = False
 
@@ -270,7 +272,7 @@ class WorkflowOrchestrator:
                     run_id=run_id,
                     plan=plan,
                     reports=reports,
-                    executed=verified_side_effects,
+                    executed=side_effects_may_have_occurred,
                     dry_run=dry_run,
                 )
                 continue
@@ -310,7 +312,7 @@ class WorkflowOrchestrator:
                     run_id=run_id,
                     plan=plan,
                     reports=reports,
-                    executed=verified_side_effects,
+                    executed=side_effects_may_have_occurred,
                     dry_run=dry_run,
                 )
                 continue
@@ -341,7 +343,7 @@ class WorkflowOrchestrator:
                     run_id=run_id,
                     plan=plan,
                     reports=reports,
-                    executed=verified_side_effects,
+                    executed=side_effects_may_have_occurred,
                     dry_run=dry_run,
                 )
                 continue
@@ -386,7 +388,7 @@ class WorkflowOrchestrator:
                         run_id=run_id,
                         plan=plan,
                         reports=reports,
-                        executed=verified_side_effects,
+                        executed=side_effects_may_have_occurred,
                         dry_run=dry_run,
                     )
                     continue
@@ -416,7 +418,7 @@ class WorkflowOrchestrator:
                                 run_id=run_id,
                                 plan=plan,
                                 reports=reports,
-                                executed=verified_side_effects,
+                                executed=side_effects_may_have_occurred,
                                 dry_run=dry_run,
                             )
                             continue
@@ -450,7 +452,7 @@ class WorkflowOrchestrator:
                                 run_id=run_id,
                                 plan=plan,
                                 reports=reports,
-                                executed=verified_side_effects,
+                                executed=side_effects_may_have_occurred,
                                 dry_run=dry_run,
                             )
                             continue
@@ -471,7 +473,7 @@ class WorkflowOrchestrator:
                                 run_id=run_id,
                                 plan=plan,
                                 reports=reports,
-                                executed=verified_side_effects,
+                                executed=side_effects_may_have_occurred,
                                 dry_run=dry_run,
                             )
                             continue
@@ -510,7 +512,7 @@ class WorkflowOrchestrator:
                             run_id=run_id,
                             plan=plan,
                             reports=reports,
-                            executed=verified_side_effects,
+                            executed=side_effects_may_have_occurred,
                             dry_run=dry_run,
                         )
                         continue
@@ -528,7 +530,7 @@ class WorkflowOrchestrator:
                             run_id=run_id,
                             plan=plan,
                             reports=reports,
-                            executed=verified_side_effects,
+                            executed=side_effects_may_have_occurred,
                             dry_run=dry_run,
                         )
                         continue
@@ -606,7 +608,7 @@ class WorkflowOrchestrator:
                             run_id=run_id,
                             plan=plan,
                             reports=reports,
-                            executed=verified_side_effects,
+                            executed=side_effects_may_have_occurred,
                             dry_run=dry_run,
                         )
                         continue
@@ -615,7 +617,41 @@ class WorkflowOrchestrator:
                         raise RuntimeError("idempotency claim omitted its token")
                 with activate_http_action_budget(http_budget):
                     result = connector.execute(action)
-                    verification = connector.verify(action, result)
+                    if not isinstance(result, ExecutionResult):
+                        raise ConnectorError(
+                            "connector returned an invalid execution result"
+                        )
+                    if _uses_idempotency(action):
+                        self._audit.record(
+                            run_id=run_id,
+                            plan_id=plan.plan_id,
+                            action_id=action.action_id,
+                            event_type="side_effect_may_have_occurred",
+                            payload={
+                                "capability": action.capability,
+                                "result": result_audit_summary(result),
+                            },
+                        )
+                    # Keep the runtime's exact post-execute snapshot private.
+                    # Verification receives a separate copy so a connector
+                    # cannot rewrite evidence that may need reconciliation or
+                    # compensation after verification fails.
+                    result = _copy_execution_result(result)
+                    if action.risk is RiskLevel.REVERSIBLE_WRITE:
+                        side_effects_may_have_occurred.append(
+                            _ExecutedAction(
+                                action=action,
+                                connector=connector,
+                                result=result,
+                                report_index=len(reports),
+                                http_budget=http_budget,
+                            )
+                        )
+                    _validate_execution_result(action, result)
+                    verification = connector.verify(
+                        action,
+                        _copy_execution_result(result),
+                    )
                 if not verification.verified:
                     outcome_persisted = self._persist_idempotency_outcome(
                         action=action,
@@ -745,6 +781,7 @@ class WorkflowOrchestrator:
                 OSError,
                 RuntimeError,
                 TypeError,
+                ValidationError,
                 ValueError,
             ) as error:  # Connector boundary preserves partial state.
                 outcome_persisted = self._persist_idempotency_outcome(
@@ -778,21 +815,6 @@ class WorkflowOrchestrator:
             state_by_id[action.action_id] = report.state
             self._record_action(run_id, plan, action, report)
 
-            if (
-                connector is not None
-                and action.risk is RiskLevel.REVERSIBLE_WRITE
-                and result is not None
-            ):
-                verified_side_effects.append(
-                    _ExecutedAction(
-                        action=action,
-                        connector=connector,
-                        result=result,
-                        report_index=len(reports) - 1,
-                        http_budget=http_budget,
-                    )
-                )
-
             if report.state in {
                 ActionState.FAILED,
                 ActionState.CONFLICTED,
@@ -804,7 +826,7 @@ class WorkflowOrchestrator:
                     run_id=run_id,
                     plan=plan,
                     reports=reports,
-                    executed=verified_side_effects,
+                    executed=side_effects_may_have_occurred,
                     dry_run=dry_run,
                 )
 
@@ -920,6 +942,57 @@ class WorkflowOrchestrator:
         for item in reversed(executed):
             action = item.action
             connector = item.connector
+            try:
+                item.result.validate_integrity()
+            except ValidationError as error:
+                reports[item.report_index] = ActionReport(
+                    action_id=action.action_id,
+                    capability=action.capability,
+                    state=ActionState.COMPENSATION_FAILED,
+                    message=f"compensation refused: {error}",
+                    result=item.result,
+                )
+                self._record_action(
+                    run_id,
+                    plan,
+                    action,
+                    reports[item.report_index],
+                )
+                continue
+            descriptor = item.result.compensation
+            if descriptor is None:
+                reports[item.report_index] = ActionReport(
+                    action_id=action.action_id,
+                    capability=action.capability,
+                    state=ActionState.COMPENSATION_FAILED,
+                    message="reversible result omitted its compensation descriptor",
+                    result=item.result,
+                )
+                self._record_action(
+                    run_id,
+                    plan,
+                    action,
+                    reports[item.report_index],
+                )
+                continue
+            if descriptor.mode is CompensationMode.MANUAL:
+                reports[item.report_index] = ActionReport(
+                    action_id=action.action_id,
+                    capability=action.capability,
+                    state=ActionState.COMPENSATION_FAILED,
+                    message=(
+                        "automatic compensation is unavailable: "
+                        f"{descriptor.reason or descriptor.kind}"
+                    ),
+                    result=item.result,
+                )
+                self._record_action(
+                    run_id,
+                    plan,
+                    action,
+                    reports[item.report_index],
+                )
+                continue
             if not isinstance(connector, CompensatingConnector):
                 reports[item.report_index] = ActionReport(
                     action_id=action.action_id,
@@ -938,17 +1011,23 @@ class WorkflowOrchestrator:
 
             try:
                 with activate_http_action_budget(item.http_budget):
-                    postcondition = connector.verify(action, item.result)
+                    postcondition = connector.verify(
+                        action,
+                        _copy_execution_result(item.result),
+                    )
                     if not postcondition.verified:
                         raise VersionConflictError(
                             "automatic compensation refused because the target no "
                             "longer matches the agent's verified post-state"
                         )
-                    compensation = connector.compensate(action, item.result)
+                    compensation = connector.compensate(
+                        action,
+                        _copy_execution_result(item.result),
+                    )
                     verification = connector.verify_compensation(
                         action,
-                        item.result,
-                        compensation,
+                        _copy_execution_result(item.result),
+                        _copy_execution_result(compensation),
                     )
                 if not verification.verified:
                     raise RuntimeError(
@@ -972,6 +1051,7 @@ class WorkflowOrchestrator:
                 OSError,
                 RuntimeError,
                 TypeError,
+                ValidationError,
                 ValueError,
             ) as error:
                 reports[item.report_index] = ActionReport(
@@ -1139,6 +1219,40 @@ def _indeterminate_result(
         return None
     result = outcome.get("result")
     return result if isinstance(result, Mapping) else None
+
+
+def _validate_execution_result(
+    action: AgentAction,
+    result: ExecutionResult,
+) -> None:
+    """Bind a connector result to the action and its rollback contract."""
+
+    if result.action_id != action.action_id:
+        raise ConnectorError("connector result action ID did not match the action")
+    result.validate_integrity()
+    if result.state is not ActionState.SUCCEEDED:
+        raise ConnectorError(
+            "connector result must report succeeded before verification"
+        )
+    if action.risk is RiskLevel.REVERSIBLE_WRITE and result.compensation is None:
+        raise ConnectorError(
+            "reversible connector result omitted a typed compensation descriptor"
+        )
+
+
+def _copy_execution_result(result: ExecutionResult) -> ExecutionResult:
+    """Return a validated private copy of connector-owned result evidence."""
+
+    result.validate_integrity()
+    return ExecutionResult(
+        action_id=result.action_id,
+        state=result.state,
+        before=result.before,
+        after=result.after,
+        connector_reference=result.connector_reference,
+        message=result.message,
+        compensation=result.compensation,
+    )
 
 
 def _dependency_succeeded(

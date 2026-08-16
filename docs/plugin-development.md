@@ -21,7 +21,10 @@ A connector provides:
 - `read(resource)` where meaningful;
 - `verify(action, result)`.
 
-A reversible connector additionally implements `compensate` and `verify_compensation`.
+A reversible connector additionally implements `compensate` and
+`verify_compensation`, returns a typed `CompensationDescriptor` from every
+effect, and selects `manual` mode unless rollback has an adapter-enforced
+atomic precondition.
 
 ## Inventory and approval binding
 

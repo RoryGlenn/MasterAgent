@@ -332,13 +332,13 @@ class OneNoteWriteConnector:
                 message="OneNote page created",
                 compensation=CompensationDescriptor(
                     kind="delete_created_page",
-                    mode=CompensationMode.IN_PROCESS,
+                    mode=CompensationMode.MANUAL,
                     target_resource_id=page_id,
                     reason=(
-                        "created-page deletion is available only through the "
-                        "originating connector run"
+                        "OneNote deletion has no adapter-enforced atomic precondition "
+                        "and requires manual re-review"
                     ),
-                ).to_dict(),
+                ),
             )
 
         page_id = action.target.resource_id
@@ -391,10 +391,10 @@ class OneNoteWriteConnector:
             message="OneNote page update accepted",
             compensation=CompensationDescriptor(
                 kind="restore_previous_page_html",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 reason=(
-                    "prior page HTML is held only by the originating connector "
-                    "and is not persisted in the run report"
+                    "OneNote restore has no adapter-enforced atomic precondition and "
+                    "the prior HTML is not persisted"
                 ),
                 parameters={
                     "available": bool(previous_html),
@@ -402,7 +402,7 @@ class OneNoteWriteConnector:
                         previous_html.encode("utf-8")
                     ).hexdigest(),
                 },
-            ).to_dict(),
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:

@@ -407,11 +407,6 @@ class JiraWriteConnector(CompensatingConnector):
         after = {
             **observed,
             "requested_fields": fields,
-            "compensation": {
-                "capability": "jira.issue.compensate",
-                "fields": _previous_values(before.get("fields"), fields),
-                "expected_version": observed.get("version"),
-            },
         }
         return ExecutionResult(
             action_id=action.action_id,
@@ -420,9 +415,18 @@ class JiraWriteConnector(CompensatingConnector):
             after=after,
             connector_reference=f"jira:{action.target.resource_id}",
             message="Jira issue update accepted",
-            compensation=CompensationDescriptor.from_dict(
-                after["compensation"]
-            ).to_dict(),
+            compensation=CompensationDescriptor(
+                kind="restore_previous_issue_fields",
+                mode=CompensationMode.MANUAL,
+                parameters={
+                    "fields": _previous_values(before.get("fields"), fields),
+                },
+                target_resource_id=action.target.resource_id,
+                reason=(
+                    "Jira issue restore has no adapter-enforced atomic precondition "
+                    "and requires manual re-review"
+                ),
+            ),
         )
 
     def _create_comment(self, action: AgentAction) -> ExecutionResult:
@@ -460,12 +464,13 @@ class JiraWriteConnector(CompensatingConnector):
             message="Jira comment created",
             compensation=CompensationDescriptor(
                 kind="delete_created_comment",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
+                target_resource_id=str(data["id"]),
                 reason=(
-                    "created-comment deletion is available only through the "
-                    "originating connector run"
+                    "Jira comment deletion has no adapter-enforced atomic "
+                    "precondition and requires manual re-review"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def _transition_issue(self, action: AgentAction) -> ExecutionResult:
@@ -507,11 +512,6 @@ class JiraWriteConnector(CompensatingConnector):
             **observed,
             "target_status": target_status,
             "transition_id": transition_id,
-            "compensation": {
-                "capability": "jira.issue.transition.reverse",
-                "previous_status": before.get("status"),
-                "reverse_transition_id": reverse_transition_id,
-            },
         }
         return ExecutionResult(
             action_id=action.action_id,
@@ -522,12 +522,17 @@ class JiraWriteConnector(CompensatingConnector):
             message="Jira transition accepted",
             compensation=CompensationDescriptor(
                 kind="reverse_issue_transition",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
+                target_resource_id=action.target.resource_id,
+                parameters={
+                    "previous_status": before.get("status"),
+                    "reverse_transition_id": reverse_transition_id,
+                },
                 reason=(
-                    "transition reversal requires provider state retained by "
-                    "the originating connector run"
+                    "Jira transition reversal has no adapter-enforced atomic "
+                    "precondition and requires manual re-review"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def _compensate(self, action: AgentAction) -> ExecutionResult:

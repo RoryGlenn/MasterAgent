@@ -175,7 +175,7 @@ class GitBranchPushConnector:
                     "remote deletion requires the originating connector's "
                     "allowlisted repository boundary"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -251,12 +251,24 @@ class GitBranchPushConnector:
                     "remote branch advanced after publication; automatic deletion "
                     "is prohibited"
                 )
-            self._run_publication(
-                repository,
-                "push",
-                remote_url,
-                f":refs/heads/{branch}",
-            )
+            try:
+                self._run_publication(
+                    repository,
+                    "push",
+                    f"--force-with-lease=refs/heads/{branch}:{expected}",
+                    remote_url,
+                    f":refs/heads/{branch}",
+                )
+            except ConnectorError as error:
+                config_guard.validate()
+                raced = self._remote_hash(repository, remote_url, branch)
+                config_guard.validate()
+                if raced != expected:
+                    raise VersionConflictError(
+                        "remote branch changed during compensation; atomic deletion "
+                        "was refused"
+                    ) from error
+                raise
             config_guard.validate()
             remaining = self._remote_hash(repository, remote_url, branch)
             config_guard.validate()

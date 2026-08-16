@@ -1,4 +1,4 @@
-"""Approved Bitbucket pull-request writes with verified decline compensation."""
+"""Approved Bitbucket pull-request writes with verified manual recovery."""
 
 from __future__ import annotations
 
@@ -134,13 +134,13 @@ class BitbucketWriteConnector:
             message="Bitbucket pull request created",
             compensation=CompensationDescriptor(
                 kind="decline_pull_request",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=pr_id,
                 reason=(
-                    "decline requires connector-held provider context and is "
-                    "available only during the originating run"
+                    "the decline adapter has no atomic provider precondition, so "
+                    "a human must re-read and decline the pull request manually"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:

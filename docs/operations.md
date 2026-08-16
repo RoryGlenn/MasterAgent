@@ -44,7 +44,8 @@ the request JSON as approval.
 - `indeterminate`: a side effect may have occurred but exact poststate could not
   be established, so automatic retry is blocked;
 - `compensated`: reversible side effect was rolled back and verified;
-- `compensation_failed`: rollback could not be proven.
+- `compensation_failed`: automatic rollback was unavailable, refused because
+  of drift, or could not be proven; inspect the descriptor's manual reason.
 
 ## Incident handling
 
@@ -55,7 +56,9 @@ the request JSON as approval.
 - Never retry an indeterminate write or send unless its typed connector can
   reconcile the exact provider resource. A Microsoft Graph `client-request-id`
   is diagnostic correlation, not an idempotency guarantee.
-- Use automatic compensation only when the exact connector supports it and the target remains unchanged.
+- Use automatic compensation only when the descriptor permits it and the
+  connector enforces the exact post-state as an atomic mutation precondition.
+  A separate read followed by an unconditional write/delete is not sufficient.
 - For sent communications, create a separate correction plan.
 - For advanced branches or edited resources, do not force rollback; escalate to the system owner.
 

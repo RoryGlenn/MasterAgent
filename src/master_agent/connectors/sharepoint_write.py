@@ -189,13 +189,13 @@ class SharePointWriteConnector:
             message="SharePoint DriveItem replaced with an approved artifact",
             compensation=CompensationDescriptor(
                 kind="restore_drive_item_version",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=item_id,
                 reason=(
-                    "provider-version restore is available only through the "
-                    "originating connector run"
+                    "DriveItem version restore has no adapter-enforced atomic "
+                    "precondition and requires manual re-review"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
