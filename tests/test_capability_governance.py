@@ -219,6 +219,8 @@ class CapabilityGovernanceTests(unittest.TestCase):
             risk=RiskLevel.LOCAL_GENERATION,
             target_resource_types=("summary",),
             parameter_schema={"body": "string"},
+            max_input_bytes=1024,
+            max_output_bytes=1024,
             uses_external_model=True,
         )
         action = AgentAction(

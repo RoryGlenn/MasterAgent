@@ -55,7 +55,12 @@ read connector  draft connector  mutation/send connector
 
 ### Domain models
 
-`ResourceRef`, `AgentAction`, `ChangePlan`, `Approval`, `ExecutionResult`, and `VerificationResult` are immutable dataclasses. Plans have stable SHA-256 fingerprints. Dependencies are validated for missing references and cycles.
+`ResourceRef`, `AgentAction`, `ChangePlan`, `Approval`, `ExecutionResult`, and
+`VerificationResult` are immutable dataclasses. Plans have stable SHA-256
+fingerprints. The plan loader rejects an oversized file before JSON parsing,
+then applies iterative depth, fan-out, node, string, action, dependency, and
+aggregate parameter budgets before recursive model construction. Dependencies
+are validated for missing references and cycles.
 
 ### Capability catalog
 
@@ -67,6 +72,7 @@ read connector  draft connector  mutation/send connector
 - reversibility;
 - exact target system and allowed resource types;
 - a top-level parameter schema for every enabled side effect;
+- explicit input and output byte quotas for every local-generation capability;
 - required effective OAuth scopes, expected-version requirements, and the
   provider precondition that makes a modifying write atomic;
 - whether the capability uses an external model;
@@ -186,6 +192,11 @@ mode `0600` without following symlinks, verify its descriptor identity, write
 and read back the exact serialized bytes, and fsync the file and directory.
 Publication never creates a security-boundary directory or replaces an
 existing name.
+
+Local draft connectors share one bounded artifact budget for the complete run.
+They check each capability's declared bundle quota and the shared budget before
+creating any final name. Artifact readback and later verification hash bounded
+chunks instead of retaining a second whole-artifact buffer.
 
 ### Audit
 

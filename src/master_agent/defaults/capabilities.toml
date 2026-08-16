@@ -85,6 +85,8 @@ description = "Create a Confluence page; deletion recovery requires manual re-re
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["page"]
 parameter_schema = { title = "string", body = "string", representation = "string?", space_id = "string?", parent_id = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Confluence page-create proposal."
@@ -114,6 +116,8 @@ description = "Version-check and update a Confluence page."
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["page"]
 parameter_schema = { title = "string", body = "string", representation = "string?", space_id = "string?", parent_id = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Confluence page-update proposal."
@@ -220,6 +224,8 @@ description = "Create a Jira comment; deletion recovery requires manual re-revie
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["issue"]
 parameter_schema = { body = "string", before = "object?", output_name = "string?" }
 description = "Render a local Jira comment proposal."
@@ -254,6 +260,8 @@ description = "Disabled until Jira exposes or the adapter implements a provider-
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["issue"]
 parameter_schema = { transition_id = "string", target_status = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Jira transition proposal."
@@ -270,6 +278,8 @@ description = "Disabled until Jira exposes or the adapter implements a provider-
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["issue"]
 parameter_schema = { fields = "object", before = "object?", output_name = "string?" }
 description = "Render a local Jira field-update proposal."
@@ -342,6 +352,8 @@ risk = "read_only"
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["draft", "email_draft"]
 parameter_schema = { to = "string_or_string_list", subject = "string", body = "string", cc = "string_or_string_list?", bcc = "string_or_string_list?", output_name = "string?" }
 
@@ -374,6 +386,8 @@ risk = "read_only"
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["presentation"]
 parameter_schema = { title = "string", slides = "array?", sections = "array?", subtitle = "string?", output_name = "string?", source_action_ids = "string_list?" }
 
@@ -389,6 +403,8 @@ description = "Disabled until every local Git metadata transaction is descriptor
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["branch_plan"]
 parameter_schema = { branch = "string", base = "string", remote = "string?", output_name = "string?" }
 description = "Generate a local branch-operation plan."
@@ -421,6 +437,8 @@ description = "Disabled until every local Git metadata transaction is descriptor
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["patch"]
 parameter_schema = { relative_path = "string", before_text = "string?", after_text = "string?", output_name = "string?" }
 description = "Generate a reviewable unified diff without changing a repository."
@@ -535,6 +553,8 @@ description = "Post exact approval-bound content to an existing Teams chat."
 enabled = true
 authentication = "local"
 risk = "local_generation"
+max_input_bytes = 4194304
+max_output_bytes = 16777216
 target_resource_types = ["draft", "message", "message_draft"]
 parameter_schema = { recipient_type = "string", recipient_id = "string", body = "string", output_name = "string?", source_bindings = "object?" }
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from master_agent.config_sources import ConfigSource
-from master_agent.connectors.drafts import write_artifact_bundle
+from master_agent.connectors.drafts import ArtifactBudget, write_artifact_bundle
 from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError
 from master_agent.models import (
@@ -228,6 +228,7 @@ def render_draft_package(
     report: RunReport,
     *,
     output_dir: Path | PinnedDirectory,
+    artifact_budget: ArtifactBudget | None = None,
 ) -> DraftPackageArtifacts:
     """Create a package summary and manifest without following public paths."""
 
@@ -281,6 +282,7 @@ def render_draft_package(
                 (manifest_path, manifest_bytes, "application/json"),
                 (summary_path, summary_bytes, "text/markdown"),
             ),
+            artifact_budget=artifact_budget,
         )
         return DraftPackageArtifacts(summary_path, manifest_path)
 

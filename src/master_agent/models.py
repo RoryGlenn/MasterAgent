@@ -11,11 +11,21 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from itertools import islice
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
+from master_agent.resource_limits import (
+    MAX_ACTION_DEPENDENCIES,
+    MAX_ACTION_PARAMETER_BYTES,
+    MAX_PLAN_ACTIONS,
+    MAX_PLAN_BYTES,
+    MAX_PLAN_PARAMETER_BYTES,
+    measure_json_resources,
+    validate_bounded_string,
+)
 
 
 class RiskLevel(StrEnum):
@@ -104,7 +114,13 @@ class ResourceRef:
         ):
             if not value.strip():
                 raise ValidationError(f"{name} must not be empty")
+            validate_bounded_string(value, context=name)
             _reject_control_characters(value, name)
+        if self.expected_version is not None:
+            validate_bounded_string(
+                self.expected_version,
+                context="expected_version",
+            )
 
     @property
     def uri(self) -> str:
@@ -163,14 +179,32 @@ class AgentAction:
                 "capability must be a non-empty domain-specific dotted name"
             )
         _reject_control_characters(self.capability, "capability")
+        validate_bounded_string(self.capability, context="capability")
         if not self.idempotency_key.strip():
             raise ValidationError("idempotency_key must not be empty")
         if not self.justification.strip():
             raise ValidationError("justification must not be empty")
-        if self.action_id in self.dependencies:
+        for name, value in (
+            ("idempotency_key", self.idempotency_key),
+            ("justification", self.justification),
+        ):
+            validate_bounded_string(value, context=name)
+        dependencies = tuple(
+            islice(iter(self.dependencies), MAX_ACTION_DEPENDENCIES + 1)
+        )
+        if len(dependencies) > MAX_ACTION_DEPENDENCIES:
+            raise ValidationError(
+                f"action dependencies exceed the {MAX_ACTION_DEPENDENCIES}-item limit"
+            )
+        if self.action_id in dependencies:
             raise ValidationError("an action cannot depend on itself")
+        measure_json_resources(
+            self.parameters,
+            context="action parameters",
+            max_bytes=MAX_ACTION_PARAMETER_BYTES,
+        )
         object.__setattr__(self, "parameters", _freeze_json_mapping(self.parameters))
-        object.__setattr__(self, "dependencies", tuple(self.dependencies))
+        object.__setattr__(self, "dependencies", dependencies)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the action to JSON-compatible data."""
@@ -226,6 +260,9 @@ class AgentAction:
         """Create an action from JSON-compatible data."""
 
         target_data = _expect_mapping(data, "target")
+        dependencies = data.get("dependencies", [])
+        if not isinstance(dependencies, list):
+            raise ValidationError("dependencies must be a list")
         return cls(
             capability=str(data["capability"]),
             target=ResourceRef(
@@ -249,9 +286,7 @@ class AgentAction:
             ),
             idempotency_key=str(data["idempotency_key"]),
             justification=str(data["justification"]),
-            dependencies=tuple(
-                UUID(str(item)) for item in data.get("dependencies", [])
-            ),
+            dependencies=tuple(UUID(str(item)) for item in dependencies),
             action_id=UUID(str(data["action_id"])),
         )
 
@@ -804,9 +839,11 @@ class ChangePlan:
             raise ValidationError("compensate_on_failure must be a boolean")
         if not self.goal.strip():
             raise ValidationError("goal must not be empty")
+        validate_bounded_string(self.goal, context="goal")
         _reject_control_characters(self.goal, "goal")
         if not self.created_by.strip():
             raise ValidationError("created_by must not be empty")
+        validate_bounded_string(self.created_by, context="created_by")
         if self.workflow_id is not None and not self.workflow_id.strip():
             raise ValidationError("workflow_id must not be empty when supplied")
         if (
@@ -818,9 +855,33 @@ class ChangePlan:
             )
         if self.workflow_fingerprint is not None and self.workflow_id is None:
             raise ValidationError("workflow_fingerprint requires workflow_id")
-        object.__setattr__(self, "actions", tuple(self.actions))
-        if not self.actions:
+        for name, value in (
+            ("workflow_id", self.workflow_id),
+            ("workflow_fingerprint", self.workflow_fingerprint),
+        ):
+            if value is not None:
+                validate_bounded_string(value, context=name)
+        actions = tuple(islice(iter(self.actions), MAX_PLAN_ACTIONS + 1))
+        if len(actions) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"change plan exceeds the {MAX_PLAN_ACTIONS}-action limit"
+            )
+        object.__setattr__(self, "actions", actions)
+        if not actions:
             raise ValidationError("a change plan must contain at least one action")
+        if not all(isinstance(action, AgentAction) for action in actions):
+            raise ValidationError("change plan actions must be AgentAction instances")
+        parameter_bytes = 0
+        for action in actions:
+            parameter_bytes += measure_json_resources(
+                action.parameters,
+                context="action parameters",
+                max_bytes=MAX_ACTION_PARAMETER_BYTES,
+            ).scalar_bytes
+            if parameter_bytes > MAX_PLAN_PARAMETER_BYTES:
+                raise ValidationError(
+                    "change plan exceeds the aggregate parameter-byte limit"
+                )
         action_ids = [action.action_id for action in self.actions]
         if len(action_ids) != len(set(action_ids)):
             raise ValidationError("action IDs must be unique")
@@ -871,9 +932,20 @@ class ChangePlan:
     def from_dict(cls, data: Mapping[str, Any]) -> ChangePlan:
         """Create a plan from JSON-compatible data."""
 
+        measure_json_resources(
+            data,
+            context="change plan",
+            max_bytes=MAX_PLAN_BYTES,
+        )
         actions_data = data.get("actions")
         if not isinstance(actions_data, list):
             raise ValidationError("actions must be a list")
+        if len(actions_data) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"change plan exceeds the {MAX_PLAN_ACTIONS}-action limit"
+            )
+        if not all(isinstance(item, Mapping) for item in actions_data):
+            raise ValidationError("actions must contain objects")
         return cls(
             schema_version=str(data.get("schema_version", "1.0")),
             plan_id=UUID(str(data["plan_id"])),

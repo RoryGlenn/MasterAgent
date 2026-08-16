@@ -321,6 +321,30 @@ rejected before policy evaluation. At live execution the runtime also enforces
 the catalog authentication class, approval-bound effective principal, granted
 `required_scopes`, and the compensation interface promised by `reversible`.
 
+Every `local_generation` capability must also declare positive
+`max_input_bytes` and `max_output_bytes` values. Input quotas may not exceed
+4 MiB, and output quotas may not exceed 16 MiB. Live capabilities may not
+declare these local-artifact fields. The packaged catalog currently uses those
+hard ceilings for each local generator; deployments may lower them.
+
+Plan ingestion has independent hard ceilings:
+
+| Resource | Ceiling |
+|---|---:|
+| serialized plan file | 8 MiB before JSON parsing |
+| actions per plan | 256 |
+| dependencies per action | 256 |
+| JSON nesting | 32 levels |
+| items in one JSON object or array | 1,024 |
+| JSON nodes | 65,536 |
+| one string | 1,048,576 characters |
+| parameters for one action | 4 MiB of bounded scalar content |
+| parameters across one plan | 8 MiB of bounded scalar content |
+
+Local publication additionally uses a single 64 MiB artifact budget shared by
+all draft connectors and the final package summary/manifest in one run.
+Per-capability and aggregate budgets are reserved before final-name creation.
+
 Modifying capabilities additionally require an approved `expected_version` and
 a declared `provider_precondition` backed by a provider-side conditional write.
 Confluence supplies version-number compare-and-swap (`version`). SharePoint
