@@ -405,6 +405,16 @@ class ConfluenceSandboxWorkflowContractTests(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", self.workflow)
         self.assertIn("persist-credentials: false", self.workflow)
 
+    def test_runner_temp_is_bound_only_where_the_context_is_valid(self) -> None:
+        runtime_roots = [
+            line
+            for line in self.workflow.splitlines()
+            if "SANDBOX_ROOT: ${{ runner.temp }}" in line
+        ]
+        self.assertEqual(len(runtime_roots), 9)
+        self.assertTrue(all(line.startswith("          ") for line in runtime_roots))
+        self.assertEqual(self.workflow.count("umask 077"), 3)
+
     def test_page_cleanup_and_limits_are_mandatory(self) -> None:
         self.assertIn(
             "if: always() && steps.private-root.outcome == 'success'", self.workflow
