@@ -49,6 +49,46 @@ class CliTests(unittest.TestCase):
                 output=None,
             )
 
+    def test_bind_and_run_forward_repeatable_credential_mappings(self) -> None:
+        mappings = (
+            "JIRA_EMAIL=MASTER_AGENT_CONFLUENCE_USERNAME",
+            "MASTER_AGENT_JIRA_TOKEN=MASTER_AGENT_CONFLUENCE_TOKEN",
+        )
+        with patch("master_agent.cli._bind_context", return_value=0) as bind_context:
+            status = main(
+                [
+                    "bind-context",
+                    "plan.json",
+                    "--output",
+                    "bound.json",
+                    *(
+                        item
+                        for mapping in mappings
+                        for item in ("--credential-map", mapping)
+                    ),
+                ]
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            bind_context.call_args.kwargs["credential_mappings"], list(mappings)
+        )
+
+        with patch("master_agent.cli._run", return_value=0) as run:
+            status = main(
+                [
+                    "run",
+                    "bound.json",
+                    "--apply",
+                    *(
+                        item
+                        for mapping in mappings
+                        for item in ("--credential-map", mapping)
+                    ),
+                ]
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(run.call_args.kwargs["credential_mappings"], list(mappings))
+
     def test_live_mode_dry_run_does_not_require_credentials(self) -> None:
         """A policy-only dry run must not construct live connectors."""
 

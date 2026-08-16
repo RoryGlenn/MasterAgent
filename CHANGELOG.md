@@ -1,5 +1,10 @@
 # Changelog
 
+- Allow explicit one-run credential mappings to select fields from canonical
+  multi-provider stores, enabling safe in-memory Atlassian credential reuse
+  across Jira and Confluence through connection probes and governed bind/apply
+  runs without rewriting private token files.
+
 ## 1.0.0 — Governed enterprise-agent runtime
 
 ### Added

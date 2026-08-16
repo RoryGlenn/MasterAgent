@@ -143,6 +143,12 @@ placeholders; select the organization's permission-checked integrations file
 before connecting either system. Placeholder URLs fail before credentials are
 loaded or a network request is made.
 
+`connect`, `bind-context`, and applied `run` accept
+`--credential-map FILE_KEY=DECLARED_NAME` to select and rename fields from a
+canonical multi-provider store for one invocation. This supports, for example,
+explicitly reusing one Atlassian email and API token for both Jira and
+Confluence without loading unrelated credentials or rewriting the store.
+
 Microsoft runtime systems share one connector configuration. `connect` selects
 delegated token-file, delegated environment-token, or application
 client-credentials authentication from the available declared values in that

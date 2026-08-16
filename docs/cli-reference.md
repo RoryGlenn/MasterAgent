@@ -38,6 +38,11 @@ commands accept `--credentials-file /absolute/path/credentials.json` in a
 development governance profile. Policy-only `run` commands do not read secrets.
 The selected canonical path is part of the bound execution context.
 
+`connect`, `bind-context`, and applied `run` also accept repeatable
+`--credential-map FILE_KEY=DECLARED_NAME` arguments. This keeps an explicit
+cross-connector credential selection in memory and lets bind/apply use the
+same mapping without rewriting a canonical multi-provider store.
+
 `connect` accepts a comma-separated `--systems` selection from Jira,
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,
 and OneNote. It activates only the selected connector configurations for that
