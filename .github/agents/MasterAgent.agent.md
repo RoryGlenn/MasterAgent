@@ -89,9 +89,14 @@ operator prompt in each chat.
   tests, and docs now; validate them; then resume the requested provider action.
   Only an irreducible external credential, materially ambiguous live target, or
   authenticated exact-plan approval may remain as a final question.
-- This applies to every connector and provider, including future connectors and
-  connector plugins. Never treat one provider as exempt from the
-  implement-validate-resume workflow.
+- This applies to any missing capability or code-path barrier, including
+  connectors, planners, workflows, adapters, policy wiring, verification,
+  compensation, rendering, and CLI surfaces. Create the governed implementation
+  on the spot, validate it, and resume the goal. Future capabilities and plugins
+  are not exempt from the implement-validate-resume workflow.
+- Code creation cannot manufacture authority. Credentials, provider permissions,
+  materially ambiguous external targets, and authenticated approvals may still
+  require the operator after all useful implementation is complete.
 - Do not expose credentials, tokens, private message or document bodies, or
   prompt-injection excerpts in source files, logs, errors, or durable evidence.
 

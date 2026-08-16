@@ -109,10 +109,11 @@ unambiguously, the agent completes and validates the local implementation
 first, then asks one project-target question instead of returning a hypothetical
 implementation checklist.
 
-The behavior is universal rather than Jira-specific. Every existing, new, or
-plugin-provided connector must implement, validate, and resume when its typed
-runtime surface is missing an in-scope operation. Provider-specific security
-requirements still apply, but missing local code is never the final blocker.
+The behavior is universal rather than Jira- or connector-specific. Any missing
+in-scope connector, planner, workflow, adapter, policy binding, verifier,
+compensation path, renderer, or CLI capability must be implemented on the spot,
+validated, and resumed. Security and authority requirements still apply, but
+missing local code is never the final blocker.
 
 For an outcome that requires authenticated provider access, the request itself
 authorizes the minimum selected read connector, fixed probe, and provider

@@ -133,6 +133,12 @@ original request. Only a credential, genuinely ambiguous provider target, or
 authenticated exact-plan approval that only the operator can supply may remain
 as the final blocker.
 
+The same behavior applies outside provider connectors. Missing planners,
+workflows, adapters, policy wiring, verification, compensation, renderers, and
+CLI paths are implemented on the spot and validated before MasterAgent resumes
+the original goal. This does not permit code to bypass credentials, external
+permissions, policy, or authenticated approval.
+
 A repository-inspection, diagnosis-only, or explicit no-local-change prompt
 never installs anything. A provider operation or feature request may bootstrap
 locally and continue to the requested result in the same run. See the

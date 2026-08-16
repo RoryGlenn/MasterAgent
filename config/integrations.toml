@@ -6,7 +6,7 @@
 [connectors.jira]
 enabled = true
 deployment = "cloud" # cloud | data_center
-base_url = "https://noboostnoballs.atlassian.net"
+base_url = "https://example.atlassian.net"
 auth_mode = "basic" # basic | bearer | none
 username_env = "MASTER_AGENT_JIRA_USERNAME"
 secret_env = "MASTER_AGENT_JIRA_TOKEN"

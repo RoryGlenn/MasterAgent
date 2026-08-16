@@ -57,6 +57,9 @@
   missing typed capability is explicitly forbidden as a final response;
 - the implement-validate-resume contract applies uniformly to every existing,
   future, and plugin-provided connector;
+- the same contract now covers every missing capability and repository code-path
+  barrier, while preserving external credential, permission, policy, and
+  authenticated-approval boundaries;
 - packaged read connectors are available by default and lazily resolve only the
   provider selected by the current operation; credentials for unrelated
   providers are never required, while write, admin, send, and schedule gates

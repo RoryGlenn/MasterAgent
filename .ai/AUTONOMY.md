@@ -64,11 +64,14 @@ For every capability gap:
 4. run the relevant and release validation; and
 5. resume the original provider request in the same run.
 
-This protocol applies to every connector—first-party, newly added, and plugin
-provided—and to every provider domain. Jira, Confluence, Bitbucket, GitHub,
-Microsoft, SharePoint, OneNote, Outlook, Teams, and future connectors get the
-same implement-then-continue behavior. Do not create a connector-specific
-exception that turns missing repository code into an operator blocker.
+This protocol applies to every capability barrier, not only connectors. When
+MasterAgent encounters missing repository code in a connector, planner,
+workflow, parser, credential adapter, policy binding, verifier, compensation
+path, output renderer, or CLI surface, it must create the smallest complete
+governed implementation immediately, on the spot, and continue the original
+goal. First-party, newly added, and plugin-provided surfaces all get the same
+implement-then-continue behavior. Do not turn missing repository code into an
+operator blocker.
 
 Do all useful local implementation before asking for any operator-only input.
 Use prompt-derived safe defaults for cosmetic names and initial content. For
@@ -79,6 +82,12 @@ multiple materially different targets, finish and validate the missing board
 and issue capabilities first, then ask one final target question. A credential,
 provider-selected target, or authenticated exact-plan approval may block the
 live mutation; missing repository code may not.
+
+This rule removes code barriers, not authority barriers. Never create code that
+bypasses policy, approval, credentials, provider permissions, data handling, or
+the prohibition on arbitrary shell and HTTP execution. Implement the governed
+path first; if an external authority boundary remains afterward, ask once for
+the smallest operator action needed.
 
 Do not stop at intermediate milestones such as local readiness, accepted
 credentials, a reachable connector, a created branch, or an opened pull
