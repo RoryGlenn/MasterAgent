@@ -72,10 +72,14 @@ be established:
 
 The command enables only the selected read connectors in memory, performs
 fixed bounded identity or access probes, and leaves credentials and persistent
-configuration unchanged. It accepts the canonical MasterAgent credential store
-or a strict provider-keyed wrapper using only documented provider and field
-names. Atlassian connections still require the organization's real reviewed
-base URL; placeholder endpoints fail before credentials or network access.
+configuration unchanged. It accepts the canonical MasterAgent credential store,
+a provider-keyed wrapper, exact declared environment names, or flat friendly
+keys whose provider and field have one clear interpretation. If a key has zero
+or multiple interpretations, ask the operator once what that key represents,
+then retry with `--credential-map FILE_KEY=DECLARED_NAME`. Infer only from key
+names, never secret values, and do not rewrite the credential file. Atlassian
+connections still require the organization's real reviewed base URL;
+placeholder endpoints fail before credentials or network access.
 
 Never rewrite a credential merely to change its JSON wrapper. Never print,
 summarize, copy, or persist a credential value. A private connection report is

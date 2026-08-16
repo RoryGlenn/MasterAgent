@@ -54,10 +54,16 @@ accept the canonical store or a strict
 provider-keyed wrapper. A provider may be a token string, such as
 `{"github":"<token>"}`, or an object using only these applicable named fields:
 `token`, `username`, `token_file`, `token_expires_at`, `tenant_id`, `client_id`,
-and `client_secret`. The wrapper is adapted in memory only. Unknown providers,
-unknown fields, and ambiguous duplicate destinations fail closed. An explicit
-credential file wins over ambient values for these two commands; neither value
-is printed or persisted. Selected output is written mode `0600`.
+and `client_secret`. A restricted file may also use exact integration-declared
+environment names directly, for example
+`{"MASTER_AGENT_JIRA_TOKEN":"<token>"}`. Clear provider/field hints in flat key
+names, such as `myJiraApiToken`, are inferred without inspecting values. An
+ambiguous key stops with candidate declared names; after clarification,
+`connect --credential-map FILE_KEY=DECLARED_NAME` supplies a one-run mapping
+without rewriting the file. Unknown fields and duplicate destinations fail
+closed. An explicit credential file wins over ambient values for these two
+commands; neither value is printed or persisted. Selected output is written
+mode `0600`.
 
 ## Configuration behavior
 

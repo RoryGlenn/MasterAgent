@@ -25,6 +25,147 @@ class CredentialStoreTests(unittest.TestCase):
         self.assertEqual(environ[_NAME], _SECRET)
         self.assertNotIn(_SECRET, repr(snapshot))
 
+    def test_exact_integration_environment_names_work_without_schema(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "tokens.json"
+            original = json.dumps(
+                {
+                    "MASTER_AGENT_JIRA_USERNAME": "operator@example.test",
+                    "MASTER_AGENT_JIRA_TOKEN": _SECRET,
+                }
+            )
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                allowed_names=(
+                    "MASTER_AGENT_JIRA_USERNAME",
+                    "MASTER_AGENT_JIRA_TOKEN",
+                ),
+                aliases={
+                    "jira": {
+                        "username": "MASTER_AGENT_JIRA_USERNAME",
+                        "token": "MASTER_AGENT_JIRA_TOKEN",
+                    }
+                },
+            )
+            environ = snapshot.overlay({})
+
+            self.assertEqual(
+                environ["MASTER_AGENT_JIRA_USERNAME"], "operator@example.test"
+            )
+            self.assertEqual(environ["MASTER_AGENT_JIRA_TOKEN"], _SECRET)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+            canonical_loader = CredentialStoreSnapshot.load(
+                path,
+                allowed_names=(
+                    "MASTER_AGENT_JIRA_USERNAME",
+                    "MASTER_AGENT_JIRA_TOKEN",
+                ),
+            )
+            self.assertEqual(
+                canonical_loader.overlay({})["MASTER_AGENT_JIRA_TOKEN"], _SECRET
+            )
+
+    def test_unrelated_name_is_not_guessed_into_selected_provider(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "tokens.json"
+            path.write_text(
+                json.dumps({"UNRELATED_CREDENTIAL": _SECRET}), encoding="utf-8"
+            )
+            path.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigurationError, "ambiguous"):
+                CredentialStoreSnapshot.load_provider_compatible(
+                    path,
+                    allowed_names=("MASTER_AGENT_JIRA_TOKEN",),
+                    aliases={"jira": {"token": "MASTER_AGENT_JIRA_TOKEN"}},
+                )
+
+    def test_clear_fuzzy_names_are_inferred_from_keys_without_reading_values(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "friendly-tokens.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "myJiraApiToken": _SECRET,
+                        "jiraLoginEmail": "operator@example.test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                allowed_names=(
+                    "MASTER_AGENT_JIRA_USERNAME",
+                    "MASTER_AGENT_JIRA_TOKEN",
+                ),
+                aliases={
+                    "jira": {
+                        "username": "MASTER_AGENT_JIRA_USERNAME",
+                        "token": "MASTER_AGENT_JIRA_TOKEN",
+                    }
+                },
+            )
+            environ = snapshot.overlay({})
+
+            self.assertEqual(environ["MASTER_AGENT_JIRA_TOKEN"], _SECRET)
+            self.assertEqual(
+                environ["MASTER_AGENT_JIRA_USERNAME"], "operator@example.test"
+            )
+
+    def test_ambiguous_fuzzy_name_requests_mapping_without_rendering_value(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "ambiguous-tokens.json"
+            path.write_text(json.dumps({"workApiToken": _SECRET}), encoding="utf-8")
+            path.chmod(0o600)
+            kwargs = {
+                "allowed_names": ("JIRA_TOKEN", "GITHUB_TOKEN"),
+                "aliases": {
+                    "jira": {"token": "JIRA_TOKEN"},
+                    "github": {"token": "GITHUB_TOKEN"},
+                },
+            }
+
+            with self.assertRaisesRegex(
+                ConfigurationError, "ask which declared credential"
+            ) as raised:
+                CredentialStoreSnapshot.load_provider_compatible(path, **kwargs)
+            self.assertNotIn(_SECRET, str(raised.exception))
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                **kwargs,
+                explicit_mappings={"workApiToken": "JIRA_TOKEN"},
+            )
+            self.assertEqual(snapshot.overlay({})["JIRA_TOKEN"], _SECRET)
+
+    def test_friendly_key_rejects_terminal_controls_before_rendering(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "unsafe-key.json"
+            path.write_text(
+                json.dumps({"jira\u001b[31mtoken": _SECRET}), encoding="utf-8"
+            )
+            path.chmod(0o600)
+
+            with self.assertRaisesRegex(
+                ConfigurationError, "must be printable"
+            ) as raised:
+                CredentialStoreSnapshot.load_provider_compatible(
+                    path,
+                    allowed_names=("JIRA_TOKEN",),
+                    aliases={"jira": {"token": "JIRA_TOKEN"}},
+                )
+            self.assertNotIn(_SECRET, str(raised.exception))
+
     def test_ambient_collision_does_not_render_values(self) -> None:
         with private_temporary_directory() as directory:
             snapshot = CredentialStoreSnapshot.load(

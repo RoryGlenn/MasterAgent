@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -46,7 +47,14 @@ class CredentialStoreSnapshot:
         cls, path: Path, *, allowed_names: Sequence[str]
     ) -> CredentialStoreSnapshot:
         canonical, payload = _read_restricted_file(path)
-        return cls(canonical, _parse_credentials(payload, allowed_names=allowed_names))
+        raw = _decode_document(payload)
+        return cls(
+            canonical,
+            _parse_direct_or_canonical_credentials(
+                raw,
+                allowed_names=allowed_names,
+            ),
+        )
 
     @classmethod
     def load_github_compatible(
@@ -76,19 +84,25 @@ class CredentialStoreSnapshot:
         *,
         allowed_names: Sequence[str],
         aliases: Mapping[str, Mapping[str, str]],
+        explicit_mappings: Mapping[str, str] | None = None,
     ) -> CredentialStoreSnapshot:
-        """Load a canonical store or a strict provider-keyed compatibility file.
+        """Load canonical, provider-keyed, or unambiguous friendly credentials.
 
         A provider value may be a token string or an object whose keys are
-        explicitly mapped by ``aliases``. Adaptation is in memory only. Unknown
-        providers, unknown fields, duplicate destinations, and ambiguous values
-        fail closed without rendering credential material.
+        explicitly mapped by ``aliases``. Flat friendly names are inferred only
+        from their keys and only when one destination is possible. Adaptation is
+        in memory only. Unknown fields, duplicate destinations, and ambiguous
+        names fail closed without rendering credential material.
         """
 
         canonical, payload = _read_restricted_file(path)
         raw = _decode_document(payload)
-        if "schema" in raw or "credentials" in raw:
-            credentials = _parse_credentials_document(
+        if (
+            "schema" in raw
+            or "credentials" in raw
+            or _uses_direct_names(raw, allowed_names)
+        ):
+            credentials = _parse_direct_or_canonical_credentials(
                 raw,
                 allowed_names=allowed_names,
             )
@@ -97,6 +111,7 @@ class CredentialStoreSnapshot:
                 raw,
                 allowed_names=allowed_names,
                 aliases=aliases,
+                explicit_mappings=explicit_mappings or {},
             )
         return cls(canonical, credentials)
 
@@ -181,13 +196,23 @@ def _read_bounded(descriptor: int) -> bytes:
     return payload
 
 
-def _parse_credentials(
-    payload: bytes, *, allowed_names: Sequence[str]
+def _parse_direct_or_canonical_credentials(
+    raw: Mapping[str, Any], *, allowed_names: Sequence[str]
 ) -> dict[str, str]:
-    return _parse_credentials_document(
-        _decode_document(payload),
-        allowed_names=allowed_names,
-    )
+    """Accept the versioned schema or exact integration environment names."""
+
+    if "schema" in raw or "credentials" in raw:
+        return _parse_credentials_document(raw, allowed_names=allowed_names)
+    if not raw:
+        raise ConfigurationError("credential store must not be empty")
+    return _validate_credentials(raw, allowed_names=allowed_names)
+
+
+def _uses_direct_names(raw: Mapping[str, Any], allowed_names: Sequence[str]) -> bool:
+    """Identify an unambiguous direct-name store without fuzzy matching."""
+
+    allowed = frozenset(allowed_names)
+    return bool(raw) and all(isinstance(name, str) and name in allowed for name in raw)
 
 
 def _decode_document(payload: bytes) -> Mapping[str, Any]:
@@ -250,6 +275,7 @@ def _parse_provider_credentials(
     *,
     allowed_names: Sequence[str],
     aliases: Mapping[str, Mapping[str, str]],
+    explicit_mappings: Mapping[str, str],
 ) -> dict[str, str]:
     if not raw:
         raise ConfigurationError("provider credential store must not be empty")
@@ -257,6 +283,19 @@ def _parse_provider_credentials(
         raise ConfigurationError(
             "provider credential store contains too many providers"
         )
+    if all(isinstance(value, str) for value in raw.values()):
+        return _parse_flat_provider_credentials(
+            raw,
+            allowed_names=allowed_names,
+            aliases=aliases,
+            explicit_mappings=explicit_mappings,
+        )
+
+    if explicit_mappings:
+        raise ConfigurationError(
+            "--credential-map applies only to flat key/value credential files"
+        )
+
     values: dict[str, Any] = {}
     for provider, provider_value in raw.items():
         fields = aliases.get(provider)
@@ -298,6 +337,146 @@ def _parse_provider_credentials(
                     "provider credential store contains too many credentials"
                 )
     return _validate_credentials(values, allowed_names=allowed_names)
+
+
+_FIELD_HINTS: Mapping[str, tuple[tuple[str, ...], ...]] = {
+    "token": (
+        ("token",),
+        ("api", "key"),
+        ("access", "key"),
+        ("pat",),
+        ("secret",),
+    ),
+    "username": (("username",), ("user",), ("email",), ("login",)),
+    "token_file": (("token", "file"),),
+    "token_expires_at": (("token", "expires", "at"), ("expiry",)),
+    "tenant_id": (("tenant", "id"),),
+    "client_id": (("client", "id"),),
+    "client_secret": (("client", "secret"),),
+}
+
+
+def _parse_flat_provider_credentials(
+    raw: Mapping[str, Any],
+    *,
+    allowed_names: Sequence[str],
+    aliases: Mapping[str, Mapping[str, str]],
+    explicit_mappings: Mapping[str, str],
+) -> dict[str, str]:
+    """Infer unambiguous provider/field names without inspecting values."""
+
+    unknown_mappings = sorted(set(explicit_mappings) - set(raw))
+    if unknown_mappings:
+        raise ConfigurationError(
+            "credential mapping names are absent from the file: "
+            + ", ".join(unknown_mappings)
+        )
+    allowed = frozenset(allowed_names)
+    invalid_destinations = sorted(set(explicit_mappings.values()) - allowed)
+    if invalid_destinations:
+        raise ConfigurationError(
+            "credential mappings target names not declared by integrations: "
+            + ", ".join(invalid_destinations)
+        )
+
+    provider_fields = _unique_provider_fields(aliases)
+    values: dict[str, Any] = {}
+    for source, value in raw.items():
+        if not isinstance(source, str):
+            raise ConfigurationError("credential key names must be strings")
+        if (
+            not source
+            or "=" in source
+            or len(source.encode("utf-8")) > 256
+            or not source.isprintable()
+        ):
+            raise ConfigurationError(
+                "friendly credential keys must be printable, at most 256 bytes, "
+                "and must not contain '='"
+            )
+        destination = explicit_mappings.get(source)
+        if destination is None:
+            candidates = _credential_candidates(source, aliases, provider_fields)
+            if len(candidates) != 1:
+                possibilities = sorted(candidates or allowed)
+                detail = ", ".join(possibilities)
+                raise ConfigurationError(
+                    f"credential key {source!r} is ambiguous; ask which declared "
+                    f"credential it represents, then retry with --credential-map "
+                    f"{source}=NAME (choices: {detail})"
+                )
+            destination = next(iter(candidates))
+        if destination in values:
+            raise ConfigurationError(
+                "credential keys map to the same declared credential: " + destination
+            )
+        values[destination] = value
+    return _validate_credentials(values, allowed_names=allowed_names)
+
+
+def _unique_provider_fields(
+    aliases: Mapping[str, Mapping[str, str]],
+) -> tuple[Mapping[str, str], ...]:
+    unique: dict[tuple[tuple[str, str], ...], Mapping[str, str]] = {}
+    for fields in aliases.values():
+        identity = tuple(sorted(fields.items()))
+        if identity:
+            unique[identity] = fields
+    return tuple(unique.values())
+
+
+def _credential_candidates(
+    source: str,
+    aliases: Mapping[str, Mapping[str, str]],
+    provider_fields: tuple[Mapping[str, str], ...],
+) -> set[str]:
+    words = _name_words(source)
+    compact = "".join(words)
+    field_scores = {
+        field: max(
+            (len(hint) for hint in hints if _hint_matches(words, compact, hint)),
+            default=0,
+        )
+        for field, hints in _FIELD_HINTS.items()
+    }
+    highest_score = max(field_scores.values(), default=0)
+    matched_fields = {
+        field for field, score in field_scores.items() if score == highest_score > 0
+    }
+    matched_providers = {
+        tuple(sorted(fields.items())): fields
+        for provider, fields in aliases.items()
+        if _provider_matches(provider, words, compact)
+    }
+    provider_was_explicit = bool(matched_providers)
+    candidate_providers = tuple(matched_providers.values())
+    if not candidate_providers and matched_fields and len(provider_fields) == 1:
+        candidate_providers = provider_fields
+
+    candidates: set[str] = set()
+    for fields in candidate_providers:
+        available_fields = matched_fields & set(fields)
+        if not available_fields and provider_was_explicit and "token" in fields:
+            available_fields = {"token"}
+        candidates.update(fields[field] for field in available_fields)
+    return candidates
+
+
+def _name_words(value: str) -> tuple[str, ...]:
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    return tuple(word for word in re.split(r"[^a-z0-9]+", expanded.casefold()) if word)
+
+
+def _provider_matches(provider: str, words: tuple[str, ...], compact: str) -> bool:
+    provider_words = _name_words(provider)
+    provider_compact = "".join(provider_words)
+    return bool(provider_compact) and (
+        provider_compact in compact or all(word in words for word in provider_words)
+    )
+
+
+def _hint_matches(words: tuple[str, ...], compact: str, hint: tuple[str, ...]) -> bool:
+    return all(word in words for word in hint) or "".join(hint) in compact
 
 
 def _without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
