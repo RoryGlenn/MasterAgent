@@ -20,8 +20,11 @@ jobs:
           cache: pip
       - name: Install project and static-analysis tools
         run: |
-          umask 022
-          python -m pip install ".[dev]"
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-static"
+          python -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install ".[dev]"
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Enforce Ruff lint and formatting
         run: |
           ruff check .
@@ -48,8 +51,11 @@ jobs:
           cache: pip
       - name: Install project
         run: |
-          umask 022
-          python -m pip install .
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-test"
+          python -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: python -m unittest discover -s tests -v
       - name: Validate release source
@@ -69,11 +75,14 @@ jobs:
           cache: pip
       - name: Build distributions
         run: |
-          umask 022
-          python -m pip install build .
+          umask 077
+          build_env="$RUNNER_TEMP/master-agent-build"
+          python -m venv "$build_env"
+          "$build_env/bin/python" -m pip install build .
+          echo "$build_env/bin" >> "$GITHUB_PATH"
           # Prove package modes do not inherit a permissive builder umask.
           umask 000
-          python -m build
+          "$build_env/bin/python" -m build
       - name: Validate distribution contents
         run: >-
           python scripts/validate_release.py
@@ -116,9 +125,12 @@ jobs:
           cache: pip
       - name: Install audit tools and project
         run: |
-          umask 022
-          python -m pip install --upgrade pip
-          python -m pip install . bandit pip-audit
+          umask 077
+          audit_env="$RUNNER_TEMP/master-agent-audit"
+          python -m venv "$audit_env"
+          "$audit_env/bin/python" -m pip install --upgrade pip
+          "$audit_env/bin/python" -m pip install . bandit pip-audit
+          echo "$audit_env/bin" >> "$GITHUB_PATH"
       - name: Reject medium and high severity Bandit findings
         run: bandit -q -r src -ll
       - name: Audit installed dependencies
@@ -137,8 +149,11 @@ jobs:
           cache: pip
       - name: Install project and coverage
         run: |
-          umask 022
-          python -m pip install . coverage
+          umask 077
+          coverage_env="$RUNNER_TEMP/master-agent-coverage"
+          python -m venv "$coverage_env"
+          "$coverage_env/bin/python" -m pip install . coverage
+          echo "$coverage_env/bin" >> "$GITHUB_PATH"
       - name: Enforce tested-code baseline
         run: |
           coverage run --source=master_agent -m unittest discover -s tests -v

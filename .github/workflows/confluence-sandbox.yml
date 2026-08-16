@@ -69,7 +69,10 @@ jobs:
       - name: Install the reviewed runtime
         run: |
           umask 077
-          python3 -m pip install .
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
         id: private-root
         env:
@@ -147,7 +150,10 @@ jobs:
       - name: Install the reviewed runtime
         run: |
           umask 077
-          python3 -m pip install .
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
         env:
           SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
@@ -229,7 +235,10 @@ jobs:
       - name: Install the reviewed runtime
         run: |
           umask 077
-          python3 -m pip install .
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
         id: private-root
         env:

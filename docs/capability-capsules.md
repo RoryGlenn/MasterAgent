@@ -72,10 +72,10 @@ Validation runs without provider credentials and includes denial probes for
 host files, ambient secrets, network, subprocesses, and private object
 introspection. The worker, interpreter, and bubblewrap binaries are trusted
 regular files and their digests form the worker identity. That identity is
-rechecked for each connector action. Package builds normalize worker mode, CI
-installs under an explicit restrictive umask, and the repository bootstrap
-creates its local environment under umask `077`; a worker writable by another
-OS account fails closed.
+rechecked for each connector action. Package builds normalize worker mode; CI,
+sandbox workflows, and the repository bootstrap install into owner-private
+virtual environments under umask `077`. A worker writable by another OS
+account fails closed.
 
 There is no automatic subprocess fallback. A non-isolated subprocess backend
 can be selected only by direct test code and is never production-ready.

@@ -63,6 +63,15 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertTrue(any("link entry" in error for error in report.errors))
             self.assertTrue(any("is not regular" in error for error in report.errors))
 
+    def test_ci_installs_the_runtime_only_in_private_virtual_environments(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(workflow.count("umask 077"), 7)
+        self.assertEqual(workflow.count('python -m venv "$'), 7)
+        self.assertNotIn("run: python -m pip install", workflow)
+        self.assertNotIn("\n          python -m pip install", workflow)
+
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         relative_paths = (
