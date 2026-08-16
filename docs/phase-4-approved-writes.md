@@ -42,7 +42,7 @@ chat conversation never constitute authority.
 
 ### Jira
 
-- comment creation;
+- comment creation with a manual deletion descriptor;
 
 Issue update, transition, and compensation adapters remain implemented but are
 disabled in catalog and governance. Their current Jira endpoints do not provide
@@ -53,16 +53,14 @@ cannot be derived exactly.
 
 ### Confluence
 
-- Cloud space creation with exact key/name verification and created-space removal;
-- page creation;
+- Cloud space creation with exact key/name verification and manual deletion recovery;
+- page creation with manual deletion recovery;
 - version-checked page update;
-- prior-version/body restoration.
+- atomic version-checked prior-version/body restoration.
 
 ### Bitbucket and Git
 
-- create a pull request;
-- decline the exact pull request created by the workflow under exact
-  preconditions.
+- create a pull request with a manual re-read/decline recovery descriptor;
 
 Local Git patch, branch, commit, push, and compensation definitions are
 disabled and absent from the live registry. They remain quarantined internals
@@ -71,9 +69,8 @@ descriptor-bound to one approved repository identity.
 
 ### GitHub
 
-- create an issue and close the exact created issue during compensation;
-- create a pull request and close the exact created pull request during
-  compensation;
+- create an issue with a manual re-read/close recovery descriptor;
+- create a pull request with a manual re-read/close recovery descriptor;
 
 Repository-settings and existing-collaborator adapters remain separately gated
 from ordinary writes but are prohibited by catalog and governance. GitHub does
@@ -98,6 +95,23 @@ commands have an exact, target-aware DOM poststate contract.
 
 ## Compensation modes
 
-`compensate_on_failure = true` instructs the orchestrator to compensate previously verified reversible actions in reverse order after a later action fails. Alternatively, persist the run report and create a separate compensation plan for human approval.
+Every reversible `ExecutionResult` carries the one typed, versioned
+`master-agent/compensation@1` descriptor. The runtime persists a
+content-free `side_effect_may_have_occurred` event immediately after `execute`
+returns and before verification. A failed or raised verification retains the
+result, records `indeterminate`, and blocks retry.
 
-Compensation is not guaranteed. Concurrent edits, provider retention, permission changes, or external deletion can prevent restoration. Such failures are terminal audit states.
+`compensate_on_failure = true` processes results in reverse order. Mode
+`in_process` is allowed only in the originating connector flow; mode `plan`
+can also be reconstructed from a persisted run report into a new
+approval-bound plan; mode `manual` is never invoked automatically. The runtime
+rejects unversioned legacy descriptor shapes and incomplete/partial recovery
+plans.
+
+Before automatic compensation, the connector re-reads the exact agent
+post-state and the mutation itself must enforce an atomic provider or local
+compare-and-swap precondition. Confluence page versions and Git ref leases meet
+that bar. A read followed by an unconditional close, decline, delete, or
+restore does not, so those adapters emit `manual`. Concurrent edits, provider
+retention, permission changes, or external deletion become explicit terminal
+audit states rather than being overwritten.

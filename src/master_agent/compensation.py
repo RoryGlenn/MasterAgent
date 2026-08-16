@@ -11,7 +11,6 @@ from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
-    CompensationDescriptor,
     CompensationMode,
     ResourceRef,
     RiskLevel,
@@ -45,16 +44,10 @@ def build_compensation_plan(
             continue
         if source.risk is not RiskLevel.REVERSIBLE_WRITE:
             continue
-        compensation = item.result.compensation
-        if not isinstance(compensation, Mapping):
-            after = item.result.after
-            compensation = (
-                after.get("compensation") if isinstance(after, Mapping) else None
-            )
-        if not isinstance(compensation, Mapping):
+        descriptor = item.result.compensation
+        if descriptor is None:
             unavailable.append(f"{item.action_id}: compensation descriptor is missing")
             continue
-        descriptor = CompensationDescriptor.from_dict(compensation)
         if descriptor.mode is not CompensationMode.PLAN:
             unavailable.append(
                 f"{item.action_id}: {descriptor.reason or descriptor.mode}"

@@ -62,9 +62,9 @@ Supported domains:
 
 | Domain | Read | Draft/local generation | Approved mutation |
 |---|---|---|---|
-| Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | comment creation; update/transition/compensation disabled pending provider CAS |
-| Confluence Cloud/Data Center | page search/read | page create/update proposals | Cloud space creation; page create, update, compensation |
-| Bitbucket Cloud/Data Center | anonymous public-workspace repository lists; authenticated repo, PR, diffstat/changes, and CI status reads | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
+| Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | comment creation with manual deletion recovery; update/transition/compensation disabled pending provider CAS |
+| Confluence Cloud/Data Center | page search/read | page create/update proposals | Cloud space/page creation with manual deletion recovery; versioned page update/compensation |
+| Bitbucket Cloud/Data Center | anonymous public-workspace repository lists; authenticated repo, PR, diffstat/changes, and CI status reads | branch plan and source patch | PR creation with manual decline recovery; local-Git branch publication disabled |
 | GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | issue/PR creation; administration disabled pending provider CAS |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, replies | message draft | chat/channel send and channel reply |
@@ -82,7 +82,7 @@ Supported domains:
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
 - **Resumable approval handoff:** pending writes produce a private, create-only request that captures the exact non-secret run and can resume only with authenticated approval.
 - **Version preconditions:** Jira, Confluence, GitHub repository settings, and SharePoint operations stop on stale state.
-- **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
+- **Compensation:** every reversible result carries one versioned typed descriptor. Automatic rollback runs only through an adapter with an atomic precondition; otherwise the descriptor requires manual re-review.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
 - **Prompt-injection boundary:** email, Teams, Jira, Confluence, source, note, and attachment content is untrusted data.
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
@@ -534,6 +534,10 @@ master-agent compensation-plan \
   --created-by operator@example.com \
   --output compensation-plan.json
 ```
+
+Only `master-agent/compensation@1` descriptors with mode `plan` can become a
+new approval-bound plan. Untyped legacy metadata and manual/in-process-only
+descriptors fail closed instead of producing a partial recovery plan.
 
 ## Send approved Outlook or Teams communication
 

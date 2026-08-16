@@ -476,10 +476,10 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
             assert compensation is not None
 
             self.assertEqual(
-                compensation["mode"],
+                compensation.mode,
                 CompensationMode.IN_PROCESS,
             )
-            self.assertIsNone(compensation["capability"])
+            self.assertIsNone(compensation.capability)
 
     def test_remote_push_reports_manual_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -516,9 +516,9 @@ class GitWorkspaceConnectorTests(unittest.TestCase):
 
             self.assertIsNotNone(result.compensation)
             assert result.compensation is not None
-            self.assertEqual(result.compensation["mode"], CompensationMode.MANUAL)
+            self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
             self.assertIn(
-                "remote branch rollback is manual", result.compensation["reason"]
+                "remote branch rollback is manual", result.compensation.reason or ""
             )
             with self.assertRaisesRegex(
                 ConnectorError,
@@ -1477,6 +1477,86 @@ class GitBranchPushConnectorTests(unittest.TestCase):
                     "refs/heads/agent/change",
                 ),
                 "",
+            )
+
+    def test_compensation_uses_atomic_lease_and_preserves_raced_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", str(remote)],
+                check=True,
+                capture_output=True,
+            )
+            repository = _repository(root / "repo")
+            _git(repository, "remote", "add", "origin", str(remote))
+            _git(repository, "switch", "-c", "agent/change")
+            connector = GitBranchPushConnector(
+                repository_root=root,
+                allow_file_remotes=True,
+            )
+            action = action_for(
+                "bitbucket.branch.push",
+                system="bitbucket",
+                resource_type="branch",
+                resource_id="agent/change",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                parameters={
+                    "repository_path": str(repository),
+                    "branch": "agent/change",
+                    "remote": "origin",
+                    "remote_url": str(remote),
+                },
+                expected_version=_git(repository, "rev-parse", "HEAD"),
+            )
+            result = connector.execute(action)
+            (repository / "README.md").write_text(
+                "human concurrent change\n",
+                encoding="utf-8",
+            )
+            _git(repository, "add", "README.md")
+            _git(repository, "commit", "-m", "human concurrent change")
+            raced_commit = _git(repository, "rev-parse", "HEAD")
+            _git(
+                repository,
+                "push",
+                str(remote),
+                f"{raced_commit}:refs/heads/human/staging",
+            )
+            original_publication = connector._run_publication
+            raced = False
+
+            def racing_deletion(workspace: Path, *arguments: str):
+                nonlocal raced
+                if (
+                    not raced
+                    and arguments
+                    and arguments[0] == "push"
+                    and any("--force-with-lease=" in item for item in arguments)
+                ):
+                    raced = True
+                    _git(
+                        remote,
+                        "update-ref",
+                        "refs/heads/agent/change",
+                        raced_commit,
+                    )
+                return original_publication(workspace, *arguments)
+
+            connector._run_publication = racing_deletion  # type: ignore[method-assign]
+            try:
+                with self.assertRaisesRegex(
+                    VersionConflictError,
+                    "atomic deletion was refused",
+                ):
+                    connector.compensate(action, result)
+            finally:
+                del connector._run_publication
+
+            self.assertTrue(raced)
+            self.assertEqual(
+                _git(remote, "rev-parse", "refs/heads/agent/change"),
+                raced_commit,
             )
 
     def test_publish_uses_approved_oid_when_local_branch_races(self) -> None:

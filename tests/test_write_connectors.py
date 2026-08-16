@@ -12,7 +12,7 @@ from master_agent.connectors.confluence_write import ConfluenceWriteConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.errors import ConnectorError, VersionConflictError
-from master_agent.models import AgentAction, RiskLevel
+from master_agent.models import AgentAction, CompensationMode, RiskLevel
 from tests.fakes import ScriptedTransport
 from tests.helpers import action_for, private_temporary_directory, resolved_config
 
@@ -98,6 +98,25 @@ class JiraWriteConnectorTests(unittest.TestCase):
         with self.assertRaises(VersionConflictError):
             connector.execute(action)
         self.assertEqual([item.method for item in transport.requests], ["GET"])
+
+    def test_update_compensation_refuses_concurrent_human_change(self) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/3/issue/RISE-1"
+        transport.add_json("GET", path, _jira_issue("Old summary", "v1"))
+        transport.add_bytes("PUT", path, b"", status=204)
+        transport.add_json("GET", path, _jira_issue("New summary", "v2"))
+        transport.add_json("GET", path, _jira_issue("Human summary", "v3"))
+        connector = _jira_connector(transport)
+        action = _jira_update_action()
+
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "changed after update"):
+            connector.compensate(action, result)
+        self.assertEqual(
+            [request.method for request in transport.requests].count("PUT"),
+            1,
+        )
 
     def test_provider_altered_first_update_poststate_is_rejected(self) -> None:
         transport = ScriptedTransport()
@@ -315,6 +334,9 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         self.assertTrue(connector.verify(action, result).verified)
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         compensation = connector.compensate(action, result)
         request_count = len(transport.requests)
         verification = connector.verify_compensation(action, result, compensation)
@@ -323,6 +345,24 @@ class JiraWriteConnectorTests(unittest.TestCase):
         self.assertEqual(verification.observed, {"comment_id": "7", "exists": False})
         self.assertEqual(len(transport.requests), request_count + 1)
         self.assertEqual(transport.requests[-1].method, "GET")
+
+    def test_comment_compensation_refuses_concurrent_human_edit(self) -> None:
+        transport = ScriptedTransport()
+        issue_path = "/rest/api/3/issue/RISE-1"
+        collection = issue_path + "/comment"
+        item = collection + "/7"
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v1"))
+        transport.add_json("POST", collection, {"id": "7"}, status=201)
+        transport.add_json("GET", issue_path, _jira_issue("Old", "v2"))
+        transport.add_json("GET", item, _jira_comment("7", "human edit"))
+        connector = _jira_connector(transport)
+        action = _jira_comment_action("approved")
+
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "comment changed"):
+            connector.compensate(action, result)
+        self.assertNotIn("DELETE", [request.method for request in transport.requests])
 
     def test_comment_compensation_rejects_still_present_comment(self) -> None:
         transport = ScriptedTransport()
@@ -341,6 +381,9 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         self.assertTrue(connector.verify(action, result).verified)
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         compensation = connector.compensate(action, result)
         verification = connector.verify_compensation(action, result, compensation)
 
@@ -367,6 +410,9 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         self.assertTrue(connector.verify(action, result).verified)
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         compensation = connector.compensate(action, result)
 
         with self.assertRaises(ConnectorError):
@@ -398,6 +444,9 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         self.assertTrue(connector.verify(action, result).verified)
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         compensation = connector.compensate(action, result)
 
         self.assertFalse(
@@ -429,6 +478,9 @@ class JiraWriteConnectorTests(unittest.TestCase):
 
         result = connector.execute(action)
         self.assertTrue(connector.verify(action, result).verified)
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         compensation = connector.compensate(action, result)
 
         self.assertFalse(
@@ -590,6 +642,37 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
         ]
         self.assertEqual(writes[0]["version"]["number"], 5)
         self.assertEqual(writes[1]["version"]["number"], 6)
+
+    def test_update_compensation_refuses_concurrent_human_change(self) -> None:
+        transport = ScriptedTransport()
+        path = "/wiki/api/v2/pages/42"
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>Old</p>", 4),
+        )
+        transport.add_json("PUT", path, {})
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>Approved</p>", 5),
+        )
+        transport.add_json(
+            "GET",
+            path,
+            _confluence_page("Status", "<p>Human edit</p>", 6),
+        )
+        connector = _confluence_connector(transport)
+        action = _confluence_update_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "changed after update"):
+            connector.compensate(action, result)
+        self.assertEqual(
+            [request.method for request in transport.requests].count("PUT"),
+            1,
+        )
 
     def test_cloud_version_conflict_is_reported_as_concurrency_failure(self) -> None:
         transport = ScriptedTransport()
@@ -844,6 +927,28 @@ class BitbucketWriteConnectorTests(unittest.TestCase):
         )
         self.assertEqual(compensation.after["state"], "DECLINED")
 
+    def test_decline_compensation_refuses_concurrent_human_change(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/2.0/repositories/acme/service/pullrequests"
+        item = collection + "/9"
+        changed = {**_cloud_pr("OPEN"), "updated_on": "later-version"}
+        transport.add_json("POST", collection, {"id": 9}, status=201)
+        transport.add_json("GET", item, _cloud_pr("OPEN"))
+        transport.add_json("GET", item, changed)
+        connector = _bitbucket_cloud_connector(transport)
+        action = _bitbucket_action()
+
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "changed after creation"):
+            connector.compensate(action, result)
+        self.assertFalse(
+            any(
+                request.url.endswith(item + "/decline")
+                for request in transport.requests
+            )
+        )
+
     def test_altered_first_provider_poststate_is_rejected(self) -> None:
         approved = _cloud_pr("OPEN")
         alterations = {
@@ -1051,6 +1156,9 @@ class SharePointWriteConnectorTests(unittest.TestCase):
 
             result = connector.execute(action)
             self.assertTrue(connector.verify(action, result).verified)
+            self.assertIsNotNone(result.compensation)
+            assert result.compensation is not None
+            self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
             compensation = connector.compensate(action, result)
             self.assertTrue(
                 connector.verify_compensation(action, result, compensation).verified
@@ -1078,6 +1186,37 @@ class SharePointWriteConnectorTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ConnectorError, "approved bytes"):
                 connector.execute(action)
+
+    def test_restore_refuses_concurrent_human_change(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            local = root / "status.txt"
+            local.write_bytes(b"GOOD")
+            transport = ScriptedTransport()
+            item = "/v1.0/drives/drive/items/item"
+            content = item + "/content"
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e1"))
+            transport.add_bytes("GET", content, b"OLD!")
+            transport.add_json(
+                "GET",
+                item + "/versions",
+                {"value": [{"id": "1"}]},
+            )
+            transport.add_bytes("PUT", content, b"", status=200)
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e2"))
+            transport.add_bytes("GET", content, b"GOOD")
+            transport.add_json("GET", item, _drive_item("status.txt", 4, "e3"))
+            connector = _sharepoint_connector(root, transport)
+            action = _sharepoint_action(local, expected_version="e1")
+
+            result = connector.execute(action)
+
+            with self.assertRaisesRegex(VersionConflictError, "changed after upload"):
+                connector.compensate(action, result)
+            self.assertNotIn(
+                "POST",
+                [request.method for request in transport.requests],
+            )
 
     def test_fresh_content_verification_rejects_later_substitution(self) -> None:
         with private_temporary_directory() as directory:

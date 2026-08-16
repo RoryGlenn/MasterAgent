@@ -212,8 +212,9 @@ reads.
 Mutation construction requires `--enable-writes`, `write_enabled = true`, and
 one of two independent granular gates. `writes_enabled = true` permits only
 `github.issue.create` and `github.pull_request.create`; both are independently
-re-read and can be compensated by closing the exact created resource after a
-conflict check. The typed `github.repository.settings.update` and
+re-read and emit manual re-read/close recovery descriptors. They are not
+closed automatically because the adapter cannot make its conflict check and
+close one atomic provider operation. The typed `github.repository.settings.update` and
 `github.collaborator.access.update` adapters remain behind `admin_enabled`, but
 the capability catalog and governance profile prohibit them. GitHub does not
 document conditional unsafe-method support for these endpoints, so a local

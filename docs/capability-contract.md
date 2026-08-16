@@ -97,9 +97,12 @@ A connector must:
 - return normalized data with a schema identifier;
 - attach retention classification and resource citations;
 - scan retrieved strings as untrusted data;
-- return a structured `ExecutionResult`;
+- return a structured `ExecutionResult`; a reversible result must carry the
+  typed `master-agent/compensation@1` descriptor object;
 - verify the result independently;
-- implement verified compensation whenever the catalog marks it reversible;
+- implement verified compensation whenever the catalog marks it reversible,
+  and use `manual` mode when the adapter cannot enforce an atomic rollback
+  precondition;
 - avoid placing secrets or retrieved bodies in audit metadata.
 
 ## Read-only result envelope

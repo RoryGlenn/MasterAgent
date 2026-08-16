@@ -143,9 +143,14 @@ The orchestrator:
 4. atomically claims side effects by action fingerprint and records explicit
    pending, completed, failed, or indeterminate outcomes;
 5. executes one typed connector capability;
-6. invokes independent verification;
-7. records action state;
-8. compensates previously verified reversible actions when `compensate_on_failure` is enabled.
+6. immediately records `side_effect_may_have_occurred` with content-free result
+   metadata before invoking verification;
+7. preserves the exact returned result and records an `indeterminate` incident
+   if verification fails or raises;
+8. records the final action state;
+9. compensates reversible actions in reverse order only when the typed
+   descriptor permits automatic execution and the adapter can enforce an
+   atomic post-state precondition.
 
 There is no claim of an atomic transaction across external systems. Partial results are explicit.
 
@@ -154,6 +159,12 @@ later explicit retry. An indeterminate effect remains blocked. It can become a
 reused completion only when a connector stored bounded content-free provider
 metadata and independently re-reads the exact provider resource successfully;
 otherwise operator reconciliation is required.
+
+`ExecutionResult.compensation` is a `CompensationDescriptor`, not an arbitrary
+mapping. Its persisted form is `master-agent/compensation@1`; unversioned
+legacy rollback metadata is rejected. Mode `plan` supports reconstruction as a
+new approval-bound plan, `in_process` is limited to the originating verified
+connector flow, and `manual` prevents the orchestrator from invoking rollback.
 
 When policy returns `approval_required`, the CLI publishes a mode-`0600`,
 create-only request inside the already pinned artifact root. The request copies

@@ -10,10 +10,11 @@ from master_agent.connectors.github_write import (
     GitHubAdminConnector,
     GitHubWriteConnector,
 )
-from master_agent.errors import ConnectorError
+from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
+    CompensationMode,
     ResourceRef,
     RiskLevel,
 )
@@ -60,9 +61,43 @@ class GitHubWriteConnectorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.after["number"], 17)
-        self.assertEqual(result.compensation["kind"], "close_issue")
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.kind, "close_issue")
+        self.assertEqual(result.compensation.mode, CompensationMode.MANUAL)
         self.assertTrue(verification.verified)
         self.assertTrue(compensation_verification.verified)
+        transport.assert_drained()
+
+    def test_close_compensation_refuses_concurrent_human_change(self) -> None:
+        created = _issue(17)
+        changed = {**created, "updated_at": "2026-08-15T10:03:00Z"}
+        transport = QueueTransport(
+            ExpectedRequest(
+                "POST",
+                "/repos/RoryGlenn/MasterAgent/issues",
+                created,
+                body_contains='"title":"Bounded issue"',
+            ),
+            ExpectedRequest("GET", "/issues/17", created),
+            ExpectedRequest("GET", "/issues/17", changed),
+        )
+        connector = GitHubWriteConnector(_config(), transport=transport)
+        action = _action(
+            "github.issue.create",
+            RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "owner": "RoryGlenn",
+                "repository": "MasterAgent",
+                "title": "Bounded issue",
+                "body": "Exact body",
+            },
+        )
+
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "changed after creation"):
+            connector.compensate(action, result)
         transport.assert_drained()
 
     def test_pull_request_create_rejects_unsafe_branch_before_http(self) -> None:
@@ -130,7 +165,9 @@ class GitHubAdminConnectorTests(unittest.TestCase):
             result.before["settings"],
             {"has_issues": True, "allow_auto_merge": False},
         )
-        self.assertEqual(result.compensation["kind"], "restore_repository_settings")
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.kind, "restore_repository_settings")
         self.assertTrue(verification.verified)
         self.assertTrue(compensation_verification.verified)
         transport.assert_drained()
@@ -162,7 +199,9 @@ class GitHubAdminConnectorTests(unittest.TestCase):
         )
 
         self.assertEqual(result.after["role_name"], "push")
-        self.assertEqual(result.compensation["mode"], "manual")
+        self.assertIsNotNone(result.compensation)
+        assert result.compensation is not None
+        self.assertEqual(result.compensation.mode, "manual")
         transport.assert_drained()
 
     def test_collaborator_admin_rejects_invitation_and_custom_role(self) -> None:

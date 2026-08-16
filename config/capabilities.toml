@@ -32,7 +32,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["pull_request"]
 parameter_schema = { title = "string", source_branch = "string", destination_branch = "string", description = "string?", close_source_branch = "boolean?", workspace = "string?", repository = "string?", project_key = "string?", repository_slug = "string?" }
-description = "Create and verify a Bitbucket pull request; compensation declines it."
+description = "Create and verify a Bitbucket pull request; recovery requires a manual re-read and decline."
 
 [capabilities."bitbucket.pull_request.diffstat"]
 enabled = true
@@ -79,7 +79,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["page"]
 parameter_schema = { title = "string", body = "string", representation = "string?", status = "string?", space_id = "string?", space_key = "string?", parent_id = "string?", source_bindings = "object?" }
-description = "Create a Confluence page with verified delete compensation."
+description = "Create a Confluence page; deletion recovery requires manual re-review because the adapter lacks atomic delete preconditions."
 
 [capabilities."confluence.page.create.draft"]
 enabled = true
@@ -125,7 +125,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["space"]
 parameter_schema = { key = "string", name = "string", description = "string?" }
-description = "Create and verify a Confluence Cloud space; compensation removes the exact created space."
+description = "Create and verify a Confluence Cloud space; deletion recovery requires manual re-review because the adapter lacks atomic delete preconditions."
 
 [capabilities."github.checks.read"]
 enabled = true
@@ -146,7 +146,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["issue"]
 parameter_schema = { owner = "string", repository = "string", title = "string", body = "string?" }
-description = "Create and verify a GitHub issue; compensation closes it after a conflict check."
+description = "Create and verify a GitHub issue; recovery requires a manual re-read and close because the adapter lacks atomic close preconditions."
 
 [capabilities."github.pull_request.create"]
 enabled = true
@@ -155,7 +155,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["pull_request"]
 parameter_schema = { owner = "string", repository = "string", title = "string", head = "string", base = "string", body = "string?", draft = "boolean?" }
-description = "Create and verify a GitHub pull request; compensation closes it after a conflict check."
+description = "Create and verify a GitHub pull request; recovery requires a manual re-read and close because the adapter lacks atomic close preconditions."
 
 [capabilities."github.pull_request.read"]
 enabled = true
@@ -214,7 +214,7 @@ risk = "reversible_write"
 reversible = true
 target_resource_types = ["issue"]
 parameter_schema = { body = "string" }
-description = "Create a Jira comment that can be deleted during compensation."
+description = "Create a Jira comment; deletion recovery requires manual re-review because the adapter lacks atomic delete preconditions."
 
 [capabilities."jira.issue.comment.draft"]
 enabled = true

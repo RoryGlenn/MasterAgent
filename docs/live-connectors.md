@@ -67,14 +67,18 @@ metadata boundary is descriptor-backed and adversarially verified.
 
 Compensation is connector-specific:
 
-- Jira removes the comment created by the workflow; issue mutation and restoration remain disabled pending provider CAS;
-- Confluence restores the captured prior page version/body or removes the exact page created by the workflow;
-- Bitbucket declines the exact PR created by the workflow;
+- Jira comment creation emits manual deletion recovery; issue mutation and restoration remain disabled pending provider CAS;
+- Confluence restores a captured prior page version/body atomically; created page/space deletion is manual;
+- Bitbucket PR creation emits manual re-read/decline recovery;
+- GitHub issue/PR creation emits manual re-read/close recovery;
 - the non-routable SharePoint replacement adapter can restore a captured prior
-  version after byte proofs, but remains disabled until its write is atomic;
+  version after byte proofs only as a manually reviewed operation, and remains
+  disabled until its write is atomic;
 - Git mutation and compensation are not exposed by the live registry.
 
-A compensation operation is independently verified and audited. Failure to compensate is reported, never hidden.
+Every reversible result carries a typed descriptor. Automatic compensation is
+independently verified and audited, and runs only where the adapter has an
+atomic precondition. Manual recovery and failures are reported, never hidden.
 
 The disabled SharePoint adapter's byte verification uses the bounded Graph content endpoint and never
 forwards credentials across an origin change. Tenants that return a cross-origin

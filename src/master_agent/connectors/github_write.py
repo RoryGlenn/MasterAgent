@@ -45,7 +45,7 @@ _COLLABORATOR_ROLES = frozenset({"pull", "triage", "push", "maintain", "admin"})
 
 
 class GitHubWriteConnector:
-    """Create GitHub issues and pull requests with verified close compensation."""
+    """Create GitHub issues and pull requests with verified manual recovery."""
 
     _CAPABILITIES = frozenset({"github.issue.create", "github.pull_request.create"})
 
@@ -103,10 +103,13 @@ class GitHubWriteConnector:
             message=f"GitHub {kind.replace('_', ' ')} created",
             compensation=CompensationDescriptor(
                 kind=f"close_{kind}",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=str(number),
-                reason="close is available only during the originating governed run",
-            ).to_dict(),
+                reason=(
+                    "GitHub close has no adapter-enforced atomic precondition, so a "
+                    "human must re-read and close the created resource manually"
+                ),
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -373,10 +376,13 @@ class GitHubAdminConnector:
             message="GitHub repository settings updated",
             compensation=CompensationDescriptor(
                 kind="restore_repository_settings",
-                mode=CompensationMode.IN_PROCESS,
+                mode=CompensationMode.MANUAL,
                 target_resource_id=f"{owner}/{repository}",
-                reason="restore requires the exact provider state captured by this run",
-            ).to_dict(),
+                reason=(
+                    "repository-settings restore has no atomic provider precondition "
+                    "and requires manual re-review"
+                ),
+            ),
         )
 
     def _update_collaborator(self, action: AgentAction) -> ExecutionResult:
@@ -435,7 +441,7 @@ class GitHubAdminConnector:
                     "GitHub exposes the highest effective role, so the source grant "
                     "cannot be safely restored automatically"
                 ),
-            ).to_dict(),
+            ),
         )
 
     def _read_settings(self, owner: str, repository: str) -> dict[str, Any]:

@@ -154,6 +154,7 @@ Controls:
 - dependency-aware state machine;
 - `compensate_on_failure` for atomic plans;
 - reverse-order provider-specific compensation;
+- a typed descriptor that distinguishes plan, in-process, and manual recovery;
 - independent compensation verification;
 - `compensation_failed` state and manual escalation;
 - no claim of distributed transactions.
@@ -164,11 +165,16 @@ A rollback may destroy human changes made after the agent action.
 
 Controls:
 
-- restore captured versions where the provider supports them;
-- delete only resources created by the exact action;
+- record the returned result as `side_effect_may_have_occurred` before
+  verification and preserve it in an explicit indeterminate incident;
+- restore captured versions only through an atomic version/ref precondition;
+- mark close, decline, delete, or restore paths manual when the adapter has
+  only a raceable read-check-mutate sequence;
 - keep local Git mutation and compensation unavailable until all metadata access
   is descriptor-bound;
-- refuse rollback when current state advanced;
+- refuse rollback with a version conflict when current state advanced;
+- reject unversioned legacy compensation metadata and partial reconstructed
+  plans;
 - sent communications never use fake rollback.
 
 ### Secret leakage

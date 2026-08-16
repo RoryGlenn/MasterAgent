@@ -11,6 +11,8 @@ from master_agent.errors import ConnectorError, VersionConflictError
 from master_agent.models import (
     ActionState,
     AgentAction,
+    CompensationDescriptor,
+    CompensationMode,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -144,6 +146,19 @@ class MockConnector:
             after=deepcopy(after),
             connector_reference=action.target.uri,
             message="mock write completed",
+            compensation=(
+                CompensationDescriptor(
+                    kind="mock_manual_recovery",
+                    mode=CompensationMode.MANUAL,
+                    target_resource_id=action.target.resource_id,
+                    reason=(
+                        "mock mode verifies effects but does not claim provider "
+                        "rollback semantics"
+                    ),
+                )
+                if action.risk is RiskLevel.REVERSIBLE_WRITE
+                else None
+            ),
         )
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
