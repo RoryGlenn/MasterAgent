@@ -414,6 +414,7 @@ class ConfluenceSandboxWorkflowContractTests(unittest.TestCase):
         self.assertEqual(len(runtime_roots), 9)
         self.assertTrue(all(line.startswith("          ") for line in runtime_roots))
         self.assertEqual(self.workflow.count("umask 077"), 3)
+        self.assertEqual(self.workflow.count("name: Seal hosted Python runtime"), 3)
 
     def test_page_cleanup_and_limits_are_mandatory(self) -> None:
         self.assertIn(

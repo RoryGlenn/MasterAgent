@@ -56,6 +56,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight
@@ -132,6 +141,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight
@@ -222,6 +240,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight

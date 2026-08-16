@@ -74,8 +74,9 @@ introspection. The worker, interpreter, and bubblewrap binaries are trusted
 regular files and their digests form the worker identity. That identity is
 rechecked for each connector action. Package builds normalize worker mode; CI,
 sandbox workflows, and the repository bootstrap install into owner-private
-virtual environments under umask `077`. A worker writable by another OS
-account fails closed.
+virtual environments under umask `077`. Hosted jobs first remove group/other
+write access from the exact setup-python runtime tree. A worker or interpreter
+writable by another OS account fails closed.
 
 There is no automatic subprocess fallback. A non-isolated subprocess backend
 can be selected only by direct test code and is never production-ready.

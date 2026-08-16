@@ -18,6 +18,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project and static-analysis tools
         run: |
           umask 077
@@ -49,6 +58,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project
         run: |
           umask 077
@@ -73,6 +91,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Build distributions
         run: |
           umask 077
@@ -123,6 +150,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install audit tools and project
         run: |
           umask 077
@@ -147,6 +183,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project and coverage
         run: |
           umask 077

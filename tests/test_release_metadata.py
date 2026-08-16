@@ -69,6 +69,8 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         self.assertEqual(workflow.count("umask 077"), 7)
         self.assertEqual(workflow.count('python -m venv "$'), 7)
+        self.assertEqual(workflow.count("name: Seal hosted Python runtime"), 5)
+        self.assertEqual(workflow.count('sudo chmod -R go-w -- "$pythonLocation"'), 5)
         self.assertNotIn("run: python -m pip install", workflow)
         self.assertNotIn("\n          python -m pip install", workflow)
 
