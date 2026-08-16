@@ -130,7 +130,8 @@ Retention policy has two independent decisions:
    - `metadata_only` — only structural metadata and digests may persist;
    - `explicit_content` — full content may persist only after an explicit command/output choice.
 2. **TTL**
-   - each evidence type receives an expiration timestamp from the first matching rule.
+   - each evidence type receives the shortest TTL among equally restrictive
+     matches; `prohibited` always overrides every allow rule.
 
 The default Phase 2B configuration uses shorter TTLs for message and attachment content than for directory metadata.
 
@@ -144,9 +145,12 @@ Every retained evidence file receives a sibling `*.retention.json` sidecar conta
 - citation IDs;
 - sibling evidence filename.
 
-Expiry cleanup is preview-only. Destructive pruning and orphan quarantine are
-disabled until recursive traversal, validation, and deletion are fully
-descriptor-relative; `evidence-prune --apply` fails before traversal.
+Evidence and its manifest are fully written and fsynced through private,
+mode-`0600`, same-directory staging files. The manifest is create-only
+published before the evidence name; failure rolls back every transaction-owned
+name. Expiry deletion remains preview-only. `evidence-repair` uses pinned,
+no-follow recursive descriptors and can recoverably quarantine an orphan while
+refusing identity races; `evidence-prune --apply` still fails before traversal.
 
 ## Audit boundary
 

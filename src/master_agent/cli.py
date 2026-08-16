@@ -98,6 +98,7 @@ from master_agent.retention import (
     RetainedJSONReservation,
     RetentionConfig,
     purge_expired_evidence,
+    repair_orphaned_evidence,
     write_retained_json,
 )
 from master_agent.security import PromptInjectionGuard
@@ -342,6 +343,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "evidence-prune":
             return _evidence_prune(
+                root=args.root,
+                apply=args.apply,
+                output=args.output,
+            )
+        if args.command == "evidence-repair":
+            return _evidence_repair(
                 root=args.root,
                 apply=args.apply,
                 output=args.output,
@@ -791,6 +798,14 @@ def _build_parser() -> argparse.ArgumentParser:
     prune.add_argument("--root", type=Path, default=Path(".master-agent"))
     prune.add_argument("--apply", action="store_true")
     prune.add_argument("--output", type=Path)
+
+    repair = subparsers.add_parser(
+        "evidence-repair",
+        help="detect or recoverably quarantine orphaned retained evidence",
+    )
+    repair.add_argument("--root", type=Path, default=Path(".master-agent"))
+    repair.add_argument("--apply", action="store_true")
+    repair.add_argument("--output", type=Path)
 
     citations = subparsers.add_parser(
         "citations",
@@ -2978,6 +2993,26 @@ def _evidence_prune(*, root: Path, apply: bool, output: Path | None) -> int:
         print(f"{'deleted' if apply else 'would delete'}: {path}")
     for error in result.errors:
         print(f"error: {error}")
+    if output is not None:
+        _write_json(output, payload, restricted=True)
+        print(f"wrote {output}")
+    return 2 if result.errors else 0
+
+
+def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
+    result = repair_orphaned_evidence(root, dry_run=not apply)
+    payload = {
+        "schema": "master-agent/evidence-repair@1",
+        **result.to_dict(),
+    }
+    mode = "apply" if apply else "preview"
+    print(f"mode: {mode}")
+    print(f"scanned files: {result.scanned_files}")
+    print(f"orphaned files: {len(result.orphaned_files)}")
+    for path in result.quarantined_files:
+        print(f"quarantined: {path!r}")
+    for error in result.errors:
+        print(f"error: {error!r}")
     if output is not None:
         _write_json(output, payload, restricted=True)
         print(f"wrote {output}")

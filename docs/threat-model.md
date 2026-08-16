@@ -258,9 +258,10 @@ Controls:
 - verification that refuses missing, empty, malformed, or tail-truncated audit
   databases without creating them;
 - evidence SHA-256 digests and manifests;
-- mode-`0600` retained files where supported;
-- read-only expiry/orphan previews; destructive recursive maintenance remains
-  disabled until every traversal and deletion is descriptor-relative;
+- mode-`0600` same-directory staging, fsync, create-only manifest-first
+  publication, and transaction-owned rollback;
+- descriptor-relative, no-follow orphan detection and recoverable quarantine;
+- expiry deletion remains preview-only;
 - production readiness that requires an implemented typed external,
   tamper-resistant audit sink rather than trusting a configured product name.
 
@@ -281,7 +282,7 @@ external compliance record.
 - arbitrary shell execution;
 - local Git patch, branch, commit, and push execution;
 - non-manifest weekly-status, communication-context, and recurring execution;
-- destructive recursive evidence pruning or quarantine;
+- destructive recursive evidence pruning;
 - automatic Teams attachment download;
 - autonomous external communication from recurring workflows;
 - automatic refresh-token persistence.
@@ -291,8 +292,8 @@ external compliance record.
 - provider APIs and permissions differ by tenant/version;
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
-- expiry/orphan maintenance is preview-only pending descriptor-relative
-  recursive traversal;
+- expiry deletion is preview-only; quarantine intentionally retains orphaned
+  bytes until an operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;
 - provider acceptance does not guarantee human receipt or downstream interpretation;

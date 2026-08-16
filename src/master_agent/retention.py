@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import secrets
 import stat
 import tomllib
 from collections.abc import Mapping
@@ -31,6 +32,9 @@ _SECURITY_CATEGORIES = frozenset(
 )
 _SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 _RETENTION_FLOCK_NAME = ".master-agent-retention.flock"
+_RETENTION_QUARANTINE_NAME = ".retention-quarantine"
+_MAX_REPAIR_FILE_BYTES = 64 * 1024 * 1024
+_MAX_REPAIR_DEPTH = 64
 
 
 class PersistenceMode(StrEnum):
@@ -222,6 +226,24 @@ class RetentionRepairResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _RetainedFileRecord:
+    """Descriptor-discovered file identity beneath one pinned evidence root."""
+
+    relative_parts: tuple[str, ...]
+    identity: tuple[int, int]
+    mode: int
+    size: int
+
+    @property
+    def name(self) -> str:
+        return self.relative_parts[-1]
+
+    @property
+    def is_symlink(self) -> bool:
+        return stat.S_ISLNK(self.mode)
+
+
 class RetainedJSONReservation:
     """Create-only retained JSON names held across an external operation.
 
@@ -273,7 +295,7 @@ class RetainedJSONReservation:
             raise ConfigurationError("retained evidence names must be distinct")
         self._lock_descriptor = -1
         self._lock_identity: tuple[int, int] | None = None
-        self._files: list[tuple[str, int, tuple[int, int]]] = []
+        self._files: list[tuple[str, tuple[int, int]]] = []
         self._committed = False
         self._closed = False
         try:
@@ -343,19 +365,11 @@ class RetainedJSONReservation:
                 self._parent_descriptor,
                 (self._path.name, self._sidecar.name),
             )
-            for target in (self._path, self._sidecar):
-                descriptor, identity = _open_new_restricted_file_at(
-                    self._parent_descriptor,
-                    target.name,
-                )
-                self._files.append((target.name, descriptor, identity))
-            for name, descriptor, _ in self._files:
-                _write_restricted_descriptor(descriptor, content_by_name[name])
-            self._validate()
-            for name, descriptor, _ in self._files:
-                if _read_restricted_descriptor(descriptor) != content_by_name[name]:
-                    raise ConfigurationError("retained evidence content changed")
-            os.fsync(self._parent_descriptor)
+            self._files = _commit_restricted_files_at(
+                self._parent_descriptor,
+                content_by_name,
+                publish_last=self._path.name,
+            )
             self._validate()
             self._committed = True
             return self._path, self._sidecar
@@ -394,7 +408,7 @@ class RetainedJSONReservation:
             _RETENTION_FLOCK_NAME,
             self._lock_identity,
         )
-        for name, _, identity in self._files:
+        for name, identity in self._files:
             _validate_restricted_file_at(
                 self._parent_descriptor,
                 name,
@@ -406,7 +420,7 @@ class RetainedJSONReservation:
             return
         rollback_errors: list[str] = []
         if not self._committed:
-            for name, _, identity in reversed(self._files):
+            for name, identity in reversed(self._files):
                 try:
                     _unlink_restricted_file_at(
                         self._parent_descriptor,
@@ -419,11 +433,6 @@ class RetainedJSONReservation:
                 os.fsync(self._parent_descriptor)
             except OSError as error:
                 rollback_errors.append(type(error).__name__)
-        for _, descriptor, _ in reversed(self._files):
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
         self._files.clear()
         if self._lock_descriptor >= 0:
             try:
@@ -626,16 +635,11 @@ def repair_orphaned_evidence(
     dry_run: bool = True,
     max_files: int = 10_000,
 ) -> RetentionRepairResult:
-    """Preview orphan repair; destructive traversal is disabled."""
+    """Detect or recoverably quarantine orphaned retained evidence."""
 
-    if not dry_run:
-        raise ConfigurationError(
-            "destructive evidence repair is disabled until recursive traversal "
-            "and quarantine are descriptor-bound"
-        )
     return _repair_orphaned_evidence_locked(
         root,
-        dry_run=True,
+        dry_run=dry_run,
         max_files=max_files,
     )
 
@@ -646,86 +650,548 @@ def _repair_orphaned_evidence_locked(
     dry_run: bool = True,
     max_files: int = 10_000,
 ) -> RetentionRepairResult:
-    """Detect and quarantine unpaired evidence in a dedicated evidence root.
-
-    An evidence file without its retention sidecar, or a sidecar without its
-    named sibling, is not treated as valid retained evidence. Applied repairs
-    move such files into a same-filesystem ``.retention-quarantine`` directory
-    so the operation remains recoverable.
-    """
+    """Scan and quarantine through a pinned root and no-follow relative FDs."""
 
     if max_files <= 0:
         raise ValueError("max_files must be positive")
-    resolved_root = root.resolve()
-    quarantine = resolved_root / ".retention-quarantine"
-    files = [
-        path
-        for path in sorted(root.rglob("*"))
-        if (path.is_file() or path.is_symlink())
-        and path.name != _RETENTION_FLOCK_NAME
-        and quarantine not in (path.resolve(), *path.resolve().parents)
-    ][:max_files]
-    paired_evidence: set[Path] = set()
-    orphans: set[Path] = set()
-    errors: list[str] = []
-
-    for sidecar in (path for path in files if path.name.endswith(".retention.json")):
+    with PinnedDirectory.open(root) as pinned:
+        root_descriptor = pinned.fileno()
+        existing_lock_missing = False
+        if dry_run:
+            existing_lock = _open_existing_retention_lock(root_descriptor)
+            if existing_lock is None:
+                lock_descriptor = -1
+                lock_identity = None
+                existing_lock_missing = True
+            else:
+                lock_descriptor, lock_identity = existing_lock
+        else:
+            lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
+        lock_acquired = False
         try:
-            if sidecar.is_symlink():
+            if lock_descriptor >= 0:
+                try:
+                    fcntl.flock(
+                        lock_descriptor,
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                    lock_acquired = True
+                except BlockingIOError as error:
+                    if not dry_run:
+                        raise ConfigurationError(
+                            "retention repair refused while a publication is active"
+                        ) from error
+                    return RetentionRepairResult(
+                        scanned_files=0,
+                        orphaned_files=(),
+                        quarantined_files=(),
+                        errors=("retention publication is active; scan deferred",),
+                        dry_run=True,
+                    )
+                assert lock_identity is not None
+                _validate_restricted_file_at(
+                    root_descriptor,
+                    _RETENTION_FLOCK_NAME,
+                    lock_identity,
+                )
+            pinned.validate()
+            records, scan_errors = _scan_retained_files_at(
+                root_descriptor,
+                max_files=max_files,
+            )
+            orphans, classification_errors = _classify_orphaned_records_at(
+                root_descriptor,
+                records,
+            )
+            errors = [*scan_errors, *classification_errors]
+            if existing_lock_missing and _retention_lock_exists_at(root_descriptor):
+                errors.append(
+                    "retention publication began during the preview; rescan required"
+                )
+            quarantined: list[str] = []
+            if not dry_run and scan_errors:
+                errors.append(
+                    "quarantine refused because the descriptor scan was incomplete"
+                )
+            elif not dry_run and orphans:
+                quarantined, quarantine_errors = _quarantine_records_at(
+                    root_descriptor,
+                    pinned.path,
+                    orphans,
+                )
+                errors.extend(quarantine_errors)
+            pinned.validate()
+            orphan_paths = tuple(
+                str(pinned.path.joinpath(*record.relative_parts)) for record in orphans
+            )
+            return RetentionRepairResult(
+                scanned_files=len(records),
+                orphaned_files=orphan_paths,
+                quarantined_files=tuple(quarantined),
+                errors=tuple(errors),
+                dry_run=dry_run,
+            )
+        finally:
+            try:
+                if lock_acquired:
+                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            finally:
+                if lock_descriptor >= 0:
+                    os.close(lock_descriptor)
+
+
+def _scan_retained_files_at(
+    root_descriptor: int,
+    *,
+    max_files: int,
+) -> tuple[list[_RetainedFileRecord], list[str]]:
+    """Recursively enumerate files without following a pathname or symlink."""
+
+    records: list[_RetainedFileRecord] = []
+    errors: list[str] = []
+    truncated = False
+
+    def visit(directory_descriptor: int, prefix: tuple[str, ...]) -> None:
+        nonlocal truncated
+        if len(prefix) > _MAX_REPAIR_DEPTH or len(records) >= max_files:
+            truncated = True
+            return
+        try:
+            names = sorted(os.listdir(directory_descriptor))
+        except OSError as error:
+            errors.append(
+                f"{'/'.join(prefix) or '.'}: scan failed: {type(error).__name__}"
+            )
+            return
+        for name in names:
+            if len(records) >= max_files:
+                truncated = True
+                return
+            if not prefix and name in {
+                _RETENTION_FLOCK_NAME,
+                _RETENTION_QUARANTINE_NAME,
+            }:
+                continue
+            relative = (*prefix, name)
+            try:
+                metadata = os.stat(
+                    name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as error:
+                errors.append(
+                    f"{'/'.join(relative)}: scan failed: {type(error).__name__}"
+                )
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if len(relative) > _MAX_REPAIR_DEPTH:
+                    errors.append(f"{'/'.join(relative)}: directory is too deep")
+                    continue
+                child_descriptor = -1
+                try:
+                    child_descriptor = os.open(
+                        name,
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0),
+                        dir_fd=directory_descriptor,
+                    )
+                    current = os.fstat(child_descriptor)
+                    if (
+                        not stat.S_ISDIR(current.st_mode)
+                        or (current.st_dev, current.st_ino)
+                        != (metadata.st_dev, metadata.st_ino)
+                        or current.st_uid != os.getuid()
+                        or stat.S_IMODE(current.st_mode) & 0o022
+                    ):
+                        raise ConfigurationError(
+                            "evidence directory is not privately controlled"
+                        )
+                    visit(child_descriptor, relative)
+                except (OSError, ConfigurationError) as error:
+                    errors.append(
+                        f"{'/'.join(relative)}: scan failed: {type(error).__name__}"
+                    )
+                finally:
+                    if child_descriptor >= 0:
+                        os.close(child_descriptor)
+                continue
+            if stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                records.append(
+                    _RetainedFileRecord(
+                        relative_parts=relative,
+                        identity=(metadata.st_dev, metadata.st_ino),
+                        mode=metadata.st_mode,
+                        size=metadata.st_size,
+                    )
+                )
+
+    visit(root_descriptor, ())
+    if truncated:
+        errors.append(f"descriptor scan exceeded the {max_files}-file limit")
+    return records, errors
+
+
+def _classify_orphaned_records_at(
+    root_descriptor: int,
+    records: list[_RetainedFileRecord],
+) -> tuple[list[_RetainedFileRecord], list[str]]:
+    """Validate evidence/sidecar pairs from descriptor-discovered identities."""
+
+    by_relative = {record.relative_parts: record for record in records}
+    paired_evidence: set[tuple[str, ...]] = set()
+    orphaned: dict[tuple[str, ...], _RetainedFileRecord] = {}
+    errors: list[str] = []
+    sidecars = sorted(
+        (record for record in records if record.name.endswith(".retention.json")),
+        key=lambda record: record.relative_parts,
+    )
+    for sidecar in sidecars:
+        display = "/".join(sidecar.relative_parts)
+        try:
+            if sidecar.is_symlink:
                 raise OSError("retention sidecar must not be a symbolic link")
-            raw = json.loads(sidecar.read_text(encoding="utf-8"))
+            raw_bytes = _read_record_bytes_at(root_descriptor, sidecar)
+            raw = json.loads(raw_bytes.decode("utf-8"))
             if not isinstance(raw, Mapping):
                 raise StructuredDataTypeError("retention sidecar must be a JSON object")
             evidence_name = str(raw.get("evidence_path", ""))
-            if not evidence_name or Path(evidence_name).name != evidence_name:
+            if (
+                not evidence_name
+                or evidence_name in {".", ".."}
+                or Path(evidence_name).name != evidence_name
+            ):
                 raise ValueError("retention evidence_path must be a sibling filename")
-            evidence = sidecar.parent / evidence_name
-            if evidence.is_symlink() or not evidence.is_file():
-                orphans.add(sidecar)
-            else:
-                try:
-                    _verify_retained_content(evidence, raw)
-                except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                    orphans.add(sidecar)
-                    orphans.add(evidence)
-                    errors.append(f"{sidecar}: content digest mismatch")
-                else:
-                    paired_evidence.add(evidence.resolve())
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
-            orphans.add(sidecar)
-            errors.append(f"{sidecar}: {type(error).__name__}")
-
-    for evidence in (
-        path for path in files if not path.name.endswith(".retention.json")
-    ):
-        if evidence.is_symlink() or evidence.resolve() not in paired_evidence:
-            orphans.add(evidence)
-
-    quarantined: list[str] = []
-    if not dry_run and orphans:
-        quarantine.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _reject_symlink(quarantine)
-        for orphan in sorted(orphans):
+            evidence_relative = (*sidecar.relative_parts[:-1], evidence_name)
+            evidence = by_relative.get(evidence_relative)
+            if evidence is None or evidence.is_symlink:
+                orphaned[sidecar.relative_parts] = sidecar
+                continue
             try:
-                relative = orphan.resolve().relative_to(resolved_root)
-                destination = quarantine / relative
-                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                _reject_symlink(destination.parent)
-                if destination.exists() or destination.is_symlink():
-                    raise FileExistsError("quarantine destination already exists")
-                os.replace(orphan, destination)
-                quarantined.append(str(destination))
-            except (OSError, ValueError) as error:
-                errors.append(f"{orphan}: quarantine failed: {type(error).__name__}")
-        _fsync_directory(quarantine)
+                _verify_retained_record_at(root_descriptor, evidence, raw)
+            except (
+                OSError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ):
+                orphaned[sidecar.relative_parts] = sidecar
+                orphaned[evidence.relative_parts] = evidence
+                errors.append(f"{display}: content digest mismatch")
+            else:
+                paired_evidence.add(evidence.relative_parts)
+        except (
+            OSError,
+            StructuredDataTypeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            orphaned[sidecar.relative_parts] = sidecar
+            errors.append(f"{display}: {type(error).__name__}")
 
-    return RetentionRepairResult(
-        scanned_files=len(files),
-        orphaned_files=tuple(str(path) for path in sorted(orphans)),
-        quarantined_files=tuple(quarantined),
-        errors=tuple(errors),
-        dry_run=dry_run,
+    for record in records:
+        if record.name.endswith(".retention.json"):
+            continue
+        if record.is_symlink or record.relative_parts not in paired_evidence:
+            orphaned[record.relative_parts] = record
+    return (
+        [orphaned[key] for key in sorted(orphaned)],
+        errors,
     )
+
+
+def _verify_retained_record_at(
+    root_descriptor: int,
+    record: _RetainedFileRecord,
+    manifest: Mapping[str, Any],
+) -> None:
+    """Require descriptor-read evidence bytes to match one manifest digest."""
+
+    expected = manifest.get("content_digest")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ValueError("retention content digest is invalid")
+    raw = _read_record_bytes_at(root_descriptor, record)
+    text = raw.decode("utf-8")
+    value: Any = json.loads(text) if record.name.casefold().endswith(".json") else text
+    if content_digest(value) != expected:
+        raise ValueError("retention content digest does not match evidence")
+
+
+def _read_record_bytes_at(
+    root_descriptor: int,
+    record: _RetainedFileRecord,
+) -> bytes:
+    """Read one bounded regular file through its validated relative descriptor."""
+
+    if record.is_symlink or record.size > _MAX_REPAIR_FILE_BYTES:
+        raise OSError("retained evidence file is unsafe or too large")
+    parent_descriptor = _open_relative_directory_at(
+        root_descriptor,
+        record.relative_parts[:-1],
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            record.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or (metadata.st_dev, metadata.st_ino) != record.identity
+            or metadata.st_size != record.size
+        ):
+            raise OSError("retained evidence file identity changed")
+        chunks: list[bytes] = []
+        remaining = _MAX_REPAIR_FILE_BYTES
+        while remaining > 0:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise OSError("retained evidence file is too large")
+        return b"".join(chunks)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_descriptor)
+
+
+def _open_relative_directory_at(
+    root_descriptor: int,
+    relative_parts: tuple[str, ...],
+) -> int:
+    """Open a private descendant directory one no-follow component at a time."""
+
+    descriptor = os.dup(root_descriptor)
+    try:
+        for component in relative_parts:
+            if component in {"", ".", ".."} or Path(component).name != component:
+                raise ConfigurationError("unsafe evidence directory component")
+            child = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) & 0o022
+            ):
+                raise ConfigurationError(
+                    "evidence directory is not privately controlled"
+                )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _quarantine_records_at(
+    root_descriptor: int,
+    root: Path,
+    records: list[_RetainedFileRecord],
+) -> tuple[list[str], list[str]]:
+    """Hard-link then unlink exact orphan identities into private quarantine."""
+
+    quarantine_descriptor = _open_or_create_private_directory_at(
+        root_descriptor,
+        _RETENTION_QUARANTINE_NAME,
+    )
+    quarantined: list[str] = []
+    errors: list[str] = []
+    try:
+        for record in records:
+            source_parent = -1
+            destination_parent = -1
+            display = root.joinpath(*record.relative_parts)
+            try:
+                source_parent = _open_relative_directory_at(
+                    root_descriptor,
+                    record.relative_parts[:-1],
+                )
+                destination_parent = _open_or_create_relative_directories_at(
+                    quarantine_descriptor,
+                    record.relative_parts[:-1],
+                )
+                _quarantine_owned_name_at(
+                    source_parent,
+                    destination_parent,
+                    record.name,
+                    record.identity,
+                    record.mode,
+                )
+                quarantined.append(
+                    str(
+                        root / _RETENTION_QUARANTINE_NAME / Path(*record.relative_parts)
+                    )
+                )
+            except (OSError, ConfigurationError) as error:
+                errors.append(f"{display}: quarantine failed: {type(error).__name__}")
+            finally:
+                if destination_parent >= 0:
+                    os.close(destination_parent)
+                if source_parent >= 0:
+                    os.close(source_parent)
+        os.fsync(quarantine_descriptor)
+        os.fsync(root_descriptor)
+        return quarantined, errors
+    finally:
+        os.close(quarantine_descriptor)
+
+
+def _open_or_create_relative_directories_at(
+    root_descriptor: int,
+    relative_parts: tuple[str, ...],
+) -> int:
+    """Open or create private quarantine descendants without following links."""
+
+    descriptor = os.dup(root_descriptor)
+    try:
+        for component in relative_parts:
+            child = _open_or_create_private_directory_at(descriptor, component)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_or_create_private_directory_at(
+    parent_descriptor: int,
+    name: str,
+) -> int:
+    """Open one owner-private directory, creating it without symlink traversal."""
+
+    if name in {"", ".", ".."} or Path(name).name != name:
+        raise ConfigurationError("unsafe quarantine directory component")
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_descriptor)
+        os.fsync(parent_descriptor)
+    except FileExistsError:
+        pass
+    descriptor = os.open(
+        name,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        dir_fd=parent_descriptor,
+    )
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        os.close(descriptor)
+        raise ConfigurationError("quarantine directory is not owner-private")
+    return descriptor
+
+
+def _quarantine_owned_name_at(
+    source_parent: int,
+    destination_parent: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    expected_mode: int,
+) -> None:
+    """Move one exact file or symlink with create-only hard-link semantics."""
+
+    source = os.stat(name, dir_fd=source_parent, follow_symlinks=False)
+    if (
+        (source.st_dev, source.st_ino) != expected_identity
+        or source.st_uid != os.getuid()
+        or source.st_nlink != 1
+        or stat.S_IFMT(source.st_mode) != stat.S_IFMT(expected_mode)
+        or not (stat.S_ISREG(source.st_mode) or stat.S_ISLNK(source.st_mode))
+    ):
+        raise ConfigurationError("orphaned evidence identity changed")
+    linked = False
+    source_unlinked = False
+    try:
+        os.link(
+            name,
+            name,
+            src_dir_fd=source_parent,
+            dst_dir_fd=destination_parent,
+            follow_symlinks=False,
+        )
+        linked = True
+        destination = os.stat(
+            name,
+            dir_fd=destination_parent,
+            follow_symlinks=False,
+        )
+        if (
+            destination.st_dev,
+            destination.st_ino,
+        ) != expected_identity or destination.st_nlink != 2:
+            raise ConfigurationError("quarantine destination identity changed")
+        current_source = os.stat(
+            name,
+            dir_fd=source_parent,
+            follow_symlinks=False,
+        )
+        if (
+            current_source.st_dev,
+            current_source.st_ino,
+        ) != expected_identity or current_source.st_nlink != 2:
+            raise ConfigurationError("orphaned evidence identity changed")
+        os.unlink(name, dir_fd=source_parent)
+        source_unlinked = True
+        final = os.stat(
+            name,
+            dir_fd=destination_parent,
+            follow_symlinks=False,
+        )
+        if (final.st_dev, final.st_ino) != expected_identity or final.st_nlink != 1:
+            raise ConfigurationError("quarantine destination identity changed")
+        os.fsync(source_parent)
+        os.fsync(destination_parent)
+    except BaseException as error:
+        if linked and not source_unlinked:
+            try:
+                destination = os.stat(
+                    name,
+                    dir_fd=destination_parent,
+                    follow_symlinks=False,
+                )
+                if (destination.st_dev, destination.st_ino) == expected_identity:
+                    os.unlink(name, dir_fd=destination_parent)
+                    os.fsync(destination_parent)
+            except OSError as cleanup_error:
+                raise ConfigurationError(
+                    "quarantine rollback was incomplete"
+                ) from cleanup_error
+        if source_unlinked:
+            raise ConfigurationError(
+                "orphan was quarantined but final durability validation failed"
+            ) from error
+        raise
 
 
 def _verify_retained_content(path: Path, manifest: Mapping[str, Any]) -> None:
@@ -1041,7 +1507,7 @@ def _atomic_write_files_at(
     files: Mapping[Path, bytes],
     parent_directory: PinnedDirectory,
 ) -> None:
-    """Create retained siblings once under one persistent transaction lock."""
+    """Stage and create-only publish retained siblings under one lock."""
 
     targets = tuple(files)
     content_by_name = {target.name: content for target, content in files.items()}
@@ -1058,7 +1524,7 @@ def _atomic_write_files_at(
     parent_descriptor = pinned.fileno()
     lock_descriptor = -1
     lock_identity: tuple[int, int] | None = None
-    created: list[tuple[str, int, tuple[int, int]]] = []
+    published: list[tuple[str, tuple[int, int]]] = []
     try:
         lock_descriptor, lock_identity = _open_retention_lock(parent_descriptor)
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
@@ -1068,29 +1534,21 @@ def _atomic_write_files_at(
             lock_identity,
         )
         pinned.validate()
-        for target, content in files.items():
-            descriptor, identity = _open_new_restricted_file_at(
-                parent_descriptor,
-                target.name,
-            )
-            created.append((target.name, descriptor, identity))
-            _write_restricted_descriptor(descriptor, content)
-        for target_name, descriptor, identity in created:
-            _validate_restricted_file_at(
-                parent_descriptor,
-                target_name,
-                identity,
-            )
-            if _read_restricted_descriptor(descriptor) != content_by_name[target_name]:
-                raise ConfigurationError("retained evidence content changed")
-        os.fsync(parent_descriptor)
+        published = _commit_restricted_files_at(
+            parent_descriptor,
+            content_by_name,
+            # Callers put the evidence file first. Publish its already-durable
+            # sidecar(s) first so a crash can never expose evidence without a
+            # retention manifest.
+            publish_last=targets[0].name,
+        )
         pinned.validate()
         _validate_restricted_file_at(
             parent_descriptor,
             _RETENTION_FLOCK_NAME,
             lock_identity,
         )
-        for target_name, _, identity in created:
+        for target_name, identity in published:
             _validate_restricted_file_at(
                 parent_descriptor,
                 target_name,
@@ -1098,7 +1556,7 @@ def _atomic_write_files_at(
             )
     except BaseException as error:
         rollback_errors: list[str] = []
-        for target_name, _, identity in reversed(created):
+        for target_name, identity in reversed(published):
             try:
                 _unlink_restricted_file_at(
                     parent_descriptor,
@@ -1124,17 +1582,107 @@ def _atomic_write_files_at(
             f"retained evidence commit failed: {type(error).__name__}"
         ) from error
     finally:
-        for _, descriptor, _ in reversed(created):
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
         if lock_descriptor >= 0:
             try:
                 fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(lock_descriptor)
         pinned.close()
+
+
+def _commit_restricted_files_at(
+    parent_descriptor: int,
+    content_by_name: Mapping[str, bytes],
+    *,
+    publish_last: str,
+) -> list[tuple[str, tuple[int, int]]]:
+    """Stage, verify, and create-only publish a retained file set.
+
+    Every byte is written through a mode-0600, no-follow temporary file in the
+    destination directory. The manifest is linked into place before evidence,
+    and final names are never replaced. Any exception rolls back all names
+    owned by this transaction.
+    """
+
+    if publish_last not in content_by_name:
+        raise ConfigurationError("retained publication target is missing")
+    final_names = tuple(content_by_name)
+    _require_retained_names_absent(parent_descriptor, final_names)
+    staged: list[tuple[str, str, int, tuple[int, int]]] = []
+    published: list[tuple[str, tuple[int, int]]] = []
+    try:
+        for final_name, content in content_by_name.items():
+            temporary_name, descriptor, identity = _open_restricted_temp_file_at(
+                parent_descriptor
+            )
+            staged.append((final_name, temporary_name, descriptor, identity))
+            _write_restricted_descriptor(descriptor, content)
+            _validate_restricted_file_at(
+                parent_descriptor,
+                temporary_name,
+                identity,
+            )
+            if _read_restricted_descriptor(descriptor) != content:
+                raise ConfigurationError("retained evidence content changed")
+
+        _require_retained_names_absent(parent_descriptor, final_names)
+        staged_by_final = {item[0]: item for item in staged}
+        publication_order = tuple(
+            name for name in final_names if name != publish_last
+        ) + (publish_last,)
+        for final_name in publication_order:
+            _, temporary_name, _, identity = staged_by_final[final_name]
+            _publish_restricted_temp_file_at(
+                parent_descriptor,
+                temporary_name,
+                final_name,
+                identity,
+            )
+            published.append((final_name, identity))
+        os.fsync(parent_descriptor)
+        for final_name, identity in published:
+            _validate_restricted_file_at(
+                parent_descriptor,
+                final_name,
+                identity,
+            )
+        return published
+    except BaseException as error:
+        rollback_errors: list[str] = []
+        for final_name, identity in reversed(published):
+            try:
+                _unlink_restricted_file_at(
+                    parent_descriptor,
+                    final_name,
+                    identity,
+                )
+            except (OSError, ConfigurationError) as rollback_error:
+                rollback_errors.append(type(rollback_error).__name__)
+        for _, temporary_name, _, identity in reversed(staged):
+            try:
+                _unlink_restricted_file_at(
+                    parent_descriptor,
+                    temporary_name,
+                    identity,
+                )
+            except (OSError, ConfigurationError) as rollback_error:
+                rollback_errors.append(type(rollback_error).__name__)
+        try:
+            os.fsync(parent_descriptor)
+        except OSError as rollback_error:
+            rollback_errors.append(type(rollback_error).__name__)
+        if rollback_errors:
+            raise ConfigurationError(
+                "retained evidence staging rollback was incomplete: "
+                + ", ".join(rollback_errors)
+            ) from error
+        raise
+    finally:
+        for _, _, descriptor, _ in reversed(staged):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _require_retained_names_absent(
@@ -1199,11 +1747,59 @@ def _open_retention_lock(
         raise
 
 
+def _open_existing_retention_lock(
+    parent_descriptor: int,
+) -> tuple[int, tuple[int, int]] | None:
+    """Open an existing lock without mutating state during a repair preview."""
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(
+            _RETENTION_FLOCK_NAME,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ConfigurationError("retention transaction lock is unsafe") from error
+    try:
+        identity = _restricted_file_identity(
+            os.fstat(descriptor),
+            _RETENTION_FLOCK_NAME,
+        )
+        _validate_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            identity,
+        )
+        return descriptor, identity
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _retention_lock_exists_at(parent_descriptor: int) -> bool:
+    """Return whether a no-follow lock name appeared during an unlocked preview."""
+
+    try:
+        metadata = os.stat(
+            _RETENTION_FLOCK_NAME,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ConfigurationError("retention transaction lock is unsafe")
+    return True
+
+
 def _open_new_restricted_file_at(
     parent_descriptor: int,
     name: str,
 ) -> tuple[int, tuple[int, int]]:
-    """Create one final retained name without replacing an existing entry."""
+    """Create one restricted name without replacing an existing entry."""
 
     try:
         descriptor = os.open(
@@ -1238,17 +1834,119 @@ def _open_new_restricted_file_at(
         if _restricted_file_identity(os.fstat(descriptor), name) != identity:
             raise ConfigurationError(f"retained evidence file is unsafe: {name}")
         return descriptor, identity
-    except BaseException:
+    except BaseException as error:
+        cleanup_error: BaseException | None = None
         if identity is not None:
             try:
-                _unlink_restricted_file_at(
+                _unlink_new_private_file_at(
                     parent_descriptor,
                     name,
                     identity,
                 )
-            except (OSError, ConfigurationError):
-                pass
+            except (OSError, ConfigurationError) as caught:
+                cleanup_error = caught
         os.close(descriptor)
+        if cleanup_error is not None:
+            raise ConfigurationError(
+                "retained evidence file initialization rollback was incomplete"
+            ) from error
+        raise
+
+
+def _open_restricted_temp_file_at(
+    parent_descriptor: int,
+) -> tuple[str, int, tuple[int, int]]:
+    """Create a private unpredictable staging file in the destination directory."""
+
+    for _ in range(32):
+        name = f".master-agent-retention-{secrets.token_hex(16)}.tmp"
+        try:
+            descriptor, identity = _open_new_restricted_file_at(
+                parent_descriptor,
+                name,
+            )
+        except ConfigurationError:
+            collision_exists = True
+            try:
+                os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                collision_exists = False
+            if not collision_exists:
+                raise
+            continue
+        return name, descriptor, identity
+    raise ConfigurationError("could not allocate a retained evidence staging file")
+
+
+def _publish_restricted_temp_file_at(
+    parent_descriptor: int,
+    temporary_name: str,
+    final_name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Create a final hard link without replacement, then remove its staging name."""
+
+    linked = False
+    try:
+        os.link(
+            temporary_name,
+            final_name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        linked = True
+    except FileExistsError as error:
+        raise ConfigurationError(
+            f"retained evidence destination already exists: {final_name}"
+        ) from error
+    except OSError as error:
+        raise ConfigurationError(
+            f"retained evidence destination is unsafe: {final_name}"
+        ) from error
+
+    try:
+        temporary = os.stat(
+            temporary_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        final = os.stat(
+            final_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        for metadata in (temporary, final):
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 2
+                or (metadata.st_dev, metadata.st_ino) != expected_identity
+            ):
+                raise ConfigurationError("retained staging file identity changed")
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+        _validate_restricted_file_at(
+            parent_descriptor,
+            final_name,
+            expected_identity,
+        )
+    except BaseException as error:
+        cleanup_error: BaseException | None = None
+        if linked:
+            try:
+                _unlink_owned_file_at(
+                    parent_descriptor,
+                    final_name,
+                    expected_identity,
+                    allowed_link_counts=frozenset({1, 2}),
+                )
+            except (OSError, ConfigurationError) as caught:
+                cleanup_error = caught
+        if cleanup_error is not None:
+            raise ConfigurationError(
+                "retained staging publication rollback was incomplete"
+            ) from error
         raise
 
 
@@ -1296,6 +1994,21 @@ def _unlink_restricted_file_at(
 ) -> None:
     """Unlink only the exact regular inode owned by this transaction."""
 
+    _unlink_owned_file_at(
+        parent_descriptor,
+        name,
+        expected_identity,
+        allowed_link_counts=frozenset({1}),
+    )
+
+
+def _unlink_new_private_file_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove a just-created owner-only file even when final chmod failed."""
+
     try:
         current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError:
@@ -1304,6 +2017,31 @@ def _unlink_restricted_file_at(
         not stat.S_ISREG(current.st_mode)
         or current.st_uid != os.getuid()
         or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) & 0o077
+        or (current.st_dev, current.st_ino) != expected_identity
+    ):
+        raise ConfigurationError("retained evidence file identity changed")
+    os.unlink(name, dir_fd=parent_descriptor)
+
+
+def _unlink_owned_file_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+    *,
+    allowed_link_counts: frozenset[int],
+) -> None:
+    """Unlink an exact private inode with an explicitly allowed link count."""
+
+    try:
+        current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.getuid()
+        or stat.S_IMODE(current.st_mode) != 0o600
+        or current.st_nlink not in allowed_link_counts
         or (current.st_dev, current.st_ino) != expected_identity
     ):
         raise ConfigurationError("retained evidence file identity changed")

@@ -162,7 +162,12 @@ metadata_only
 explicit_content
 ```
 
-A caller cannot persist full content under a `metadata_only` rule. Retained files receive sibling sidecars with digest, timestamps, expiration, citation IDs, and content-included state.
+A caller cannot persist full content under a `metadata_only` rule. Projection
+uses fixed nested schemas and derives digests for opaque identifiers; arbitrary
+provider values, error messages, and excerpts are not copied through.
+`prohibited` matches override every allow rule. Retained evidence and its
+sibling sidecar are staged as private, mode-`0600` files, fsynced, and
+create-only published manifest-first with rollback of transaction-owned names.
 
 ## Audit summary
 

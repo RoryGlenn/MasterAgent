@@ -577,8 +577,11 @@ master-agent weekly-status-plan --output weekly-plan.json
 master-agent communication-context-plan --output communication-plan.json
 ```
 
-`evidence-prune` is preview-only. `--apply` and destructive orphan quarantine
-are disabled until recursive traversal and deletion are descriptor-bound.
+`evidence-prune` remains preview-only and rejects `--apply`. Orphan handling is
+separate and recoverable: preview with
+`master-agent evidence-repair --root <evidence-root>`, then add `--apply` to
+move exact descriptor-validated orphans into the root's private
+`.retention-quarantine` tree.
 
 ## Connector plugins
 
