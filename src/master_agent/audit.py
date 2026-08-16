@@ -43,6 +43,20 @@ class IdempotencyClaim:
     prior_state: IdempotencyClaimState | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RunCheckpoint:
+    """Content-free durable capsule-run recovery checkpoint."""
+
+    run_id: UUID
+    plan_id: UUID
+    plan_fingerprint: str
+    state: str
+    sequence: int
+    capsule_bindings_sha256: str
+    result_sha256: str | None
+    updated_at: datetime
+
+
 class AuditSinkKind(StrEnum):
     """Implemented durable-audit transport kinds."""
 
@@ -173,6 +187,127 @@ class AuditLog:
                 (event_count + 1, event_hash),
             )
         return event_hash
+
+    def checkpoint_run(
+        self,
+        *,
+        run_id: UUID,
+        plan_id: UUID,
+        plan_fingerprint: str,
+        state: str,
+        capsule_bindings_sha256: str,
+        expected_state: str | None,
+        result_sha256: str | None = None,
+    ) -> RunCheckpoint:
+        """Atomically create or advance one exact content-free run checkpoint."""
+
+        for name, value in (
+            ("plan_fingerprint", plan_fingerprint),
+            ("capsule_bindings_sha256", capsule_bindings_sha256),
+        ):
+            if not _is_sha256(value):
+                raise ConfigurationError(f"run checkpoint {name} is malformed")
+        if result_sha256 is not None and not _is_sha256(result_sha256):
+            raise ConfigurationError("run checkpoint result digest is malformed")
+        if not state or not state.isascii():
+            raise ConfigurationError("run checkpoint state is malformed")
+        timestamp = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT plan_id, plan_fingerprint, state, sequence,
+                       capsule_bindings_sha256
+                FROM run_checkpoints WHERE run_id = ?
+                """,
+                (str(run_id),),
+            ).fetchone()
+            if existing is None:
+                if expected_state is not None:
+                    raise RuntimeError("capsule run checkpoint is missing")
+                sequence = 0
+                connection.execute(
+                    """
+                    INSERT INTO run_checkpoints (
+                        run_id, plan_id, plan_fingerprint, state, sequence,
+                        capsule_bindings_sha256, result_sha256, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(run_id),
+                        str(plan_id),
+                        plan_fingerprint,
+                        state,
+                        sequence,
+                        capsule_bindings_sha256,
+                        result_sha256,
+                        timestamp.isoformat(),
+                    ),
+                )
+            else:
+                if (
+                    str(existing[0]) != str(plan_id)
+                    or str(existing[1]) != plan_fingerprint
+                    or str(existing[2]) != expected_state
+                    or str(existing[4]) != capsule_bindings_sha256
+                ):
+                    raise RuntimeError(
+                        "capsule run checkpoint differs from the exact resume request"
+                    )
+                sequence = int(existing[3]) + 1
+                cursor = connection.execute(
+                    """
+                    UPDATE run_checkpoints
+                    SET state = ?, sequence = ?, result_sha256 = ?, updated_at = ?
+                    WHERE run_id = ? AND state = ? AND sequence = ?
+                    """,
+                    (
+                        state,
+                        sequence,
+                        result_sha256,
+                        timestamp.isoformat(),
+                        str(run_id),
+                        expected_state,
+                        int(existing[3]),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("capsule run checkpoint changed concurrently")
+        return RunCheckpoint(
+            run_id=run_id,
+            plan_id=plan_id,
+            plan_fingerprint=plan_fingerprint,
+            state=state,
+            sequence=sequence,
+            capsule_bindings_sha256=capsule_bindings_sha256,
+            result_sha256=result_sha256,
+            updated_at=timestamp,
+        )
+
+    def run_checkpoint(self, run_id: UUID) -> RunCheckpoint | None:
+        """Load one content-free run checkpoint without changing it."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT plan_id, plan_fingerprint, state, sequence,
+                       capsule_bindings_sha256, result_sha256, updated_at
+                FROM run_checkpoints WHERE run_id = ?
+                """,
+                (str(run_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return RunCheckpoint(
+            run_id=run_id,
+            plan_id=UUID(str(row[0])),
+            plan_fingerprint=str(row[1]),
+            state=str(row[2]),
+            sequence=int(row[3]),
+            capsule_bindings_sha256=str(row[4]),
+            result_sha256=(str(row[5]) if row[5] is not None else None),
+            updated_at=datetime.fromisoformat(str(row[6])),
+        )
 
     def save_completed(
         self,
@@ -674,6 +809,20 @@ class AuditLog:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_checkpoints (
+                    run_id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    plan_fingerprint TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    capsule_bindings_sha256 TEXT NOT NULL,
+                    result_sha256 TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             columns = {
                 str(row[1])
                 for row in connection.execute(
@@ -729,3 +878,9 @@ def _idempotency_result(value: object) -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError, ValueError):
         return None
     return decoded if isinstance(decoded, dict) else None
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )

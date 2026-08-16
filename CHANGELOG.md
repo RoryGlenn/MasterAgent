@@ -1,5 +1,26 @@
 # Changelog
 
+- Add an immutable signed capability-capsule lifecycle for dependency-free pure
+  generated capabilities: descriptor-pinned quarantine storage, separate
+  promotion roles, Linux bubblewrap isolation, strict source language and
+  resource limits, exact catalog/plan/approval binding, normal orchestrator
+  execution, deterministic readback, immediate deprecation/revocation, and
+  adversarial escape/substitution/exhaustion tests. Provider, side-effect,
+  dependent, raw-plugin, and production capsule execution remains fail closed.
+
+- Add complete-binding single-use credential handles, authenticated runtime
+  principal/account constraints, policy-first intent cards and bounded active
+  sessions, contextual resource/classification/budget/time policy, durable
+  exact-run checkpoints, signed content-free execution receipts, and external
+  audit/telemetry interfaces. Production readiness now requires the isolated
+  worker, a production credential provider, authenticated approvals, and a
+  healthy external tamper-resistant sink together.
+
+- Record the repository's current proprietary license status and add an exact
+  runtime dependency closure, deny-by-default dependency-license policy,
+  deterministic CycloneDX SBOM generation, third-party notices, packaged
+  evidence, and CI/release drift checks.
+
 - Add a default-branch-only Confluence Cloud sandbox workflow that exercises
   the normal connection probe, private authenticated-approval resume, exact
   page create/read/versioned-update verification, always-run fresh cleanup,

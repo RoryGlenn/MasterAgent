@@ -273,6 +273,46 @@ _PUBLIC_READ_FORBIDDEN_CLAIMS = {
     Path("docs/release-validation.md"): ("Before live use, administrators must",),
 }
 
+_CAPSULE_DOCUMENT_REQUIREMENTS = {
+    Path(".ai/MASTER_AGENT.md"): (
+        "newly generated capability code as quarantined data",
+        "Never let generated code sign, review, publish, enable, route, approve",
+        "docs/capability-capsules.md",
+    ),
+    _AUTONOMY_CONTRACT_PATH: (
+        "Implementation does not make generated code trusted",
+        "docs/capability-capsules.md",
+    ),
+    Path("README.md"): (
+        "Capability capsule promotion",
+        "Linux bubblewrap",
+        "docs/capability-capsules.md",
+    ),
+    Path("docs/capability-capsules.md"): (
+        "dependency-free, deterministic",
+        "## Isolation boundary",
+        "## Credential broker boundary",
+        "## Supply-chain admission",
+        "## Production boundary",
+        "shipped deployment remains\nfail closed",
+    ),
+    Path("docs/architecture.md"): (
+        "### Capability capsule promotion",
+        "Linux bubblewrap",
+        "capability-capsules.md",
+    ),
+    Path("docs/threat-model.md"): (
+        "Generated capability substitution or self-promotion",
+        "AST-restricted language in Linux bubblewrap",
+        "capability-capsules.md",
+    ),
+    Path("docs/release-validation.md"): (
+        "capability-capsule acceptance flow",
+        "dependency-license admission policy",
+        "CycloneDX 1.5 SBOM",
+    ),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
@@ -325,11 +365,13 @@ def validate_project(root: Path) -> ValidationReport:
     errors: list[str] = []
 
     _validate_versions(root, checks, errors)
+    _validate_supply_chain(root, checks, errors)
     _validate_packaged_defaults(root, checks, errors)
     _validate_capabilities(root, checks, errors)
     _validate_copilot_agent(root, checks, errors)
     _validate_first_run_contract(root, checks, errors)
     _validate_public_read_contract(root, checks, errors)
+    _validate_capsule_contract(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
     _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
@@ -383,7 +425,9 @@ def validate_archive(path: Path) -> ValidationReport:
     if path.suffix == ".whl":
         required_suffixes = (
             "master_agent/__init__.py",
+            "master_agent/capsule_worker.py",
             "master_agent/defaults/capabilities.toml",
+            "master_agent/defaults/dependency-licenses.toml",
             ".dist-info/METADATA",
         )
     else:
@@ -393,11 +437,22 @@ def validate_archive(path: Path) -> ValidationReport:
             "/.ai/AUTONOMY.md",
             "/.github/agents/MasterAgent.agent.md",
             "/.env.example",
+            "/LICENSE",
+            "/THIRD_PARTY_NOTICES.md",
             "/config/capabilities.toml",
+            "/config/dependency-licenses.toml",
+            "/requirements-runtime.lock",
+            "/sbom.cdx.json",
+            "/supply-chain/runtime-dependencies.toml",
+            "/docs/capability-capsules.md",
             "/scripts/bootstrap_agent.py",
+            "/scripts/generate_sbom.py",
             "/scripts/validate_release.py",
+            "/tests/test_capability_capsules.py",
+            "/tests/test_capsule_broker_and_routing.py",
             "/tests/test_release_metadata.py",
             "/src/master_agent/__init__.py",
+            "/src/master_agent/capsule_worker.py",
         )
     for required in required_suffixes:
         if not any(name.endswith(required) for name in names):
@@ -445,6 +500,204 @@ def _validate_versions(root: Path, checks: list[str], errors: list[str]) -> None
         errors.append("HTTP user agent does not match the project version")
     else:
         checks.append(f"version metadata is consistent at {project_version}")
+
+
+def _validate_supply_chain(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    error_count = len(errors)
+    required = (
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+        "requirements-runtime.lock",
+        "sbom.cdx.json",
+        "config/dependency-licenses.toml",
+        "supply-chain/runtime-dependencies.toml",
+        "scripts/generate_sbom.py",
+    )
+    missing = [name for name in required if not (root / name).is_file()]
+    if missing:
+        errors.append("supply-chain baseline files are missing: " + ", ".join(missing))
+        return
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    project_metadata = pyproject["project"]
+    if project_metadata.get(
+        "license"
+    ) != "LicenseRef-MasterAgent-Proprietary" or project_metadata.get(
+        "license-files"
+    ) != ["LICENSE"]:
+        errors.append("pyproject license does not bind the repository LICENSE")
+    policy_document = tomllib.loads(
+        (root / "config/dependency-licenses.toml").read_text(encoding="utf-8")
+    )
+    policy = policy_document.get("policy")
+    if not isinstance(policy, dict):
+        errors.append("dependency-license policy is missing or malformed")
+        return
+    allowed = policy.get("allowed_spdx")
+    denied = policy.get("denied_spdx")
+    if (
+        not isinstance(allowed, list)
+        or not all(isinstance(value, str) and value for value in allowed)
+        or not isinstance(denied, list)
+        or not all(isinstance(value, str) and value for value in denied)
+        or set(allowed) & set(denied)
+        or not isinstance(policy.get("deny_unknown"), bool)
+        or not isinstance(policy.get("require_notices"), bool)
+    ):
+        errors.append("dependency-license policy is missing or malformed")
+        return
+    inventory = tomllib.loads(
+        (root / "supply-chain/runtime-dependencies.toml").read_text(encoding="utf-8")
+    )
+    project = inventory.get("project")
+    components = inventory.get("components", [])
+    if (
+        not isinstance(project, dict)
+        or not isinstance(components, list)
+        or not components
+    ):
+        errors.append("runtime dependency inventory is empty or malformed")
+        return
+    required_component_fields = {
+        "name",
+        "version",
+        "license",
+        "purl",
+        "homepage",
+        "notice",
+        "dependencies",
+    }
+    if any(
+        not isinstance(item, dict)
+        or not required_component_fields.issubset(item)
+        or any(
+            not isinstance(item.get(field), str) or not str(item[field]).strip()
+            for field in required_component_fields - {"dependencies"}
+        )
+        or not isinstance(item.get("dependencies"), list)
+        or not all(
+            isinstance(value, str) and value for value in item.get("dependencies", [])
+        )
+        for item in components
+    ):
+        errors.append("runtime dependency inventory is empty or malformed")
+        return
+    expected = {
+        str(item["name"]).replace("_", "-").casefold(): (
+            str(item["version"]),
+            str(item["license"]),
+        )
+        for item in components
+    }
+    if len(expected) != len(components):
+        errors.append("runtime dependency inventory contains duplicate names")
+    observed_licenses = {
+        str(project.get("license", "")),
+        *(str(item["license"]) for item in components),
+    }
+    blocked_licenses = sorted(observed_licenses & set(denied))
+    unknown_licenses = sorted(observed_licenses - set(allowed))
+    if blocked_licenses:
+        errors.append(
+            "runtime dependency license is denied: " + ", ".join(blocked_licenses)
+        )
+    if bool(policy["deny_unknown"]) and unknown_licenses:
+        errors.append(
+            "runtime dependency license is unknown: " + ", ".join(unknown_licenses)
+        )
+    if bool(policy["require_notices"]) and any(
+        not str(item["notice"]).strip() for item in components
+    ):
+        errors.append("runtime dependency notice is missing")
+
+    direct = project.get("dependencies")
+    if (
+        not isinstance(direct, list)
+        or not direct
+        or not all(isinstance(value, str) and value for value in direct)
+    ):
+        errors.append("project runtime dependency closure is malformed")
+    else:
+        by_name = {
+            str(item["name"]).replace("_", "-").casefold(): item for item in components
+        }
+        pending = [value.replace("_", "-").casefold() for value in direct]
+        reached: set[str] = set()
+        while pending:
+            name = pending.pop()
+            if name in reached:
+                continue
+            component = by_name.get(name)
+            if component is None:
+                errors.append(f"runtime dependency closure is missing: {name}")
+                break
+            reached.add(name)
+            pending.extend(
+                value.replace("_", "-").casefold()
+                for value in component["dependencies"]
+            )
+        if reached != set(by_name):
+            errors.append("runtime dependency inventory is not one complete closure")
+
+    declared: dict[str, str] = {}
+    for requirement in pyproject["project"].get("dependencies", []):
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", requirement)
+        if match is None:
+            errors.append(f"runtime project dependency is not exact: {requirement}")
+            continue
+        declared[match.group(1).replace("_", "-").casefold()] = match.group(2)
+    if declared != {name: value[0] for name, value in expected.items()}:
+        errors.append("pyproject runtime dependencies differ from the complete lock")
+    lock_entries: dict[str, str] = {}
+    for line in (
+        (root / "requirements-runtime.lock").read_text(encoding="utf-8").splitlines()
+    ):
+        if not line or line.startswith("#"):
+            continue
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", line)
+        if match is None:
+            errors.append(f"runtime lock entry is not exact: {line}")
+            continue
+        lock_entries[match.group(1).replace("_", "-").casefold()] = match.group(2)
+    if lock_entries != {name: value[0] for name, value in expected.items()}:
+        errors.append("runtime lock differs from the reviewed dependency inventory")
+    sbom = json.loads((root / "sbom.cdx.json").read_text(encoding="utf-8"))
+    sbom_components = sbom.get("components", []) if isinstance(sbom, dict) else []
+    observed = {
+        str(item.get("name", "")).replace("_", "-").casefold(): (
+            str(item.get("version", "")),
+            str(item.get("licenses", [{}])[0].get("license", {}).get("id", "")),
+        )
+        for item in sbom_components
+        if isinstance(item, dict)
+        and isinstance(item.get("licenses"), list)
+        and item.get("licenses")
+        and isinstance(item.get("licenses", [None])[0], dict)
+        and isinstance(item.get("licenses", [{}])[0].get("license"), dict)
+    }
+    if (
+        not isinstance(sbom, dict)
+        or sbom.get("bomFormat") != "CycloneDX"
+        or str(sbom.get("specVersion")) != "1.5"
+        or observed != expected
+    ):
+        errors.append("CycloneDX SBOM differs from the complete runtime lock")
+    notices = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    if any(
+        str(item.get("name", "")) not in notices
+        or str(item.get("license", "")) not in notices
+        for item in components
+        if isinstance(item, dict)
+    ):
+        errors.append("third-party notices omit a runtime component or license")
+    if len(errors) == error_count:
+        checks.append(
+            f"license, policy, exact lock, CycloneDX SBOM, and notices cover "
+            f"{len(expected)} runtime components"
+        )
 
 
 def _validate_packaged_defaults(
@@ -682,6 +935,37 @@ def _validate_public_read_contract(
         checks.append(
             "anonymous public-read guidance is consistent across "
             f"{len(_PUBLIC_READ_DOCUMENT_REQUIREMENTS)} policy and documentation files"
+        )
+
+
+def _validate_capsule_contract(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Keep generated-code safety boundaries consistent across public guidance."""
+
+    starting_errors = len(errors)
+    for relative, requirements in _CAPSULE_DOCUMENT_REQUIREMENTS.items():
+        path = root / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(
+                f"capability-capsule contract document is unreadable: {relative}: {error}"
+            )
+            continue
+        for requirement in requirements:
+            if requirement not in text:
+                errors.append(
+                    "capability-capsule contract document is inconsistent: "
+                    f"{relative} is missing {requirement!r}"
+                )
+
+    if len(errors) == starting_errors:
+        checks.append(
+            "capability-capsule safety guidance is consistent across "
+            f"{len(_CAPSULE_DOCUMENT_REQUIREMENTS)} policy and documentation files"
         )
 
 

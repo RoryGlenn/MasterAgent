@@ -84,6 +84,33 @@ authentication mode, granted scopes, and compensation interface before any
 effect. High-impact merge is represented but disabled, making prohibition
 explicit rather than relying on an absent endpoint.
 
+### Capability capsule promotion
+
+Generated capability source remains quarantined data. A capsule packages its
+typed contract, immutable source/artifact identity, dependency lock, CycloneDX
+SBOM, licenses/notices, tests, verification and compensation contracts,
+destinations, credential requirements, resource limits, and provenance. Six
+separate roles sign the ordered lifecycle from quarantine through validation,
+review, publication, and enablement; deprecation and revocation append new
+terminal states.
+
+The current worker admits only dependency-free pure read/local-generation
+capsules. It executes their AST-restricted program in Linux bubblewrap with no
+network, no ambient environment, read-only runtime mounts, an ephemeral work
+directory, and process/CPU/memory/time/input/output quotas. Complete signed
+manifest and artifact verification occurs before a connector is constructed.
+Provider destinations, credentials, or declared effects cause activation to
+fail closed because a production provider-capsule adapter is not bundled.
+
+An enabled capsule contributes one normal `CapabilityDefinition` and one typed
+connector. Its version, all security-relevant digests, publisher/reviewer,
+principal/account, classification/retention, destinations, scopes, and quotas
+are stored in `ExecutionContext`, and therefore in the plan and approval
+fingerprint. Policy filters compact capability cards before advisory intent
+matching. A time/call/byte-bounded active session then admits only those exact
+selected identities. See
+[`capability-capsules.md`](capability-capsules.md).
+
 ### Organization governance
 
 `config/governance.toml` maps capability patterns to:
@@ -135,13 +162,15 @@ credential resolution, even when an ambient provider credential exists.
 Authenticated routes are reserved for private, account-visible, or otherwise
 identity-bound data.
 
-Plugin connectors are discovered, locked, and bound to plans without import.
+Raw plugin connectors are discovered, locked, and bound to plans without import.
 Before hashing, the complete bounded distribution inventory must pass strict
 relative-path validation. Every artifact is then opened without following
 links beneath one descriptor-pinned, owner-checked distribution root; type,
 owner, identity, per-file size, and aggregate size are verified. They are not
-loaded during apply: the CLI fails closed until a separate worker can seal the
-plugin and transitive dependency closure before execution.
+loaded during apply. The capsule worker does not change that raw entry-point
+boundary: it accepts only a separately reviewed, dependency-free pure capsule.
+A plugin with dependencies still needs a sealed complete dependency filesystem
+before it can become executable.
 
 ### Orchestrator
 
@@ -209,6 +238,14 @@ chunks instead of retaining a second whole-artifact buffer.
 
 The SQLite audit log is tamper-evident through a hash chain. Default audit summaries exclude document/message bodies and secret values. Full evidence is written only through an explicit output/retention path.
 
+Capsule runs add an atomic content-free checkpoint state machine and a signed
+terminal receipt. Resume requires the exact plan and capsule-binding digest;
+normal action idempotency controls decide whether connector work may continue.
+Receipts bind policy/approval identity, capsule digests, action/readback and
+compensation digests, and the audit-chain anchor. Production requires an
+external healthy tamper-resistant receipt sink; local SQLite cannot satisfy
+that gate.
+
 ### Retention and citations
 
 Normalized resources receive stable citation IDs. Metadata-only persistence is
@@ -262,6 +299,8 @@ For a production deployment, separate these operational identities where possibl
 - communication identity;
 - scheduler identity;
 - audit sink writer;
+- capsule promotion authorities and isolated worker identity;
+- production credential broker and external receipt sink;
 - human approvers.
 
 Do not give the planning model raw provider credentials. The deterministic runtime resolves secret references immediately before constructing an approved connector.

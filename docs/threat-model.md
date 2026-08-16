@@ -10,6 +10,7 @@
 - approval authority;
 - canonical source integrity;
 - audit/evidence integrity;
+- capability capsule signing authorities, immutable artifacts, and receipts;
 - recurring workflow scope.
 
 ## Trust boundaries
@@ -17,7 +18,9 @@
 - planner output is untrusted until schema, catalog, governance, policy, and approval validation;
 - retrieved provider content is always data, never authority;
 - connector code is trusted application code and must be reviewed;
-- installed plugins remain untrusted executable code and CLI execution is disabled;
+- generated capsule source and installed plugins remain untrusted data; raw
+  plugin CLI execution is disabled, and a capsule becomes executable only
+  after its complete signed promotion chain verifies;
 - provider responses are untrusted until normalized and verified;
 - local artifact/workspace roots are explicit security boundaries.
 
@@ -226,7 +229,40 @@ Controls:
 - no generic HTTP connector;
 - no generic shell connector;
 - no routable local Git mutation or generic repository command surface;
-- CLI plugin execution is disabled pending an isolated worker.
+- raw CLI plugin execution remains disabled;
+- promoted pure capsules use an AST-restricted language in Linux bubblewrap
+  with no network, no ambient environment, no import/file/process authority,
+  and bounded resources; and
+- provider destinations, credentials, side effects, and capsule dependencies
+  are rejected before connector construction in the demonstrated runtime.
+
+### Generated capability substitution or self-promotion
+
+Generated source may alter its declared contract, replace validation evidence,
+escape quarantine, select its own reviewer, or reuse an approval for another
+version.
+
+Controls:
+
+- owner-private descriptor-pinned capsule store with no-follow, single-link,
+  bounded regular-file reads and create-only writes;
+- complete source/artifact/dependency/SBOM/test/contract/policy/worker digests;
+- ordered signed manifests with distinct generator, validator, sandbox,
+  reviewer, publisher, and revoker roles;
+- publisher/reviewer separation, monotonic timestamps, append-only states, and
+  exact latest-enabled resolution;
+- dependency-license allow/deny policy, complete exact lock, CycloneDX SBOM,
+  and required third-party notices;
+- activation verifies the signature chain and all artifacts before connector
+  construction;
+- the complete capsule identity is inside `ExecutionContext`, the plan and
+  approval fingerprint, audit events, active session, and signed receipt;
+- deprecation/revocation becomes the latest state and blocks resolution; and
+- generated code has no signing, approval, credential, routing, or promotion
+  authority.
+
+The complete demonstrated boundary and explicit production exclusions are in
+[`capability-capsules.md`](capability-capsules.md).
 
 ### Malicious connector plugin
 
@@ -243,8 +279,10 @@ Controls:
   operator-locked and approval-bound;
 - binding imports no plugin code;
 - CLI apply rejects plugins before importing the entry module or factory;
-- a future worker must lock the complete transitive dependency closure and
-  isolate it from already-cached host modules before activation;
+- the capsule worker is not a raw plugin loader and accepts only a separately
+  reviewed dependency-free pure capsule;
+- a future dependency filesystem must seal the complete transitive closure and
+  isolate it from already-cached host modules before dependent capsules can run;
 - package publisher and code review remain operator responsibilities.
 
 ### Recurring autonomy expansion
@@ -303,7 +341,10 @@ Controls:
 - reserve one 64 MiB aggregate budget across all artifacts in a complete local
   run and reject over-budget bundles before any final artifact name is created;
 - stream artifact readback and verification in bounded chunks instead of
-  holding a duplicate whole-file buffer.
+  holding a duplicate whole-file buffer;
+- cap capsule source, manifest chain, dependency count, test cases, AST nodes,
+  process count, address space, CPU, wall time, request/output bytes, active
+  credential handles, and active-session calls/bytes.
 
 ## Packaged prohibitions
 
@@ -315,6 +356,9 @@ Controls:
 - arbitrary deletion;
 - arbitrary HTTP;
 - arbitrary shell execution;
+- provider/network or side-effect capsule execution;
+- capsule self-promotion or generated approval;
+- capsule third-party runtime dependencies in the current pure worker;
 - local Git patch, branch, commit, and push execution;
 - non-manifest weekly-status, communication-context, and recurring execution;
 - destructive recursive evidence pruning;
@@ -327,6 +371,10 @@ Controls:
 - provider APIs and permissions differ by tenant/version;
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
+- HMAC capsule/receipt signing assumes externally protected authority keys;
+- the bundled pure capsule worker is intentionally too small for many useful
+  provider capabilities; production brokerage and external audit adapters are
+  deployment work, not demonstrated guarantees;
 - expiry deletion is preview-only; quarantine intentionally retains orphaned
   bytes until an operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;

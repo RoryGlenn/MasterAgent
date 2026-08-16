@@ -26,6 +26,7 @@ send, and recurring-schedule gates remain disabled.
 | `sources_of_truth.toml` | canonical resources and projection direction |
 | `identities.toml` | names, aliases, and provider IDs |
 | `retention.toml` | evidence persistence and expiry |
+| `dependency-licenses.toml` | admitted/denied SPDX identifiers and third-party notice requirements |
 | workflow TOML files | exact registered task inputs |
 | `recurring.toml` | disabled schedules and workflow allowlists |
 
@@ -34,6 +35,15 @@ send, and recurring-schedule gates remain disabled.
 TOML contains environment-variable **names**, never secret values. The runtime rejects credentials embedded in URLs and redacts query strings from errors.
 
 Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
+
+Capability capsules use a separate typed broker boundary. The existing
+restricted JSON snapshot is a development adapter only. Production capsule
+readiness requires an organization-provided credential/OAuth adapter that
+attests its provider/account/principal binding and is explicitly marked
+production-ready. A capsule declares credential names and scopes but never
+contains values. Opaque handles are short-lived, single-use, and bound to the
+complete plan-selected capsule and destination. The shipped runtime does not
+include a production secret-manager adapter.
 
 Authenticated GitHub Cloud capabilities use `MASTER_AGENT_GITHUB_TOKEN` as a
 bearer token. The separate `github.public_repository.list` capability is
@@ -62,6 +72,28 @@ live `run --apply` reject those flows even if configuration supplies a claimed
 identity label. Another provider-verified principal or trusted credential-broker
 attestation adapter is required before those flows can be used for applied
 execution.
+
+## License and SBOM policy
+
+The repository and packaged copy of `dependency-licenses.toml` must match.
+Unknown license identifiers are denied by default, selected strong-copyleft and
+source-available licenses are explicitly denied, and dependency notices are
+required. Runtime inventory lives in
+[`supply-chain/runtime-dependencies.toml`](../supply-chain/runtime-dependencies.toml);
+the generated exact lock, CycloneDX SBOM, and notices live at the repository
+root.
+
+Run this after any runtime dependency or license change:
+
+```bash
+python3 scripts/generate_sbom.py --check --verify-installed
+```
+
+The generator rejects a non-exact `pyproject.toml` requirement, an incomplete
+or unreachable dependency graph, installed version/license drift, an unknown
+or denied license, missing notices, or generated-file drift. Capsule-specific
+locks/SBOMs use the same fail-closed policy. The current pure capsule worker
+validates but then rejects nonempty third-party runtime dependency closures.
 
 ## Applied-run manifest
 

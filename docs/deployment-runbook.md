@@ -140,9 +140,13 @@ Before production:
 
 - install and register a typed external, tamper-resistant audit-sink adapter;
 - use an approved secret manager for every credentialed capability;
+- keep capability-capsule production promotion disabled until bubblewrap, a
+  production credential/OAuth adapter, authenticated exact-plan approvals, and
+  the external tamper-resistant receipt sink all pass one readiness assessment;
 - define incident response and token revocation for authenticated connectors;
 - define evidence retention/legal hold;
-- keep plugin execution disabled; inventory and pin artifacts only for review;
+- keep raw plugin and provider/side-effect/dependent capsule execution disabled;
+  inventory and pin plugin artifacts only for review;
 - review every enabled capability and connector gate;
 - preserve a tested rollback procedure;
 - monitor provider throttling and authentication failures.

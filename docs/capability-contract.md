@@ -11,6 +11,17 @@ future capabilities, and plugins. Different operations may require different
 authentication, approval, or external permissions, but missing repository code
 cannot become an operator-facing dead end.
 
+Capability-gap autonomy does not authorize immediate execution of generated
+code. A generated capability remains quarantined until its immutable capsule,
+complete dependency/license/SBOM evidence, typed schemas, tests, isolation
+evidence, verification/compensation contracts, publisher, and independent
+reviewer complete the signed lifecycle. Only the exact enabled version may add
+one normal catalog definition and connector, and its complete security identity
+is bound into the plan and approval fingerprint. The current demonstrated
+worker admits only dependency-free pure read/local-generation capabilities;
+provider and side-effect gaps still use reviewed first-party typed connectors.
+See [`capability-capsules.md`](capability-capsules.md).
+
 ## Domain-specific capabilities
 
 Capabilities preserve the semantics required for policy and verification:

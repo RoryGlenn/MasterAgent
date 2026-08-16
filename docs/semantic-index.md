@@ -44,12 +44,23 @@ The normal execution path is:
 The expanded component and trust-boundary description is in
 [`architecture.md`](architecture.md).
 
+Generated capability code has a separate admission prelude before this normal
+path: [`capsules.py`](../src/master_agent/capsules.py) defines immutable bundles,
+signatures, storage, and lifecycle;
+[`capsule_promotion.py`](../src/master_agent/capsule_promotion.py) owns the
+authorized transitions; and
+[`capsule_runtime.py`](../src/master_agent/capsule_runtime.py) validates and
+activates only an exact enabled capsule. Once activated, it uses the catalog,
+registry, policy, and orchestrator path above.
+
 ## Find code by intent
 
 | Intent or concept | Primary implementation | Closest tests and supporting material |
 |---|---|---|
 | Change the plan schema, immutability, dependencies, fingerprints, results, or approvals | [`models.py`](../src/master_agent/models.py), [`approvals.py`](../src/master_agent/approvals.py) | [`test_runtime_hardening.py`](../tests/test_runtime_hardening.py), [`test_strict_types.py`](../tests/test_strict_types.py), [`capability-contract.md`](capability-contract.md) |
 | Add or modify a typed capability | [`capabilities.py`](../src/master_agent/capabilities.py), [`config/capabilities.toml`](../config/capabilities.toml), [`config/governance.toml`](../config/governance.toml) | [`test_capability_governance.py`](../tests/test_capability_governance.py), [`test_factory_and_catalog.py`](../tests/test_factory_and_catalog.py); mirror the catalog into [`defaults/capabilities.toml`](../src/master_agent/defaults/capabilities.toml) |
+| Promote, isolate, activate, deprecate, or revoke generated capability code | [`capsules.py`](../src/master_agent/capsules.py), [`capsule_promotion.py`](../src/master_agent/capsule_promotion.py), [`capsule_runtime.py`](../src/master_agent/capsule_runtime.py), [`capsule_worker.py`](../src/master_agent/capsule_worker.py) | [`test_capability_capsules.py`](../tests/test_capability_capsules.py), [`capability-capsules.md`](capability-capsules.md) |
+| Change capsule credentials, intent routing, exact sessions, checkpoints, readiness, receipts, or contextual policy | [`credential_broker.py`](../src/master_agent/credential_broker.py), [`capability_routing.py`](../src/master_agent/capability_routing.py), [`capsule_operations.py`](../src/master_agent/capsule_operations.py), [`capsule_readiness.py`](../src/master_agent/capsule_readiness.py), [`receipts.py`](../src/master_agent/receipts.py), [`policy.py`](../src/master_agent/policy.py) | [`test_capsule_broker_and_routing.py`](../tests/test_capsule_broker_and_routing.py), [`test_capability_capsules.py`](../tests/test_capability_capsules.py), [`capability-capsules.md`](capability-capsules.md) |
 | Change approval, risk, governance, or prohibition behavior | [`policy.py`](../src/master_agent/policy.py), [`governance.py`](../src/master_agent/governance.py), [`approvals.py`](../src/master_agent/approvals.py) | [`test_policy.py`](../tests/test_policy.py), [`test_capability_governance.py`](../tests/test_capability_governance.py), [`threat-model.md`](threat-model.md) |
 | Change the private approval request, signing handoff, or exact-run resume flow | [`approval_handoff.py`](../src/master_agent/approval_handoff.py), [`cli.py`](../src/master_agent/cli.py) | [`test_approval_handoff.py`](../tests/test_approval_handoff.py), [`cli-reference.md`](cli-reference.md), [`operations.md`](operations.md) |
 | Bind an approved plan to runtime state and prevent path, identity, credential, or configuration substitution | [`execution_context.py`](../src/master_agent/execution_context.py), [`config_sources.py`](../src/master_agent/config_sources.py), [`directory_safety.py`](../src/master_agent/directory_safety.py), [`trust_store.py`](../src/master_agent/trust_store.py) | [`test_execution_context.py`](../tests/test_execution_context.py), [`test_config_sources.py`](../tests/test_config_sources.py), [`test_directory_safety.py`](../tests/test_directory_safety.py) |
@@ -69,6 +80,7 @@ The expanded component and trust-boundary description is in
 | Add or change a CLI command | [`cli.py`](../src/master_agent/cli.py), [`__main__.py`](../src/master_agent/__main__.py) | [`test_cli.py`](../tests/test_cli.py), [`test_cli_v1.py`](../tests/test_cli_v1.py), [`test_cli_phase_completion.py`](../tests/test_cli_phase_completion.py), [`cli-reference.md`](cli-reference.md) |
 | Change the GitHub Copilot custom-agent entry point, first-run setup, force-multiplier autonomy/stop conditions, response contract, or tool boundary | [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md), [`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md), [`bootstrap_agent.py`](../scripts/bootstrap_agent.py) | [`test_agent_bootstrap.py`](../tests/test_agent_bootstrap.py), [`test_release_metadata.py`](../tests/test_release_metadata.py), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`release-validation.md`](release-validation.md) |
 | Change release assertions or source-tree hygiene | [`scripts/validate_release.py`](../scripts/validate_release.py), [`pyproject.toml`](../pyproject.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`test_packaged_defaults.py`](../tests/test_packaged_defaults.py), [`release-validation.md`](release-validation.md) |
+| Change runtime dependencies, licenses, lock, SBOM, or notices | [`generate_sbom.py`](../scripts/generate_sbom.py), [`runtime-dependencies.toml`](../supply-chain/runtime-dependencies.toml), [`config/dependency-licenses.toml`](../config/dependency-licenses.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`release-validation.md`](release-validation.md), [`capability-capsules.md`](capability-capsules.md) |
 
 ## Connector map
 
@@ -116,6 +128,7 @@ suite and add an adversarial test for a newly reachable edge case.
 | Paths, files, Git state, and SQLite state remain bound to reviewed identities across races | [`directory_safety.py`](../src/master_agent/directory_safety.py), [`connectors/git_sandbox.py`](../src/master_agent/connectors/git_sandbox.py), [`sqlite_safety.py`](../src/master_agent/sqlite_safety.py) | [`test_directory_safety.py`](../tests/test_directory_safety.py), [`test_git_connectors.py`](../tests/test_git_connectors.py), [`test_sqlite_safety.py`](../tests/test_sqlite_safety.py) |
 | Partial multi-system failure is explicit; compensation never claims atomicity | [`orchestrator.py`](../src/master_agent/orchestrator.py), [`compensation.py`](../src/master_agent/compensation.py) | [`test_orchestrator_compensation.py`](../tests/test_orchestrator_compensation.py), [`test_compensation.py`](../tests/test_compensation.py) |
 | Plugins are inspected and bound without importing untrusted plugin code | [`plugins.py`](../src/master_agent/plugins.py) | [`test_plugins.py`](../tests/test_plugins.py), [`test_cli_plugin_boundary.py`](../tests/test_cli_plugin_boundary.py) |
+| Generated code stays quarantined until exact signed promotion and executes only in the pure OS-isolated worker | [`capsules.py`](../src/master_agent/capsules.py), [`capsule_runtime.py`](../src/master_agent/capsule_runtime.py), [`capsule_worker.py`](../src/master_agent/capsule_worker.py) | [`test_capability_capsules.py`](../tests/test_capability_capsules.py), [`test_capsule_broker_and_routing.py`](../tests/test_capsule_broker_and_routing.py) |
 
 ## Configuration topology
 
@@ -138,6 +151,7 @@ The configuration files have distinct responsibilities:
   parameter selectors.
 - `identities.toml`: non-secret cross-system identity aliases.
 - `retention.toml`: evidence classes, persistence modes, and expiration.
+- `dependency-licenses.toml`: admitted and denied licenses plus required notices.
 - Workflow TOML files: bounded inputs and examples for one built-in workflow.
 
 ## Validation and maintenance

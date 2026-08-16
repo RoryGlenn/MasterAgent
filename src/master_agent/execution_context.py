@@ -23,6 +23,7 @@ from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
 from master_agent.models import (
+    CapabilityCapsuleExecutionBinding,
     ChangePlan,
     ConfigurationExecutionBinding,
     ConnectorExecutionBinding,
@@ -144,6 +145,7 @@ def build_execution_context(
     include_connectors: bool = True,
     systems: set[str] | None = None,
     principal_transport: HttpTransport | None = None,
+    capsule_bindings: Sequence[CapabilityCapsuleExecutionBinding] = (),
 ) -> ExecutionContext:
     """Resolve a secret-free snapshot suitable for plan approval binding."""
 
@@ -191,6 +193,7 @@ def build_execution_context(
         integrations_sha256=integrations.source_sha256,
         connectors=connector_bindings,
         plugins=tuple(plugin_bindings),
+        capsules=tuple(capsule_bindings),
         runtime=runtime,
     )
 
@@ -419,6 +422,8 @@ def enforce_execution_context(plan: ChangePlan, observed: ExecutionContext) -> N
             changed.append("connector origin or CA identity")
         if approved.plugins != observed.plugins:
             changed.append("connector plugin identity")
+        if approved.capsules != observed.capsules:
+            changed.append("promoted capability capsule identity")
         if approved.runtime != observed.runtime:
             changed.append("runtime policy, principal, gate, or path binding")
         rendered = ", ".join(changed) or "execution context"
