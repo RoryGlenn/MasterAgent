@@ -67,8 +67,9 @@ the request JSON as approval.
 - Access tokens should be short-lived.
 - Token-file mode rejects group/world-readable files and expired tokens.
 - Approval TTLs should be minutes, not days.
-- Evidence expiry and orphan checks are preview-only. Destructive pruning and
-  quarantine are disabled pending descriptor-relative recursive maintenance.
+- Evidence expiry deletion remains preview-only. Orphan checks are previewed
+  with `evidence-repair`; `--apply` moves exact descriptor-validated files or
+  symlinks into `.retention-quarantine` without deleting their content.
 - Recurring execution is disabled; do not install or repair scheduler locks.
 
 ## Monitoring

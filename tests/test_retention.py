@@ -352,6 +352,95 @@ persistence = "explicit_content"
             self.assertFalse(evidence.exists())
             self.assertFalse(evidence.with_suffix(".json.retention.json").exists())
 
+    def test_pair_is_staged_privately_and_publishes_manifest_first(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence.json"
+            sidecar = root / "evidence.json.retention.json"
+            real_publish = retention._publish_restricted_temp_file_at
+            publication_order: list[str] = []
+
+            def observe_publication(
+                parent_descriptor: int,
+                temporary_name: str,
+                final_name: str,
+                identity: tuple[int, int],
+            ) -> None:
+                temporary = root / temporary_name
+                self.assertTrue(temporary.is_file())
+                self.assertEqual(temporary.stat().st_mode & 0o777, 0o600)
+                self.assertFalse(evidence.exists())
+                if final_name == evidence.name:
+                    self.assertTrue(sidecar.is_file())
+                real_publish(
+                    parent_descriptor,
+                    temporary_name,
+                    final_name,
+                    identity,
+                )
+                publication_order.append(final_name)
+
+            with patch.object(
+                retention,
+                "_publish_restricted_temp_file_at",
+                side_effect=observe_publication,
+            ):
+                write_retained_json(
+                    evidence,
+                    {"schema": "example@1"},
+                    evidence_type="outlook.message.metadata",
+                    config=config,
+                    include_content=False,
+                )
+
+            self.assertEqual(publication_order, [sidecar.name, evidence.name])
+            self.assertFalse(any(path.name.endswith(".tmp") for path in root.iterdir()))
+
+    def test_failure_after_manifest_publication_rolls_back_the_pair(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence.json"
+            sidecar = root / "evidence.json.retention.json"
+            real_publish = retention._publish_restricted_temp_file_at
+
+            def fail_evidence_publication(
+                parent_descriptor: int,
+                temporary_name: str,
+                final_name: str,
+                identity: tuple[int, int],
+            ) -> None:
+                if final_name == evidence.name:
+                    self.assertTrue(sidecar.is_file())
+                    raise OSError("simulated evidence publication failure")
+                real_publish(
+                    parent_descriptor,
+                    temporary_name,
+                    final_name,
+                    identity,
+                )
+
+            with (
+                patch.object(
+                    retention,
+                    "_publish_restricted_temp_file_at",
+                    side_effect=fail_evidence_publication,
+                ),
+                self.assertRaisesRegex(ConfigurationError, "commit failed"),
+            ):
+                write_retained_json(
+                    evidence,
+                    {"schema": "example@1"},
+                    evidence_type="outlook.message.metadata",
+                    config=config,
+                    include_content=False,
+                )
+
+            self.assertFalse(evidence.exists())
+            self.assertFalse(sidecar.exists())
+            self.assertFalse(any(path.name.endswith(".tmp") for path in root.iterdir()))
+
     def test_existing_pair_is_never_overwritten(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
         with TemporaryDirectory() as directory:
@@ -462,19 +551,123 @@ persistence = "explicit_content"
 
             self.assertFalse(missing.exists())
 
-    def test_orphaned_evidence_is_detected_but_quarantine_is_disabled(self) -> None:
+    def test_orphaned_evidence_is_detected_and_recoverably_quarantined(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            orphan = root / "orphan.json"
+            nested = root / "nested"
+            nested.mkdir(mode=0o700)
+            orphan = nested / "orphan.json"
             orphan.write_text('{"secret":"TOP-SECRET"}\n', encoding="utf-8")
 
             preview = repair_orphaned_evidence(root, dry_run=True)
-            with self.assertRaisesRegex(ConfigurationError, "repair is disabled"):
-                repair_orphaned_evidence(root, dry_run=False)
+            repair = repair_orphaned_evidence(root, dry_run=False)
+            destination = root / ".retention-quarantine" / "nested" / "orphan.json"
 
             self.assertEqual(preview.orphaned_files, (str(orphan),))
-            self.assertTrue(orphan.exists())
-            self.assertFalse((root / ".retention-quarantine").exists())
+            self.assertEqual(repair.errors, ())
+            self.assertEqual(repair.quarantined_files, (str(destination),))
+            self.assertFalse(orphan.exists())
+            self.assertEqual(
+                destination.read_text(encoding="utf-8"),
+                '{"secret":"TOP-SECRET"}\n',
+            )
+            self.assertEqual(
+                (root / ".retention-quarantine").stat().st_mode & 0o777,
+                0o700,
+            )
+
+    def test_orphan_preview_does_not_create_a_transaction_lock(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            orphan = root / "orphan.json"
+            orphan.write_text("orphan", encoding="utf-8")
+
+            preview = repair_orphaned_evidence(root, dry_run=True)
+
+            self.assertEqual(preview.orphaned_files, (str(orphan),))
+            self.assertFalse((root / ".master-agent-retention.flock").exists())
+
+    def test_quarantine_refuses_source_replacement_after_scan(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            orphan = root / "orphan.json"
+            displaced = root / "displaced.json"
+            orphan.write_text("original", encoding="utf-8")
+            real_quarantine = retention._quarantine_owned_name_at
+            raced = False
+
+            def race_source(
+                source_parent: int,
+                destination_parent: int,
+                name: str,
+                expected_identity: tuple[int, int],
+                expected_mode: int,
+            ) -> None:
+                nonlocal raced
+                raced = True
+                orphan.rename(displaced)
+                orphan.write_text("replacement", encoding="utf-8")
+                real_quarantine(
+                    source_parent,
+                    destination_parent,
+                    name,
+                    expected_identity,
+                    expected_mode,
+                )
+
+            with patch.object(
+                retention,
+                "_quarantine_owned_name_at",
+                side_effect=race_source,
+            ):
+                repair = repair_orphaned_evidence(root, dry_run=False)
+
+            self.assertTrue(raced)
+            self.assertTrue(repair.errors)
+            self.assertEqual(orphan.read_text(encoding="utf-8"), "replacement")
+            self.assertEqual(displaced.read_text(encoding="utf-8"), "original")
+            self.assertFalse((root / ".retention-quarantine" / "orphan.json").exists())
+
+    def test_quarantine_refuses_an_incomplete_bounded_scan(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "a.json"
+            second = root / "b.json"
+            first.write_text("first", encoding="utf-8")
+            second.write_text("second", encoding="utf-8")
+
+            repair = repair_orphaned_evidence(
+                root,
+                dry_run=False,
+                max_files=1,
+            )
+
+            self.assertTrue(repair.errors)
+            self.assertEqual(repair.quarantined_files, ())
+            self.assertTrue(first.exists())
+            self.assertTrue(second.exists())
+
+    def test_orphaned_symlink_is_quarantined_without_following_target(self) -> None:
+        with TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "evidence"
+            root.mkdir(mode=0o700)
+            target = base / "target.txt"
+            target.write_text("target", encoding="utf-8")
+            link = root / "orphan-link"
+            link.symlink_to(Path("..") / target.name)
+
+            repair = repair_orphaned_evidence(root, dry_run=False)
+            quarantined_link = root / ".retention-quarantine" / link.name
+
+            self.assertEqual(repair.errors, ())
+            self.assertFalse(link.exists())
+            self.assertTrue(quarantined_link.is_symlink())
+            self.assertEqual(
+                quarantined_link.readlink(),
+                Path("..") / target.name,
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), "target")
 
     def test_retained_text_receives_sidecar_and_expiration_cleanup(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
@@ -558,12 +751,23 @@ persistence = "explicit_content"
                 purge_expired_evidence(root, dry_run=False)
             purge.assert_not_called()
 
-            with (
-                patch.object(retention, "_repair_orphaned_evidence_locked") as repair,
-                self.assertRaisesRegex(ConfigurationError, "repair is disabled"),
-            ):
-                repair_orphaned_evidence(root, dry_run=False)
-            repair.assert_not_called()
+            expected = retention.RetentionRepairResult(
+                scanned_files=0,
+                orphaned_files=(),
+                quarantined_files=(),
+                errors=(),
+                dry_run=False,
+            )
+            with patch.object(
+                retention,
+                "_repair_orphaned_evidence_locked",
+                return_value=expected,
+            ) as repair:
+                self.assertIs(
+                    repair_orphaned_evidence(root, dry_run=False),
+                    expected,
+                )
+            repair.assert_called_once_with(root, dry_run=False, max_files=10_000)
 
 
 def _citation_id(system: str, resource_type: str, resource_id: str) -> str:

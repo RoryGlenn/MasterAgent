@@ -182,7 +182,14 @@ The SQLite audit log is tamper-evident through a hash chain. Default audit summa
 
 ### Retention and citations
 
-Normalized resources receive stable citation IDs. Retained evidence receives a sidecar with creation time, expiration, evidence type, digest, persistence mode, and citations. Cleanup is constrained to sibling evidence files beneath the selected root.
+Normalized resources receive stable citation IDs. Metadata-only persistence is
+projected through fixed nested schemas, with opaque identifiers and provider
+messages represented by stable digests/reason codes. Prohibited retention
+matches override every allow rule. Retained evidence and its sidecar are
+fsynced through mode-`0600` same-directory staging files and create-only
+published manifest-first. Descriptor-relative repair can move orphaned
+identities into a private same-filesystem quarantine; expiry deletion remains
+preview-only.
 
 ### Recurring runner
 

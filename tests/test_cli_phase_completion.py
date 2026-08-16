@@ -99,6 +99,26 @@ class PhaseCompletionCliTests(unittest.TestCase):
             self.assertIn("pruning is disabled", stderr.getvalue())
             self.assertFalse(missing.exists())
 
+    def test_evidence_repair_apply_quarantines_orphan_recoverably(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            orphan = root / "orphan.json"
+            orphan.write_text('{"secret":"canary"}\n', encoding="utf-8")
+            stdout = StringIO()
+            stderr = StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(["evidence-repair", "--root", str(root), "--apply"])
+
+            destination = root / ".retention-quarantine" / orphan.name
+            self.assertEqual(status, 0, stderr.getvalue())
+            self.assertFalse(orphan.exists())
+            self.assertEqual(
+                destination.read_text(encoding="utf-8"),
+                '{"secret":"canary"}\n',
+            )
+            self.assertIn(f"quarantined: {str(destination)!r}", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

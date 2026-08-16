@@ -31,6 +31,7 @@ or filesystem side effects.
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
 | `retain-evidence` | Persist evidence under the selected retention rule | Local create-only evidence and sidecar output; never contacts a provider |
 | `evidence-prune` | Preview expired evidence | Read-only preview; `--apply` is disabled before traversal or deletion |
+| `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; `--apply` recoverably moves exact descriptor-validated identities into a private same-filesystem quarantine |
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
