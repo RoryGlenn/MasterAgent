@@ -200,6 +200,42 @@ class SourceOfTruthTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("field-value", reason)
 
+    def test_same_resource_id_with_wrong_type_cannot_authorize_projection(self) -> None:
+        registry = SourceOfTruthRegistry.from_toml(
+            ROOT / "config/sources_of_truth.toml"
+        )
+        wrong_type = AgentAction(
+            capability="confluence.page.update",
+            target=ResourceRef("confluence", "blogpost", "project-status", "1"),
+            parameters={"body": "approved narrative"},
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="canonical:wrong-resource-type",
+            justification="attempt to substitute a different resource type",
+        )
+        projection = AgentAction(
+            capability="teams.message.draft",
+            target=ResourceRef("teams", "message", "weekly-status-draft"),
+            parameters={"body": "approved narrative"},
+            risk=RiskLevel.LOCAL_GENERATION,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="projection:wrong-resource-type",
+            justification="project from the wrong canonical resource type",
+            dependencies=(wrong_type.action_id,),
+        )
+        plan = ChangePlan(
+            goal="reject a resource-type substitution",
+            actions=(wrong_type, projection),
+            created_by="test",
+        )
+
+        valid, reason = registry.validate(plan, projection)
+
+        self.assertFalse(valid)
+        self.assertIn("confluence:page:project-status", reason)
+
     def test_forged_equal_digest_cannot_hide_divergent_projection_values(self) -> None:
         registry = SourceOfTruthRegistry.from_toml(
             ROOT / "config/sources_of_truth.toml"
@@ -348,7 +384,8 @@ class SourceOfTruthTests(unittest.TestCase):
             path = Path(directory) / "sources.toml"
             path.write_text(
                 "[[rules]]\nfield='status'\ncanonical_system='jira'\n"
-                "canonical_resource_id='X'\nprojections=['teams:X']\n"
+                "canonical_resource_type='issue'\ncanonical_resource_id='X'\n"
+                "projections=[{system='teams', resource_type='message', resource_id='X'}]\n"
                 "direction='outbound_only'\n"
                 "canonical_extractors={'jira.issue.update'=['fields.status']}\n"
                 "projection_extractors={'teams.message.update'=['body']}\n",
@@ -362,7 +399,8 @@ class SourceOfTruthTests(unittest.TestCase):
             path = Path(directory) / "sources.toml"
             path.write_text(
                 "[[rules]]\nfield='status'\ncanonical_system='jira'\n"
-                "canonical_resource_id='X'\nprojections=['teams:X']\n"
+                "canonical_resource_type='issue'\ncanonical_resource_id='X'\n"
+                "projections=[{system='teams', resource_type='message', resource_id='X'}]\n"
                 "direction='bidirectional'\ncanonical_capabilities=['jira.issue.update']\n"
                 "projection_capabilities=['teams.message.update']\n",
                 encoding="utf-8",

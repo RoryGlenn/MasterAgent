@@ -31,8 +31,6 @@ github.pull_request.read
 github.checks.read
 github.issue.create
 github.pull_request.create
-github.repository.settings.update
-github.collaborator.access.update
 microsoft.identity.search
 outlook.message.search
 outlook.message.read
@@ -47,11 +45,14 @@ teams.message.draft
 
 Do not reduce these to generic `create`, `read`, or `update`. Domain semantics determine authentication, limits, risk, reversibility, concurrency, retention, and verification.
 
-GitHub issue and pull-request creation are reversible writes. GitHub repository
-settings are reversible writes with dual approval. Existing-collaborator access
-updates are high-impact and also require dual approval; they are deliberately
-non-reversible because the provider
-does not identify which direct or inherited grant produced the effective role.
+GitHub issue and pull-request creation are reversible writes. The typed
+repository-settings and existing-collaborator adapters remain implemented, but
+their catalog and governance routes are disabled: GitHub does not document a
+provider-side conditional precondition for those unsafe updates. Jira issue
+update, transition, and compensation routes are disabled for the same reason.
+SharePoint small-file replacement is also disabled because its exact
+`PUT /content` endpoint does not document a conditional precondition. An
+approval cannot substitute for atomic provider concurrency control.
 
 ## Action envelope
 
@@ -88,6 +89,8 @@ A connector must:
 - reject a different target system;
 - reject unsupported capabilities or risk tiers;
 - validate required parameters and reject excessive limits;
+- satisfy the catalog's exact target, authentication, effective identity, and
+  scope contract;
 - quote external identifiers before path construction;
 - bound collection, pagination, enrichment, response, and download sizes;
 - construct endpoints internally rather than accepting arbitrary URLs;
@@ -96,6 +99,7 @@ A connector must:
 - scan retrieved strings as untrusted data;
 - return a structured `ExecutionResult`;
 - verify the result independently;
+- implement verified compensation whenever the catalog marks it reversible;
 - avoid placing secrets or retrieved bodies in audit metadata.
 
 ## Read-only result envelope

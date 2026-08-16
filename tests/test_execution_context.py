@@ -595,6 +595,10 @@ class ExecutionContextTests(unittest.TestCase):
             original.connectors[0].credential_identity,
             "github:user:42",
         )
+        self.assertEqual(
+            original.connectors[0].credential_scopes,
+            ("repo", "workflow"),
+        )
         rendered = json.dumps(original.to_dict())
         self.assertNotIn("token-for-user-42", rendered)
         self.assertNotIn("OriginalLogin", rendered)
@@ -628,6 +632,37 @@ class ExecutionContextTests(unittest.TestCase):
                 )
 
         self.assertEqual(len(swapped_transport.requests), 1)
+
+    def test_github_scope_drift_is_rejected_before_connector_actions(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(_GITHUB_BEARER_CONFIG, encoding="utf-8")
+            integrations = IntegrationConfig.from_toml(path)
+            approved = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "approved-token"},
+                principal_transport=_github_principal_transport(
+                    login="ApprovedUser",
+                    user_id=42,
+                    scopes="repo",
+                ),
+            )
+            drifted_transport = _github_principal_transport(
+                login="ApprovedUser",
+                user_id=42,
+                scopes="admin:org",
+            )
+
+            with self.assertRaisesRegex(ConfigurationError, "credential scopes"):
+                build_live_connectors(
+                    integrations,
+                    environ={"MASTER_AGENT_GITHUB_TOKEN": "same-user-new-scope"},
+                    systems={"github"},
+                    transport=drifted_transport,
+                    approved_execution_context=approved,
+                )
+
+        self.assertEqual(len(drifted_transport.requests), 1)
         self.assertNotIn(
             "swapped-token-canary",
             json.dumps(approved.to_dict()),
@@ -835,17 +870,6 @@ class ExecutionContextTests(unittest.TestCase):
 auth_mode = "bearer"
 secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
 """,
-            "delegated environment": """
-auth_mode = "oauth_delegated"
-oauth_flow = "environment"
-secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
-""",
-            "delegated token file": """
-auth_mode = "oauth_delegated"
-oauth_flow = "token_file"
-token_file_env = "MASTER_AGENT_GRAPH_TOKEN_FILE"
-secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
-""",
             "application environment": """
 auth_mode = "oauth_application"
 oauth_flow = "environment"
@@ -871,6 +895,46 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                         "provider-verified principal",
                     ):
                         build_execution_context(integrations, environ={})
+
+    def test_microsoft_delegated_identity_and_scopes_are_provider_bound(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "oauth_delegated"
+oauth_flow = "environment"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+identity_mode = "delegated"
+scopes = ["Mail.Send", "User.Read"]
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(path)
+            transport = QueueTransport(
+                ExpectedRequest(
+                    method="GET",
+                    url_contains="/me?%24select=id",
+                    payload={"id": "user-object-42"},
+                )
+            )
+
+            context = build_execution_context(
+                integrations,
+                environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "opaque-token"},
+                principal_transport=transport,
+            )
+
+        binding = context.connectors[0]
+        self.assertEqual(binding.authentication_mode, "oauth_delegated")
+        self.assertEqual(binding.credential_identity, "microsoft:user:user-object-42")
+        self.assertEqual(binding.credential_scopes, ("Mail.Send", "User.Read"))
+        self.assertNotIn("opaque-token", json.dumps(context.to_dict()))
+        transport.assert_drained()
 
     def test_unselected_default_connectors_do_not_block_safe_context(
         self,
@@ -1996,12 +2060,18 @@ def _mkdir_private(*paths: Path) -> None:
         path.chmod(0o700)
 
 
-def _github_principal_transport(*, login: str, user_id: int) -> QueueTransport:
+def _github_principal_transport(
+    *,
+    login: str,
+    user_id: int,
+    scopes: str = "workflow, repo",
+) -> QueueTransport:
     return QueueTransport(
         ExpectedRequest(
             method="GET",
             url_contains="/user",
             payload={"login": login, "id": user_id},
+            headers={"X-OAuth-Scopes": scopes},
         )
     )
 

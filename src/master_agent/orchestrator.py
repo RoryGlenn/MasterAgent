@@ -278,12 +278,10 @@ class WorkflowOrchestrator:
             failed_dependencies = [
                 dependency
                 for dependency in action.dependencies
-                if state_by_id.get(dependency)
-                not in {
-                    ActionState.PLANNED,
-                    ActionState.VERIFIED,
-                    ActionState.REUSED,
-                }
+                if not _dependency_succeeded(
+                    state_by_id.get(dependency),
+                    dry_run=dry_run,
+                )
             ]
             if failed_dependencies:
                 report = ActionReport(
@@ -369,6 +367,29 @@ class WorkflowOrchestrator:
                     action.target.system,
                     action.capability,
                 )
+                execution_ok, execution_reason = self._validate_execution_contract(
+                    plan,
+                    action,
+                    connector,
+                )
+                if not execution_ok:
+                    report = ActionReport(
+                        action_id=action.action_id,
+                        capability=action.capability,
+                        state=ActionState.PROHIBITED,
+                        message=execution_reason,
+                    )
+                    reports.append(report)
+                    state_by_id[action.action_id] = report.state
+                    self._record_action(run_id, plan, action, report)
+                    abort_remaining = self._maybe_compensate(
+                        run_id=run_id,
+                        plan=plan,
+                        reports=reports,
+                        executed=verified_side_effects,
+                        dry_run=dry_run,
+                    )
+                    continue
                 http_budget = connector_http_action_budget(connector)
                 if _uses_idempotency(action):
                     claim = self._audit.claim_action(
@@ -819,7 +840,51 @@ class WorkflowOrchestrator:
             allowed, reason = self._governance.validate_action(action)
             if not allowed:
                 return False, reason
+            if self._capabilities is not None:
+                allowed, reason = self._governance.validate_external_model(
+                    action,
+                    self._capabilities.definition(action.capability),
+                )
+                if not allowed:
+                    return False, reason
         return True, "capability passed catalog and governance checks"
+
+    def _validate_execution_contract(
+        self,
+        plan: ChangePlan,
+        action: AgentAction,
+        connector: Connector,
+    ) -> tuple[bool, str]:
+        """Enforce approval-bound identity, scopes, auth, and reversibility."""
+
+        if self._capabilities is None:
+            return True, "no capability catalog was configured"
+        context = plan.execution_context
+        connector_mode = (
+            context.runtime.connector_mode
+            if context is not None and context.runtime is not None
+            else "live"
+        )
+        binding_system = (
+            "microsoft"
+            if action.target.system
+            in {"microsoft", "sharepoint", "outlook", "teams", "onenote"}
+            else action.target.system
+        )
+        binding = next(
+            (
+                item
+                for item in (context.connectors if context is not None else ())
+                if item.system == binding_system
+            ),
+            None,
+        )
+        return self._capabilities.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode=connector_mode,
+        )
 
     def _minimum_approvers(self, action: AgentAction) -> int:
         """Return the governance-required number of distinct approvers."""
@@ -1074,6 +1139,18 @@ def _indeterminate_result(
         return None
     result = outcome.get("result")
     return result if isinstance(result, Mapping) else None
+
+
+def _dependency_succeeded(
+    state: ActionState | None,
+    *,
+    dry_run: bool,
+) -> bool:
+    """Require verified provider state for applied dependency edges."""
+
+    if state in {ActionState.VERIFIED, ActionState.REUSED}:
+        return True
+    return dry_run and state is ActionState.PLANNED
 
 
 def _topological_order(actions: tuple[AgentAction, ...]) -> tuple[AgentAction, ...]:

@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
-from master_agent.capabilities import CapabilityCatalog
+from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
+from master_agent.connectors.mock import MockConnector
+from master_agent.errors import ConfigurationError
 from master_agent.governance import ApprovalTier, GovernanceProfile
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    ConnectorExecutionBinding,
     DataClassification,
     ResourceRef,
     RiskLevel,
@@ -47,6 +52,199 @@ class CapabilityGovernanceTests(unittest.TestCase):
         allowed, reason = catalog.validate_action(action)
         self.assertFalse(allowed)
         self.assertIn("disabled", reason)
+
+    def test_enabled_modifier_requires_declared_provider_precondition(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "provider_precondition"):
+            CapabilityDefinition(
+                name="example.item.update",
+                enabled=True,
+                authentication="configured_connector",
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                reversible=True,
+                requires_expected_version=True,
+                target_resource_types=("item",),
+                parameter_schema={"value": "string"},
+            )
+
+    def test_target_and_parameter_schema_are_enforced_before_policy(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        action = AgentAction(
+            capability="github.issue.create",
+            target=ResourceRef("github", "issue", "new"),
+            parameters={
+                "owner": "RoryGlenn",
+                "repository": "MasterAgent",
+                "title": "Safety regression",
+            },
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="schema-contract",
+            justification="test executable capability schema",
+        )
+
+        allowed, reason = catalog.validate_action(action)
+        self.assertTrue(allowed, reason)
+
+        wrong_type = replace(
+            action,
+            target=ResourceRef("github", "repository", "new"),
+        )
+        allowed, reason = catalog.validate_action(wrong_type)
+        self.assertFalse(allowed)
+        self.assertIn("resource type", reason)
+
+        unknown_parameter = replace(
+            action,
+            parameters={**dict(action.parameters), "assumed_permission": "admin"},
+        )
+        allowed, reason = catalog.validate_action(unknown_parameter)
+        self.assertFalse(allowed)
+        self.assertIn("unexpected parameters", reason)
+
+    def test_effective_identity_authentication_and_scopes_are_enforced(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        action = AgentAction(
+            capability="outlook.email.send",
+            target=ResourceRef("outlook", "message", "new"),
+            parameters={
+                "to": ["operator@example.test"],
+                "subject": "Reviewed",
+                "body": "Exact approved content",
+            },
+            risk=RiskLevel.EXTERNAL_COMMUNICATION,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="effective-scope-contract",
+            justification="test effective OAuth authority",
+        )
+        connector = MockConnector("outlook", capabilities={action.capability})
+        connector._config = SimpleNamespace(  # type: ignore[attr-defined]
+            auth=SimpleNamespace(mode="oauth_delegated"),
+            config_identity="a" * 64,
+        )
+        binding = ConnectorExecutionBinding(
+            system="microsoft",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://graph.microsoft.com/v1.0",
+            resolved_origin="https://graph.microsoft.com",
+            authentication_mode="oauth_delegated",
+            credential_identity="microsoft:user:42",
+            credential_scopes=("Mail.Send",),
+        )
+
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode="live",
+        )
+        self.assertTrue(allowed, reason)
+
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            replace(binding, credential_scopes=("Mail.Read",)),
+            connector_mode="live",
+        )
+        self.assertFalse(allowed)
+        self.assertIn("Mail.Send", reason)
+
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            replace(binding, authentication_mode="bearer"),
+            connector_mode="live",
+        )
+        self.assertFalse(allowed)
+        self.assertIn("authentication", reason)
+
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            replace(binding, credential_identity=None),
+            connector_mode="live",
+        )
+        self.assertFalse(allowed)
+        self.assertIn("identity", reason)
+
+    def test_reversible_metadata_requires_a_compensating_connector(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        action = AgentAction(
+            capability="github.issue.create",
+            target=ResourceRef("github", "issue", "new"),
+            parameters={
+                "owner": "RoryGlenn",
+                "repository": "MasterAgent",
+                "title": "Reviewed",
+            },
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="reversibility-contract",
+            justification="test reversible connector enforcement",
+        )
+        binding = ConnectorExecutionBinding(
+            system="github",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://api.github.com",
+            resolved_origin="https://api.github.com",
+            authentication_mode="bearer",
+            credential_identity="github:user:42",
+        )
+
+        connector = MockConnector("github", capabilities={action.capability})
+        connector._config = SimpleNamespace(  # type: ignore[attr-defined]
+            auth=SimpleNamespace(mode="bearer"),
+            config_identity="a" * 64,
+        )
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode="live",
+        )
+
+        self.assertFalse(allowed)
+        self.assertIn("compensation", reason)
+
+    def test_external_model_policy_requires_an_explicit_classification(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        definition = CapabilityDefinition(
+            name="example.summary.generate",
+            enabled=True,
+            authentication="local",
+            risk=RiskLevel.LOCAL_GENERATION,
+            target_resource_types=("summary",),
+            parameter_schema={"body": "string"},
+            uses_external_model=True,
+        )
+        action = AgentAction(
+            capability=definition.name,
+            target=ResourceRef("example", "summary", "1"),
+            parameters={"body": "internal material"},
+            risk=RiskLevel.LOCAL_GENERATION,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="external-model-boundary",
+            justification="test external model policy",
+        )
+
+        allowed, reason = governance.validate_external_model(action, definition)
+        self.assertFalse(allowed)
+        self.assertIn("does not approve", reason)
+
+        approved = replace(
+            governance,
+            metadata={
+                **dict(governance.metadata),
+                "external_model_approved_classifications": ["internal"],
+            },
+        )
+        allowed, reason = approved.validate_external_model(action, definition)
+        self.assertTrue(allowed, reason)
 
     def test_onenote_writes_are_disabled_by_catalog_and_governance(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
@@ -96,9 +294,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
         governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
         action = AgentAction(
-            capability="jira.issue.update",
-            target=ResourceRef("jira", "issue", "X-1"),
-            parameters={"fields": {"summary": "changed"}},
+            capability="confluence.page.update",
+            target=ResourceRef("confluence", "page", "42"),
+            parameters={"title": "Status", "body": "changed"},
             risk=RiskLevel.REVERSIBLE_WRITE,
             data_classification=DataClassification.RESTRICTED,
             authority_source=AuthoritySource.DIRECT_USER,
@@ -189,12 +387,13 @@ class CapabilityGovernanceTests(unittest.TestCase):
         ):
             with self.subTest(capability=capability):
                 self.assertEqual(
-                    governance.approval_tier_for(capability), ApprovalTier.DUAL
+                    governance.approval_tier_for(capability),
+                    ApprovalTier.PROHIBITED,
                 )
 
-    def test_typed_github_admin_is_not_blocked_by_generic_permission_ban(self) -> None:
+    def test_github_admin_mutations_without_provider_cas_are_disabled(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
-        policy = PolicyEngine(PolicyConfig.from_toml(ROOT / "config/policy.toml"))
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
         action = AgentAction(
             capability="github.collaborator.access.update",
             target=ResourceRef("github", "collaborator", "RoryGlenn/alice"),
@@ -212,12 +411,32 @@ class CapabilityGovernanceTests(unittest.TestCase):
         )
 
         allowed, reason = catalog.validate_action(action)
-        self.assertTrue(allowed, reason)
-        decision = policy.evaluate(
-            ChangePlan(goal="test", actions=(action,), created_by="test"), action
-        )
-        self.assertFalse(decision.permitted)
-        self.assertIn("approval", decision.reason)
+        self.assertFalse(allowed)
+        self.assertIn("disabled", reason)
+        allowed, reason = governance.validate_action(action)
+        self.assertFalse(allowed)
+        self.assertIn("disables", reason)
+
+    def test_read_check_write_mutations_are_disabled_without_provider_cas(
+        self,
+    ) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        for capability in (
+            "github.repository.settings.update",
+            "github.collaborator.access.update",
+            "jira.issue.update",
+            "jira.issue.transition",
+            "jira.issue.compensate",
+            "sharepoint.file.upload",
+        ):
+            with self.subTest(capability=capability):
+                self.assertFalse(catalog.definitions[capability].enabled)
+                rule = governance.rule_for(capability)
+                self.assertIsNotNone(rule)
+                assert rule is not None
+                self.assertFalse(rule.enabled)
+                self.assertEqual(rule.approval_tier, ApprovalTier.PROHIBITED)
 
     def test_governance_minimum_forces_approval_even_if_risk_is_auto_permitted(
         self,

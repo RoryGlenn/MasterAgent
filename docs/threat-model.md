@@ -67,8 +67,12 @@ Controls:
   route never resolves or forwards an ambient credential and cannot be silently
   upgraded to a broader authenticated route;
 - GitHub bearer credentials are provider-attested through `GET /user` at bind
-  and apply time, with only the immutable numeric user ID approval-bound;
-- other opaque bearer/delegated credentials fail closed for live applied
+  and apply time, with the immutable numeric user ID and reported OAuth scopes
+  approval-bound;
+- Microsoft delegated credentials are provider-attested through Graph `/me` at
+  bind and apply time, with the immutable user object ID and token-file or
+  configured effective scopes approval-bound;
+- other opaque bearer/application credentials fail closed for live applied
   execution until a provider-verified principal or trusted broker attestation
   is available;
 - runtime + provider master + granular gates;
@@ -83,8 +87,9 @@ A legitimate user request may be combined with untrusted content to act on the w
 Controls:
 
 - explicit `ResourceRef` and identity mapping;
-- exact target identifiers in plans;
-- source-of-truth rules with capability-specific immutable-value extractors;
+- exact target system, resource type, and identifiers in plans;
+- source-of-truth rules whose identity includes the typed resource, governed
+  field, and capability-specific immutable-value extractors;
 - caller-supplied source-binding hashes are ignored as authority;
 - exact recipient/body approval;
 - no implicit external recipients.
@@ -263,8 +268,8 @@ external compliance record.
 - protected-branch write;
 - force push;
 - pull-request merge;
-- arbitrary permission changes, invitations, and custom roles; the separately
-  gated existing-GitHub-collaborator role update requires dual approval;
+- arbitrary permission changes, invitations, custom roles, and GitHub
+  administration without provider compare-and-swap;
 - arbitrary deletion;
 - arbitrary HTTP;
 - arbitrary shell execution;

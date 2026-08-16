@@ -127,9 +127,11 @@ Examples of granular flags:
 - Jira/Confluence: `writes_enabled`;
 - Bitbucket: `pull_request_writes_enabled`; `branch_push_enabled` is retained
   only to reject attempted local-Git publication explicitly;
-- GitHub: `writes_enabled` for issue/PR creation and `admin_enabled` for
-  allowlisted repository settings and existing-collaborator role changes;
-- Microsoft: `sharepoint_writes_enabled`, `onenote_read_enabled`, `outlook_send_enabled`, `teams_send_enabled`.
+- GitHub: `writes_enabled` for issue/PR creation; `admin_enabled` only exposes
+  implemented adapters that remain catalog/governance-prohibited pending CAS;
+- Microsoft: `sharepoint_writes_enabled` only constructs the disabled
+  SharePoint adapter; `onenote_read_enabled`, `outlook_send_enabled`, and
+  `teams_send_enabled` govern active typed routes.
 
 OneNote write flags are intentionally not part of the runtime surface. Legacy
 `onenote_writes_enabled` values are ignored; page create/update remain disabled
@@ -211,18 +213,12 @@ Mutation construction requires `--enable-writes`, `write_enabled = true`, and
 one of two independent granular gates. `writes_enabled = true` permits only
 `github.issue.create` and `github.pull_request.create`; both are independently
 re-read and can be compensated by closing the exact created resource after a
-conflict check. `admin_enabled = true` permits only
-`github.repository.settings.update` and `github.collaborator.access.update`.
-Governance requires two distinct approvers for both administration actions;
-repository settings are reversible writes, while collaborator access is
-high-impact and non-reversible. Repository settings accept only the boolean
-allowlist and capture exact prior values for restoration. Collaborator access
-accepts only GitHub's five built-in roles and only for a collaborator already
-present on the repository; it does not support inviting, removing, or assigning
-a custom role. If concurrent removal makes GitHub return an invitation, the
-connector cancels that invitation and fails the action. It cannot automatically
-roll back a role because GitHub reports the highest effective role rather than
-the source grant.
+conflict check. The typed `github.repository.settings.update` and
+`github.collaborator.access.update` adapters remain behind `admin_enabled`, but
+the capability catalog and governance profile prohibit them. GitHub does not
+document conditional unsafe-method support for these endpoints, so a local
+read-check-write sequence cannot prevent a concurrent overwrite. They must not
+be re-enabled until an adapter can prove a provider-side compare-and-swap.
 
 Use a fine-grained token whose repository permissions cover only the selected
 operation. GitHub documents the endpoint-specific permissions for
@@ -283,7 +279,8 @@ Replace placeholder owners such as `unassigned` and `example-organization` befor
 
 ## Canonical-source extractors
 
-Each entry in `sources_of_truth.toml` maps every allowed canonical and
+Each entry in `sources_of_truth.toml` declares canonical and projection
+resources as exact `{system, resource_type, resource_id}` identities and maps every allowed canonical and
 projection capability to one or more reviewed parameter selectors. The runtime
 derives typed SHA-256 values from those exact immutable action parameters and
 requires a dependent canonical write with a matching value. A capability with
@@ -298,7 +295,7 @@ The packaged rules currently verify these mappings:
 | project status narrative | `teams.message.draft` | `body` |
 | project status narrative | `outlook.email.draft` | `body` |
 
-The exact `powerpoint:weekly-status` target is governed but deliberately has no
+The exact `powerpoint:presentation:weekly-status` target is governed but deliberately has no
 allowed projection capability. Generic slides do not provide a unique typed
 location for each canonical field, so that target fails closed until the
 PowerPoint connector accepts and renders a complete field-addressed schema.
@@ -310,6 +307,31 @@ checked too; their lower risk does not exempt them from canonical integrity.
 The built-in static sample uses distinct `*-preview` resource IDs because it
 reads canonical systems but does not propose a canonical write; those harmless
 preview artifacts must not masquerade as the exact governed projections above.
+
+## Executable capability contracts
+
+Every enabled non-read capability declares `target_resource_types` and a
+`parameter_schema`. Unknown top-level parameters, missing required parameters,
+wrong types, target-system substitutions, and target-resource substitutions are
+rejected before policy evaluation. At live execution the runtime also enforces
+the catalog authentication class, approval-bound effective principal, granted
+`required_scopes`, and the compensation interface promised by `reversible`.
+
+Modifying capabilities additionally require an approved `expected_version` and
+a declared `provider_precondition` backed by a provider-side conditional write.
+Confluence supplies version-number compare-and-swap (`version`). SharePoint
+small-file replacement, Jira update/transition/compensation, and GitHub
+administration are disabled because their current adapters cannot provide an
+equivalent atomic precondition.
+This boundary follows the providers' documented contracts: Confluence page
+updates carry a version number; Microsoft Graph's exact small-file content
+endpoint does not list `If-Match` (although other DriveItem and upload-session
+operations do); GitHub's unsafe-method guidance and the Jira issue mutation API
+do not document an equivalent conditional input for these adapters. See the
+[Confluence page API](https://developer.atlassian.com/cloud/confluence/rest/v2/api-group-page/),
+[Microsoft small-file content API](https://learn.microsoft.com/en-us/graph/api/driveitem-put-content?view=graph-rest-1.0),
+[GitHub REST best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api),
+and [Jira issue API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/).
 
 ## Recurring workflows
 

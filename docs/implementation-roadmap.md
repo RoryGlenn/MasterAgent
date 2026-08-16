@@ -54,11 +54,11 @@ non-routable.
 - separate write connectors;
 - expected-version or commit preconditions;
 - exact approvals and idempotency;
-- provider-side compare-and-swap and reconstructable compensation remain
-  required before production write enablement;
+- enabled modifying capabilities use provider-side compare-and-swap; adapters
+  without an atomic provider precondition remain disabled;
 - protected branches, force pushes, merge, invitations, arbitrary permissions,
-  and broad deletion prohibited; existing GitHub collaborator roles use one
-  separately gated dual-approved capability.
+  and broad deletion prohibited; GitHub administration and Jira mutations stay
+  disabled until they gain a real provider-side concurrency precondition.
 
 ### Phase 5
 

@@ -264,6 +264,8 @@ class ConnectorExecutionBinding:
     config_identity_sha256: str
     resolved_base_url: str
     resolved_origin: str
+    authentication_mode: str = "none"
+    credential_scopes: tuple[str, ...] = ()
     credential_identity: str | None = None
     ca_bundle_path: str | None = None
     ca_bundle_sha256: str | None = None
@@ -274,6 +276,7 @@ class ConnectorExecutionBinding:
             ("deployment", self.deployment),
             ("resolved_base_url", self.resolved_base_url),
             ("resolved_origin", self.resolved_origin),
+            ("authentication_mode", self.authentication_mode),
         ):
             if not value.strip():
                 raise ValidationError(f"connector execution binding {name} is empty")
@@ -292,6 +295,20 @@ class ConnectorExecutionBinding:
             raise ValidationError(
                 "connector execution binding credential_identity is empty"
             )
+        scopes = tuple(sorted(set(self.credential_scopes)))
+        if any(not scope.strip() for scope in scopes):
+            raise ValidationError(
+                "connector execution binding credential scope is empty"
+            )
+        if len(scopes) > 128 or any(len(scope) > 256 for scope in scopes):
+            raise ValidationError(
+                "connector execution binding credential scopes are too large"
+            )
+        for scope in scopes:
+            _reject_control_characters(
+                scope,
+                "connector execution binding credential scope",
+            )
         if self.ca_bundle_path is not None and not self.ca_bundle_path.strip():
             raise ValidationError("connector execution binding CA path is empty")
         if self.ca_bundle_sha256 is not None:
@@ -299,19 +316,22 @@ class ConnectorExecutionBinding:
                 self.ca_bundle_sha256,
                 "connector execution binding ca_bundle_sha256",
             )
+        object.__setattr__(self, "credential_scopes", scopes)
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the connector binding."""
 
-        payload: dict[str, str | None] = {
+        payload: dict[str, Any] = {
             "system": self.system,
             "deployment": self.deployment,
             "config_identity_sha256": self.config_identity_sha256,
             "resolved_base_url": self.resolved_base_url,
             "resolved_origin": self.resolved_origin,
+            "authentication_mode": self.authentication_mode,
             "ca_bundle_path": self.ca_bundle_path,
             "ca_bundle_sha256": self.ca_bundle_sha256,
         }
+        payload["credential_scopes"] = list(self.credential_scopes)
         if self.credential_identity is not None:
             payload["credential_identity"] = self.credential_identity
         return payload
@@ -320,12 +340,21 @@ class ConnectorExecutionBinding:
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectorExecutionBinding:
         """Parse a connector binding."""
 
+        raw_scopes = data.get("credential_scopes", [])
+        if not isinstance(raw_scopes, list) or not all(
+            isinstance(item, str) for item in raw_scopes
+        ):
+            raise ValidationError(
+                "connector execution binding credential_scopes must be strings"
+            )
         return cls(
             system=str(data["system"]),
             deployment=str(data["deployment"]),
             config_identity_sha256=str(data["config_identity_sha256"]),
             resolved_base_url=str(data["resolved_base_url"]),
             resolved_origin=str(data["resolved_origin"]),
+            authentication_mode=str(data.get("authentication_mode", "none")),
+            credential_scopes=tuple(str(item) for item in raw_scopes),
             credential_identity=(
                 str(data["credential_identity"])
                 if data.get("credential_identity") is not None

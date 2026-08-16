@@ -175,18 +175,45 @@ pattern = "github.repository.settings.update"
 owner = "source-control-owner"
 authentication = "configured_connector"
 data_classifications = ["internal", "confidential"]
-approval_tier = "dual"
+approval_tier = "prohibited"
 environments = ["development", "non_production", "production"]
-enabled = true
+enabled = false
 
 [[rules]]
 pattern = "github.collaborator.access.update"
 owner = "security-owner"
 authentication = "configured_connector"
 data_classifications = ["internal", "confidential", "restricted"]
-approval_tier = "dual"
+approval_tier = "prohibited"
 environments = ["development", "non_production", "production"]
-enabled = true
+enabled = false
+
+[[rules]]
+pattern = "jira.issue.update"
+owner = "system-owner"
+authentication = "configured_connector"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "jira.issue.transition"
+owner = "system-owner"
+authentication = "configured_connector"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
+
+[[rules]]
+pattern = "jira.issue.compensate"
+owner = "system-owner"
+authentication = "configured_connector"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
 
 [[rules]]
 pattern = "*.update"
@@ -205,6 +232,15 @@ data_classifications = ["internal", "confidential"]
 approval_tier = "single"
 environments = ["development", "non_production", "production"]
 enabled = true
+
+[[rules]]
+pattern = "sharepoint.file.upload"
+owner = "system-owner"
+authentication = "microsoft_graph"
+data_classifications = ["internal", "confidential"]
+approval_tier = "prohibited"
+environments = ["development", "non_production", "production"]
+enabled = false
 
 [[rules]]
 pattern = "*.upload"

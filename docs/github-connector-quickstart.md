@@ -16,9 +16,11 @@ The built-in GitHub connector can:
 - list open, closed, or all pull requests;
 - read one pull request; and
 - read check runs for a branch or commit;
-- create an issue or pull request through the reversible-write gate; and
-- update allowlisted repository settings or an existing collaborator's
-  built-in role through the separate dual-approved administration gate.
+- create an issue or pull request through the reversible-write gate.
+
+Typed repository-settings and collaborator-role adapters exist, but catalog
+and governance prohibit them because GitHub does not document provider-side
+compare-and-swap for those unsafe updates.
 
 The default and convenience-command paths are read-only. There is no generic
 GitHub request, comment, push, merge, delete, invitation, custom-role, secret,

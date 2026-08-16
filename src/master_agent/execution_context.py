@@ -18,6 +18,7 @@ from master_agent.config import (
 )
 from master_agent.config_sources import ConfigSource
 from master_agent.connectors.github import GitHubConnector
+from master_agent.connectors.microsoft import MicrosoftIdentityConnector
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
@@ -40,6 +41,14 @@ class CapturedConnectorExecution:
     config: ConnectorConfig
     target: ResolvedExecutionTarget
     binding: ConnectorExecutionBinding
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialAttestation:
+    """Secret-free principal and effective scope facts for approval binding."""
+
+    identity: str | None
+    scopes: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -91,6 +100,16 @@ def capture_connector_executions(
             continue
         target = config.capture_execution_target(source)
         ca_bundle = target.ca_bundle
+        attestation = (
+            _credential_attestation(
+                config,
+                target=target,
+                environ=source,
+                transport=principal_transport,
+            )
+            if require_trusted_principal
+            else CredentialAttestation(identity=None)
+        )
         captured.append(
             CapturedConnectorExecution(
                 config=config,
@@ -101,16 +120,9 @@ def capture_connector_executions(
                     config_identity_sha256=target.config_identity,
                     resolved_base_url=target.base_url,
                     resolved_origin=_origin(target.base_url, system=config.system),
-                    credential_identity=(
-                        _credential_identity(
-                            config,
-                            target=target,
-                            environ=source,
-                            transport=principal_transport,
-                        )
-                        if require_trusted_principal
-                        else None
-                    ),
+                    authentication_mode=str(config.auth_mode),
+                    credential_scopes=attestation.scopes,
+                    credential_identity=attestation.identity,
                     ca_bundle_path=(
                         str(ca_bundle.path) if ca_bundle is not None else None
                     ),
@@ -195,31 +207,41 @@ def _connector_is_selected(system: str, systems: set[str] | None) -> bool:
     return system in systems
 
 
-def _credential_identity(
+def _credential_attestation(
     config: ConnectorConfig,
     *,
     target: ResolvedExecutionTarget,
     environ: Mapping[str, str],
     transport: HttpTransport | None,
-) -> str | None:
-    """Capture a flow-enforced or provider-verified principal identity."""
+) -> CredentialAttestation:
+    """Capture a flow-enforced or provider-verified principal and scopes."""
 
     adapter = config.principal_attestation_adapter
     if adapter is PrincipalAttestationAdapter.GITHUB_AUTHENTICATED_USER:
         resolved = config.resolve(environ, execution_target=target)
-        return (
-            GitHubConnector(
-                resolved,
-                transport=transport,
-            )
-            .attest_principal()
-            .identity
+        github_attested = GitHubConnector(
+            resolved,
+            transport=transport,
+        ).attest_principal()
+        return CredentialAttestation(
+            identity=github_attested.identity,
+            scopes=github_attested.scopes,
+        )
+    if adapter is PrincipalAttestationAdapter.MICROSOFT_DELEGATED_USER:
+        resolved = config.resolve(environ, execution_target=target)
+        microsoft_attested = MicrosoftIdentityConnector(
+            resolved,
+            transport=transport,
+        ).attest_principal()
+        return CredentialAttestation(
+            identity=microsoft_attested.identity,
+            scopes=microsoft_attested.scopes,
         )
     if adapter is not None:  # pragma: no cover - adapter registry invariant.
         raise ConfigurationError(
             f"connector {config.system} has an unsupported principal adapter"
         )
-    return config.credential_identity(environ)
+    return CredentialAttestation(identity=config.credential_identity(environ))
 
 
 def build_runtime_execution_binding(

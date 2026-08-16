@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import textwrap
 import unittest
@@ -41,6 +42,7 @@ from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.errors import ConfigurationError
+from master_agent.models import ChangePlan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -210,6 +212,23 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         ):
             with self.subTest(capability=capability):
                 self.assertFalse(catalog.definitions[capability].enabled)
+
+    def test_checked_in_weekly_status_plan_satisfies_capability_contracts(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        plan = ChangePlan.from_dict(
+            json.loads(
+                (ROOT / "examples/weekly-status-plan.json").read_text(encoding="utf-8")
+            )
+        )
+
+        errors = [
+            reason
+            for action in plan.actions
+            for allowed, reason in (catalog.validate_action(action),)
+            if not allowed
+        ]
+
+        self.assertEqual(errors, [])
 
 
 def _capabilities(connectors: tuple[object, ...]) -> set[str]:

@@ -65,9 +65,18 @@ read connector  draft connector  mutation/send connector
 - authentication class;
 - risk tier;
 - reversibility;
+- exact target system and allowed resource types;
+- a top-level parameter schema for every enabled side effect;
+- required effective OAuth scopes, expected-version requirements, and the
+  provider precondition that makes a modifying write atomic;
+- whether the capability uses an external model;
 - optional description.
 
-A connector may not expose an uncatalogued capability in the standard runtime. High-impact merge is represented but disabled, making prohibition explicit rather than relying on an absent endpoint.
+A connector may not expose an uncatalogued capability in the standard runtime.
+The orchestrator rechecks the resolved connector's approval-bound principal,
+authentication mode, granted scopes, and compensation interface before any
+effect. High-impact merge is represented but disabled, making prohibition
+explicit rather than relying on an absent endpoint.
 
 ### Organization governance
 
@@ -90,13 +99,15 @@ The most specific matching rule wins. Uncovered capabilities fail closed. Dual a
 - reversible writes, external communication, and high impact require approval;
 - destructive actions are prohibited;
 - retrieved content cannot authorize writes;
-- merge, deletion, generic permission changes, invitations, and protected-branch
-  operations are denied; the sole access-management route is the typed,
-  dual-approved update of an existing GitHub collaborator's built-in role.
+- merge, deletion, generic permission changes, invitations, protected-branch
+  operations, and GitHub administration without provider compare-and-swap are
+  denied.
 
 ### Source-of-truth registry
 
-Canonical resources are validated before execution. A governed projection,
+Canonical resources are validated before execution. Identity includes the
+exact system, resource type, resource ID, governed field, and reviewed
+parameter selector. A governed projection,
 including a matching local-generation target, cannot be updated without an
 authorized canonical change in the same plan when the registry says the field
 is outbound-only. Each allowed capability has a reviewed scalar parameter

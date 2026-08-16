@@ -355,12 +355,18 @@ def _verify_approved_execution_context(
     for system in sorted(observed):
         actual = observed[system]
         reviewed = expected[system]
-        if actual.config_identity_sha256 != reviewed.config_identity_sha256:
+        if actual.deployment != reviewed.deployment:
+            detail = "deployment"
+        elif actual.config_identity_sha256 != reviewed.config_identity_sha256:
             detail = "config identity"
         elif actual.resolved_base_url != reviewed.resolved_base_url:
             detail = "base URL"
         elif actual.resolved_origin != reviewed.resolved_origin:
             detail = "origin"
+        elif actual.authentication_mode != reviewed.authentication_mode:
+            detail = "authentication mode"
+        elif actual.credential_scopes != reviewed.credential_scopes:
+            detail = "credential scopes"
         elif actual.credential_identity != reviewed.credential_identity:
             detail = "credential identity"
         elif actual.ca_bundle_path != reviewed.ca_bundle_path:

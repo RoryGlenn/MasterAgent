@@ -62,7 +62,9 @@ class OAuthReadinessTests(unittest.TestCase):
         )
         self.assertFalse(any("principal" in item for item in report.errors))
 
-    def test_enabled_opaque_connector_reports_missing_principal_adapter(self) -> None:
+    def test_microsoft_delegated_principal_adapter_is_ready_without_network(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "integrations.toml"
             path.write_text(
@@ -88,11 +90,15 @@ credential_identity = "tenant-a:claimed-user"
                 environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "opaque-token"},
             )
 
-        rendered = "\n".join(report.errors)
-        self.assertFalse(report.ready)
-        self.assertIn("trusted credential-broker attestation", rendered)
-        self.assertIn("no such adapter is implemented", rendered)
-        self.assertNotIn("opaque-token", rendered)
+        connector_check = next(
+            check for check in report.checks if check["name"] == "connector:microsoft"
+        )
+        self.assertTrue(report.ready, report.errors)
+        self.assertEqual(
+            connector_check["principal_attestation"],
+            "microsoft_delegated_user",
+        )
+        self.assertNotIn("opaque-token", str(report.to_dict()))
 
     def test_github_provider_attestation_adapter_is_ready_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -30,6 +30,8 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["pull_request"]
+parameter_schema = { title = "string", source_branch = "string", destination_branch = "string", description = "string?", close_source_branch = "boolean?", workspace = "string?", repository = "string?", project_key = "string?", repository_slug = "string?" }
 description = "Create and verify a Bitbucket pull request; compensation declines it."
 
 [capabilities."bitbucket.pull_request.diffstat"]
@@ -65,6 +67,9 @@ authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
+provider_precondition = "version"
+target_resource_types = ["page"]
+parameter_schema = { title = "string", body = "string", representation = "string?", status = "string?", space_key = "string?", version_message = "string?", source_bindings = "object?" }
 description = "Restore the prior Confluence page version and body."
 
 [capabilities."confluence.page.create"]
@@ -72,12 +77,16 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["page"]
+parameter_schema = { title = "string", body = "string", representation = "string?", status = "string?", space_id = "string?", space_key = "string?", parent_id = "string?", source_bindings = "object?" }
 description = "Create a Confluence page with verified delete compensation."
 
 [capabilities."confluence.page.create.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["page"]
+parameter_schema = { title = "string", body = "string", representation = "string?", space_id = "string?", parent_id = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Confluence page-create proposal."
 
 [capabilities."confluence.page.read"]
@@ -96,12 +105,17 @@ authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
+provider_precondition = "version"
+target_resource_types = ["page"]
+parameter_schema = { title = "string", body = "string", representation = "string?", status = "string?", space_key = "string?", version_message = "string?", source_bindings = "object?" }
 description = "Version-check and update a Confluence page."
 
 [capabilities."confluence.page.update.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["page"]
+parameter_schema = { title = "string", body = "string", representation = "string?", space_id = "string?", parent_id = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Confluence page-update proposal."
 
 [capabilities."confluence.space.create"]
@@ -109,6 +123,8 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["space"]
+parameter_schema = { key = "string", name = "string", description = "string?" }
 description = "Create and verify a Confluence Cloud space; compensation removes the exact created space."
 
 [capabilities."github.checks.read"]
@@ -117,17 +133,19 @@ authentication = "configured_connector"
 risk = "read_only"
 
 [capabilities."github.collaborator.access.update"]
-enabled = true
+enabled = false
 authentication = "configured_connector"
 risk = "high_impact"
 reversible = false
-description = "Change the built-in role of an existing collaborator; invitations and custom roles are excluded."
+description = "Disabled because GitHub does not document a provider-side compare-and-swap precondition for this mutation."
 
 [capabilities."github.issue.create"]
 enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["issue"]
+parameter_schema = { owner = "string", repository = "string", title = "string", body = "string?" }
 description = "Create and verify a GitHub issue; compensation closes it after a conflict check."
 
 [capabilities."github.pull_request.create"]
@@ -135,6 +153,8 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["pull_request"]
+parameter_schema = { owner = "string", repository = "string", title = "string", head = "string", base = "string", body = "string?", draft = "boolean?" }
 description = "Create and verify a GitHub pull request; compensation closes it after a conflict check."
 
 [capabilities."github.pull_request.read"]
@@ -165,12 +185,12 @@ authentication = "configured_connector"
 risk = "read_only"
 
 [capabilities."github.repository.settings.update"]
-enabled = true
+enabled = false
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Update an allowlisted set of boolean repository settings with verified restoration."
+description = "Disabled because GitHub does not document a provider-side compare-and-swap precondition for repository settings updates."
 
 [capabilities."identity.identifier.resolve"]
 enabled = true
@@ -192,21 +212,25 @@ enabled = true
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
+target_resource_types = ["issue"]
+parameter_schema = { body = "string" }
 description = "Create a Jira comment that can be deleted during compensation."
 
 [capabilities."jira.issue.comment.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["issue"]
+parameter_schema = { body = "string", before = "object?", output_name = "string?" }
 description = "Render a local Jira comment proposal."
 
 [capabilities."jira.issue.compensate"]
-enabled = true
+enabled = false
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Restore Jira state captured by a prior approved action."
+description = "Disabled until Jira exposes or the adapter implements a provider-side compare-and-swap precondition."
 
 [capabilities."jira.issue.read"]
 enabled = true
@@ -219,31 +243,35 @@ authentication = "configured_connector"
 risk = "read_only"
 
 [capabilities."jira.issue.transition"]
-enabled = true
+enabled = false
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Transition a Jira issue with an explicit reverse transition for compensation."
+description = "Disabled until Jira exposes or the adapter implements a provider-side compare-and-swap precondition."
 
 [capabilities."jira.issue.transition.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["issue"]
+parameter_schema = { transition_id = "string", target_status = "string?", before = "object?", output_name = "string?" }
 description = "Render a local Jira transition proposal."
 
 [capabilities."jira.issue.update"]
-enabled = true
+enabled = false
 authentication = "configured_connector"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Update explicitly named Jira fields after version validation."
+description = "Disabled until Jira exposes or the adapter implements a provider-side compare-and-swap precondition."
 
 [capabilities."jira.issue.update.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["issue"]
+parameter_schema = { fields = "object", before = "object?", output_name = "string?" }
 description = "Render a local Jira field-update proposal."
 
 [capabilities."jira.server.info"]
@@ -314,12 +342,17 @@ risk = "read_only"
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["draft", "email_draft"]
+parameter_schema = { to = "string_or_string_list", subject = "string", body = "string", cc = "string_or_string_list?", bcc = "string_or_string_list?", output_name = "string?" }
 
 [capabilities."outlook.email.send"]
 enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
+required_scopes = ["Mail.Send"]
+target_resource_types = ["message", "correction_email"]
+parameter_schema = { to = "string_or_string_list", subject = "string", body = "string", cc = "string_or_string_list?", bcc = "string_or_string_list?", content_type = "string?", identity = "string?" }
 description = "Send exact approval-bound Outlook content after provider-draft verification."
 
 [capabilities."outlook.mail_folder.list"]
@@ -341,6 +374,8 @@ risk = "read_only"
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["presentation"]
+parameter_schema = { title = "string", slides = "array?", sections = "array?", subtitle = "string?", output_name = "string?", source_action_ids = "string_list?" }
 
 [capabilities."repository.branch.create"]
 enabled = false
@@ -354,6 +389,8 @@ description = "Disabled until every local Git metadata transaction is descriptor
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["branch_plan"]
+parameter_schema = { branch = "string", base = "string", remote = "string?", output_name = "string?" }
 description = "Generate a local branch-operation plan."
 
 [capabilities."repository.branch.push"]
@@ -384,6 +421,8 @@ description = "Disabled until every local Git metadata transaction is descriptor
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["patch"]
+parameter_schema = { relative_path = "string", before_text = "string?", after_text = "string?", output_name = "string?" }
 description = "Generate a reviewable unified diff without changing a repository."
 
 [capabilities."sharepoint.drive.children"]
@@ -407,12 +446,15 @@ authentication = "microsoft_graph"
 risk = "read_only"
 
 [capabilities."sharepoint.file.upload"]
-enabled = true
+enabled = false
 authentication = "microsoft_graph"
 risk = "reversible_write"
 reversible = true
 requires_expected_version = true
-description = "Upload a bounded file while retaining the prior version for rollback."
+required_scopes = ["Sites.ReadWrite.All"]
+target_resource_types = ["file"]
+parameter_schema = { drive_id = "string", local_path = "string", local_sha256 = "string", content_type = "string?" }
+description = "Disabled because the Graph small-file content endpoint does not document an atomic conditional precondition."
 
 [capabilities."sharepoint.site.read"]
 enabled = true
@@ -449,6 +491,9 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
+required_scopes = ["ChannelMessage.Send"]
+target_resource_types = ["message"]
+parameter_schema = { team_id = "string", channel_id = "string", parent_message_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Reply with exact approval-bound content in a Teams channel thread."
 
 [capabilities."teams.channel.message.send"]
@@ -456,6 +501,9 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
+required_scopes = ["ChannelMessage.Send"]
+target_resource_types = ["message"]
+parameter_schema = { team_id = "string", channel_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Post exact approval-bound content to a Teams channel."
 
 [capabilities."teams.chat.list"]
@@ -478,12 +526,17 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
+required_scopes = ["ChatMessage.Send"]
+target_resource_types = ["message"]
+parameter_schema = { chat_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Post exact approval-bound content to an existing Teams chat."
 
 [capabilities."teams.message.draft"]
 enabled = true
 authentication = "local"
 risk = "local_generation"
+target_resource_types = ["draft", "message", "message_draft"]
+parameter_schema = { recipient_type = "string", recipient_id = "string", body = "string", output_name = "string?", source_bindings = "object?" }
 
 [capabilities."teams.team.list"]
 enabled = true
