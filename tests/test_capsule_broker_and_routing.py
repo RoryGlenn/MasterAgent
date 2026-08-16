@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.capability_routing import (
@@ -21,6 +22,7 @@ from master_agent.credential_broker import (
     CredentialBroker,
     CredentialMaterial,
     LocalJsonCredentialProvider,
+    ProviderOperationBinding,
     RuntimePrincipal,
 )
 from master_agent.credentials import CredentialStoreSnapshot
@@ -37,6 +39,8 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.policy import ContextualPolicyConstraints, PolicyConfig, PolicyEngine
+
+_ACTION_ID = UUID("00000000-0000-4000-8000-000000000001")
 
 
 class CapsuleBrokerAndRoutingTests(unittest.TestCase):
@@ -57,10 +61,12 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
         provider = LocalJsonCredentialProvider({("jira", "account-7"): snapshot})
         broker = CredentialBroker(provider)
         principal = _principal()
+        operation = _operation()
         handle = broker.issue(
             capsule=binding,
             principal=principal,
             credential_name="MASTER_AGENT_JIRA_TOKEN",
+            operation=operation,
         )
         self.assertNotIn("super-secret-value", repr(handle))
         self.assertNotIn(handle.token, repr(handle))
@@ -70,9 +76,7 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
             handle=handle,
             capsule=binding,
             adapter=adapter,
-            origin="https://example.atlassian.net",
-            method="POST",
-            path="/rest/api/3/issue",
+            operation=operation,
             payload={"summary_sha256": "a" * 64},
         )
         self.assertEqual(result, {"status": "accepted"})
@@ -82,9 +86,7 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
                 handle=handle,
                 capsule=binding,
                 adapter=adapter,
-                origin="https://example.atlassian.net",
-                method="POST",
-                path="/rest/api/3/issue",
+                operation=operation,
                 payload={},
             )
         with self.assertRaisesRegex(AuthenticationError, "drifted"):
@@ -92,6 +94,7 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
                 capsule=binding,
                 principal=replace(principal, tenant_id="attacker"),
                 credential_name="MASTER_AGENT_JIRA_TOKEN",
+                operation=operation,
             )
 
     def test_connection_request_and_destination_constraints_bind_exact_run(
@@ -115,36 +118,64 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
         )
         self.assertEqual(request.to_dict()["run_fingerprint"], "9" * 64)
         self.assertEqual(len(request.fingerprint), 64)
-        handle = broker.issue(
-            capsule=binding,
-            principal=_principal(),
-            credential_name="MASTER_AGENT_JIRA_TOKEN",
-        )
         with self.assertRaisesRegex(AuthenticationError, "path"):
-            broker.invoke(
-                handle=handle,
+            broker.issue(
                 capsule=binding,
-                adapter=_ProviderAdapter(),
-                origin="https://example.atlassian.net",
-                method="POST",
-                path="/rest/api/3/issue/../admin",
-                payload={},
+                principal=_principal(),
+                credential_name="MASTER_AGENT_JIRA_TOKEN",
+                operation=_operation(path="/rest/api/3/admin"),
             )
-        encoded_handle = broker.issue(
-            capsule=binding,
-            principal=_principal(),
-            credential_name="MASTER_AGENT_JIRA_TOKEN",
+        for unsafe_path in (
+            "/rest/api/3/issue/../admin",
+            "/rest/api/3/issue/%2e%2e/admin",
+        ):
+            with (
+                self.subTest(path=unsafe_path),
+                self.assertRaisesRegex(AuthenticationError, "path"),
+            ):
+                _operation(path=unsafe_path)
+
+    def test_credential_handle_binds_exact_plan_action_and_destination(self) -> None:
+        binding = _provider_binding()
+        provider = LocalJsonCredentialProvider(
+            {
+                ("jira", "account-7"): CredentialStoreSnapshot(
+                    Path("/private/test.json"),
+                    {"MASTER_AGENT_JIRA_TOKEN": "secret"},
+                )
+            }
         )
-        with self.assertRaisesRegex(AuthenticationError, "path"):
-            broker.invoke(
-                handle=encoded_handle,
-                capsule=binding,
-                adapter=_ProviderAdapter(),
-                origin="https://example.atlassian.net",
-                method="POST",
-                path="/rest/api/3/issue/%2e%2e/admin",
-                payload={},
-            )
+        approved = _operation()
+        variants = (
+            replace(approved, plan_fingerprint="e" * 64),
+            replace(
+                approved,
+                action_id=UUID("00000000-0000-4000-8000-000000000002"),
+            ),
+            replace(approved, origin="https://other.atlassian.net"),
+            replace(approved, method="GET"),
+            replace(approved, path="/rest/api/3/issue/OTHER-1"),
+        )
+        for attempted in variants:
+            with self.subTest(attempted=attempted.to_dict()):
+                broker = CredentialBroker(provider)
+                handle = broker.issue(
+                    capsule=binding,
+                    principal=_principal(),
+                    credential_name="MASTER_AGENT_JIRA_TOKEN",
+                    operation=approved,
+                )
+                with self.assertRaisesRegex(
+                    AuthenticationError,
+                    "another provider operation",
+                ):
+                    broker.invoke(
+                        handle=handle,
+                        capsule=binding,
+                        adapter=_ProviderAdapter(),
+                        operation=attempted,
+                        payload={},
+                    )
 
     def test_credential_handle_rejects_widened_binding_and_provider_drift(self) -> None:
         binding = _provider_binding()
@@ -157,10 +188,12 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
             }
         )
         broker = CredentialBroker(provider)
+        operation = _operation()
         handle = broker.issue(
             capsule=binding,
             principal=_principal(),
             credential_name="MASTER_AGENT_JIRA_TOKEN",
+            operation=operation,
         )
         widened = replace(
             binding,
@@ -171,9 +204,7 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
                 handle=handle,
                 capsule=widened,
                 adapter=_ProviderAdapter(),
-                origin="https://example.atlassian.net",
-                method="POST",
-                path="/rest/api/3/admin",
+                operation=operation,
                 payload={},
             )
 
@@ -186,6 +217,7 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
                 ),
                 principal=_principal(),
                 credential_name="MASTER_AGENT_JIRA_TOKEN",
+                operation=operation,
             )
 
     def test_router_handles_read_write_negation_policy_and_confusable_names(
@@ -216,6 +248,24 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
         )
         self.assertEqual(
             [card.capability_id for card in contracted.cards],
+            ["jira.issue.read"],
+        )
+        modified = router.resolve(
+            "Show the issue; do not ever delete it",
+            (read, delete),
+            policy_allows=lambda _card: True,
+        )
+        self.assertEqual(
+            [card.capability_id for card in modified.cards],
+            ["jira.issue.read"],
+        )
+        emphatic = router.resolve(
+            "Show the issue; do not under any circumstances ever delete it",
+            (read, delete),
+            policy_allows=lambda _card: True,
+        )
+        self.assertEqual(
+            [card.capability_id for card in emphatic.cards],
             ["jira.issue.read"],
         )
         with self.assertRaisesRegex(ValidationError, "no policy-permitted"):
@@ -545,6 +595,23 @@ def _principal() -> RuntimePrincipal:
         provider="jira",
         account_id="account-7",
         scopes=("write:jira-work",),
+    )
+
+
+def _operation(
+    *,
+    plan_fingerprint: str = "f" * 64,
+    action_id: UUID = _ACTION_ID,
+    origin: str = "https://example.atlassian.net",
+    method: str = "POST",
+    path: str = "/rest/api/3/issue",
+) -> ProviderOperationBinding:
+    return ProviderOperationBinding(
+        plan_fingerprint=plan_fingerprint,
+        action_id=action_id,
+        origin=origin,
+        method=method,
+        path=path,
     )
 
 

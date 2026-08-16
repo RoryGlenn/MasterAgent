@@ -107,7 +107,9 @@ Execution uses the existing `WorkflowOrchestrator`; capsule code does not get a
 second policy path. Policy runs before advisory routing. Active capability
 sessions admit only the selected ID, version, manifest digest, plan fingerprint,
 time window, call count, and byte budget. Read/write confusion, negation, and
-confusable names fail closed. A pure capsule result is independently verified
+confusable names fail closed. Negation scans a bounded clause for the actual
+operation term, so intervening modifiers such as `do not ever delete` cannot
+re-enable a write candidate. A pure capsule result is independently verified
 by a fresh deterministic replay in the sandbox.
 
 `CapsuleRunCoordinator` persists content-free checkpoints for:
@@ -132,10 +134,12 @@ Telemetry exports contain only bounded states, identities, and digests.
 The broker exposes a typed provider interface and keeps the existing restricted
 JSON snapshots as a development-only provider. A handle is random, short-lived,
 single-use, and bound to the complete capsule, authenticated user, agent,
-tenant, account, credential provider, credential name, scopes, and run-selected
-destination. A trusted provider adapter receives raw material only after all of
-those facts and the payload budget are rechecked. Generated or validation code
-never receives the secret.
+tenant, account, credential provider, credential name, scopes, exact plan
+fingerprint, exact action ID, and normalized origin/method/path. A trusted
+provider adapter receives raw material only after all of those facts and the
+payload budget are rechecked. A handle issued for one approved resource cannot
+be redeemed for another resource that merely shares the capsule allowlist.
+Generated or validation code never receives the secret.
 
 The broker rejects widened capsule bindings, encoded path traversal, another
 provider/account, an undeclared origin/method/path, reused or expired handles,

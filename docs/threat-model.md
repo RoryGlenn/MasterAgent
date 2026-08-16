@@ -234,7 +234,13 @@ Controls:
   with no network, no ambient environment, no import/file/process authority,
   and bounded resources; and
 - provider destinations, credentials, side effects, and capsule dependencies
-  are rejected before connector construction in the demonstrated runtime.
+  are rejected before connector construction in the demonstrated runtime;
+- each credential lease binds the exact plan fingerprint, action ID, normalized
+  origin, method, and path, then rechecks that immutable operation before a
+  trusted adapter can receive credential material; and
+- routing negation crosses bounded intervening modifiers to the operation term,
+  preventing phrases such as `do not ever delete` from admitting the delete
+  capability.
 
 ### Generated capability substitution or self-promotion
 

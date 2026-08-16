@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 from master_agent.credentials import CredentialStoreSnapshot
 from master_agent.errors import AuthenticationError, ConfigurationError
@@ -203,10 +204,67 @@ class OpaqueCredentialHandle:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderOperationBinding:
+    """Exact approved plan action and provider destination for one lease."""
+
+    plan_fingerprint: str
+    action_id: UUID
+    origin: str
+    method: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if len(self.plan_fingerprint) != 64 or any(
+            character not in "0123456789abcdef" for character in self.plan_fingerprint
+        ):
+            raise AuthenticationError(
+                "provider operation plan fingerprint is malformed"
+            )
+        if not isinstance(self.action_id, UUID):
+            raise AuthenticationError("provider operation action ID is malformed")
+        object.__setattr__(self, "origin", _canonical_origin(self.origin))
+        normalized_method = self.method.upper()
+        if (
+            not normalized_method
+            or normalized_method != self.method.strip().upper()
+            or any(not character.isalpha() for character in normalized_method)
+        ):
+            raise AuthenticationError("provider operation method is malformed")
+        object.__setattr__(self, "method", normalized_method)
+        if not _valid_provider_path(self.path):
+            raise AuthenticationError("provider operation path is malformed")
+
+    @property
+    def binding_sha256(self) -> str:
+        """Return the secret-free exact-operation identity."""
+
+        return _sha256_fields(
+            self.plan_fingerprint,
+            str(self.action_id),
+            self.origin,
+            self.method,
+            self.path,
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the immutable operation binding without credentials."""
+
+        return {
+            "plan_fingerprint": self.plan_fingerprint,
+            "action_id": str(self.action_id),
+            "origin": self.origin,
+            "method": self.method,
+            "path": self.path,
+            "binding_sha256": self.binding_sha256,
+        }
+
+
 @dataclass(slots=True)
 class _Lease:
     material: CredentialMaterial
     capsule_binding_sha256: str
+    operation_binding_sha256: str
     binding_sha256: str
     expires_at: datetime
 
@@ -281,10 +339,11 @@ class CredentialBroker:
         capsule: CapabilityCapsuleExecutionBinding,
         principal: RuntimePrincipal,
         credential_name: str,
+        operation: ProviderOperationBinding,
         now: datetime | None = None,
         ttl_seconds: int = 60,
     ) -> OpaqueCredentialHandle:
-        """Issue one handle only for the exact plan-bound principal and scope."""
+        """Issue one handle for an exact plan action, destination, and principal."""
 
         current = (now or datetime.now(UTC)).astimezone(UTC)
         self._purge(current)
@@ -299,6 +358,7 @@ class CredentialBroker:
             raise AuthenticationError(
                 "runtime principal lacks capsule credential scopes"
             )
+        _validate_operation_binding(capsule, operation)
         material = self.provider.resolve(
             principal=principal,
             credential_name=credential_name,
@@ -320,10 +380,12 @@ class CredentialBroker:
             principal.binding_sha256(),
             credential_name,
             self.provider.provider_id,
+            operation.binding_sha256,
         )
         self._leases[token_sha256] = _Lease(
             material=material,
             capsule_binding_sha256=capsule_binding_sha256,
+            operation_binding_sha256=operation.binding_sha256,
             binding_sha256=binding_sha256,
             expires_at=expires,
         )
@@ -339,13 +401,11 @@ class CredentialBroker:
         handle: OpaqueCredentialHandle,
         capsule: CapabilityCapsuleExecutionBinding,
         adapter: TrustedProviderAdapter,
-        origin: str,
-        method: str,
-        path: str,
+        operation: ProviderOperationBinding,
         payload: Mapping[str, Any],
         now: datetime | None = None,
     ) -> Mapping[str, Any]:
-        """Redeem once through a trusted adapter after destination revalidation."""
+        """Redeem once after exact plan-action and destination revalidation."""
 
         current = (now or datetime.now(UTC)).astimezone(UTC)
         self._purge(current)
@@ -367,32 +427,27 @@ class CredentialBroker:
             raise AuthenticationError(
                 "credential handle belongs to another capsule binding"
             )
+        if not hmac.compare_digest(
+            lease.operation_binding_sha256,
+            operation.binding_sha256,
+        ):
+            raise AuthenticationError(
+                "credential handle belongs to another provider operation"
+            )
         expected_binding = _sha256_fields(
             observed_capsule_sha256,
             lease.material.principal.binding_sha256(),
             lease.material.credential_name,
             lease.material.provider_id,
+            operation.binding_sha256,
         )
         if not hmac.compare_digest(expected_binding, handle.binding_sha256):
             raise AuthenticationError("credential handle authority drifted")
-        canonical_origin = _canonical_origin(origin)
-        normalized_method = method.upper()
+        _validate_operation_binding(capsule, operation)
         if adapter.provider != capsule.capability_id.split(".", 1)[0]:
             raise AuthenticationError(
                 "provider adapter differs from the capsule system"
             )
-        if canonical_origin not in capsule.allowed_origins:
-            raise AuthenticationError(
-                "provider origin is outside the capsule allowlist"
-            )
-        if normalized_method not in capsule.allowed_methods:
-            raise AuthenticationError(
-                "provider method is outside the capsule allowlist"
-            )
-        if not any(
-            _path_is_within(path, prefix) for prefix in capsule.allowed_path_prefixes
-        ):
-            raise AuthenticationError("provider path is outside the capsule allowlist")
         measure_json_resources(
             payload,
             context="credential broker provider payload",
@@ -400,9 +455,9 @@ class CredentialBroker:
         )
         result = adapter.invoke(
             material=lease.material,
-            origin=canonical_origin,
-            method=normalized_method,
-            path=path,
+            origin=operation.origin,
+            method=operation.method,
+            path=operation.path,
             payload=payload,
         )
         if not isinstance(result, Mapping):
@@ -500,15 +555,34 @@ def _canonical_origin(value: str) -> str:
     return urlunsplit(("https", rendered, "", "", ""))
 
 
-def _path_is_within(path: str, prefix: str) -> bool:
-    if (
-        not path.startswith("/")
-        or "?" in path
-        or "#" in path
-        or "\\" in path
-        or "%" in path
-        or any(part in {"", ".", ".."} for part in path.split("/")[1:])
+def _validate_operation_binding(
+    capsule: CapabilityCapsuleExecutionBinding,
+    operation: ProviderOperationBinding,
+) -> None:
+    if operation.origin not in capsule.allowed_origins:
+        raise AuthenticationError("provider origin is outside the capsule allowlist")
+    if operation.method not in capsule.allowed_methods:
+        raise AuthenticationError("provider method is outside the capsule allowlist")
+    if not any(
+        _path_is_within(operation.path, prefix)
+        for prefix in capsule.allowed_path_prefixes
     ):
+        raise AuthenticationError("provider path is outside the capsule allowlist")
+
+
+def _valid_provider_path(path: str) -> bool:
+    return (
+        path.startswith("/")
+        and "?" not in path
+        and "#" not in path
+        and "\\" not in path
+        and "%" not in path
+        and all(part not in {"", ".", ".."} for part in path.split("/")[1:])
+    )
+
+
+def _path_is_within(path: str, prefix: str) -> bool:
+    if not _valid_provider_path(path):
         return False
     return path == prefix or path.startswith(prefix.rstrip("/") + "/")
 

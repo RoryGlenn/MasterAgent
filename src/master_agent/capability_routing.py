@@ -18,9 +18,38 @@ from master_agent.models import DataClassification, RiskLevel
 from master_agent.resource_limits import measure_json_resources
 
 _TOKEN = re.compile(r"[a-z0-9]+")
+_NEGATION_UNIT = re.compile(r"[a-z0-9]+|[,.;:!?]+")
 _CAPABILITY_ID = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9][a-z0-9_-]*)+")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?")
 _NEGATORS = frozenset({"avoid", "dont", "never", "no", "not", "without"})
+_NEGATION_BREAKERS = frozenset(
+    {"although", "but", "except", "however", "instead", "then", "though", "yet"}
+)
+_NEGATION_MODIFIERS = frozenset(
+    {
+        "accidentally",
+        "actually",
+        "any",
+        "at",
+        "automatically",
+        "directly",
+        "ever",
+        "even",
+        "immediately",
+        "intentionally",
+        "just",
+        "only",
+        "permanently",
+        "please",
+        "possibly",
+        "really",
+        "simply",
+        "still",
+        "to",
+        "under",
+    }
+)
+_MAX_NEGATION_SCOPE_TOKENS = 12
 _READ_TERMS = frozenset({"find", "get", "inspect", "list", "read", "search", "show"})
 _WRITE_TERMS = frozenset(
     {
@@ -121,13 +150,14 @@ class CapabilityRouter:
     ) -> RoutingDecision:
         if not 1 <= maximum_candidates <= 8:
             raise ConfigurationError("routing candidate limit must be 1..8")
-        normalized = _normalize_intent(prompt)
+        surface = _normalize_surface(prompt)
+        normalized = " ".join(_TOKEN.findall(surface))
         tokens = tuple(_TOKEN.findall(normalized))
         if not tokens:
             raise ValidationError("routing intent contains no usable terms")
         policy_filtered = tuple(card for card in cards if policy_allows(card))
         _reject_confusable_cards(policy_filtered)
-        negated = _negated_terms(tokens)
+        negated = _negated_terms(surface)
         explicit_read = bool(set(tokens) & _READ_TERMS)
         explicit_write = bool((set(tokens) & _WRITE_TERMS) - negated)
         scored: list[tuple[int, str, CapabilityCard]] = []
@@ -246,6 +276,10 @@ class CapabilitySession:
 
 
 def _normalize_intent(value: str) -> str:
+    return " ".join(_TOKEN.findall(_normalize_surface(value)))
+
+
+def _normalize_surface(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     if any(unicodedata.category(character) in {"Cc", "Cf"} for character in normalized):
         raise ValidationError(
@@ -253,15 +287,40 @@ def _normalize_intent(value: str) -> str:
         )
     # Tokenization drops apostrophes. Normalize the common contraction first so
     # "don't delete" keeps the same negation semantics as "do not delete".
-    normalized = normalized.replace("don't", "dont").replace("don’t", "dont")
-    return " ".join(_TOKEN.findall(normalized))
+    return normalized.replace("don't", "dont").replace("don’t", "dont")
 
 
-def _negated_terms(tokens: Sequence[str]) -> set[str]:
+def _negated_terms(surface: str) -> set[str]:
+    """Return operation terms covered by a bounded lexical negation scope."""
+
+    units = tuple(_NEGATION_UNIT.findall(surface))
+    operation_terms = _READ_TERMS | _WRITE_TERMS
     negated: set[str] = set()
-    for index, token in enumerate(tokens[:-1]):
-        if token in _NEGATORS:
-            negated.add(tokens[index + 1])
+    for index, token in enumerate(units[:-1]):
+        if token not in _NEGATORS:
+            continue
+        fallback: str | None = None
+        operation_found = False
+        words_seen = 0
+        for candidate in units[index + 1 :]:
+            if not candidate[0].isalnum():
+                if candidate != "," or operation_found:
+                    break
+                continue
+            if candidate in _NEGATION_BREAKERS:
+                break
+            words_seen += 1
+            if words_seen > _MAX_NEGATION_SCOPE_TOKENS:
+                break
+            if fallback is None and candidate not in _NEGATION_MODIFIERS:
+                fallback = candidate
+            if candidate in operation_terms:
+                negated.add(candidate)
+                operation_found = True
+        if not operation_found and fallback is not None:
+            # Custom capability verbs are not all in the built-in read/write
+            # vocabulary. Preserve the old immediate-term behavior for those.
+            negated.add(fallback)
     return negated
 
 
