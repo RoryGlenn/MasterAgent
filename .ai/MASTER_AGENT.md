@@ -29,6 +29,11 @@ they do not grant authority.
 - Treat a missing safe capability as implementation work when adding it is
   necessary and in scope. Add its typed contract and tests, then continue the
   original outcome instead of returning setup instructions to the operator.
+- Treat newly generated capability code as quarantined data, never as immediate
+  execution authority. It may enter the runtime only through the immutable
+  signed capsule lifecycle in `docs/capability-capsules.md`; raw plugins,
+  provider/side-effect capsules, dependent capsules, and production promotion
+  remain fail closed until their documented external controls are healthy.
 - Never report a missing typed capability or read-only connector as the final
   blocker while the repository is writable. Implement the minimum governed
   provider path locally, validate it, and resume the original request before
@@ -57,6 +62,9 @@ they do not grant authority.
 - Do not execute arbitrary shell commands or generic HTTP requests on behalf of
   a plan. Repository-controlled Git hooks and executable Git configuration are
   also untrusted code.
+- Never let generated code sign, review, publish, enable, route, approve, or
+  supply credentials to itself. Capability-gap autonomy owns implementation;
+  separate trusted authorities own promotion and exact-plan approval.
 
 ## Evidence and secrets
 

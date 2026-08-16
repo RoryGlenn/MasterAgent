@@ -15,7 +15,11 @@ Typed anonymous public-data capabilities require no credential activation.
   approval resume, exact cleanup, bounded stale-page recovery, and an optional
   independently gated disposable-space lifecycle. It never runs on pull-request
   code and is not required when sandbox secrets are unavailable.
-- Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
+- Repository configuration and all 13 wheel-packaged TOML defaults match exactly.
+- The repository license, exact complete runtime dependency closure,
+  dependency-license admission policy, CycloneDX 1.5 SBOM, and third-party
+  notices agree. CI rechecks installed distribution versions and license
+  metadata; unknown or denied licenses fail closed.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
 - All 82 typed capabilities have governance coverage; GitHub administration,
   Jira read-check-write mutations, and high-impact Bitbucket merge remain
@@ -36,6 +40,14 @@ Typed anonymous public-data capabilities require no credential activation.
   private request inspection, trusted signing, exact-run resume, and dual
   approval. Tampered, stale, unsafe-permission, symlinked, or authority-drifted
   requests fail closed without weakening the existing plan or runtime gates.
+- The capability-capsule acceptance flow generates, quarantines, validates,
+  reviews, signs, enables, routes, executes, independently replays, audits, and
+  receipts a synthetic missing capability through the normal orchestrator.
+  Hosted test and coverage jobs install bubblewrap; unpromoted, tampered,
+  dependency-confused, deprecated/revoked, path-escaped, secret/file/network/
+  process-seeking, resource-exhausting, signature-substituted,
+  approval-replayed, routing-confused, and exact-resume adversarial cases fail
+  closed.
 - Instruction, connector, configuration, deployment, and operations guides
   distinguish typed anonymous public reads from authenticated access. Release
   validation rejects the stale blanket claims that all live use requires a
@@ -44,7 +56,16 @@ Typed anonymous public-data capabilities require no credential activation.
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
 - The wheel is installed outside the source tree and exercised with safe defaults before release.
-- Release archives are checked for integrity, forbidden secret/runtime files, and symbolic links.
+- Release archives are checked for integrity, forbidden secret/runtime files,
+  symbolic links, and a capability worker writable by another OS account.
+- Package builds normalize shipped Python modules to mode `0644`, independent
+  of the builder's umask.
+- CI installs and tests the runtime from owner-private virtual environments,
+  never from the hosted runner's shared site-packages. The exact setup-python
+  runtime tree is made non-writable by group/others before those environments
+  are created.
+- The source archive includes both workflow definitions alongside the
+  workflow-contract tests that validate them.
 
 Ruff linting and formatting plus strict mypy checks pass without file
 exclusions and are required CI gates. Tool versions are pinned in the project
@@ -59,6 +80,7 @@ Run the equivalent local gates from the project root:
 ruff check .
 ruff format --check .
 mypy
+python3 scripts/generate_sbom.py --check --verify-installed
 python3 -m unittest discover -s tests -v
 python3 scripts/validate_release.py
 ```

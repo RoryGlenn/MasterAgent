@@ -48,6 +48,16 @@ tests, and documentation, then use it to finish the request. Never bypass the
 typed runtime with an arbitrary provider call merely because implementation
 work is required.
 
+Implementation does not make generated code trusted. Package a dynamically
+generated capability as an immutable capsule and keep it quarantined until its
+source, contracts, dependencies/licenses/SBOM, tests, sandbox evidence,
+publisher, and independent reviewer complete the signed lifecycle documented
+in [`docs/capability-capsules.md`](../docs/capability-capsules.md). The agent may
+prepare every artifact and run validation, but it cannot impersonate promotion
+authorities or exact-plan approvers. When the current pure capsule boundary
+cannot safely express a provider effect, implement the reviewed first-party
+typed connector path; do not widen the worker into generic HTTP or shell.
+
 Never end an actionable request with “there is no governed capability,” “the
 connector is read-only,” or a list of code that would need to be written. Those
 facts start repository implementation; they are not an operator-facing outcome.

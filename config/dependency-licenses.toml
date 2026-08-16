@@ -1,0 +1,18 @@
+[policy]
+allowed_spdx = [
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "LicenseRef-MasterAgent-Proprietary",
+  "MIT",
+  "MIT-CMU",
+  "PSF-2.0",
+]
+denied_spdx = [
+  "AGPL-3.0-only",
+  "AGPL-3.0-or-later",
+  "GPL-3.0-only",
+  "GPL-3.0-or-later",
+  "SSPL-1.0",
+]
+deny_unknown = true
+require_notices = true

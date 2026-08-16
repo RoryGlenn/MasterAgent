@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,15 @@ description = "Governed orchestration layer for enterprise agent workflows."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Rory Glenn" }]
-dependencies = ["python-pptx>=1.0.2"]
+license = "LicenseRef-MasterAgent-Proprietary"
+license-files = ["LICENSE"]
+dependencies = [
+    "Pillow==12.3.0",
+    "XlsxWriter==3.2.9",
+    "lxml==6.1.1",
+    "python-pptx==1.0.2",
+    "typing_extensions==4.16.0",
+]
 
 [project.optional-dependencies]
 dev = [

@@ -13,7 +13,8 @@
 | OneNote | Microsoft Graph delegated | notebooks, sections, pages, page content | HTML/proposal | disabled pending exact DOM proof | read content is re-read; no write connector is registered | disabled |
 | PowerPoint | local `python-pptx` | — | `.pptx` generation | publishing disabled with SharePoint replacement | local file digest | available locally |
 | Git workspace | local Git identity | repository preconditions | branch and patch plan | disabled until every metadata transaction is descriptor-bound | no live mutation connector is registered | unavailable |
-| Connector plugin | metadata-only entry-point inventory | — | — | disabled | future isolated-worker contract | never executed |
+| Capability capsule | signed immutable local capsule | dependency-free pure reads | dependency-free deterministic local generation | provider/side-effect capsules blocked | deterministic sandbox replay; signed receipt; no compensation for pure output | test/local promotion only |
+| Connector plugin | metadata-only entry-point inventory | — | — | disabled | raw entry points are not capsule-compatible; dependent worker filesystem remains future work | never executed |
 
 ## Hard exclusions
 
@@ -23,6 +24,9 @@
 - No other connector exposes permission modification.
 - No generic arbitrary HTTP connector exists.
 - No arbitrary shell capability exists.
+- No provider/network, side-effect, or third-party-dependent capsule is
+  executable through the demonstrated pure worker.
+- Generated code cannot approve, review, publish, or enable itself.
 - No force push or protected-branch write exists.
 - No standalone destructive Git worktree restore exists.
 - No local Git patch, branch, commit, or push mutation is routable.

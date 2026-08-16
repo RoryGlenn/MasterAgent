@@ -58,26 +58,41 @@ master-agent bind-context plan.json \
   --output bound-plan.json
 ```
 
-The CLI does not currently activate connector plugins. Every attempted
+The CLI does not activate raw connector entry points. Every attempted
 `run --apply --plugin ...` fails before importing the entry module or invoking
 its factory, including attempts with valid locks and exact-plan approvals.
 
 Locking only the plugin distribution cannot authenticate transitive or
 already-cached dependency code in the host interpreter. Production activation
-therefore remains disabled until an isolated worker can verify a complete
-locked dependency closure and expose only the typed connector protocol.
+therefore remains disabled until an isolated worker can verify and mount a
+complete locked dependency closure and expose only the typed connector
+protocol.
+
+MasterAgent now has a separate capability-capsule worker. It demonstrates safe
+promotion and normal governed execution for dependency-free pure
+read/local-generation code. It is not an entry-point compatibility layer and
+does not make a discovered distribution executable. A plugin may enter that
+path only after its needed behavior has been converted into the strict capsule
+contract, separately reviewed, signed, and promoted. Any provider access,
+side effect, or third-party runtime dependency still fails before connector
+construction. See [`capability-capsules.md`](capability-capsules.md).
 
 ## Required governance work
 
-Before a future isolated worker can use a plugin capability:
+Before a provider or dependent plugin capability can run:
 
 1. add it to `capabilities.toml` with the correct risk and authentication;
 2. add an accountable governance rule;
 3. add source-of-truth policy where relevant;
 4. test approval, idempotency, verification, failure, and compensation behavior;
 5. ensure it does not overlap an existing capability for the same system;
-6. pin and review the plugin package.
+6. pin and review the plugin package and its complete dependency filesystem;
+7. convert the exact typed surface into a capsule and complete every signed
+   promotion state; and
+8. satisfy production credential-broker, authenticated-approval, and external
+   tamper-resistant receipt gates.
 
 Discovery and binding remain useful review groundwork, but do not grant
-execution authority. Do not describe a plugin as runnable through Master Agent
-until the isolated worker boundary is implemented and validated.
+execution authority. Do not describe a raw plugin, a dependent capsule, or a
+provider/side-effect capsule as runnable through MasterAgent; only the narrow
+pure capsule path documented above is demonstrated.

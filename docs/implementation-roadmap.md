@@ -18,6 +18,7 @@ non-routable.
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; local Git disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
 | 6 — recurring autonomy | Registration/status only | Execution disabled pending exact target/config/runtime binding |
+| Capability promotion | Complete for dependency-free pure test/local capsules | Provider/side-effect and production capsules remain fail closed pending production broker, authenticated approval, and external audit adapters |
 
 ## Phase acceptance criteria
 
@@ -74,6 +75,25 @@ non-routable.
 - execution is disabled before config, credentials, connectors, or audit access;
 - reactivation requires exact target, source, delivery, config, and runtime
   manifest binding rather than capability-name-only scope checks.
+
+### Capability-promotion release boundary
+
+- immutable signed quarantine, test, sandbox, review, publish, enable,
+  deprecate, and revoke states;
+- complete artifact/dependency/SBOM/test/contract/worker identity and distinct
+  publisher/reviewer binding;
+- Linux bubblewrap execution with no network or ambient credentials and bounded
+  process, CPU, memory, time, request, and output resources;
+- exact capsule facts in the plan, approval fingerprint, audit chain, active
+  session, and signed execution receipt;
+- policy-first advisory routing, canonical contextual constraints, exact-run
+  checkpoints, and normal orchestrator idempotency/verification;
+- dependency-free pure read/local-generation execution demonstrated end to end;
+- provider destinations, side effects, runtime dependencies, raw plugins, and
+  production promotion blocked before connector construction; and
+- production readiness requires the isolated worker plus a real production
+  credential adapter, authenticated approvals, and an external
+  tamper-resistant audit sink. Those deployment adapters are not bundled.
 
 ## Deployment work that cannot be completed generically
 

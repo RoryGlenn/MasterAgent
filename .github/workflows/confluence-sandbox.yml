@@ -41,7 +41,6 @@ jobs:
     timeout-minutes: 20
     environment: confluence-sandbox
     env:
-      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-page-${{ github.run_id }}-${{ github.run_attempt }}
       RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-page
       SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
       ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
@@ -57,6 +56,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight
@@ -68,12 +76,20 @@ jobs:
           --parent-id "$PARENT_ID"
           --require-space
       - name: Install the reviewed runtime
-        run: python3 -m pip install .
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
         id: private-root
+        env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-page-${{ github.run_id }}-${{ github.run_attempt }}
         run: install -d -m 0700 "$SANDBOX_ROOT"
       - name: Create, independently read, and version-update one page
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-page-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
@@ -91,6 +107,7 @@ jobs:
       - name: Always remove the exact owned page and verify provider state
         if: always() && steps.private-root.outcome == 'success'
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-page-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
@@ -109,7 +126,6 @@ jobs:
     timeout-minutes: 10
     environment: confluence-sandbox
     env:
-      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
       RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-reaper
       SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
       ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
@@ -125,6 +141,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight
@@ -141,12 +166,20 @@ jobs:
           REAPER_DELETE_ENABLED: ${{ vars.CONFLUENCE_SANDBOX_ENABLE_STALE_DELETE }}
         run: test "$REAPER_DELETE_ENABLED" = "true"
       - name: Install the reviewed runtime
-        run: python3 -m pip install .
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
+        env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
         run: install -d -m 0700 "$SANDBOX_ROOT"
       - name: Preview stale exact-marker candidates
         if: github.event_name == 'schedule' || inputs.reaper_mode == 'preview'
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
@@ -167,6 +200,7 @@ jobs:
       - name: Delete only stale authenticated-marker candidates
         if: github.event_name == 'workflow_dispatch' && inputs.reaper_mode == 'delete'
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-reaper-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SANDBOX_APPROVAL_SECRET }}
@@ -194,7 +228,6 @@ jobs:
     timeout-minutes: 25
     environment: confluence-space-sandbox
     env:
-      SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-space-${{ github.run_id }}-${{ github.run_attempt }}
       RUN_LABEL: gha-${{ github.run_id }}-${{ github.run_attempt }}-space
       SANDBOX_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ORIGIN }}
       ALLOWLISTED_ORIGIN: ${{ vars.CONFLUENCE_SANDBOX_ALLOWED_ORIGIN }}
@@ -207,6 +240,15 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Reject an unsafe destination before provider access
         run: >-
           python3 scripts/confluence_sandbox.py preflight
@@ -218,12 +260,20 @@ jobs:
           SPACE_LIFECYCLE_ENABLED: ${{ vars.CONFLUENCE_SANDBOX_ENABLE_SPACE_LIFECYCLE }}
         run: test "$SPACE_LIFECYCLE_ENABLED" = "true"
       - name: Install the reviewed runtime
-        run: python3 -m pip install .
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-confluence-runtime"
+          python3 -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Create a private ephemeral runtime root
         id: private-root
+        env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-space-${{ github.run_id }}-${{ github.run_attempt }}
         run: install -d -m 0700 "$SANDBOX_ROOT"
       - name: Create and verify an owned space and disposable page
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-space-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_APPROVAL_SECRET }}
@@ -238,6 +288,7 @@ jobs:
       - name: Always remove owned content, then the exact empty space
         if: always() && steps.private-root.outcome == 'success'
         env:
+          SANDBOX_ROOT: ${{ runner.temp }}/master-agent-confluence-space-${{ github.run_id }}-${{ github.run_attempt }}
           CONFLUENCE_SANDBOX_EMAIL: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_EMAIL }}
           CONFLUENCE_SANDBOX_API_TOKEN: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_API_TOKEN }}
           CONFLUENCE_SANDBOX_APPROVAL_SECRET: ${{ secrets.CONFLUENCE_SPACE_SANDBOX_APPROVAL_SECRET }}

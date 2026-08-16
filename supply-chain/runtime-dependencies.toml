@@ -1,0 +1,51 @@
+[project]
+name = "master-agent"
+version = "1.0.0"
+license = "LicenseRef-MasterAgent-Proprietary"
+purl = "pkg:pypi/master-agent@1.0.0"
+dependencies = ["Pillow", "XlsxWriter", "lxml", "python-pptx", "typing_extensions"]
+
+[[components]]
+name = "python-pptx"
+version = "1.0.2"
+license = "MIT"
+purl = "pkg:pypi/python-pptx@1.0.2"
+homepage = "https://github.com/scanny/python-pptx"
+notice = "Copyright (c) 2013 Steve Canny"
+dependencies = ["Pillow", "XlsxWriter", "lxml", "typing_extensions"]
+
+[[components]]
+name = "Pillow"
+version = "12.3.0"
+license = "MIT-CMU"
+purl = "pkg:pypi/pillow@12.3.0"
+homepage = "https://github.com/python-pillow/Pillow"
+notice = "Copyright 1997-2011 Secret Labs AB; 1995-2011 Fredrik Lundh and contributors; 2010 Jeffrey Alex Clark and contributors"
+dependencies = []
+
+[[components]]
+name = "XlsxWriter"
+version = "3.2.9"
+license = "BSD-2-Clause"
+purl = "pkg:pypi/xlsxwriter@3.2.9"
+homepage = "https://github.com/jmcnamara/XlsxWriter"
+notice = "Copyright (c) 2013-2025 John McNamara"
+dependencies = []
+
+[[components]]
+name = "lxml"
+version = "6.1.1"
+license = "BSD-3-Clause"
+purl = "pkg:pypi/lxml@6.1.1"
+homepage = "https://github.com/lxml/lxml"
+notice = "Copyright (c) 2004 Infrae"
+dependencies = []
+
+[[components]]
+name = "typing_extensions"
+version = "4.16.0"
+license = "PSF-2.0"
+purl = "pkg:pypi/typing-extensions@4.16.0"
+homepage = "https://github.com/python/typing_extensions"
+notice = "Python Software Foundation License Version 2"
+dependencies = []

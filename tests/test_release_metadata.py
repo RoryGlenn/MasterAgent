@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import stat
 import unittest
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -15,6 +17,8 @@ from scripts.validate_release import (
     _validate_file_hygiene,
     _validate_first_run_contract,
     _validate_public_read_contract,
+    _validate_supply_chain,
+    validate_archive,
     validate_project,
 )
 
@@ -29,6 +33,84 @@ class ReleaseMetadataTests(unittest.TestCase):
         report = validate_project(root)
         self.assertEqual(report.errors, ())
         self.assertTrue(report.valid)
+
+    def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo("master_agent/capsule_worker.py")
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFREG | 0o666) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "pass\n")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(
+                any("writable by group or others" in error for error in report.errors)
+            )
+
+    def test_release_rejects_a_symlinked_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo("master_agent/capsule_worker.py")
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "../attacker.py")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(any("link entry" in error for error in report.errors))
+            self.assertTrue(any("is not regular" in error for error in report.errors))
+
+    def test_ci_installs_the_runtime_only_in_private_virtual_environments(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+        self.assertEqual(workflow.count("umask 077"), 7)
+        self.assertEqual(workflow.count('python -m venv "$'), 7)
+        self.assertEqual(workflow.count("name: Seal hosted Python runtime"), 5)
+        self.assertEqual(workflow.count('sudo chmod -R go-w -- "$pythonLocation"'), 5)
+        self.assertEqual(workflow.count("apparmor-profiles bubblewrap"), 3)
+        self.assertEqual(workflow.count("sudo apparmor_parser -r"), 3)
+        self.assertNotIn("apparmor_restrict_unprivileged_userns=0", workflow)
+        self.assertNotIn("run: python -m pip install", workflow)
+        self.assertNotIn("\n          python -m pip install", workflow)
+
+    def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        relative_paths = (
+            Path("LICENSE"),
+            Path("THIRD_PARTY_NOTICES.md"),
+            Path("requirements-runtime.lock"),
+            Path("sbom.cdx.json"),
+            Path("pyproject.toml"),
+            Path("config/dependency-licenses.toml"),
+            Path("supply-chain/runtime-dependencies.toml"),
+            Path("scripts/generate_sbom.py"),
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in relative_paths:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_root / relative).read_bytes())
+            inventory = root / "supply-chain/runtime-dependencies.toml"
+            inventory.write_text(
+                inventory.read_text(encoding="utf-8").replace(
+                    'license = "MIT"',
+                    'license = "AGPL-3.0-only"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_supply_chain(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(any("license is denied" in error for error in errors))
 
     def test_runtime_directory_is_rejected_even_when_contents_are_ignored(self) -> None:
         with TemporaryDirectory() as directory:

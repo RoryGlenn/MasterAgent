@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,20 +20,31 @@ class BootstrapError(RuntimeError):
 def _metadata_digest(root: Path) -> str:
     """Return the dependency and entry-point metadata digest."""
 
-    path = root / "pyproject.toml"
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as error:
-        raise BootstrapError(f"cannot read {path}: {error}") from error
+    digest = hashlib.sha256()
+    for relative in (Path("pyproject.toml"), Path("setup.py")):
+        path = root / relative
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise BootstrapError(f"cannot read {path}: {error}") from error
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
-def _run(command: list[str], *, root: Path) -> int:
+def _run(command: list[str], *, root: Path, private_install: bool = False) -> int:
     """Run one visible, argument-separated setup command."""
 
+    previous_umask = os.umask(0o077) if private_install else None
     try:
         result = subprocess.run(command, cwd=root, check=False)
     except OSError as error:
         raise BootstrapError(f"could not run {command[0]}: {error}") from error
+    finally:
+        if previous_umask is not None:
+            os.umask(previous_umask)
     return result.returncode
 
 
@@ -64,7 +76,11 @@ def bootstrap(
 
     if not environment.exists():
         print("Creating the repository-local .venv...", flush=True)
-        if _run([python_executable, "-m", "venv", str(environment)], root=root):
+        if _run(
+            [python_executable, "-m", "venv", str(environment)],
+            root=root,
+            private_install=True,
+        ):
             raise BootstrapError(
                 "python3 could not create .venv; the Python venv module may be missing"
             )
@@ -95,6 +111,7 @@ def bootstrap(
                 str(root),
             ],
             root=root,
+            private_install=True,
         ):
             raise BootstrapError(
                 "the repository-local pip install failed; review the installer error above"

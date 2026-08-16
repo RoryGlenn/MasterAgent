@@ -241,6 +241,16 @@ class WorkflowOrchestrator:
                 "workflow_id": plan.workflow_id,
                 "workflow_fingerprint": plan.workflow_fingerprint,
                 "compensate_on_failure": plan.compensate_on_failure,
+                **(
+                    {
+                        "capsule_bindings": [
+                            item.to_dict() for item in plan.execution_context.capsules
+                        ]
+                    }
+                    if plan.execution_context is not None
+                    and plan.execution_context.capsules
+                    else {}
+                ),
             },
         )
 
@@ -850,6 +860,16 @@ class WorkflowOrchestrator:
             dry_run=dry_run,
             actions=tuple(reports),
         )
+
+    def authenticated_approvals(
+        self,
+        plan: ChangePlan,
+        approvals: Iterable[Approval],
+    ) -> tuple[tuple[Approval, str], ...]:
+        """Authenticate receipt evidence through the same policy authority."""
+
+        snapshot = ChangePlan.from_dict(plan.to_dict())
+        return self._policy.authenticated_approvals(snapshot, approvals)
 
     def _validate_capability(self, action: AgentAction) -> tuple[bool, str]:
         """Validate catalog enablement and organization governance."""

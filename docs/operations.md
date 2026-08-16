@@ -8,7 +8,8 @@
    credential principals required by the selected capabilities into the plan.
    A capability whose authentication class is `none` has no credential
    principal and must not resolve one. Plugin identities may be bound for
-   review, but plugin execution remains disabled.
+   review, but raw plugin execution remains disabled. An enabled pure capsule
+   must contribute its complete signed identity to the same execution context.
 3. Bind the explicit approval-authority configuration before any plan whose
    policy or governance tier requires human approval. Binding does not read its
    secret.
@@ -83,5 +84,7 @@ Track:
 - evidence nearing expiry;
 - audit-chain verification;
 - recurring registration and due-state drift;
-- plugin inventory changes, while keeping plugin execution disabled;
+- plugin inventory changes, while keeping raw plugin execution disabled;
+- capsule promotion/deprecation/revocation transitions, worker identity drift,
+  run checkpoints, signed-receipt export failures, and readiness-gate changes;
 - capability/governance configuration changes.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import unicodedata
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
@@ -26,6 +27,9 @@ from master_agent.resource_limits import (
     measure_json_resources,
     validate_bounded_string,
 )
+
+_CAPSULE_CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9][a-z0-9_-]*)+")
+_CAPSULE_VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?")
 
 
 class RiskLevel(StrEnum):
@@ -203,7 +207,7 @@ class AgentAction:
             context="action parameters",
             max_bytes=MAX_ACTION_PARAMETER_BYTES,
         )
-        object.__setattr__(self, "parameters", _freeze_json_mapping(self.parameters))
+        object.__setattr__(self, "parameters", freeze_json_mapping(self.parameters))
         object.__setattr__(self, "dependencies", dependencies)
 
     def to_dict(self) -> dict[str, Any]:
@@ -739,12 +743,225 @@ class PluginExecutionBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityCapsuleExecutionBinding:
+    """Exact promoted capsule identity and authority constraints bound to a plan."""
+
+    capability_id: str
+    version: str
+    risk: RiskLevel
+    manifest_sha256: str
+    source_sha256: str
+    artifact_sha256: str
+    dependency_lock_sha256: str
+    sbom_sha256: str
+    test_suite_sha256: str
+    validation_result_sha256: str
+    sandbox_validation_sha256: str
+    verification_contract_sha256: str
+    compensation_contract_sha256: str
+    policy_contract_sha256: str
+    worker_sha256: str
+    publisher: str
+    reviewer: str
+    signer_key_id: str
+    authenticated_principal: str = "local:operator"
+    agent_identity: str = "master-agent"
+    tenant_id: str = "local"
+    provider_account_id: str = "none"
+    credential_provider_id: str = "none"
+    allowed_origins: tuple[str, ...] = ()
+    allowed_methods: tuple[str, ...] = ()
+    allowed_path_prefixes: tuple[str, ...] = ()
+    credential_names: tuple[str, ...] = ()
+    credential_scopes: tuple[str, ...] = ()
+    data_classification: DataClassification = DataClassification.INTERNAL
+    retention_class: str = "ephemeral"
+    max_input_bytes: int = 65_536
+    max_output_bytes: int = 65_536
+    timeout_seconds: int = 5
+    cpu_seconds: int = 2
+    memory_bytes: int = 134_217_728
+    max_processes: int = 1
+    state: str = "enabled"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.risk, RiskLevel) or not isinstance(
+            self.data_classification, DataClassification
+        ):
+            raise ValidationError("capsule binding risk or classification is malformed")
+        validate_bounded_string(
+            self.capability_id, context="capsule binding capability_id"
+        )
+        validate_bounded_string(self.version, context="capsule binding version")
+        if _CAPSULE_CAPABILITY_PATTERN.fullmatch(self.capability_id) is None:
+            raise ValidationError("capsule binding capability_id is malformed")
+        if _CAPSULE_VERSION_PATTERN.fullmatch(self.version) is None:
+            raise ValidationError("capsule binding version is malformed")
+        for name, value in (
+            ("publisher", self.publisher),
+            ("reviewer", self.reviewer),
+            ("signer_key_id", self.signer_key_id),
+            ("authenticated_principal", self.authenticated_principal),
+            ("agent_identity", self.agent_identity),
+            ("tenant_id", self.tenant_id),
+            ("provider_account_id", self.provider_account_id),
+            ("credential_provider_id", self.credential_provider_id),
+            ("retention_class", self.retention_class),
+        ):
+            if not value or value != value.strip():
+                raise ValidationError(f"capsule binding {name} is empty or malformed")
+            _validate_approval_claim(value, f"capsule binding {name}")
+            validate_bounded_string(value, context=f"capsule binding {name}")
+        if self.publisher.casefold() == self.reviewer.casefold():
+            raise ValidationError("capsule publisher and reviewer must be distinct")
+        if self.state != "enabled":
+            raise ValidationError("only enabled capability capsules may bind to plans")
+        for name, value in (
+            ("manifest_sha256", self.manifest_sha256),
+            ("source_sha256", self.source_sha256),
+            ("artifact_sha256", self.artifact_sha256),
+            ("dependency_lock_sha256", self.dependency_lock_sha256),
+            ("sbom_sha256", self.sbom_sha256),
+            ("test_suite_sha256", self.test_suite_sha256),
+            ("validation_result_sha256", self.validation_result_sha256),
+            ("sandbox_validation_sha256", self.sandbox_validation_sha256),
+            ("verification_contract_sha256", self.verification_contract_sha256),
+            ("compensation_contract_sha256", self.compensation_contract_sha256),
+            ("policy_contract_sha256", self.policy_contract_sha256),
+            ("worker_sha256", self.worker_sha256),
+        ):
+            _validate_sha256(value, f"capsule binding {name}")
+        for name, values in (
+            ("allowed_origins", self.allowed_origins),
+            ("allowed_methods", self.allowed_methods),
+            ("allowed_path_prefixes", self.allowed_path_prefixes),
+            ("credential_names", self.credential_names),
+            ("credential_scopes", self.credential_scopes),
+        ):
+            if (
+                not isinstance(values, tuple)
+                or len(values) != len(set(values))
+                or any(not value or value != value.strip() for value in values)
+            ):
+                raise ValidationError(f"capsule binding {name} is malformed")
+            for value in values:
+                _reject_control_characters(value, f"capsule binding {name}")
+                validate_bounded_string(value, context=f"capsule binding {name}")
+        for limit_name, limit_value, minimum, maximum in (
+            ("max_input_bytes", self.max_input_bytes, 1, 1024 * 1024),
+            ("max_output_bytes", self.max_output_bytes, 1, 1024 * 1024),
+            ("timeout_seconds", self.timeout_seconds, 1, 30),
+            ("cpu_seconds", self.cpu_seconds, 1, 10),
+            ("memory_bytes", self.memory_bytes, 32 * 1024 * 1024, 512 * 1024 * 1024),
+            ("max_processes", self.max_processes, 1, 4),
+        ):
+            if (
+                not isinstance(limit_value, int)
+                or isinstance(limit_value, bool)
+                or not minimum <= limit_value <= maximum
+            ):
+                raise ValidationError(
+                    f"capsule binding {limit_name} is outside its safe bound"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize every security-relevant capsule execution fact."""
+
+        return {
+            "capability_id": self.capability_id,
+            "version": self.version,
+            "risk": str(self.risk),
+            "manifest_sha256": self.manifest_sha256,
+            "source_sha256": self.source_sha256,
+            "artifact_sha256": self.artifact_sha256,
+            "dependency_lock_sha256": self.dependency_lock_sha256,
+            "sbom_sha256": self.sbom_sha256,
+            "test_suite_sha256": self.test_suite_sha256,
+            "validation_result_sha256": self.validation_result_sha256,
+            "sandbox_validation_sha256": self.sandbox_validation_sha256,
+            "verification_contract_sha256": self.verification_contract_sha256,
+            "compensation_contract_sha256": self.compensation_contract_sha256,
+            "policy_contract_sha256": self.policy_contract_sha256,
+            "worker_sha256": self.worker_sha256,
+            "publisher": self.publisher,
+            "reviewer": self.reviewer,
+            "signer_key_id": self.signer_key_id,
+            "authenticated_principal": self.authenticated_principal,
+            "agent_identity": self.agent_identity,
+            "tenant_id": self.tenant_id,
+            "provider_account_id": self.provider_account_id,
+            "credential_provider_id": self.credential_provider_id,
+            "allowed_origins": list(self.allowed_origins),
+            "allowed_methods": list(self.allowed_methods),
+            "allowed_path_prefixes": list(self.allowed_path_prefixes),
+            "credential_names": list(self.credential_names),
+            "credential_scopes": list(self.credential_scopes),
+            "data_classification": str(self.data_classification),
+            "retention_class": self.retention_class,
+            "max_input_bytes": self.max_input_bytes,
+            "max_output_bytes": self.max_output_bytes,
+            "timeout_seconds": self.timeout_seconds,
+            "cpu_seconds": self.cpu_seconds,
+            "memory_bytes": self.memory_bytes,
+            "max_processes": self.max_processes,
+            "state": self.state,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> CapabilityCapsuleExecutionBinding:
+        """Parse an immutable capsule binding from a plan."""
+
+        return cls(
+            capability_id=str(data["capability_id"]),
+            version=str(data["version"]),
+            risk=RiskLevel(str(data["risk"])),
+            manifest_sha256=str(data["manifest_sha256"]),
+            source_sha256=str(data["source_sha256"]),
+            artifact_sha256=str(data["artifact_sha256"]),
+            dependency_lock_sha256=str(data["dependency_lock_sha256"]),
+            sbom_sha256=str(data["sbom_sha256"]),
+            test_suite_sha256=str(data["test_suite_sha256"]),
+            validation_result_sha256=str(data["validation_result_sha256"]),
+            sandbox_validation_sha256=str(data["sandbox_validation_sha256"]),
+            verification_contract_sha256=str(data["verification_contract_sha256"]),
+            compensation_contract_sha256=str(data["compensation_contract_sha256"]),
+            policy_contract_sha256=str(data["policy_contract_sha256"]),
+            worker_sha256=str(data["worker_sha256"]),
+            publisher=str(data["publisher"]),
+            reviewer=str(data["reviewer"]),
+            signer_key_id=str(data["signer_key_id"]),
+            authenticated_principal=str(data["authenticated_principal"]),
+            agent_identity=str(data["agent_identity"]),
+            tenant_id=str(data["tenant_id"]),
+            provider_account_id=str(data["provider_account_id"]),
+            credential_provider_id=str(data["credential_provider_id"]),
+            allowed_origins=_capsule_binding_strings(data, "allowed_origins"),
+            allowed_methods=_capsule_binding_strings(data, "allowed_methods"),
+            allowed_path_prefixes=_capsule_binding_strings(
+                data, "allowed_path_prefixes"
+            ),
+            credential_names=_capsule_binding_strings(data, "credential_names"),
+            credential_scopes=_capsule_binding_strings(data, "credential_scopes"),
+            data_classification=DataClassification(str(data["data_classification"])),
+            retention_class=str(data["retention_class"]),
+            max_input_bytes=_required_positive_int(data, "max_input_bytes"),
+            max_output_bytes=_required_positive_int(data, "max_output_bytes"),
+            timeout_seconds=_required_positive_int(data, "timeout_seconds"),
+            cpu_seconds=_required_positive_int(data, "cpu_seconds"),
+            memory_bytes=_required_positive_int(data, "memory_bytes"),
+            max_processes=_required_positive_int(data, "max_processes"),
+            state=str(data["state"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionContext:
     """Reviewed connector identities and metadata-only plugin inventory binding."""
 
     integrations_sha256: str
     connectors: tuple[ConnectorExecutionBinding, ...] = ()
     plugins: tuple[PluginExecutionBinding, ...] = ()
+    capsules: tuple[CapabilityCapsuleExecutionBinding, ...] = ()
     runtime: RuntimeExecutionBinding | None = None
     schema: str = "master-agent/execution-context@1"
 
@@ -757,12 +974,21 @@ class ExecutionContext:
         )
         connectors = tuple(sorted(self.connectors, key=lambda item: item.system))
         plugins = tuple(sorted(self.plugins, key=lambda item: item.name))
+        capsules = tuple(
+            sorted(self.capsules, key=lambda item: (item.capability_id, item.version))
+        )
         if len({item.system for item in connectors}) != len(connectors):
             raise ValidationError("execution context connector systems must be unique")
         if len({item.name for item in plugins}) != len(plugins):
             raise ValidationError("execution context plugin names must be unique")
+        capsule_names = [item.capability_id for item in capsules]
+        if len(capsule_names) != len(set(capsule_names)):
+            raise ValidationError(
+                "execution context capsule capabilities must be unique"
+            )
         object.__setattr__(self, "connectors", connectors)
         object.__setattr__(self, "plugins", plugins)
+        object.__setattr__(self, "capsules", capsules)
 
     @property
     def fingerprint(self) -> str:
@@ -788,6 +1014,8 @@ class ExecutionContext:
         }
         if self.runtime is not None:
             payload["runtime"] = self.runtime.to_dict()
+        if self.capsules:
+            payload["capsules"] = [item.to_dict() for item in self.capsules]
         return payload
 
     @classmethod
@@ -796,14 +1024,19 @@ class ExecutionContext:
 
         connectors = data.get("connectors")
         plugins = data.get("plugins")
+        capsules = data.get("capsules", [])
         if not isinstance(connectors, list):
             raise ValidationError("execution context connectors must be a list")
         if not isinstance(plugins, list):
             raise ValidationError("execution context plugins must be a list")
+        if not isinstance(capsules, list):
+            raise ValidationError("execution context capsules must be a list")
         if not all(isinstance(item, Mapping) for item in connectors):
             raise ValidationError("execution context connectors must be objects")
         if not all(isinstance(item, Mapping) for item in plugins):
             raise ValidationError("execution context plugins must be objects")
+        if not all(isinstance(item, Mapping) for item in capsules):
+            raise ValidationError("execution context capsules must be objects")
         return cls(
             schema=str(data.get("schema", "")),
             integrations_sha256=str(data["integrations_sha256"]),
@@ -811,6 +1044,9 @@ class ExecutionContext:
                 ConnectorExecutionBinding.from_dict(item) for item in connectors
             ),
             plugins=tuple(PluginExecutionBinding.from_dict(item) for item in plugins),
+            capsules=tuple(
+                CapabilityCapsuleExecutionBinding.from_dict(item) for item in capsules
+            ),
             runtime=(
                 RuntimeExecutionBinding.from_dict(_expect_mapping(data, "runtime"))
                 if data.get("runtime") is not None
@@ -1121,7 +1357,7 @@ class CompensationDescriptor:
             raise ValidationError(
                 "non-plan compensation requires an operator-facing reason"
             )
-        object.__setattr__(self, "parameters", _freeze_json_mapping(self.parameters))
+        object.__setattr__(self, "parameters", freeze_json_mapping(self.parameters))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the descriptor to a stable versioned object."""
@@ -1186,14 +1422,14 @@ class ExecutionResult:
 
     def __post_init__(self) -> None:
         if self.before is not None:
-            _freeze_json_mapping(self.before)
+            freeze_json_mapping(self.before)
             object.__setattr__(
                 self,
                 "before",
                 deepcopy(dict(self.before)),
             )
         if self.after is not None:
-            _freeze_json_mapping(self.after)
+            freeze_json_mapping(self.after)
             object.__setattr__(
                 self,
                 "after",
@@ -1299,6 +1535,20 @@ def _validate_sha256(value: str, name: str) -> None:
         raise ValidationError(f"{name} must be a lowercase SHA-256 digest")
 
 
+def _capsule_binding_strings(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError(f"capsule binding {key} must be a string list")
+    return tuple(value)
+
+
+def _required_positive_int(data: Mapping[str, Any], key: str) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValidationError(f"capsule binding {key} must be positive")
+    return value
+
+
 def _expect_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     value = data.get(key)
     if not isinstance(value, Mapping):
@@ -1331,7 +1581,7 @@ def _result_state_digest(value: Mapping[str, Any] | None) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _freeze_json_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+def freeze_json_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     """Recursively freeze and validate a JSON-compatible mapping."""
 
     frozen = _freeze_json(value, path="mapping")

@@ -1,0 +1,160 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "pkg:pypi/python-pptx@1.0.2",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/scanny/python-pptx"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "python-pptx",
+      "purl": "pkg:pypi/python-pptx@1.0.2",
+      "type": "library",
+      "version": "1.0.2"
+    },
+    {
+      "bom-ref": "pkg:pypi/pillow@12.3.0",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/python-pillow/Pillow"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT-CMU"
+          }
+        }
+      ],
+      "name": "Pillow",
+      "purl": "pkg:pypi/pillow@12.3.0",
+      "type": "library",
+      "version": "12.3.0"
+    },
+    {
+      "bom-ref": "pkg:pypi/xlsxwriter@3.2.9",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/jmcnamara/XlsxWriter"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "XlsxWriter",
+      "purl": "pkg:pypi/xlsxwriter@3.2.9",
+      "type": "library",
+      "version": "3.2.9"
+    },
+    {
+      "bom-ref": "pkg:pypi/lxml@6.1.1",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/lxml/lxml"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "lxml",
+      "purl": "pkg:pypi/lxml@6.1.1",
+      "type": "library",
+      "version": "6.1.1"
+    },
+    {
+      "bom-ref": "pkg:pypi/typing-extensions@4.16.0",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/python/typing_extensions"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "PSF-2.0"
+          }
+        }
+      ],
+      "name": "typing_extensions",
+      "purl": "pkg:pypi/typing-extensions@4.16.0",
+      "type": "library",
+      "version": "4.16.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "pkg:pypi/pillow@12.3.0",
+        "pkg:pypi/xlsxwriter@3.2.9",
+        "pkg:pypi/lxml@6.1.1",
+        "pkg:pypi/python-pptx@1.0.2",
+        "pkg:pypi/typing-extensions@4.16.0"
+      ],
+      "ref": "pkg:pypi/master-agent@1.0.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:pypi/pillow@12.3.0",
+        "pkg:pypi/xlsxwriter@3.2.9",
+        "pkg:pypi/lxml@6.1.1",
+        "pkg:pypi/typing-extensions@4.16.0"
+      ],
+      "ref": "pkg:pypi/python-pptx@1.0.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:pypi/pillow@12.3.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:pypi/xlsxwriter@3.2.9"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:pypi/lxml@6.1.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:pypi/typing-extensions@4.16.0"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "pkg:pypi/master-agent@1.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "LicenseRef-MasterAgent-Proprietary"
+          }
+        }
+      ],
+      "name": "master-agent",
+      "purl": "pkg:pypi/master-agent@1.0.0",
+      "type": "application",
+      "version": "1.0.0"
+    }
+  },
+  "specVersion": "1.5",
+  "version": 1
+}

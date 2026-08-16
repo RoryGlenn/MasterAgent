@@ -18,14 +18,30 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project and static-analysis tools
-        run: python -m pip install ".[dev]"
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-static"
+          python -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install ".[dev]"
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Enforce Ruff lint and formatting
         run: |
           ruff check .
           ruff format --check .
       - name: Enforce strict mypy checks
         run: mypy
+      - name: Verify dependency lock, licenses, SBOM, and notices
+        run: python scripts/generate_sbom.py --check --verify-installed
 
   test:
     name: Python ${{ matrix.python-version }}
@@ -36,12 +52,34 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install capability-capsule isolation backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-profiles bubblewrap
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project
-        run: python -m pip install .
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-test"
+          python -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: python -m unittest discover -s tests -v
       - name: Validate release source
@@ -53,14 +91,37 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install capability-capsule isolation backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-profiles bubblewrap
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Build distributions
         run: |
-          python -m pip install build .
-          python -m build
+          umask 077
+          build_env="$RUNNER_TEMP/master-agent-build"
+          python -m venv "$build_env"
+          "$build_env/bin/python" -m pip install build .
+          echo "$build_env/bin" >> "$GITHUB_PATH"
+          # Prove package modes do not inherit a permissive builder umask.
+          umask 000
+          "$build_env/bin/python" -m build
       - name: Validate distribution contents
         run: >-
           python scripts/validate_release.py
@@ -69,6 +130,7 @@ jobs:
       - name: Smoke-test installed wheel outside the source tree
         run: |
           set -euo pipefail
+          umask 077
           wheel_env="$RUNNER_TEMP/master-agent-wheel"
           python -m venv "$wheel_env"
           "$wheel_env/bin/pip" install dist/*.whl
@@ -78,6 +140,7 @@ jobs:
       - name: Test extracted source distribution
         run: |
           set -euo pipefail
+          umask 077
           sdist_dir="$RUNNER_TEMP/master-agent-sdist"
           sdist_env="$RUNNER_TEMP/master-agent-sdist-venv"
           mkdir -p "$sdist_dir"
@@ -87,6 +150,7 @@ jobs:
           "$sdist_env/bin/pip" install "$sdist_root"
           cd "$sdist_root"
           "$sdist_env/bin/python" -m unittest discover -s tests -v
+          "$sdist_env/bin/python" scripts/generate_sbom.py --check --verify-installed
           "$sdist_env/bin/python" scripts/validate_release.py
 
   dependency-security:
@@ -98,10 +162,23 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install audit tools and project
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install . bandit pip-audit
+          umask 077
+          audit_env="$RUNNER_TEMP/master-agent-audit"
+          python -m venv "$audit_env"
+          "$audit_env/bin/python" -m pip install --upgrade pip
+          "$audit_env/bin/python" -m pip install . bandit pip-audit
+          echo "$audit_env/bin" >> "$GITHUB_PATH"
       - name: Reject medium and high severity Bandit findings
         run: bandit -q -r src -ll
       - name: Audit installed dependencies
@@ -112,12 +189,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install capability-capsule isolation backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-profiles bubblewrap
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
           cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
       - name: Install project and coverage
-        run: python -m pip install . coverage
+        run: |
+          umask 077
+          coverage_env="$RUNNER_TEMP/master-agent-coverage"
+          python -m venv "$coverage_env"
+          "$coverage_env/bin/python" -m pip install . coverage
+          echo "$coverage_env/bin" >> "$GITHUB_PATH"
       - name: Enforce tested-code baseline
         run: |
           coverage run --source=master_agent -m unittest discover -s tests -v

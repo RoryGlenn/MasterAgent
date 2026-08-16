@@ -2,7 +2,7 @@
 
 **Version 1.0.0 — governed enterprise-agent runtime**
 
-Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, GitHub, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, but plugin execution is disabled.
+Master Agent is a Python control plane for coordinating enterprise work across Jira, Confluence, Bitbucket, GitHub, Outlook, Microsoft Teams, SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. Connector-plugin inventory and approval binding are available for review, while generated dependency-free pure capabilities now have a signed quarantine-to-enable test/local path. Raw entry-point plugin and provider/side-effect capsule execution remain disabled.
 
 It separates AI planning from authorization and execution:
 
@@ -38,6 +38,7 @@ do not yet meet the release security boundary remain deliberately non-routable:
 | 4 — approved reversible writes | Jira comments, Confluence, Bitbucket PRs, and GitHub issue/PR creation; SharePoint replacement, other Jira mutations, GitHub administration, local/remote Git, and unsafe OneNote writes are disabled |
 | 5 — external communication | Exact-approval Outlook sends and Teams chat/channel messages or replies |
 | 6 — recurring workflow registration | Status and plan-generation surfaces; recurring execution is disabled pending exact target/config and runtime-path binding |
+| Capability promotion | Signed immutable capsule lifecycle, Linux isolation, exact-plan binding, advisory routing, durable checkpoints, receipts, and development credential brokerage for dependency-free pure capabilities; provider/side-effect and production activation remain fail closed |
 
 The implemented runtime surfaces remain fail closed until a particular company
 deployment approves applications, scopes, retention, data handling, Conditional
@@ -72,7 +73,8 @@ Supported domains:
 | OneNote | notebooks, sections, pages | generated HTML/proposals | disabled pending exact target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | publishing disabled with SharePoint replacement |
 | Git workspace | repository state | branch/patch plan | mutation disabled until all Git metadata transactions are descriptor-bound |
-| Plugins | metadata only | metadata only | execution disabled pending an isolated worker and locked dependency closure |
+| Capability capsules | promoted dependency-free pure reads | promoted deterministic local generation | provider/side-effect and dependent capsule execution disabled |
+| Plugins | metadata only | metadata only | raw entry-point execution disabled; dependent isolation remains future work |
 
 ## Core safety properties
 
@@ -88,11 +90,15 @@ Supported domains:
 - **Constrained networking:** HTTPS-only, same-origin requests, bounded pagination/response sizes, safe redirects, and secret-free errors.
 - **Constrained source control:** no force pushes, no protected-branch writes, no autonomous merges, no standalone destructive worktree restore, and explicit workspace roots.
 - **Evidence discipline:** full content is persisted only under an explicit retention rule; durable audit records normally store digests and metadata.
-- **Plugin isolation:** discovery, locking, and plan binding do not import plugin code; all CLI plugin execution fails closed pending a sealed isolated worker.
+- **Generated-code isolation:** dependency-free pure capsules require signed
+  promotion and Linux bubblewrap; raw plugins, provider/side-effect capsules,
+  dependent capsules, self-promotion, and production activation fail closed.
 
 ## Requirements
 
 - Python 3.12 or newer.
+- Linux bubblewrap for capability-capsule validation or execution. There is no
+  automatic subprocess fallback outside explicit test construction.
 - Ubuntu 24.04 LTS or macOS for the provided setup commands.
 - `python-pptx`, installed automatically.
 - Git only for repository inspection and quarantined internal mutation tests;
@@ -156,6 +162,7 @@ real stop conditions, safety boundaries, and GitHub.com or CLI usage.
 tar -xzf master_agent-1.0.0.tar.gz
 cd master_agent-1.0.0
 
+umask 077
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -170,6 +177,7 @@ master-agent readiness
 **Machine: Ubuntu 24.04 or macOS development computer**
 
 ```bash
+umask 077
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install ./master_agent-1.0.0-py3-none-any.whl
@@ -617,9 +625,13 @@ master-agent bind-context plan.json \
 ```
 
 `run --apply --plugin ...` is intentionally rejected before plugin import,
-even when the lock and approvals are valid. A future activation path requires
-an isolated worker that verifies the complete dependency closure before any
-plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md).
+even when the lock and approvals are valid. The capability-capsule worker is a
+separate, demonstrated path for dependency-free pure generated code; it does
+not make an arbitrary entry-point distribution executable. A plugin must be
+converted into a reviewed capsule, and any dependency closure still requires a
+future sealed dependency filesystem. See
+[`docs/plugin-development.md`](docs/plugin-development.md) and
+[`docs/capability-capsules.md`](docs/capability-capsules.md).
 
 ## Configuration map
 
@@ -633,6 +645,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 | `config/sources_of_truth.toml` | Canonical resource and projection rules |
 | `config/identities.toml` | Cross-system identity mapping, never credentials |
 | `config/retention.toml` | Evidence persistence modes and TTLs |
+| `config/dependency-licenses.toml` | Allowed/denied runtime and capsule dependency licenses plus notice policy |
 | `config/draft-package.toml` | Phase 3 local package example |
 | `config/weekly-status.toml` | Read-only weekly status workflow |
 | `config/communication-context.toml` | Read-only communication context workflow |
@@ -648,6 +661,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)
+- [Capability capsule promotion](docs/capability-capsules.md)
 - [Integration matrix](docs/integration-matrix.md)
 - [Live connector contracts](docs/live-connectors.md)
 - [Threat model](docs/threat-model.md)

@@ -440,7 +440,12 @@ class AuditSafetyTests(unittest.TestCase):
             self.assertEqual(attacker.read_bytes(), b"")
             self.assertEqual(
                 _audit_table_names(database),
-                ["audit_events", "audit_state", "completed_actions"],
+                [
+                    "audit_events",
+                    "audit_state",
+                    "completed_actions",
+                    "run_checkpoints",
+                ],
             )
 
 
