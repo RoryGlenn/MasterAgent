@@ -365,7 +365,7 @@ class CapabilityCapsuleTests(unittest.TestCase):
             artifact.chmod(0o664)
             _validate_worker_artifact(artifact, executable=False)
             artifact.chmod(0o666)
-            with self.assertRaisesRegex(ConfigurationError, "not a trusted"):
+            with self.assertRaisesRegex(ConfigurationError, "world_writable"):
                 _validate_worker_artifact(artifact, executable=False)
 
     def test_exact_resume_rejects_changed_plan_and_terminal_replay(self) -> None:

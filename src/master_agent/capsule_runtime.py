@@ -697,16 +697,22 @@ def _validate_worker_artifact(path: Path, *, executable: bool) -> None:
         raise ConfigurationError(
             "capability capsule worker artifact is unavailable"
         ) from error
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid not in {0, os.geteuid()}
-        or metadata.st_nlink != 1
-        or stat.S_IMODE(metadata.st_mode) & stat.S_IWOTH
-        or not _group_write_is_owner_private(metadata)
-        or (executable and not os.access(path, os.X_OK))
-    ):
+    failures: list[str] = []
+    if not stat.S_ISREG(metadata.st_mode):
+        failures.append("not_regular")
+    if metadata.st_uid not in {0, os.geteuid()}:
+        failures.append("untrusted_owner")
+    if metadata.st_nlink != 1:
+        failures.append("multiple_links")
+    if stat.S_IMODE(metadata.st_mode) & stat.S_IWOTH:
+        failures.append("world_writable")
+    if not _group_write_is_owner_private(metadata):
+        failures.append("shared_group_writable")
+    if executable and not os.access(path, os.X_OK):
+        failures.append("not_executable")
+    if failures:
         raise ConfigurationError(
-            "capability capsule worker artifact is not a trusted regular file"
+            "capability capsule worker artifact is not trusted: " + ",".join(failures)
         )
 
 
