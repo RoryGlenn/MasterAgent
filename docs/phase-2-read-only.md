@@ -154,6 +154,13 @@ Graph handles site, drive, item, and metadata requests. For a text-file read:
 
 Binary files and non-allowlisted extensions are rejected before download.
 
+Raw retrieved excerpts remain structured data and are retained only through an
+explicit controlled artifact path. When a finding or provider diagnostic is
+shown in a terminal, the CLI bounds the displayed field and renders C0/C1,
+escape/OSC, carriage-return, backspace, Unicode line separators, and
+bidirectional formatting controls as inert visible `\uXXXX` text. Normal
+Unicode remains readable.
+
 ## HTTP boundary
 
 `SafeHttpClient` enforces:
