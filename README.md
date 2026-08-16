@@ -162,6 +162,7 @@ real stop conditions, safety boundaries, and GitHub.com or CLI usage.
 tar -xzf master_agent-1.0.0.tar.gz
 cd master_agent-1.0.0
 
+umask 077
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -176,6 +177,7 @@ master-agent readiness
 **Machine: Ubuntu 24.04 or macOS development computer**
 
 ```bash
+umask 077
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install ./master_agent-1.0.0-py3-none-any.whl

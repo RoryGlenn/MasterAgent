@@ -2,22 +2,58 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts.bootstrap_agent import BootstrapError, bootstrap
+from scripts.bootstrap_agent import BootstrapError, _metadata_digest, _run, bootstrap
 
 
 class AgentBootstrapTests(unittest.TestCase):
     """Keep first-run setup idempotent, local, and fail-closed."""
 
+    def test_private_install_umask_is_scoped_to_the_child_command(self) -> None:
+        observed: list[int] = []
+
+        def fake_run(
+            command: list[str],
+            *,
+            cwd: Path,
+            check: bool,
+        ) -> subprocess.CompletedProcess[bytes]:
+            del cwd, check
+            active = os.umask(0)
+            os.umask(active)
+            observed.append(active)
+            return subprocess.CompletedProcess(command, 0)
+
+        previous = os.umask(0o027)
+        try:
+            with (
+                TemporaryDirectory() as directory,
+                patch("scripts.bootstrap_agent.subprocess.run", side_effect=fake_run),
+            ):
+                status = _run(
+                    ["python3", "-m", "venv", ".venv"],
+                    root=Path(directory),
+                    private_install=True,
+                )
+            restored = os.umask(0o027)
+        finally:
+            os.umask(previous)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(observed, [0o077])
+        self.assertEqual(restored, 0o027)
+
     def test_first_run_creates_installs_and_checks_readiness(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            (root / "setup.py").write_text("from setuptools import setup\n")
             commands: list[list[str]] = []
 
             def fake_run(
@@ -66,13 +102,12 @@ class AgentBootstrapTests(unittest.TestCase):
             root = Path(directory)
             metadata = root / "pyproject.toml"
             metadata.write_text("[project]\n", encoding="utf-8")
+            (root / "setup.py").write_text("from setuptools import setup\n")
             binary_dir = root / ".venv/bin"
             binary_dir.mkdir(parents=True)
             (binary_dir / "python").touch()
             (binary_dir / "master-agent").touch()
-            import hashlib
-
-            digest = hashlib.sha256(metadata.read_bytes()).hexdigest()
+            digest = _metadata_digest(root)
             (root / ".venv/.master-agent-bootstrap-v1").write_text(
                 f"{digest}\n", encoding="utf-8"
             )
@@ -96,6 +131,7 @@ class AgentBootstrapTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            (root / "setup.py").write_text("from setuptools import setup\n")
             target = root / "elsewhere"
             target.mkdir()
             (root / ".venv").symlink_to(target, target_is_directory=True)

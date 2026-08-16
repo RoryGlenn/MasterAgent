@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import stat
 import unittest
+import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -16,6 +18,7 @@ from scripts.validate_release import (
     _validate_first_run_contract,
     _validate_public_read_contract,
     _validate_supply_chain,
+    validate_archive,
     validate_project,
 )
 
@@ -30,6 +33,35 @@ class ReleaseMetadataTests(unittest.TestCase):
         report = validate_project(root)
         self.assertEqual(report.errors, ())
         self.assertTrue(report.valid)
+
+    def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo("master_agent/capsule_worker.py")
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFREG | 0o666) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "pass\n")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(
+                any("writable by group or others" in error for error in report.errors)
+            )
+
+    def test_release_rejects_a_symlinked_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo("master_agent/capsule_worker.py")
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "../attacker.py")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(any("link entry" in error for error in report.errors))
+            self.assertTrue(any("is not regular" in error for error in report.errors))
 
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

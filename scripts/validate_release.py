@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 import sys
 import tarfile
 import tomllib
@@ -398,6 +399,17 @@ def validate_archive(path: Path) -> ValidationReport:
                     if item.is_dir():
                         continue
                     names.append(item.filename)
+                    archive_mode = (item.external_attr >> 16) & 0xFFFF
+                    if stat.S_ISLNK(archive_mode):
+                        errors.append(
+                            f"release archive contains link entry: {item.filename}"
+                        )
+                    _validate_archive_runtime_mode(
+                        item.filename,
+                        archive_mode,
+                        is_regular=stat.S_ISREG(archive_mode),
+                        errors=errors,
+                    )
                     with archive.open(item) as handle:
                         _consume_stream(handle)
         elif path.name.endswith((".tar.gz", ".tar.bz2", ".tar.xz", ".tgz")):
@@ -411,6 +423,12 @@ def validate_archive(path: Path) -> ValidationReport:
                     if not item.isfile():
                         continue
                     names.append(item.name)
+                    _validate_archive_runtime_mode(
+                        item.name,
+                        item.mode,
+                        is_regular=True,
+                        errors=errors,
+                    )
                     handle = archive.extractfile(item)
                     if handle is not None:
                         with handle:
@@ -438,6 +456,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/.github/agents/MasterAgent.agent.md",
             "/.env.example",
             "/LICENSE",
+            "/setup.py",
             "/THIRD_PARTY_NOTICES.md",
             "/config/capabilities.toml",
             "/config/dependency-licenses.toml",
@@ -1377,6 +1396,27 @@ def _validate_archive_member(name: str, errors: list[str]) -> None:
         or forbidden_environment
     ):
         errors.append(f"forbidden runtime/secret file in release archive: {name}")
+
+
+def _validate_archive_runtime_mode(
+    name: str,
+    mode: int,
+    *,
+    is_regular: bool,
+    errors: list[str],
+) -> None:
+    """Reject a capsule worker another operating-system account can alter."""
+
+    if not name.endswith("master_agent/capsule_worker.py"):
+        return
+    if not is_regular:
+        errors.append(f"release archive capsule worker is not regular: {name}")
+    permissions = stat.S_IMODE(mode)
+    if permissions & (stat.S_IWGRP | stat.S_IWOTH):
+        errors.append(
+            "release archive capsule worker is writable by group or others: "
+            f"{name} ({permissions:#05o})"
+        )
 
 
 def _consume_stream(handle: BinaryIO) -> None:

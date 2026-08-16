@@ -247,6 +247,8 @@ Controls:
 - owner-private descriptor-pinned capsule store with no-follow, single-link,
   bounded regular-file reads and create-only writes;
 - complete source/artifact/dependency/SBOM/test/contract/policy/worker digests;
+- deterministic package modes plus a restrictive install umask, with a
+  shared-group- or world-writable capsule worker rejected before execution;
 - ordered signed manifests with distinct generator, validator, sandbox,
   reviewer, publisher, and revoker roles;
 - publisher/reviewer separation, monotonic timestamps, append-only states, and

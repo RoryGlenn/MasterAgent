@@ -56,7 +56,10 @@ Typed anonymous public-data capabilities require no credential activation.
   its separately recorded rendered review reports no overflow.
 - The source archive is extracted and tested independently before release.
 - The wheel is installed outside the source tree and exercised with safe defaults before release.
-- Release archives are checked for integrity, forbidden secret/runtime files, and symbolic links.
+- Release archives are checked for integrity, forbidden secret/runtime files,
+  symbolic links, and a capability worker writable by another OS account.
+- Package builds normalize shipped Python modules to mode `0644`, independent
+  of the builder's umask.
 
 Ruff linting and formatting plus strict mypy checks pass without file
 exclusions and are required CI gates. Tool versions are pinned in the project
