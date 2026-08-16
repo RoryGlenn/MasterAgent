@@ -26,6 +26,10 @@ Typed anonymous public-data capabilities require no credential activation.
   explicit no-local-change safeguards, provider-neutral ephemeral connection,
   capability-gap ownership, last-resort question rules, script, and policy are
   included in the source distribution.
+- The resumable approval handoff is tested from missing approval through
+  private request inspection, trusted signing, exact-run resume, and dual
+  approval. Tampered, stale, unsafe-permission, symlinked, or authority-drifted
+  requests fail closed without weakening the existing plan or runtime gates.
 - Instruction, connector, configuration, deployment, and operations guides
   distinguish typed anonymous public reads from authenticated access. Release
   validation rejects the stale blanket claims that all live use requires a

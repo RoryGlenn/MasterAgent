@@ -9,21 +9,33 @@
    A capability whose authentication class is `none` has no credential
    principal and must not resolve one. Plugin identities may be bound for
    review, but plugin execution remains disabled.
-3. Inspect the bound plan and fingerprint.
-4. Create exact action approvals with an explicit trusted approval-authority
-   key ring and the fingerprint printed by `master-agent inspect`.
-5. Run policy-only dry run.
-6. Apply using only required connector classes.
+3. Bind the explicit approval-authority configuration before any plan whose
+   policy or governance tier requires human approval. Binding does not read its
+   secret.
+4. Inspect the bound plan and fingerprint.
+5. Run policy-only dry run, then apply using only required connector classes.
+6. If the run returns `approval_required`, inspect the private request written
+   under the approved artifact root. A trusted operator signs it with
+   `approve-request`; the agent then uses `resume-approval` instead of
+   reconstructing apply arguments.
 7. Review per-action state and verification.
 8. Verify the audit chain.
 9. Retain full evidence only when policy requires it.
+
+Approval requests are mode `0600`, create-only, and secret-free. They bind no
+new authority: the referenced plan, action manifests, execution context,
+authority configuration digest, and request fingerprint are revalidated before
+signing and again before resume. A partial dual approval produces a new request
+that carries the first artifact path forward. Never treat a chat response or
+the request JSON as approval.
 
 ## Action states
 
 - `planned`: permitted dry run;
 - `verified`: provider/local state re-read matched expectations;
 - `skipped`: dependency, idempotency, or prior stop prevented execution;
-- `approval_required`: immutable approval absent or insufficient;
+- `approval_required`: immutable approval absent or insufficient; applied runs
+  emit a resumable private approval request when the authority was bound;
 - `prohibited`: policy, catalog, governance, or source-of-truth denial;
 - `conflicted`: version or remote state changed;
 - `failed`: connector or verification failure;

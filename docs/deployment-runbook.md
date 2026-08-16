@@ -87,6 +87,12 @@ expected versions. Obtain exact approvals. Enable only one granular provider
 flag. Execute, verify, and test compensation. Do not enable local Git or OneNote
 writes; their catalog, governance, and live-registry routes are disabled.
 
+Exercise the approval handoff itself: bind the approval-authority configuration,
+confirm an unsigned run emits a private request and no pending provider effect,
+inspect and sign it from the trusted operator context, then use
+`resume-approval`. For dual approval, prove that one approval remains blocked
+and that the next request carries it forward before the second identity signs.
+
 For GitHub administration, use a test repository, require two distinct
 approvers, and enable only `admin_enabled`. Test repository-setting restoration
 separately. Existing-collaborator role changes require manual recovery review;

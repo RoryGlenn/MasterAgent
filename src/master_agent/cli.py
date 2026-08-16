@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -16,6 +17,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from master_agent.approval_handoff import (
+    ApprovalRequest,
+    ApprovalRunInvocation,
+    load_approval_request,
+    publish_approval_request,
+    write_restricted_json,
+)
 from master_agent.approvals import HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.auth import AuthMode
@@ -44,6 +52,7 @@ from master_agent.errors import (
     ConfigurationError,
     MasterAgentError,
     StructuredDataTypeError,
+    ValidationError,
 )
 from master_agent.execution_context import (
     build_execution_context,
@@ -55,6 +64,7 @@ from master_agent.governance import EnvironmentKind, GovernanceProfile
 from master_agent.http import HttpTransport
 from master_agent.identity import IdentityRegistry
 from master_agent.models import (
+    ActionState,
     AgentAction,
     Approval,
     AuthoritySource,
@@ -181,6 +191,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 approval_authorities=args.approval_authorities,
                 output=args.output,
                 ttl_minutes=args.ttl_minutes,
+            )
+        if args.command == "inspect-approval-request":
+            return _inspect_approval_request(args.request)
+        if args.command == "approve-request":
+            return _approve_request(
+                request_path=args.request,
+                key_id=args.key_id,
+                expected_fingerprint=args.expected_fingerprint,
+                output=args.output,
+                ttl_minutes=args.ttl_minutes,
+            )
+        if args.command == "resume-approval":
+            return _resume_approval(
+                request_path=args.request,
+                expected_fingerprint=args.expected_fingerprint,
+                approval_paths=args.approval,
             )
         if args.command == "run":
             return _run(
@@ -441,6 +467,36 @@ def _build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--approval-authorities", type=Path, required=True)
     approve.add_argument("--output", type=Path, required=True)
     approve.add_argument("--ttl-minutes", type=int, default=30)
+
+    inspect_approval = subparsers.add_parser(
+        "inspect-approval-request",
+        help="inspect an exact private approval handoff",
+    )
+    inspect_approval.add_argument("request", type=Path)
+
+    approve_request = subparsers.add_parser(
+        "approve-request",
+        help="sign every pending action in an inspected approval handoff",
+    )
+    approve_request.add_argument("request", type=Path)
+    approve_request.add_argument("--key-id", required=True)
+    approve_request.add_argument("--expected-fingerprint", required=True)
+    approve_request.add_argument("--output", type=Path, required=True)
+    approve_request.add_argument("--ttl-minutes", type=int, default=30)
+
+    resume_approval = subparsers.add_parser(
+        "resume-approval",
+        help="resume an exact bound run with authenticated approval artifacts",
+    )
+    resume_approval.add_argument("request", type=Path)
+    resume_approval.add_argument("--expected-fingerprint", required=True)
+    resume_approval.add_argument(
+        "--approval",
+        type=Path,
+        action="append",
+        required=True,
+        help="authenticated approval artifact; repeat for dual approval",
+    )
 
     run = subparsers.add_parser("run", help="evaluate or apply a plan")
     run.add_argument("plan", type=Path)
@@ -846,6 +902,15 @@ def _bind_context(
         governance_path=governance_path,
     )
     governance = GovernanceProfile.from_toml(configuration_sources["governance"])
+    if approval_authorities is None and _plan_requires_authenticated_approval(
+        plan,
+        policy_source=configuration_sources["policy"],
+        governance=governance,
+    ):
+        raise ConfigurationError(
+            "approval-required plans must bind --approval-authorities before "
+            "the approval handoff can be prepared"
+        )
     credential_store = _load_credential_store(
         credentials_file,
         integrations=integrations,
@@ -944,6 +1009,138 @@ def _approve(
     return 0
 
 
+def _inspect_approval_request(path: Path) -> int:
+    """Render the complete secret-free review surface for one handoff."""
+
+    request = load_approval_request(path)
+    plan = _load_plan(Path(request.run.plan_path))
+    request.validate_plan(plan)
+    print(f"goal: {request.goal}")
+    print(f"plan fingerprint: {request.plan_fingerprint}")
+    print(f"request fingerprint: {request.fingerprint}")
+    print("execution context:")
+    print(json.dumps(request.execution_context.to_dict(), indent=2, ensure_ascii=True))
+    print("captured non-secret run:")
+    print(json.dumps(request.run.to_dict(), indent=2, ensure_ascii=True))
+    print("pending approval actions:")
+    for item in request.required_approvals:
+        print(f"  {item.action.action_id}  {item.reason}")
+        print(json.dumps(item.action.to_dict(), indent=4, ensure_ascii=True))
+    print(
+        "This request is not approval. A trusted operator must use "
+        "approve-request with the fingerprint shown above."
+    )
+    return 0
+
+
+def _approve_request(
+    *,
+    request_path: Path,
+    key_id: str,
+    expected_fingerprint: str,
+    output: Path,
+    ttl_minutes: int,
+) -> int:
+    """Sign the pending actions in an already-inspected private handoff."""
+
+    if ttl_minutes <= 0:
+        raise ValueError("ttl-minutes must be positive")
+    request = load_approval_request(request_path)
+    if expected_fingerprint != request.fingerprint:
+        raise ValueError(
+            "approval request fingerprint does not match --expected-fingerprint; "
+            "inspect the current request before approving"
+        )
+    plan = _load_plan(Path(request.run.plan_path))
+    request.validate_plan(plan)
+    authority_path = Path(request.run.approval_authorities)
+    authority_source = resolve_config_source(
+        authority_path,
+        "approval-authorities.toml",
+    )
+    runtime = request.execution_context.runtime
+    if runtime is None:  # pragma: no cover - ApprovalRequest invariant.
+        raise ValidationError("approval request is missing its bound runtime")
+    expected_digest = next(
+        (
+            item.sha256
+            for item in runtime.configurations
+            if item.name == "approval_authorities"
+        ),
+        None,
+    )
+    with authority_source.open("rb") as handle:
+        observed_digest = hashlib.sha256(handle.read()).hexdigest()
+    if expected_digest != observed_digest:
+        raise ConfigurationError(
+            "approval-authorities configuration differs from the bound plan"
+        )
+    authenticator = HmacApprovalAuthenticator.from_toml_for_key(
+        authority_source,
+        key_id=key_id,
+        environ=os.environ,
+    )
+    issued_at = datetime.now(UTC)
+    approval = authenticator.issue(
+        plan=plan,
+        approved_action_ids=request.action_ids,
+        key_id=key_id,
+        issued_at=issued_at,
+        expires_at=issued_at + timedelta(minutes=ttl_minutes),
+    )
+    write_restricted_json(output, approval.to_dict())
+    print(f"wrote {output}")
+    print(f"approval ID: {approval.approval_id}")
+    print(f"plan fingerprint: {approval.plan_fingerprint}")
+    print(f"expires: {approval.expires_at.isoformat()}")
+    return 0
+
+
+def _resume_approval(
+    *,
+    request_path: Path,
+    expected_fingerprint: str,
+    approval_paths: Sequence[Path],
+) -> int:
+    """Retry the exact captured invocation with supplied approval artifacts."""
+
+    request = load_approval_request(request_path)
+    if expected_fingerprint != request.fingerprint:
+        raise ValueError(
+            "approval request fingerprint does not match --expected-fingerprint; "
+            "inspect the current request before resuming"
+        )
+    plan = _load_plan(Path(request.run.plan_path))
+    request.validate_plan(plan)
+    invocation = request.run.with_approvals(approval_paths)
+    return _run(
+        plan_path=Path(invocation.plan_path),
+        apply=True,
+        approval_paths=[Path(path) for path in invocation.approval_paths],
+        approval_authorities=Path(invocation.approval_authorities),
+        database=Path(invocation.database),
+        connector_mode=invocation.connector_mode,
+        integrations_path=_optional_path(invocation.integrations),
+        result_json=_optional_path(invocation.result_json),
+        retention_path=_optional_path(invocation.retention),
+        evidence_type=invocation.evidence_type,
+        identities_path=_optional_path(invocation.identities),
+        include_writes=invocation.include_writes,
+        include_communications=invocation.include_communications,
+        workspace_root=_optional_path(invocation.workspace_root),
+        draft_output_dir=Path(invocation.draft_output_dir),
+        capabilities_path=_optional_path(invocation.capabilities),
+        governance_path=_optional_path(invocation.governance),
+        policy_path=_optional_path(invocation.policy),
+        sources_of_truth_path=_optional_path(invocation.sources_of_truth),
+        plugin_names=list(invocation.plugin_names),
+        plugin_lock_path=_optional_path(invocation.plugin_lock),
+        credentials_file=_optional_path(invocation.credentials_file),
+        credential_mappings=invocation.credential_mappings,
+        connector_urls=invocation.connector_urls,
+    )
+
+
 def _run(
     *,
     plan_path: Path,
@@ -1010,7 +1207,7 @@ def _run(
         # A policy-only dry run must not resolve credentials or construct live
         # clients. This makes plan review safe on unconfigured machines.
         connectors = ConnectorRegistry()
-        if approval_authorities is not None:
+        if approval_authorities is not None and approvals:
             approval_authenticator = HmacApprovalAuthenticator.from_toml(
                 configuration_sources["approval_authorities"],
                 environ=os.environ,
@@ -1187,7 +1384,7 @@ def _run(
                 )
             )
 
-        if approval_authorities is not None:
+        if approval_authorities is not None and approvals:
             approval_authenticator = HmacApprovalAuthenticator.from_toml(
                 configuration_sources["approval_authorities"],
                 environ=execution_environ,
@@ -1292,14 +1489,74 @@ def _run(
         finally:
             applied_audit.close()
 
-        if result_json is not None:
+        pending_approvals = tuple(
+            (item.action_id, item.message)
+            for item in report.actions
+            if item.state is ActionState.APPROVAL_REQUIRED
+        )
+        if result_json is not None and not pending_approvals:
             if result_reservation is None:  # pragma: no cover - branch invariant.
                 raise ConfigurationError("applied result path was not reserved")
             evidence, sidecar = result_reservation.commit(report.to_dict())
+        approval_request_path: Path | None = None
+        approval_request: ApprovalRequest | None = None
+        if pending_approvals:
+            if approval_authorities is None:
+                raise ConfigurationError(
+                    "approval is required, but the plan has no resumable approval "
+                    "authority binding; rebind with --approval-authorities"
+                )
+            invocation = ApprovalRunInvocation.capture(
+                plan_path=plan_path,
+                approval_paths=approval_paths,
+                approval_authorities=approval_authorities,
+                database=database,
+                connector_mode=connector_mode,
+                integrations=integrations_path,
+                result_json=result_json,
+                retention=retention_path,
+                evidence_type=evidence_type,
+                identities=identities_path,
+                include_writes=include_writes,
+                include_communications=include_communications,
+                workspace_root=workspace_root,
+                draft_output_dir=draft_output_dir,
+                capabilities=capabilities_path,
+                governance=governance_path,
+                policy=policy_path,
+                sources_of_truth=sources_of_truth_path,
+                plugin_names=plugin_names,
+                plugin_lock=plugin_lock_path,
+                credentials_file=credentials_file,
+                credential_mappings=credential_mappings,
+                connector_urls=connector_urls,
+            )
+            approval_request = ApprovalRequest.build(
+                plan=plan,
+                run=invocation,
+                pending=pending_approvals,
+            )
+            approval_request_path = publish_approval_request(
+                artifact_directory,
+                approval_request,
+            )
         _print_report(report)
-        if result_json is not None:
+        if result_json is not None and not pending_approvals:
             print(f"full result written to {evidence}")
             print(f"retention sidecar written to {sidecar}")
+        elif result_json is not None:
+            print(
+                "full result remains reserved for the approval-complete resume at "
+                f"{result_json}"
+            )
+        if approval_request_path is not None and approval_request is not None:
+            print(f"approval request: {approval_request_path}")
+            print(f"request fingerprint: {approval_request.fingerprint}")
+            print(
+                "pending actions were not executed; a trusted operator must use "
+                "inspect-approval-request and approve-request, then MasterAgent "
+                "can resume-approval without rebuilding this run"
+            )
         return 0 if report.successful else 2
 
 
@@ -2770,6 +3027,29 @@ def _mock_registry() -> ConnectorRegistry:
     return registry
 
 
+def _plan_requires_authenticated_approval(
+    plan: ChangePlan,
+    *,
+    policy_source: ConfigSource,
+    governance: GovernanceProfile,
+) -> bool:
+    """Return whether any otherwise-governed action needs human approval."""
+
+    engine = PolicyEngine(PolicyConfig.from_toml(policy_source))
+    for action in plan.actions:
+        governed, _ = governance.validate_action(action)
+        if not governed:
+            continue
+        decision = engine.evaluate(
+            plan,
+            action,
+            minimum_distinct_approvers=governance.minimum_approvers(action.capability),
+        )
+        if decision.approval_required:
+            return True
+    return False
+
+
 def _execution_configuration_sources(
     *,
     approval_authorities: Path | None,
@@ -2882,6 +3162,10 @@ def _load_plan(path: Path) -> ChangePlan:
 
 def _load_approval(path: Path) -> Approval:
     return Approval.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _optional_path(value: str | None) -> Path | None:
+    return Path(value) if value is not None else None
 
 
 def _write_json(

@@ -11,6 +11,9 @@ or filesystem side effects.
 | `inspect` | Validate and display a plan and fingerprint | Read-only local inspection |
 | `bind-context` | Bind reviewed config, paths, connector identities, and gates into a plan | Writes the bound plan; live GitHub binding performs `GET /user`, while other supported identities are derived without provider mutation |
 | `approve` | Sign selected action IDs for an exact plan fingerprint | Writes a local approval artifact; performs no provider request |
+| `inspect-approval-request` | Review the exact actions, runtime context, and fingerprint in a private approval request | Read-only local inspection; requires a mode-`0600` request beneath a private directory |
+| `approve-request` | Sign every pending action in an inspected approval request | Creates one mode-`0600` approval artifact; performs no provider request and never overwrites an existing file |
+| `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector, target, credential, path, or gate arguments |
 | `run` | Evaluate a plan or execute an approved, manifest-bound plan | No provider side effect without `--apply`; live apply is governed by every catalog, policy, approval, connector, and runtime gate |
 | `plugins` | Inventory connector entry-point metadata without importing plugin code | Optional local JSON output; never executes plugin code |
 | `readiness` | Validate governance, configuration, OAuth, permissions, and implemented production adapters | Offline; optional local JSON output |
@@ -50,6 +53,40 @@ selected connectors may be overridden; unsafe origins, embedded credentials,
 duplicates, nondefault ports, and Data Center targets fail before credential
 loading or network access. Bind and apply must receive the same override
 because the normalized target is part of the execution context.
+
+An approval-required plan must include `--approval-authorities` during
+`bind-context`; adding a trust configuration after review would change the
+bound runtime and cannot produce a usable approval. An applied `run` that stops
+at `approval_required` writes a deterministic, create-only approval request in
+the already approved `--draft-output-dir`. The mode-`0600` request includes the
+exact pending action manifests and every non-secret argument needed to resume,
+but contains no credential or approval-secret values and grants no authority.
+When `--result-json` is bound, its create-only output remains uncommitted while
+approval is pending and is written by the approval-complete resume.
+
+Use the request fingerprint printed by `run` for the handoff:
+
+```bash
+master-agent inspect-approval-request /private/drafts/approval-request-....json
+
+# Run by a trusted operator with access to the configured approval authority.
+master-agent approve-request /private/drafts/approval-request-....json \
+  --key-id rory \
+  --expected-fingerprint REQUEST_FINGERPRINT \
+  --output /private/approvals/approval-rory.json
+
+# MasterAgent can resume without reconstructing the original apply arguments.
+master-agent resume-approval /private/drafts/approval-request-....json \
+  --expected-fingerprint REQUEST_FINGERPRINT \
+  --approval /private/approvals/approval-rory.json
+```
+
+For dual approval, repeat `approve-request` with a distinct configured human
+identity. If only one valid approval is supplied, `resume-approval` creates a
+new request that carries the first approval path forward; supply the second
+artifact to that new request. Changed request bytes, a changed referenced plan
+or authority configuration, unsafe permissions, symlinks, or an apply-time
+context mismatch fail before the pending provider action executes.
 
 `connect` accepts a comma-separated `--systems` selection from Jira,
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,

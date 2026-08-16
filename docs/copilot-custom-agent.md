@@ -158,7 +158,16 @@ An explicit request to create, update, send, publish, push, or merge is not
 followed by redundant conversational permission prompts. MasterAgent prepares
 and validates the exact outcome automatically. If policy requires
 authenticated exact-plan approval that the agent cannot create, it asks once
-at that final unavoidable boundary. It never self-signs or bypasses approval.
+at that final unavoidable boundary. Before binding, it includes the private
+operator-controlled approval-authority configuration so the plan remains
+resumable. The blocked run emits a mode-`0600` request under its approved
+artifact root; MasterAgent uses `inspect-approval-request` to summarize that
+one exact effect. A trusted operator creates the authenticated artifact with
+`approve-request`, never the agent. Once supplied, MasterAgent calls
+`resume-approval`, which restores the original connector URLs, credential
+mappings, paths, gates, and any partial dual approval without rebuilding the
+apply command. A chat response is direction, not authenticated approval, and
+the agent never self-signs or bypasses approval.
 
 ## If automatic setup is blocked
 

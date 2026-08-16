@@ -137,6 +137,16 @@ The orchestrator:
 
 There is no claim of an atomic transaction across external systems. Partial results are explicit.
 
+When policy returns `approval_required`, the CLI publishes a mode-`0600`,
+create-only request inside the already pinned artifact root. The request copies
+the exact pending action manifests and captures the complete non-secret run
+selection. It is not an authorization input. `approve-request` checks the
+request fingerprint, referenced plan, and bound authority digest before
+issuing the existing authenticated exact-plan approval; `resume-approval`
+replays the captured arguments through the normal execution-context gates.
+This closes the usability gap without letting chat text, an edited request, or
+the agent create authority.
+
 ### Audit
 
 The SQLite audit log is tamper-evident through a hash chain. Default audit summaries exclude document/message bodies and secret values. Full evidence is written only through an explicit output/retention path.

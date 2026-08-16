@@ -14,6 +14,12 @@
   across Jira and Confluence through connection probes and governed bind/apply
   runs without rewriting private token files.
 
+- Add a resumable authenticated-approval handoff. Approval-required plans now
+  bind their trust configuration up front, emit private create-only review
+  requests, support exact-request signing with `approve-request`, carry partial
+  dual approvals forward, and continue through `resume-approval` without
+  reconstructing provider targets, credentials, paths, or gates.
+
 ## 1.0.0 — Governed enterprise-agent runtime
 
 ### Added

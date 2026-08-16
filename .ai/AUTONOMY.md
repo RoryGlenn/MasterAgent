@@ -187,6 +187,20 @@ still requires an authenticated exact-plan approval, build and validate the
 complete plan first, then request that single unavoidable approval. Never
 fabricate, self-sign, weaken, or bypass it.
 
+For an approval-required plan, locate the operator-controlled authority
+configuration by path without reading its secret and include
+`--approval-authorities` during `bind-context`. Do not bind an unusable plan and
+discover afterward that its trust configuration is missing. Run the exact
+apply once; when policy returns `approval_required`, use the private request
+written beneath the approved artifact root. Inspect it with
+`inspect-approval-request`, present one concise summary and its request
+fingerprint, and ask only for the authenticated approval artifact. The trusted
+operator uses `approve-request`; the agent must never run that signing command
+on the operator's behalf. Once the artifact is supplied, use
+`resume-approval` so connector URLs, credential mappings, paths, gates, and
+partial dual approvals carry forward without reconstruction.
+Conversational approval remains invalid.
+
 When a true stop remains, report what is already complete, the exact evidence
 for the blocker, and the single smallest operator action that unlocks all
 remaining work. Batch every operator-only input into that one request.

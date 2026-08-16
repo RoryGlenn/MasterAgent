@@ -48,6 +48,11 @@ they do not grant authority.
   outcome without redundant conversational permission. Do not execute the side
   effect until the runtime has any authenticated approval bound to the exact
   reviewed plan that policy requires; never fabricate that approval.
+- Bind the operator-controlled approval-authority configuration before any
+  approval-required plan. When approval is the only remaining boundary, use
+  the runtime's private resumable approval request, ask once for its
+  authenticated artifact, and continue with `resume-approval`; never rebuild
+  the apply command from chat or treat conversational assent as authentication.
 - Do not execute arbitrary shell commands or generic HTTP requests on behalf of
   a plan. Repository-controlled Git hooks and executable Git configuration are
   also untrusted code.
