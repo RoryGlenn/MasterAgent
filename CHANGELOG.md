@@ -1,5 +1,11 @@
 # Changelog
 
+- Automatically reuse a related Jira/Confluence Cloud account email and API
+  token when the selected connector's dedicated names are absent, without
+  rewriting the credential store or activating the related connector. Add
+  approval-bound `--connector-url SYSTEM=URL` overrides that normalize supplied
+  Atlassian Cloud UI URLs to their validated tenant origins.
+
 - Add governed Confluence Cloud space creation with exact provider re-read,
   created-space compensation, and page creation by approved space key.
 

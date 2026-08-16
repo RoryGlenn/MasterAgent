@@ -278,9 +278,24 @@ master-agent connect \
 
 `connect` accepts the canonical credential store or a strict provider-keyed
 wrapper, probes fixed read-only endpoints, writes private output mode `0600`,
-and changes neither the credential file nor persistent configuration. An
-Atlassian connector needs the organization's reviewed base URL through
-`--integrations`; the packaged placeholder is rejected before network access.
+and changes neither the credential file nor persistent configuration. For Jira
+or Confluence Cloud, an operator-supplied page or site URL can replace the
+packaged placeholder in memory:
+
+```bash
+master-agent connect \
+  --systems confluence \
+  --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+The URL is normalized to the validated tenant origin. Use the same repeatable
+argument with `bind-context` and `run --apply`; the destination is bound to the
+reviewed execution context. Data Center deployments still require an explicit
+reviewed integrations file. For Cloud Basic authentication, missing Jira or
+Confluence credential names automatically fall back in memory to the other
+product's Atlassian email/API-token pair. Explicit selected-product names win,
+the other connector remains inactive, and the probe determines actual access.
 The agent should continue the requested feature after the probe succeeds.
 
 For “show the public repositories under GitHub user `USERNAME`” or a request

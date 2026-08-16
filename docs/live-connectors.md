@@ -35,10 +35,14 @@ retention rules permit persistence.
 when operator-requested access requires authentication. It enables only the
 selected supported read connectors in memory, accepts canonical or strictly
 mapped provider-keyed local credentials, runs each connector's fixed probe,
-and persists no connector or credential changes. It is not a prerequisite for
-the anonymous GitHub public-user repository list. It is not a generic HTTP
-surface and does not execute a feature action; the agent continues through the
-typed capability that produces the requested outcome.
+and persists no connector or credential changes. Selected Jira/Confluence
+Cloud Basic-auth connectors may reuse the other product's configured Atlassian
+account pair in memory when their own names are absent. `--connector-url`
+normalizes an operator-supplied Atlassian UI URL to the selected tenant origin;
+bind/apply include that origin in the execution context. It is not a
+prerequisite for the anonymous GitHub public-user repository list. It is not a
+generic HTTP surface and does not execute a feature action; the agent continues
+through the typed capability that produces the requested outcome.
 
 ## Mutation connectors
 

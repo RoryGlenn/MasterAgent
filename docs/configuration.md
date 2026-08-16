@@ -139,15 +139,33 @@ This does not edit `integrations.toml`, the credential file, or any mutation or
 communication gate. Explicit credential-file values win over ambient values for the names in
 that file. The optional report is mode `0600` and contains only redacted
 discovery metadata. Jira and Confluence packaged URLs are deliberate
-placeholders; select the organization's permission-checked integrations file
-before connecting either system. Placeholder URLs fail before credentials are
-loaded or a network request is made.
+placeholders. For an operator-requested Atlassian Cloud connection, pass the
+Jira or Confluence page/site URL without editing configuration:
+
+```bash
+master-agent connect \
+  --systems confluence \
+  --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+`connect` normalizes the URL to `https://tenant.atlassian.net`, rejects any
+non-HTTPS, credential-bearing, non-Atlassian, duplicate, or unselected target,
+and uses the override only in memory. `bind-context` and applied `run` accept
+the same repeatable `--connector-url SYSTEM=URL` argument; the normalized
+destination and connector identity are approval-bound. Data Center context
+roots still require the organization's permission-checked integrations file.
 
 `connect`, `bind-context`, and applied `run` accept
 `--credential-map FILE_KEY=DECLARED_NAME` to select and rename fields from a
 canonical multi-provider store for one invocation. This supports, for example,
 explicitly reusing one Atlassian email and API token for both Jira and
 Confluence without loading unrelated credentials or rewriting the store.
+For selected Jira and Confluence Cloud connectors using Basic authentication,
+that same-account fallback is automatic when the selected connector's own
+names are absent. Explicit selected-connector credentials always win. The
+related connector is not activated, and only the provider probe determines
+whether that Atlassian account has access to the target product and site.
 
 Microsoft runtime systems share one connector configuration. `connect` selects
 delegated token-file, delegated environment-token, or application
@@ -354,7 +372,8 @@ possible declared destinations. After the operator identifies the meaning, the
 agent can retry `connect` with
 `--credential-map FILE_KEY=DECLARED_NAME` without rewriting the token file.
 
-Only providers selected by `--systems` and fields mapped by the selected
-integration configuration are accepted. Unknown or duplicate mappings, loose
-permissions, symlinks, and ambiguous shapes fail closed. The file is never
-rewritten.
+Only providers selected by `--systems`, plus the related Jira/Confluence Cloud
+credential labels described above, are accepted. Related labels supply only
+the selected connector and never activate their own connector. Unknown or
+duplicate mappings, loose permissions, symlinks, and ambiguous shapes fail
+closed. The file is never rewritten.

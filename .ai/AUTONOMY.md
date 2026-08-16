@@ -118,9 +118,21 @@ a provider-keyed wrapper, exact declared environment names, or flat friendly
 keys whose provider and field have one clear interpretation. If a key has zero
 or multiple interpretations, ask the operator once what that key represents,
 then retry with `--credential-map FILE_KEY=DECLARED_NAME`. Infer only from key
-names, never secret values, and do not rewrite the credential file. Atlassian
-connections still require the organization's real reviewed base URL;
-placeholder endpoints fail before credentials or network access.
+names, never secret values, and do not rewrite the credential file. For a
+selected Jira or Confluence Cloud Basic-auth connector, a missing provider-
+specific email or API-token name automatically falls back in memory to the
+other connector's configured Atlassian account pair. An explicit credential
+for the selected connector wins, the related connector stays inactive, and the
+fixed provider probe decides whether the account actually has access.
+
+When the operator supplies a Jira or Confluence Cloud URL, pass it directly as
+`--connector-url SYSTEM=URL`. The runtime normalizes a page or UI URL to its
+validated `atlassian.net` tenant origin without editing persistent
+configuration. Use the same argument for `bind-context` and `run --apply`; the
+normalized destination is approval-bound. Do not stop at the packaged
+placeholder or ask for a dedicated Confluence credential before attempting
+this governed path. Data Center context roots still require an explicit
+reviewed integrations file.
 
 Never rewrite a credential merely to change its JSON wrapper. Never print,
 summarize, copy, or persist a credential value. A private connection report is

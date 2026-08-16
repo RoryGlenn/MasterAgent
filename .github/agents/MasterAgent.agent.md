@@ -134,7 +134,16 @@ intermediate success.
 For any supported connector, use `.venv/bin/master-agent connect --systems`
 with the exact requested systems. It performs minimum in-memory enablement,
 strict compatible credential loading, and fixed safe probes without persistent
-configuration changes. Then continue the requested feature. For GitHub
+configuration changes. For Jira and Confluence Cloud, pass an operator-supplied
+page or site URL as `--connector-url SYSTEM=URL`; reuse that argument when
+binding and applying a plan. The runtime normalizes and approval-binds the
+Atlassian tenant. If the selected connector lacks its own credential names but
+the restricted store contains the related Jira or Confluence email/API-token
+pair, let the runtime try that pair in memory.
+Do not ask for renamed or duplicate credentials first; only an actual
+provider authentication or permission failure may establish that the pair is
+unusable. Then continue the
+requested feature. For GitHub
 repository discovery, use `.venv/bin/master-agent github-repositories`. When
 the operator names a GitHub user or supplies a public profile URL, extract
 the username and pass `--username USERNAME`; this path reads only public

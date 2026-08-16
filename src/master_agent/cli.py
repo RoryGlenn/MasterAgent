@@ -13,6 +13,7 @@ from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from master_agent.approvals import HmacApprovalAuthenticator
@@ -22,7 +23,7 @@ from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
-from master_agent.config import IntegrationConfig
+from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
 from master_agent.config_sources import ConfigSource, resolve_config_source
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.factory import (
@@ -168,6 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 governance_path=args.governance,
                 credentials_file=args.credentials_file,
                 credential_mappings=args.credential_map,
+                connector_urls=args.connector_url,
                 output=args.output,
             )
         if args.command == "approve":
@@ -205,6 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugin_lock_path=args.plugin_lock,
                 credentials_file=args.credentials_file,
                 credential_mappings=args.credential_map,
+                connector_urls=args.connector_url,
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
@@ -264,6 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 governance_path=args.governance,
                 credentials_file=args.credentials_file,
                 credential_mappings=tuple(args.credential_map),
+                connector_urls=tuple(args.connector_url),
                 systems=_parse_systems(args.systems) or set(),
                 output=args.output,
             )
@@ -407,6 +411,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="select or rename a private credential field for this invocation",
     )
     bind_context.add_argument(
+        "--connector-url",
+        action="append",
+        default=[],
+        metavar="SYSTEM=URL",
+        help="use an operator-supplied Atlassian Cloud URL for this invocation",
+    )
+    bind_context.add_argument(
         "--plugin",
         action="append",
         default=[],
@@ -489,6 +500,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="FILE_KEY=DECLARED_NAME",
         help="select or rename a private credential field for this invocation",
+    )
+    run.add_argument(
+        "--connector-url",
+        action="append",
+        default=[],
+        metavar="SYSTEM=URL",
+        help="use an operator-supplied Atlassian Cloud URL for this invocation",
     )
     run.add_argument("--policy", type=Path, default=None)
     run.add_argument("--sources-of-truth", type=Path, default=None)
@@ -605,6 +623,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "resolve an ambiguous flat credential key for this invocation "
             "without rewriting the credential file"
         ),
+    )
+    connect.add_argument(
+        "--connector-url",
+        action="append",
+        default=[],
+        metavar="SYSTEM=URL",
+        help="normalize an operator-supplied Atlassian Cloud URL in memory",
     )
     connect.add_argument("--systems", required=True)
     connect.add_argument("--output", type=Path)
@@ -797,12 +822,20 @@ def _bind_context(
     credentials_file: Path | None,
     output: Path,
     credential_mappings: Sequence[str] = (),
+    connector_urls: Sequence[str] = (),
 ) -> int:
     """Write a plan whose fingerprint covers the complete applied runtime."""
 
     plan = _load_plan(plan_path)
     integrations_source = resolve_config_source(integrations_path, "integrations.toml")
     integrations = IntegrationConfig.from_toml(integrations_source)
+    live_systems = _live_systems_for_plan(plan, integrations)
+    configurations = _configuration_names_for_systems(live_systems)
+    integrations = _with_connector_url_overrides(
+        integrations,
+        connector_urls,
+        selected_configurations=configurations,
+    )
     configuration_sources = _execution_configuration_sources(
         approval_authorities=approval_authorities,
         retention_path=retention_path,
@@ -819,9 +852,16 @@ def _bind_context(
         governance=governance,
         connector_mode=connector_mode,
         credential_mappings=credential_mappings,
+        systems=live_systems,
     )
-    execution_environ = _credential_environment(credential_store, os.environ)
-    live_systems = _live_systems_for_plan(plan, integrations)
+    execution_environ = _credential_environment(
+        credential_store,
+        os.environ,
+        compatible_names=_atlassian_credential_compatibility(
+            integrations,
+            configurations=configurations,
+        ),
+    )
     plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
     descriptors = (
         resolve_locked_plugin_descriptors(
@@ -929,6 +969,7 @@ def _run(
     plugin_lock_path: Path | None,
     credentials_file: Path | None,
     credential_mappings: Sequence[str] = (),
+    connector_urls: Sequence[str] = (),
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -947,6 +988,8 @@ def _run(
         raise ValueError("--credentials-file requires --apply")
     if not apply and credential_mappings:
         raise ValueError("--credential-map requires --apply and --credentials-file")
+    if not apply and connector_urls:
+        raise ValueError("--connector-url requires --apply")
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
     if approvals and approval_authorities is None:
@@ -1004,6 +1047,13 @@ def _run(
             integrations_path, "integrations.toml"
         )
         integration_config = IntegrationConfig.from_toml(integrations_source)
+        live_systems = _live_systems_for_plan(plan, integration_config)
+        configurations = _configuration_names_for_systems(live_systems)
+        integration_config = _with_connector_url_overrides(
+            integration_config,
+            connector_urls,
+            selected_configurations=configurations,
+        )
         approved_context = plan.execution_context
         if approved_context is None or approved_context.runtime is None:
             raise ConfigurationError(
@@ -1019,9 +1069,17 @@ def _run(
             governance=governance,
             connector_mode=connector_mode,
             credential_mappings=credential_mappings,
+            systems=live_systems,
         )
-        execution_environ = _credential_environment(credential_store, os.environ)
-        live_systems = _live_systems_for_plan(plan, integration_config)
+        compatibility = _atlassian_credential_compatibility(
+            integration_config,
+            configurations=configurations,
+        )
+        execution_environ = _credential_environment(
+            credential_store,
+            os.environ,
+            compatible_names=compatibility,
+        )
         approved_path_bindings = (
             *approved_context.runtime.runtime_paths,
             *approved_context.runtime.publication_roots,
@@ -1170,10 +1228,18 @@ def _run(
             capabilities_path=capabilities_path,
             governance_path=governance_path,
         )
-        current_integrations = IntegrationConfig.from_toml(
-            resolve_config_source(integrations_path, "integrations.toml")
+        current_integrations = _with_connector_url_overrides(
+            IntegrationConfig.from_toml(
+                resolve_config_source(integrations_path, "integrations.toml")
+            ),
+            connector_urls,
+            selected_configurations=configurations,
         )
-        current_environ = _credential_environment(credential_store, os.environ)
+        current_environ = _credential_environment(
+            credential_store,
+            os.environ,
+            compatible_names=compatibility,
+        )
         enforce_execution_context(
             plan,
             build_execution_context(
@@ -1275,6 +1341,7 @@ def _load_credential_store(
     governance: GovernanceProfile,
     connector_mode: str,
     credential_mappings: Sequence[str] = (),
+    systems: set[str] | None = None,
 ) -> CredentialStoreSnapshot | None:
     """Load an explicitly selected development-only connector credential store."""
 
@@ -1291,12 +1358,21 @@ def _load_credential_store(
             "--credentials-file is restricted to the development environment; "
             "use the approved secret manager for non-development execution"
         )
+    configurations = (
+        _configuration_names_for_systems(systems)
+        if systems is not None
+        else set(integrations.connectors)
+    )
+    alias_configurations = configurations | _related_atlassian_configurations(
+        integrations,
+        configurations=configurations,
+    )
     return CredentialStoreSnapshot.load_provider_compatible(
         path,
         allowed_names=integrations.credential_environment_variables(),
         aliases=_provider_credential_aliases(
             integrations,
-            configurations=set(integrations.connectors),
+            configurations=alias_configurations,
             systems=set(),
         ),
         explicit_mappings=_parse_credential_mappings(tuple(credential_mappings)),
@@ -1304,9 +1380,16 @@ def _load_credential_store(
 
 
 def _credential_environment(
-    store: CredentialStoreSnapshot | None, environ: Mapping[str, str]
+    store: CredentialStoreSnapshot | None,
+    environ: Mapping[str, str],
+    *,
+    compatible_names: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    return store.overlay(environ) if store is not None else dict(environ)
+    merged = store.overlay(environ) if store is not None else dict(environ)
+    for destination, source in (compatible_names or {}).items():
+        if not merged.get(destination) and merged.get(source):
+            merged[destination] = merged[source]
+    return merged
 
 
 def _enforce_approved_credential_file(
@@ -1344,6 +1427,7 @@ def _readiness(
         governance=governance,
         connector_mode="live",
     )
+    configurations = set(integrations.connectors)
     report = assess_readiness(
         catalog=CapabilityCatalog.from_toml(
             resolve_config_source(capabilities_path, "capabilities.toml")
@@ -1356,7 +1440,14 @@ def _readiness(
         identities=IdentityRegistry.from_toml(
             resolve_config_source(identities_path, "identities.toml")
         ),
-        environ=_credential_environment(credential_store, os.environ),
+        environ=_credential_environment(
+            credential_store,
+            os.environ,
+            compatible_names=_atlassian_credential_compatibility(
+                integrations,
+                configurations=configurations,
+            ),
+        ),
     )
     payload = report.to_dict()
     print(f"environment: {report.environment}")
@@ -1765,10 +1856,23 @@ def _discover(
         integrations=config,
         governance=governance,
         connector_mode="live",
+        systems=systems,
+    )
+    configurations = (
+        _configuration_names_for_systems(systems)
+        if systems is not None
+        else set(config.connectors)
     )
     records = discover_integrations(
         config,
-        environ=_credential_environment(credential_store, os.environ),
+        environ=_credential_environment(
+            credential_store,
+            os.environ,
+            compatible_names=_atlassian_credential_compatibility(
+                config,
+                configurations=configurations,
+            ),
+        ),
         probe=probe,
         systems=systems,
     )
@@ -1800,6 +1904,7 @@ def _connect(
     output: Path | None,
     transport: HttpTransport | None = None,
     credential_mappings: tuple[str, ...] = (),
+    connector_urls: tuple[str, ...] = (),
 ) -> int:
     """Verify requested read connectors through an ephemeral configuration."""
 
@@ -1822,7 +1927,12 @@ def _connect(
     governance = GovernanceProfile.from_toml(
         resolve_config_source(governance_path, "governance.toml")
     )
-    configurations = {_CONNECT_CONFIGURATION_BY_SYSTEM[system] for system in systems}
+    configurations = _configuration_names_for_systems(systems)
+    integrations = _with_connector_url_overrides(
+        integrations,
+        connector_urls,
+        selected_configurations=configurations,
+    )
     connectors = dict(integrations.connectors)
     for name in configurations:
         unresolved = integrations.connector(name)
@@ -1835,7 +1945,19 @@ def _connect(
         if name == "microsoft" and "onenote" in systems:
             extra["onenote_read_enabled"] = True
         connectors[name] = replace(unresolved, enabled=True, extra=extra)
-    effective = IntegrationConfig(connectors=connectors)
+    effective = IntegrationConfig(
+        connectors=connectors,
+        source_sha256=integrations.source_sha256,
+    )
+
+    related_configurations = _related_atlassian_configurations(
+        effective,
+        configurations=configurations,
+    )
+    credential_compatibility = _atlassian_credential_compatibility(
+        effective,
+        configurations=configurations,
+    )
 
     if credentials_file is not None:
         if governance.environment is not EnvironmentKind.DEVELOPMENT:
@@ -1848,7 +1970,7 @@ def _connect(
             allowed_names=effective.credential_environment_variables(),
             aliases=_provider_credential_aliases(
                 effective,
-                configurations=configurations,
+                configurations=configurations | related_configurations,
                 systems=systems,
             ),
             explicit_mappings=_parse_credential_mappings(credential_mappings),
@@ -1856,11 +1978,19 @@ def _connect(
         ambient = {
             name: value for name, value in os.environ.items() if name not in store.names
         }
-        environ = store.overlay(ambient)
+        environ = _credential_environment(
+            store,
+            ambient,
+            compatible_names=credential_compatibility,
+        )
     else:
         if credential_mappings:
             raise ConfigurationError("--credential-map requires --credentials-file")
-        environ = dict(os.environ)
+        environ = _credential_environment(
+            None,
+            os.environ,
+            compatible_names=credential_compatibility,
+        )
 
     if "microsoft" in configurations:
         microsoft = effective.connector("microsoft")
@@ -1946,6 +2076,157 @@ def _reject_output_aliases(output: Path | None, *inputs: Path | None) -> None:
             raise ConfigurationError(
                 "connection output must not replace credentials or configuration"
             )
+
+
+def _configuration_names_for_systems(systems: set[str]) -> set[str]:
+    """Return configured connector names backing the selected runtime systems."""
+
+    return {
+        _CONNECT_CONFIGURATION_BY_SYSTEM[system]
+        for system in systems
+        if system in _CONNECT_CONFIGURATION_BY_SYSTEM
+    }
+
+
+def _supports_shared_atlassian_credentials(connector: ConnectorConfig) -> bool:
+    """Return whether an Atlassian account email/API token can be attempted."""
+
+    return (
+        connector.system in {"jira", "confluence"}
+        and connector.deployment is DeploymentType.CLOUD
+        and connector.auth_mode is AuthMode.BASIC
+    )
+
+
+def _related_atlassian_configurations(
+    integrations: IntegrationConfig,
+    *,
+    configurations: set[str],
+) -> set[str]:
+    """Select related credential labels without activating their connectors."""
+
+    related: set[str] = set()
+    for target_name, source_name in (
+        ("jira", "confluence"),
+        ("confluence", "jira"),
+    ):
+        if target_name not in configurations:
+            continue
+        if not {target_name, source_name} <= set(integrations.connectors):
+            continue
+        target = integrations.connector(target_name)
+        source = integrations.connector(source_name)
+        if _supports_shared_atlassian_credentials(
+            target
+        ) and _supports_shared_atlassian_credentials(source):
+            related.add(source_name)
+    return related
+
+
+def _atlassian_credential_compatibility(
+    integrations: IntegrationConfig,
+    *,
+    configurations: set[str],
+) -> dict[str, str]:
+    """Map missing Jira/Confluence names to the related Atlassian account pair."""
+
+    compatible: dict[str, str] = {}
+    for target_name, source_name in (
+        ("jira", "confluence"),
+        ("confluence", "jira"),
+    ):
+        if target_name not in configurations:
+            continue
+        if not {target_name, source_name} <= set(integrations.connectors):
+            continue
+        target = integrations.connector(target_name)
+        source = integrations.connector(source_name)
+        if not (
+            _supports_shared_atlassian_credentials(target)
+            and _supports_shared_atlassian_credentials(source)
+        ):
+            continue
+        for destination, fallback in (
+            (target.username_env, source.username_env),
+            (target.secret_env, source.secret_env),
+        ):
+            if destination and fallback and destination != fallback:
+                compatible[destination] = fallback
+    return compatible
+
+
+def _with_connector_url_overrides(
+    integrations: IntegrationConfig,
+    values: Sequence[str],
+    *,
+    selected_configurations: set[str],
+) -> IntegrationConfig:
+    """Apply validated Atlassian Cloud tenant origins without editing config."""
+
+    if not values:
+        return integrations
+    overrides: dict[str, str] = {}
+    for value in values:
+        system, separator, raw_url = value.partition("=")
+        system = system.strip().casefold()
+        raw_url = raw_url.strip()
+        if not separator or not system or not raw_url:
+            raise ConfigurationError("--connector-url must use SYSTEM=URL")
+        if system not in {"jira", "confluence"}:
+            raise ConfigurationError(
+                "--connector-url currently supports Jira and Confluence Cloud only"
+            )
+        if system not in selected_configurations:
+            raise ConfigurationError(
+                "--connector-url names an unselected connector: " + system
+            )
+        if system in overrides:
+            raise ConfigurationError("--connector-url repeats connector: " + system)
+        connector = integrations.connector(system)
+        overrides[system] = _normalize_atlassian_cloud_url(connector, raw_url)
+
+    connectors = dict(integrations.connectors)
+    for system, base_url in overrides.items():
+        connectors[system] = replace(
+            connectors[system],
+            base_url=base_url,
+            base_url_env=None,
+        )
+    return IntegrationConfig(
+        connectors=connectors,
+        source_sha256=integrations.source_sha256,
+    )
+
+
+def _normalize_atlassian_cloud_url(
+    connector: ConnectorConfig,
+    value: str,
+) -> str:
+    """Normalize an Atlassian Cloud UI or API URL to its tenant origin."""
+
+    if connector.deployment is not DeploymentType.CLOUD:
+        raise ConfigurationError(
+            "--connector-url cannot infer an Atlassian Data Center context root"
+        )
+    if not value.isprintable():
+        raise ConfigurationError("--connector-url must contain printable characters")
+    parsed = urlsplit(value)
+    if parsed.scheme.casefold() != "https" or not parsed.hostname:
+        raise ConfigurationError("--connector-url requires an HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ConfigurationError("--connector-url must not contain credentials")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError("--connector-url has an invalid port") from error
+    if port not in {None, 443}:
+        raise ConfigurationError("--connector-url must use the HTTPS default port")
+    hostname = parsed.hostname.casefold().rstrip(".")
+    if not hostname.endswith(".atlassian.net") or hostname == "atlassian.net":
+        raise ConfigurationError(
+            "--connector-url Cloud target must be an atlassian.net tenant"
+        )
+    return f"https://{hostname}"
 
 
 def _provider_credential_aliases(
