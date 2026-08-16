@@ -10,6 +10,11 @@ Typed anonymous public-data capabilities require no credential activation.
 
 - The complete unit, integration-contract, and adversarial regression suite
   passes on Python 3.12, 3.13, and 3.14 in CI.
+- A separately protected, opt-in Confluence Cloud sandbox workflow supplements
+  those required scripted gates with a real page lifecycle, authenticated
+  approval resume, exact cleanup, bounded stale-page recovery, and an optional
+  independently gated disposable-space lifecycle. It never runs on pull-request
+  code and is not required when sandbox secrets are unavailable.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
 - All 82 typed capabilities have governance coverage; GitHub administration,

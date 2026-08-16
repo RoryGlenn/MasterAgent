@@ -15,7 +15,7 @@ non-routable.
 | 2B — Outlook/Teams/identity/citations/retention | Complete | Contract-tested; target deployment requires approved credentials |
 | 2C — authentication/readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
-| 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; local Git disabled | Provider-specific gates and approvals required |
+| 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; local Git disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
 | 6 — recurring autonomy | Registration/status only | Execution disabled pending exact target/config/runtime binding |
 

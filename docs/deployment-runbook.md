@@ -106,6 +106,13 @@ inspect and sign it from the trusted operator context, then use
 `resume-approval`. For dual approval, prove that one approval remains blocked
 and that the next request carries it forward before the second identity signs.
 
+For Confluence Cloud, the opt-in
+[sandbox workflow](confluence-sandbox-tests.md) automates this exact path on the
+default branch with an allowlisted non-production tenant, a least-privilege
+identity, authenticated ownership markers, always-run verified cleanup, and a
+separately protected optional space lifecycle. It supplements rather than
+replaces the scripted connector tests required on every pull request.
+
 Do not activate GitHub administration, Jira issue mutations, or SharePoint file
 replacement. Their typed adapters are intentionally catalog/governance-disabled
 until a provider-side compare-and-swap can be proven. A test resource and extra

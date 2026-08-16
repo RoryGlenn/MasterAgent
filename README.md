@@ -641,6 +641,7 @@ plugin code runs. See [`docs/plugin-development.md`](docs/plugin-development.md)
 ## Documentation
 
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
+- [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Semantic codebase index](docs/semantic-index.md)
 - [CLI reference](docs/cli-reference.md)
 - [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
