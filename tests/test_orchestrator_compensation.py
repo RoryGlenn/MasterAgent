@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
-from master_agent.audit import AuditLog
+from master_agent.audit import AuditLog, IdempotencyClaimState
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.errors import ConnectorError, PreEffectError
 from master_agent.models import (
@@ -156,6 +156,23 @@ class _VerificationRaisesConnector(_CompensatingTestConnector):
         raise ConnectorError("verification transport failed")
 
 
+class _CompensationVerificationFailsConnector(_CompensatingTestConnector):
+    """Simulate a provider race after the compensation request returns."""
+
+    def verify_compensation(
+        self,
+        action: AgentAction,
+        original: ExecutionResult,
+        compensation: ExecutionResult,
+    ) -> VerificationResult:
+        return VerificationResult(
+            action_id=action.action_id,
+            verified=False,
+            observed={"value": "provider changed after rollback"},
+            message="provider no longer matches the compensated state",
+        )
+
+
 class OrchestratorCompensationTests(unittest.TestCase):
     """Verify reverse-order, independently checked compensation."""
 
@@ -254,6 +271,45 @@ class OrchestratorCompensationTests(unittest.TestCase):
             self.assertIn("requires manual rollback", report.actions[0].message)
             self.assertEqual(connector.state["first"], "agent change")
             self.assertEqual(connector.compensation_calls, 0)
+
+    def test_failed_compensation_verification_preserves_idempotency_completion(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources_path = root / "sources.toml"
+            sources_path.write_text("", encoding="utf-8")
+            connector = _CompensationVerificationFailsConnector()
+            registry = ConnectorRegistry()
+            registry.register(connector)
+            first = _action("first", "agent change")
+            second = _action("fail", "never-written", dependencies=(first.action_id,))
+            plan = ChangePlan(
+                goal="Retain idempotency evidence until rollback is verified.",
+                actions=(first, second),
+                created_by="test",
+                compensate_on_failure=True,
+            )
+            orchestrator, approval, audit = _runtime(
+                root,
+                sources_path,
+                registry,
+                plan,
+            )
+
+            report = orchestrator.run(plan, approvals=(approval,), dry_run=False)
+
+            self.assertEqual(
+                report.actions[0].state,
+                ActionState.COMPENSATION_FAILED,
+            )
+            self.assertEqual(
+                audit.idempotency_outcome(
+                    first.idempotency_key,
+                    action_fingerprint=first.effect_fingerprint,
+                ),
+                IdempotencyClaimState.COMPLETED,
+            )
 
     def test_verification_exception_preserves_result_and_incident_first(self) -> None:
         with TemporaryDirectory() as directory:

@@ -643,6 +643,150 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
         self.assertEqual(writes[0]["version"]["number"], 5)
         self.assertEqual(writes[1]["version"]["number"], 6)
 
+    def test_created_page_compensation_requires_fresh_provider_not_found(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/pages"
+        item = "/wiki/api/v2/pages/42"
+        created = _confluence_page("Status", "<p>Approved</p>", 1)
+        transport.add_json("POST", collection, {"id": "42"}, status=201)
+        transport.add_json("GET", item, created)
+        transport.add_json("GET", item, created)
+        transport.add_bytes("GET", item, b"{}", status=404)
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _confluence_connector(transport)
+        action = _confluence_create_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+        compensation = connector.compensate(action, result)
+        request_count = len(transport.requests)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(verification.observed, {"id": "42", "exists": False})
+        self.assertEqual(len(transport.requests), request_count + 1)
+        self.assertIn("status=current", transport.requests[-1].url)
+        self.assertIn("status=trashed", transport.requests[-1].url)
+
+    def test_created_page_compensation_rejects_restored_page(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/pages"
+        item = "/wiki/api/v2/pages/42"
+        created = _confluence_page("Status", "<p>Approved</p>", 1)
+        transport.add_json("POST", collection, {"id": "42"}, status=201)
+        transport.add_json("GET", item, created)
+        transport.add_json("GET", item, created)
+        transport.add_json("GET", item, {"id": "42", "status": "current"})
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _confluence_connector(transport)
+        action = _confluence_create_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+        compensation = connector.compensate(action, result)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertFalse(verification.verified)
+        self.assertEqual(verification.observed["status"], "current")
+
+    def test_data_center_created_page_compensation_accepts_provider_trash(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        item = "/rest/api/content/42"
+        created = _data_center_confluence_page(
+            "Status",
+            "<p>Approved</p>",
+            1,
+        )
+        transport.add_json(
+            "GET",
+            "/rest/api/space/DC",
+            _data_center_confluence_space(),
+        )
+        transport.add_json("POST", "/rest/api/content", {"id": "42"}, status=201)
+        transport.add_json("GET", item, created)
+        transport.add_json("GET", item, created)
+        transport.add_json("GET", item, {"id": "42", "status": "trashed"})
+        transport.add_bytes("DELETE", item, b"", status=204)
+        connector = _data_center_confluence_connector(transport)
+        action = _data_center_confluence_create_action("<p>Approved</p>")
+
+        result = connector.execute(action)
+        compensation = connector.compensate(action, result)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(verification.observed["status"], "trashed")
+        self.assertIn("status=any", transport.requests[-1].url)
+
+    def test_update_compensation_verification_rejects_complete_state_races(
+        self,
+    ) -> None:
+        prior_body = "<p>Old</p>"
+        altered_pages = (
+            _confluence_page("Other title", prior_body, 6),
+            _confluence_page("Status", "<p>Other body</p>", 6),
+            _confluence_page(
+                "Status",
+                prior_body,
+                6,
+                representation="atlas_doc_format",
+            ),
+            _confluence_page("Status", prior_body, 7),
+            _confluence_page("Status", prior_body, 6, status="draft"),
+            _confluence_page("Status", prior_body, 6, space_id="OTHER"),
+            _confluence_page("Status", prior_body, 6, parent_id="OTHER"),
+        )
+        for altered in altered_pages:
+            with self.subTest(altered=altered):
+                transport = ScriptedTransport()
+                path = "/wiki/api/v2/pages/42"
+                old = _confluence_page("Status", prior_body, 4)
+                changed = _confluence_page("Status", "<p>New</p>", 5)
+                restored = _confluence_page("Status", prior_body, 6)
+                for payload in (old, changed, changed, changed, restored, altered):
+                    transport.add_json("GET", path, payload)
+                transport.add_json("PUT", path, {})
+                transport.add_json("PUT", path, {})
+                connector = _confluence_connector(transport)
+                action = _confluence_update_action("<p>New</p>")
+
+                result = connector.execute(action)
+                compensation = connector.compensate(action, result)
+                verification = connector.verify_compensation(
+                    action,
+                    result,
+                    compensation,
+                )
+
+                self.assertFalse(verification.verified)
+
+    def test_data_center_update_compensation_verifies_fresh_complete_state(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        path = "/rest/api/content/42"
+        old = _data_center_confluence_page("Status", "<p>Old</p>", 4)
+        changed = _data_center_confluence_page("Status", "<p>New</p>", 5)
+        restored = _data_center_confluence_page("Status", "<p>Old</p>", 6)
+        for payload in (old, changed, changed, changed, restored, restored):
+            transport.add_json("GET", path, payload)
+        transport.add_json("PUT", path, {})
+        transport.add_json("PUT", path, {})
+        connector = _data_center_confluence_connector(transport)
+        action = _confluence_update_action("<p>New</p>")
+
+        result = connector.execute(action)
+        compensation = connector.compensate(action, result)
+        request_count = len(transport.requests)
+        verification = connector.verify_compensation(action, result, compensation)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(len(transport.requests), request_count + 1)
+        self.assertIn("status=current", transport.requests[-1].url)
+        self.assertIn("ancestors", transport.requests[-1].url)
+
     def test_update_compensation_refuses_concurrent_human_change(self) -> None:
         transport = ScriptedTransport()
         path = "/wiki/api/v2/pages/42"

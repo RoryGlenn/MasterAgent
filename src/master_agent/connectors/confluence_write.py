@@ -190,9 +190,19 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 if self._config.deployment is DeploymentType.CLOUD
                 else f"rest/api/content/{quote_segment(page_id)}"
             )
+            status = _state_required_text(after, "status")
+            delete_query: dict[str, object] | None = None
+            if self._config.deployment is DeploymentType.CLOUD and status == "draft":
+                delete_query = {"draft": True}
+            elif (
+                self._config.deployment is DeploymentType.DATA_CENTER
+                and status != "current"
+            ):
+                delete_query = {"status": status}
             response = self._client.request_bytes(
                 "DELETE",
                 path,
+                query=delete_query,
                 safe_to_retry=False,
             )
             observed = {"id": page_id, "deleted": True}
@@ -267,20 +277,99 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 ),
             )
         if original.before is None:
-            verified = bool(observed.get("deleted"))
-        else:
-            prior = original.before
-            verified = observed.get("title") == prior.get("title") and observed.get(
-                "body"
-            ) == prior.get("body")
+            return self._verify_created_page_compensation(
+                action,
+                original,
+                compensation,
+            )
+
+        try:
+            expected = _captured_restore_poststate(
+                original,
+                compensation,
+                deployment=self._config.deployment,
+            )
+        except ConnectorError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message="Confluence rollback result omitted its captured poststate",
+            )
+        try:
+            observed = self._read_page(
+                str(expected["id"]),
+                representation=str(expected["representation"]),
+                status=str(expected["status"]),
+            )
+        except ConnectorError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message="Confluence restored page could not be independently verified",
+            )
+        verified = _page_matches(
+            compensation.after or {},
+            expected,
+        ) and _page_matches(observed, expected)
         return VerificationResult(
             action_id=action.action_id,
             verified=verified,
             observed=observed,
             message=(
-                "verified Confluence rollback"
+                "verified Confluence rollback by independent provider re-read"
                 if verified
-                else "Confluence rollback did not restore prior state"
+                else "Confluence rollback did not restore the complete prior state"
+            ),
+        )
+
+    def _verify_created_page_compensation(
+        self,
+        action: AgentAction,
+        original: ExecutionResult,
+        compensation: ExecutionResult,
+    ) -> VerificationResult:
+        """Prove a created page is absent or in the provider trash."""
+
+        try:
+            page_id = _state_required_identity(original.after or {}, "id")
+            compensation_page_id = _state_required_identity(
+                compensation.after or {},
+                "id",
+            )
+        except ConnectorError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message="Confluence page rollback has no stable provider ID",
+            )
+        if page_id != compensation_page_id:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message="Confluence page rollback referenced another provider ID",
+            )
+        try:
+            observed = self._read_page_lifecycle_state(page_id)
+        except ResourceNotFoundError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=True,
+                observed={"id": page_id, "exists": False},
+                message="verified Confluence page deletion by provider not-found",
+            )
+        verified = observed.get("id") == page_id and observed.get("status") == "trashed"
+        return VerificationResult(
+            action_id=action.action_id,
+            verified=verified,
+            observed=observed,
+            message=(
+                "verified Confluence page is in the provider trash"
+                if verified
+                else "Confluence page remains outside a terminal deleted state"
             ),
         )
 
@@ -773,6 +862,27 @@ class ConfluenceWriteConnector(CompensatingConnector):
             "reference": response.url,
         }
 
+    def _read_page_lifecycle_state(self, page_id: str) -> dict[str, Any]:
+        """Read a page across active and terminal provider lifecycle states."""
+
+        encoded = quote_segment(page_id)
+        if self._config.deployment is DeploymentType.CLOUD:
+            path = f"wiki/api/v2/pages/{encoded}"
+            query: dict[str, object] = {
+                "status": ("current", "draft", "archived", "trashed"),
+            }
+        else:
+            path = f"rest/api/content/{encoded}"
+            query = {"status": "any"}
+        data, response = self._client.request_json("GET", path, query=query)
+        if not isinstance(data, Mapping):
+            raise ConnectorError("Confluence page lifecycle response must be an object")
+        return {
+            "id": _provider_page_id(data),
+            "status": _mapping_required_text(data, "status", context="page"),
+            "reference": response.url,
+        }
+
     def _read_space(self, space_id: str) -> dict[str, Any]:
         data, response = self._client.request_json(
             "GET",
@@ -924,6 +1034,43 @@ def _approved_poststate(
     return expected
 
 
+def _captured_restore_poststate(
+    original: ExecutionResult,
+    compensation: ExecutionResult,
+    *,
+    deployment: DeploymentType,
+) -> dict[str, Any]:
+    """Build the exact rollback target from immutable execution snapshots."""
+
+    prior = original.before
+    original_after = original.after
+    compensation_after = compensation.after
+    if not isinstance(prior, Mapping) or not isinstance(original_after, Mapping):
+        raise ConnectorError("Confluence rollback omitted its captured page states")
+    if not isinstance(compensation_after, Mapping):
+        raise ConnectorError("Confluence rollback omitted its provider poststate")
+    page_id = _state_required_identity(original_after, "id")
+    if _state_required_identity(compensation_after, "id") != page_id:
+        raise ConnectorError("Confluence rollback returned another page identity")
+    expected_version = _provider_version(original_after.get("version")) + 1
+    if _provider_version(compensation_after.get("version")) != expected_version:
+        raise ConnectorError("Confluence rollback returned an unexpected page version")
+    expected = {
+        "id": page_id,
+        "title": _state_required_text(prior, "title"),
+        "body": _state_required_string(prior, "body"),
+        "representation": _state_required_text(prior, "representation"),
+        "version": expected_version,
+        "status": _state_required_text(prior, "status"),
+        "space_id": _state_required_identity(prior, "space_id"),
+        "space_key": None,
+        "parent_id": _state_optional_identity(prior, "parent_id"),
+    }
+    if deployment is DeploymentType.DATA_CENTER:
+        expected["space_key"] = _state_required_text(prior, "space_key")
+    return expected
+
+
 def _poststate_matches(
     observed: Mapping[str, Any],
     expected: Mapping[str, Any],
@@ -1037,6 +1184,13 @@ def _state_optional_identity(data: Mapping[str, Any], key: str) -> str | None:
 
 def _state_required_text(data: Mapping[str, Any], key: str) -> str:
     return _mapping_required_text(data, key, context="normalized page")
+
+
+def _state_required_string(data: Mapping[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ConnectorError(f"Confluence normalized page omitted {key}")
+    return value
 
 
 def _approved_space_poststate(
