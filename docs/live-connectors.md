@@ -68,7 +68,10 @@ metadata boundary is descriptor-backed and adversarially verified.
 Compensation is connector-specific:
 
 - Jira comment creation emits manual deletion recovery; issue mutation and restoration remain disabled pending provider CAS;
-- Confluence restores a captured prior page version/body atomically; created page/space deletion is manual;
+- Confluence restores a captured prior page state atomically and independently
+  re-reads every restored content and placement field; created page/space
+  deletion is manual, and page deletion verification requires provider
+  not-found or the documented trash state;
 - Bitbucket PR creation emits manual re-read/decline recovery;
 - GitHub issue/PR creation emits manual re-read/close recovery;
 - the non-routable SharePoint replacement adapter can restore a captured prior

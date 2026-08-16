@@ -60,13 +60,21 @@ cannot be derived exactly.
 - version-checked page update with an independent deployment-specific re-read
   that proves the approved status and stable space/parent placement as well as
   the exact content;
-- atomic version-checked prior-version/body restoration.
+- atomic version-checked prior-state restoration followed by a fresh provider
+  read of the restored title, body, representation, version, publication
+  status, space, and direct parent.
 
 Cloud verification uses the v2 page response's `spaceId` and `parentId`.
 Data Center verification explicitly expands `space` and `ancestors`, treats the
 last ancestor as the direct parent, and resolves the approved space key to its
 stable provider ID. A missing placement or publication field is an unverified
 outcome, not a partial success.
+
+Created-page recovery also performs a fresh lifecycle read after deletion.
+Only provider not-found or the documented `trashed` state counts as verified;
+a still-current, restored, or otherwise nonterminal page fails compensation.
+The orchestrator retains the completed idempotency record until this independent
+verification succeeds.
 
 ### Bitbucket and Git
 

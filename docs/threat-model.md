@@ -180,6 +180,9 @@ Controls:
 - keep local Git mutation and compensation unavailable until all metadata access
   is descriptor-bound;
 - refuse rollback with a version conflict when current state advanced;
+- require a fresh provider observation after compensation and retain completed
+  idempotency state until that observation proves the complete captured
+  prestate (or a documented terminal deletion state);
 - reject unversioned legacy compensation metadata and partial reconstructed
   plans;
 - sent communications never use fake rollback.
