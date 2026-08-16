@@ -261,6 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 integrations_path=args.integrations,
                 governance_path=args.governance,
                 credentials_file=args.credentials_file,
+                credential_mappings=tuple(args.credential_map),
                 systems=_parse_systems(args.systems) or set(),
                 output=args.output,
             )
@@ -579,6 +580,16 @@ def _build_parser() -> argparse.ArgumentParser:
     connect.add_argument("--integrations", type=Path, default=None)
     connect.add_argument("--governance", type=Path, default=None)
     connect.add_argument("--credentials-file", type=Path)
+    connect.add_argument(
+        "--credential-map",
+        action="append",
+        default=[],
+        metavar="FILE_KEY=DECLARED_NAME",
+        help=(
+            "resolve an ambiguous flat credential key for this invocation "
+            "without rewriting the credential file"
+        ),
+    )
     connect.add_argument("--systems", required=True)
     connect.add_argument("--output", type=Path)
 
@@ -1744,6 +1755,7 @@ def _connect(
     systems: set[str],
     output: Path | None,
     transport: HttpTransport | None = None,
+    credential_mappings: tuple[str, ...] = (),
 ) -> int:
     """Verify requested read connectors through an ephemeral configuration."""
 
@@ -1795,12 +1807,15 @@ def _connect(
                 configurations=configurations,
                 systems=systems,
             ),
+            explicit_mappings=_parse_credential_mappings(credential_mappings),
         )
         ambient = {
             name: value for name, value in os.environ.items() if name not in store.names
         }
         environ = store.overlay(ambient)
     else:
+        if credential_mappings:
+            raise ConfigurationError("--credential-map requires --credentials-file")
         environ = dict(os.environ)
 
     if "microsoft" in configurations:
@@ -1918,6 +1933,28 @@ def _provider_credential_aliases(
             if _CONNECT_CONFIGURATION_BY_SYSTEM[system] == name:
                 aliases[system] = fields
     return aliases
+
+
+def _parse_credential_mappings(values: tuple[str, ...]) -> dict[str, str]:
+    """Parse secret-free one-run mappings for ambiguous credential keys."""
+
+    mappings: dict[str, str] = {}
+    for value in values:
+        source, separator, destination = value.partition("=")
+        source = source.strip()
+        destination = destination.strip()
+        if not separator or not source or not destination:
+            raise ConfigurationError("--credential-map must use FILE_KEY=DECLARED_NAME")
+        if source in mappings:
+            raise ConfigurationError(
+                "--credential-map repeats a credential file key: " + source
+            )
+        if not source.isprintable() or not destination.isprintable():
+            raise ConfigurationError(
+                "--credential-map names must contain only printable characters"
+            )
+        mappings[source] = destination
+    return mappings
 
 
 def _github_repositories(

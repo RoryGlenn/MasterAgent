@@ -102,6 +102,12 @@ Bitbucket, authenticated GitHub, Microsoft identity, SharePoint, Outlook,
 Teams, or OneNote; then continue the requested feature. The connector setting
 is never persisted unless persistent setup was requested.
 
+Credential files may use canonical, provider-keyed, exact environment-name, or
+unambiguous friendly-key forms. Infer friendly mappings only from key names. If
+a key is ambiguous, ask once what it represents and retry `connect` with
+`--credential-map FILE_KEY=DECLARED_NAME`; never inspect a secret value to
+guess, and never rewrite the credential file merely to change its wrapper.
+
 GitHub repository discovery is routed by the data the operator requested. When
 the operator names a GitHub user or supplies a public profile URL, extract the
 username and run:

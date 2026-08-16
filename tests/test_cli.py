@@ -11,7 +11,12 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from master_agent.cli import _connect, _github_repositories, main
+from master_agent.cli import (
+    _connect,
+    _github_repositories,
+    _parse_credential_mappings,
+    main,
+)
 from master_agent.errors import ConfigurationError
 from master_agent.planners.static import build_weekly_status_plan
 from tests.fakes import ScriptedTransport
@@ -22,6 +27,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CliTests(unittest.TestCase):
     """Verify CLI boundaries that protect live credentials and operators."""
+
+    def test_credential_mapping_argument_is_secret_free_and_unambiguous(self) -> None:
+        self.assertEqual(
+            _parse_credential_mappings(("friendlyJiraKey=MASTER_AGENT_JIRA_TOKEN",)),
+            {"friendlyJiraKey": "MASTER_AGENT_JIRA_TOKEN"},
+        )
+        with self.assertRaisesRegex(ConfigurationError, "FILE_KEY=DECLARED_NAME"):
+            _parse_credential_mappings(("missing-separator",))
+        with self.assertRaisesRegex(ConfigurationError, "repeats"):
+            _parse_credential_mappings(("key=ONE", "key=TWO"))
+
+    def test_connect_rejects_credential_mapping_without_a_file(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "requires --credentials-file"):
+            _connect(
+                integrations_path=None,
+                governance_path=None,
+                credentials_file=None,
+                credential_mappings=("key=MASTER_AGENT_GITHUB_TOKEN",),
+                systems={"github"},
+                output=None,
+            )
 
     def test_live_mode_dry_run_does_not_require_credentials(self) -> None:
         """A policy-only dry run must not construct live connectors."""
@@ -431,7 +457,7 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         )
         self.assertNotIn(token, stdout.getvalue())
 
-    def test_connect_adapts_named_jira_credentials_without_persisting_config(
+    def test_connect_infers_friendly_jira_credentials_without_persisting_config(
         self,
     ) -> None:
         username = "operator@example.test"
@@ -462,7 +488,7 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             integrations.write_text(original_config, encoding="utf-8")
             credentials = root / "providers.json"
             original_credentials = json.dumps(
-                {"jira": {"username": username, "token": token}}
+                {"jiraLoginEmail": username, "myJiraApiToken": token}
             )
             credentials.write_text(original_credentials, encoding="utf-8")
             credentials.chmod(0o600)

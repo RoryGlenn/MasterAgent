@@ -299,6 +299,26 @@ string or an object using only applicable fields from `token`, `username`,
 }
 ```
 
+For compatibility with common local token files, the same restricted JSON file
+may instead use the exact environment-variable names declared by the selected
+integration, without the schema wrapper:
+
+```json
+{
+  "MASTER_AGENT_JIRA_USERNAME": "operator@example.com",
+  "MASTER_AGENT_JIRA_TOKEN": "replace-with-a-real-token"
+}
+```
+
+Exact declared names are accepted first. For flat key/value files, MasterAgent
+also examines key names—not secret values—for recognizable provider and field
+hints. Names such as `myJiraApiToken`, `jiraLoginEmail`, or `jira.com` can be
+mapped automatically when only one interpretation is possible. When a name is
+unclear or matches several selected providers, the command stops with the
+possible declared destinations. After the operator identifies the meaning, the
+agent can retry `connect` with
+`--credential-map FILE_KEY=DECLARED_NAME` without rewriting the token file.
+
 Only providers selected by `--systems` and fields mapped by the selected
 integration configuration are accepted. Unknown or duplicate mappings, loose
 permissions, symlinks, and ambiguous shapes fail closed. The file is never
