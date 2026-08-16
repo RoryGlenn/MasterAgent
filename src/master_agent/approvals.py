@@ -72,6 +72,36 @@ class HmacApprovalAuthenticator:
     ) -> HmacApprovalAuthenticator:
         """Load identity bindings while resolving secrets from the environment."""
 
+        return cls._from_toml(path, environ=environ, selected_key_ids=None)
+
+    @classmethod
+    def from_toml_for_key(
+        cls,
+        path: ConfigSource,
+        *,
+        key_id: str,
+        environ: Mapping[str, str] | None = None,
+    ) -> HmacApprovalAuthenticator:
+        """Load only the selected signer's key from a shared authority ring."""
+
+        if not key_id.strip() or key_id != key_id.strip():
+            raise ConfigurationError("approval authority key_id must be normalized")
+        return cls._from_toml(
+            path,
+            environ=environ,
+            selected_key_ids=frozenset({key_id}),
+        )
+
+    @classmethod
+    def _from_toml(
+        cls,
+        path: ConfigSource,
+        *,
+        environ: Mapping[str, str] | None,
+        selected_key_ids: frozenset[str] | None,
+    ) -> HmacApprovalAuthenticator:
+        """Load a complete verifier ring or a signer-specific subset."""
+
         try:
             with path.open("rb") as handle:
                 raw = tomllib.load(handle)
@@ -96,6 +126,8 @@ class HmacApprovalAuthenticator:
                 )
             if not enabled:
                 continue
+            if selected_key_ids is not None and key_id not in selected_key_ids:
+                continue
             subject = str(item.get("subject", ""))
             secret_env = str(item.get("secret_env", "")).strip()
             if not secret_env:
@@ -113,6 +145,9 @@ class HmacApprovalAuthenticator:
                 secret=secret,
             )
             authorities[authority.key_id] = authority
+        if selected_key_ids is not None and set(authorities) != set(selected_key_ids):
+            missing = ", ".join(sorted(selected_key_ids - set(authorities)))
+            raise ConfigurationError(f"unknown approval authority key_id: {missing}")
         return cls(authorities)
 
     def issue(

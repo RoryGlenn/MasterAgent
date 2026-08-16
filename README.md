@@ -80,6 +80,7 @@ Supported domains:
 - **Three independent live gates:** runtime flag, provider-specific TOML flag, and capability/governance permission.
 - **Immutable approvals:** approvals bind to a SHA-256 plan fingerprint and exact action IDs; any mutation invalidates them.
 - **Approval separation:** governance can require zero, one, or two distinct human approvers.
+- **Resumable approval handoff:** pending writes produce a private, create-only request that captures the exact non-secret run and can resume only with authenticated approval.
 - **Version preconditions:** Jira, Confluence, GitHub repository settings, and SharePoint operations stop on stale state.
 - **Compensation:** reversible actions capture enough prior state to restore, decline, delete, or revert the exact resource created or changed.
 - **No false transactions:** partial multi-system success is reported explicitly; compensation is attempted only where supported.
@@ -357,6 +358,11 @@ destinations and CA bundles, policy/source/capability/governance/identity and
 retention snapshots, connector gates, filesystem roots, audit database, and
 retained-result destination:
 
+Any plan that needs authenticated approval must bind the operator-controlled
+approval-authority configuration at this stage. Adding an authority after the
+plan is reviewed changes the runtime manifest, so `bind-context` rejects that
+unresumable setup early. Approval secrets are not read while binding.
+
 Every runtime directory must already exist, be owned by the current account,
 and be non-writable by group or world. The binding records the exact directory
 identity; neither binding nor apply creates these security boundaries. For
@@ -407,6 +413,39 @@ Inspect the bound plan and its new fingerprint:
 ```bash
 master-agent inspect bound-change-plan.json
 ```
+
+When an applied run has no sufficient approval, it executes no pending action
+and writes a deterministic mode-`0600` request beneath the approved
+`--draft-output-dir`. That request holds the exact action review surface and
+complete non-secret resume invocation, including connector URLs, credential
+field mappings, paths, and gates. It contains no credential or approval-secret
+values and is not itself authority.
+
+If `--result-json` is bound, an approval-blocked run keeps that create-only
+name unused and commits the complete retained result only after an
+approval-complete resume. This prevents the resume from overwriting an
+intermediate report or failing after the provider effect.
+
+```bash
+master-agent inspect-approval-request /absolute/state/drafts/approval-request-....json
+
+# A trusted operator signs the reviewed request outside the agent.
+master-agent approve-request /absolute/state/drafts/approval-request-....json \
+  --key-id rory \
+  --expected-fingerprint REQUEST_FINGERPRINT \
+  --output /absolute/state/approvals/approval-rory.json
+
+# The agent resumes the exact captured run; no apply arguments are rebuilt.
+master-agent resume-approval /absolute/state/drafts/approval-request-....json \
+  --expected-fingerprint REQUEST_FINGERPRINT \
+  --approval /absolute/state/approvals/approval-rory.json
+```
+
+If a dual-approved action has only one valid approval, the resumed run remains
+blocked and emits a new request carrying that approval path forward. A second
+distinct operator signs the new request. Conversational text, the request
+artifact, and the agent itself can never self-sign or substitute for an
+authenticated approval.
 
 Create an approval bound to selected action UUIDs:
 

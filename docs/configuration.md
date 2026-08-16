@@ -68,6 +68,14 @@ of policy, source-of-truth, capability, governance, identity, retention, and
 approval-authority snapshots. A missing legacy binding or any mismatch is
 rejected before connector construction.
 
+If policy or governance requires human approval, `bind-context` requires an
+explicit `--approval-authorities` path. The snapshot digest becomes part of the
+plan before anyone reviews it; the signing secret is not loaded at bind time.
+An approval-required apply writes its secret-free resumable request beneath the
+bound artifact root. `resume-approval` restores only the captured invocation,
+so there is no supported path for adding or replacing a trust configuration,
+provider URL, credential mapping, runtime path, or gate after review.
+
 All runtime directories (the audit database parent, artifact root, optional
 workspace root, optional result parent, and any configured publication root)
 must preexist, be owned by the current account, and not be writable by group or

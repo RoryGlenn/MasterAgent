@@ -131,6 +131,18 @@ relaying commands the agent can run. Do not narrate JSON keys, config fields,
 permission checks, commands, probes, or retries, and do not stop after an
 intermediate success.
 
+Before binding a plan that policy or governance will require a human to
+approve, locate the private operator-controlled approval-authority
+configuration without reading its secret and pass `--approval-authorities` to
+`bind-context`. If none exists, finish every other safe prerequisite and ask
+once for that path instead of producing an unresumable plan. When an exact run
+returns `approval_required`, inspect its private request with
+`inspect-approval-request`, summarize the exact target and effect once, and ask
+only for the authenticated artifact. Never execute `approve-request` for the
+operator or infer authentication from their chat response. When they supply
+the artifact, run `resume-approval`; do not reconstruct connector URLs,
+credential mappings, runtime paths, or gates by hand.
+
 For any supported connector, use `.venv/bin/master-agent connect --systems`
 with the exact requested systems. It performs minimum in-memory enablement,
 strict compatible credential loading, and fixed safe probes without persistent

@@ -99,6 +99,14 @@ Controls:
 - approval bound to fingerprint and explicit action IDs;
 - expiry and distinct approver requirements;
 - approval invalidation after any plan mutation.
+- approval-authority configuration bound before review;
+- mode-`0600`, create-only resumable requests beneath the pinned artifact root;
+- request fingerprint plus exact plan/action/context validation before signing;
+- captured non-secret invocation replayed through the unchanged apply gates,
+  with symlink, permission, plan, authority, and context drift rejected.
+
+The resumable request is review data, not approval. Conversational assent, an
+edited request, or possession of the request cannot authenticate an approver.
 
 ### Lost update
 

@@ -14,6 +14,14 @@ A reversible write requires:
 - resource/commit preconditions;
 - independent verification.
 
+The approval-authority configuration is part of the bound plan before review.
+If approval is absent or incomplete, the applied run emits a private,
+create-only request beneath its approved artifact root and leaves the pending
+write untouched. A trusted operator signs that exact request; MasterAgent then
+uses `resume-approval` to retry the captured invocation through every normal
+gate. Partial dual approvals are carried into the next request. The request and
+chat conversation never constitute authority.
+
 ## Supported writes
 
 ### Jira

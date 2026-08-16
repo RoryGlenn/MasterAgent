@@ -51,6 +51,7 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "Treat a missing safe capability as implementation work",
         "Do not require or search for credentials",
         "typed anonymous capability",
+        "private resumable approval request",
     ),
     _FIRST_RUN_CONTRACT_PATH: (
         "first operator",
@@ -81,6 +82,9 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "github-repositories --username USERNAME",
         "public repositories anonymously",
         "persistent connector or credential state",
+        "inspect-approval-request",
+        "resume-approval",
+        "Conversational approval remains invalid",
     ),
     Path("AGENTS.md"): (
         "[`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md)",
@@ -98,6 +102,7 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "--connector-url SYSTEM=URL",
         "capability gaps now trigger immediate governed runtime implementation",
         "same contract now covers every missing capability",
+        "resumable authenticated-approval handoff",
     ),
     Path("README.md"): (
         "[first-run contract](.ai/FIRST_RUN.md)",
@@ -109,6 +114,8 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "github-repositories",
         "github-repositories --username USERNAME",
         "the connector is read-only",
+        "approve-request",
+        "resume-approval",
     ),
     Path("docs/copilot-custom-agent.md"): (
         "[first-run contract](../.ai/FIRST_RUN.md)",
@@ -126,17 +133,21 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "automatically tries",
         "it asks once",
         "without a second confirmation",
+        "inspect-approval-request",
+        "resume-approval",
     ),
     Path("docs/release-validation.md"): (
         "first-prompt contract",
         "force-multiplier default-to-action contract",
         "stable nontechnical responses",
         "capability-gap ownership",
+        "resumable approval handoff",
     ),
     Path("docs/semantic-index.md"): (
         "[`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md)",
         "[`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md)",
         "[`bootstrap_agent.py`](../scripts/bootstrap_agent.py)",
+        "[`approval_handoff.py`](../src/master_agent/approval_handoff.py)",
     ),
 }
 
@@ -566,6 +577,8 @@ def _validate_copilot_agent(
         "github-repositories",
         "--username USERNAME",
         "python scripts/validate_release.py",
+        "inspect-approval-request",
+        "resume-approval",
     )
     for boundary in required_boundaries:
         if boundary not in body:
