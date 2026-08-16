@@ -1,5 +1,8 @@
 # Changelog
 
+- Add governed Confluence Cloud space creation with exact provider re-read,
+  created-space compensation, and page creation by approved space key.
+
 - Allow explicit one-run credential mappings to select fields from canonical
   multi-provider stores, enabling safe in-memory Atlassian credential reuse
   across Jira and Confluence through connection probes and governed bind/apply
@@ -11,7 +14,7 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- an 80-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- an 81-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
 - a bounded GitHub Cloud read connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run
   reads;

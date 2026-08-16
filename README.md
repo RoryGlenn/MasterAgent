@@ -48,11 +48,11 @@ weekly-status, communication-context, and recurring execution are also disabled.
 
 ## Capability surface
 
-The catalog contains **80 typed capabilities**:
+The catalog contains **81 typed capabilities**:
 
 - 45 read-only capabilities;
 - 10 local-generation capabilities;
-- 19 reversible-write definitions, including 2 disabled OneNote writes and 5
+- 20 reversible-write definitions, including 2 disabled OneNote writes and 5
   disabled local-Git mutations;
 - 4 external-communication capabilities;
 - 2 high-impact capability definitions: the dual-approved GitHub collaborator
@@ -63,7 +63,7 @@ Supported domains:
 | Domain | Read | Draft/local generation | Approved mutation |
 |---|---|---|---|
 | Jira Cloud/Data Center | issue search/read, server info | issue update/comment/transition proposals | field update, comment, transition, compensation |
-| Confluence Cloud/Data Center | page search/read | page create/update proposals | create, update, compensation |
+| Confluence Cloud/Data Center | page search/read | page create/update proposals | Cloud space creation; page create, update, compensation |
 | Bitbucket Cloud/Data Center | repo, PR, diffstat/changes, CI status | branch plan and source patch | PR creation/decline compensation; local-Git branch publication disabled |
 | GitHub Cloud | anonymous public-user and authenticated-user repository lists, repository, PR, and check-run reads | — | issue/PR creation; allowlisted repository settings and existing-collaborator role administration |
 | Outlook | folders, messages, allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |

@@ -3,7 +3,7 @@
 | System | Deployment/auth modes | Read-only | Draft/local | Approved mutation | Compensation/verification | Default |
 |---|---|---|---|---|---|---|
 | Jira | Cloud basic/API token; Data Center bearer/basic | server info, search, issue read | update/comment/transition proposal | field update, comment, transition | independent read; restore fields; delete created comment; configured reverse transition | disabled |
-| Confluence | Cloud basic/API token; Data Center bearer/basic | page search/read | create/update proposal | create/update page | version check; independent read; restore prior version/body or remove created page | disabled |
+| Confluence | Cloud basic/API token; Data Center bearer/basic | page search/read | create/update proposal | create Cloud space; create/update page | exact space/page read; remove created space/page; restore prior page version/body | disabled |
 | Bitbucket | Cloud token/basic or bearer; Data Center PAT/bearer | repository, PR, diffstat/changes, build status | branch/patch plan | create PR; local-Git branch publication disabled | verify exact PR; decline created PR | disabled |
 | GitHub | Cloud anonymous public reads or bearer token with provider-verified numeric-user attestation | public-user and authenticated-user repository lists, repository read, PR search/read, commit check runs | — | issue/PR create; allowlisted repository settings; existing-collaborator built-in role | anonymous route omits credentials; authenticated principal check; exact post-write re-read; close/restore compensation where safe | disabled |
 | Microsoft identity | delegated or explicit application user | current/explicit user and directory search | — | — | normalized identity/citation | disabled |

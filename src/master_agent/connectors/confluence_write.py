@@ -1,4 +1,4 @@
-"""Approved reversible Confluence page writes for Phase 4."""
+"""Approved reversible Confluence space and page writes for Phase 4."""
 
 from __future__ import annotations
 
@@ -9,7 +9,11 @@ from typing import Any
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.base import CompensatingConnector
 from master_agent.connectors.utils import enforce_expected_version, quote_segment
-from master_agent.errors import ConnectorError, VersionConflictError
+from master_agent.errors import (
+    ConnectorError,
+    ResourceNotFoundError,
+    VersionConflictError,
+)
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
@@ -25,13 +29,14 @@ from master_agent.text import html_to_text
 
 
 class ConfluenceWriteConnector(CompensatingConnector):
-    """Create and update Confluence pages with exact version checks."""
+    """Create spaces and create or update pages with exact verification."""
 
     _CAPABILITIES = frozenset(
         {
             "confluence.page.create",
             "confluence.page.update",
             "confluence.page.compensate",
+            "confluence.space.create",
         }
     )
 
@@ -69,7 +74,9 @@ class ConfluenceWriteConnector(CompensatingConnector):
         """Execute one approved page mutation."""
 
         self._validate(action)
-        if action.capability == "confluence.page.create":
+        if action.capability == "confluence.space.create":
+            result = self._create_space(action)
+        elif action.capability == "confluence.page.create":
             result = self._create(action)
         elif action.capability == "confluence.page.update":
             result = self._update(action, compensating=False)
@@ -80,8 +87,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 f"unsupported Confluence capability: {action.capability}"
             )
         if result.after is not None:
-            page_id = str(result.after.get("id", action.target.resource_id))
-            self._last[page_id] = deepcopy(dict(result.after))
+            resource_id = str(result.after.get("id", action.target.resource_id))
+            self._last[resource_id] = deepcopy(dict(result.after))
+            if action.capability == "confluence.space.create":
+                self._last[action.target.resource_id] = deepcopy(dict(result.after))
         return result
 
     def read(self, resource: ResourceRef) -> dict[str, object] | None:
@@ -98,6 +107,22 @@ class ConfluenceWriteConnector(CompensatingConnector):
         """Re-read the page and compare the exact approved poststate."""
 
         after = result.after or {}
+        if action.capability == "confluence.space.create":
+            expected = _approved_space_poststate(action, after)
+            observed = self._read_space(str(expected["id"]))
+            verified = _space_matches(after, expected) and _space_matches(
+                observed, expected
+            )
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=verified,
+                observed=observed,
+                message=(
+                    "verified Confluence space by independent re-read"
+                    if verified
+                    else "Confluence space did not match approved identity"
+                ),
+            )
         try:
             expected = self._approved_result_poststate(action, result)
         except ConnectorError:
@@ -135,6 +160,8 @@ class ConfluenceWriteConnector(CompensatingConnector):
         """Delete a created page or restore the exact pre-update page body."""
 
         after = result.after or {}
+        if action.capability == "confluence.space.create":
+            return self._delete_created_space(action, after)
         page_id = str(after.get("id", action.target.resource_id))
         if result.before is None:
             before = self._read_page(
@@ -208,6 +235,23 @@ class ConfluenceWriteConnector(CompensatingConnector):
         """Verify created-page deletion or exact prior content restoration."""
 
         observed = compensation.after or {}
+        if action.capability == "confluence.space.create":
+            space_id = str(observed.get("id", ""))
+            try:
+                self._read_space(space_id)
+                verified = False
+            except ResourceNotFoundError:
+                verified = True
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=verified,
+                observed=observed,
+                message=(
+                    "verified Confluence space rollback"
+                    if verified
+                    else "Confluence space still exists after rollback"
+                ),
+            )
         if original.before is None:
             verified = bool(observed.get("deleted"))
         else:
@@ -226,6 +270,96 @@ class ConfluenceWriteConnector(CompensatingConnector):
             ),
         )
 
+    def _create_space(self, action: AgentAction) -> ExecutionResult:
+        if self._config.deployment is not DeploymentType.CLOUD:
+            raise ConnectorError("Confluence space creation currently requires Cloud")
+        key = _required_text(action.parameters, "key").upper()
+        if action.target.resource_type != "space" or action.target.resource_id != key:
+            raise ConnectorError(
+                "Confluence space creation target must equal the approved space key"
+            )
+        if len(key) > 255 or not key.isalnum():
+            raise ConnectorError(
+                "Confluence space key must contain only letters and digits"
+            )
+        name = _required_text(action.parameters, "name")
+        payload: dict[str, Any] = {"key": key, "name": name}
+        description = str(action.parameters.get("description", "")).strip()
+        if description:
+            payload["description"] = {
+                "value": description,
+                "representation": "plain",
+            }
+        data, response = self._client.request_json(
+            "POST",
+            "wiki/api/v2/spaces",
+            json_body=payload,
+        )
+        if not isinstance(data, Mapping):
+            raise ConnectorError("Confluence create-space response must be an object")
+        space_id = _provider_space_id(data)
+        observed = self._read_space(space_id)
+        expected = _approved_space_poststate(action, {"id": space_id})
+        if not _space_matches(observed, expected):
+            raise ConnectorError(
+                "Confluence create-space provider poststate did not match approved identity"
+            )
+        observed["compensation"] = {
+            "capability": "confluence.space.delete_created",
+            "space_id": space_id,
+            "space_key": key,
+            "created_by_action": True,
+        }
+        return ExecutionResult(
+            action_id=action.action_id,
+            state=ActionState.SUCCEEDED,
+            before=None,
+            after=observed,
+            connector_reference=response.url,
+            message="Confluence space created",
+            compensation=CompensationDescriptor(
+                kind="delete_created_space",
+                mode=CompensationMode.IN_PROCESS,
+                target_resource_id=space_id,
+                reason=(
+                    "created-space deletion is available only through the "
+                    "originating connector run"
+                ),
+            ).to_dict(),
+        )
+
+    def _delete_created_space(
+        self,
+        action: AgentAction,
+        after: Mapping[str, Any],
+    ) -> ExecutionResult:
+        expected = _approved_space_poststate(action, after)
+        space_id = str(expected["id"])
+        current = self._read_space(space_id)
+        if not _space_matches(current, expected):
+            raise VersionConflictError(
+                "Confluence space changed after creation; deletion is refused"
+            )
+        homepage_id = str(current.get("homepage_id", "")).strip()
+        page_ids = self._read_space_page_ids(space_id)
+        if any(page_id != homepage_id for page_id in page_ids):
+            raise VersionConflictError(
+                "Confluence space contains another page; deletion is refused"
+            )
+        response = self._client.request_bytes(
+            "DELETE",
+            f"wiki/rest/api/space/{quote_segment(str(expected['key']))}",
+            safe_to_retry=False,
+        )
+        return ExecutionResult(
+            action_id=action.action_id,
+            state=ActionState.SUCCEEDED,
+            before=current,
+            after={"id": space_id, "key": expected["key"], "deleted": True},
+            connector_reference=response.url,
+            message="deleted Confluence space created by rolled-back workflow",
+        )
+
     def _create(self, action: AgentAction) -> ExecutionResult:
         title = _required_text(action.parameters, "title")
         body = _required_text(action.parameters, "body")
@@ -234,7 +368,10 @@ class ConfluenceWriteConnector(CompensatingConnector):
             self._config.deployment,
         )
         if self._config.deployment is DeploymentType.CLOUD:
-            space_id = _required_text(action.parameters, "space_id")
+            space_id = str(action.parameters.get("space_id", "")).strip()
+            if not space_id:
+                space_key = _required_text(action.parameters, "space_key").upper()
+                space_id = self._resolve_cloud_space_id(space_key)
             payload: dict[str, Any] = {
                 "spaceId": space_id,
                 "status": str(action.parameters.get("status", "draft")),
@@ -269,6 +406,13 @@ class ConfluenceWriteConnector(CompensatingConnector):
             raise ConnectorError("Confluence create response omitted a page ID")
         page_id = _provider_page_id(data)
         after = self._read_page(page_id, representation=representation)
+        if (
+            self._config.deployment is DeploymentType.CLOUD
+            and str(after.get("space_id", "")) != space_id
+        ):
+            raise ConnectorError(
+                "Confluence create provider poststate used another space"
+            )
         expected = _approved_poststate(
             action,
             page_id=page_id,
@@ -470,6 +614,59 @@ class ConfluenceWriteConnector(CompensatingConnector):
             "reference": response.url,
         }
 
+    def _read_space(self, space_id: str) -> dict[str, Any]:
+        data, response = self._client.request_json(
+            "GET",
+            f"wiki/api/v2/spaces/{quote_segment(space_id)}",
+        )
+        if not isinstance(data, Mapping):
+            raise ConnectorError("Confluence space response must be an object")
+        return {
+            "id": _provider_space_id(data),
+            "key": str(data.get("key", "")),
+            "name": str(data.get("name", "")),
+            "type": data.get("type"),
+            "status": data.get("status"),
+            "homepage_id": data.get("homepageId"),
+            "reference": response.url,
+        }
+
+    def _resolve_cloud_space_id(self, space_key: str) -> str:
+        data, _ = self._client.request_json(
+            "GET",
+            "wiki/api/v2/spaces",
+            query={"keys": space_key, "limit": 2},
+        )
+        if not isinstance(data, Mapping) or not isinstance(data.get("results"), list):
+            raise ConnectorError(
+                "Confluence space lookup response must contain results"
+            )
+        matches = [
+            item
+            for item in data["results"]
+            if isinstance(item, Mapping)
+            and str(item.get("key", "")).upper() == space_key
+        ]
+        if len(matches) != 1:
+            raise ConnectorError(
+                "Confluence space key did not resolve to exactly one visible space"
+            )
+        return _provider_space_id(matches[0])
+
+    def _read_space_page_ids(self, space_id: str) -> tuple[str, ...]:
+        data, _ = self._client.request_json(
+            "GET",
+            f"wiki/api/v2/spaces/{quote_segment(space_id)}/pages",
+            query={"limit": 2},
+        )
+        if not isinstance(data, Mapping) or not isinstance(data.get("results"), list):
+            raise ConnectorError("Confluence space-page response must contain results")
+        return tuple(
+            _provider_page_id(item)
+            for item in data["results"]
+            if isinstance(item, Mapping)
+        )
+
     def _validate(self, action: AgentAction) -> None:
         if action.target.system != self.system:
             raise ConnectorError("Confluence write connector received another system")
@@ -479,6 +676,11 @@ class ConfluenceWriteConnector(CompensatingConnector):
             )
         if action.risk is not RiskLevel.REVERSIBLE_WRITE:
             raise ConnectorError("Confluence writes must use reversible_write risk")
+        if (
+            action.capability == "confluence.space.create"
+            and self._config.deployment is not DeploymentType.CLOUD
+        ):
+            raise ConnectorError("Confluence space creation currently requires Cloud")
 
 
 def _cloud_body(
@@ -555,6 +757,40 @@ def _provider_page_id(data: Mapping[str, Any]) -> str:
     if not rendered:
         raise ConnectorError("Confluence page response omitted a page ID")
     return rendered
+
+
+def _provider_space_id(data: Mapping[str, Any]) -> str:
+    value = data.get("id")
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ConnectorError("Confluence space response omitted a space ID")
+    rendered = str(value).strip()
+    if not rendered:
+        raise ConnectorError("Confluence space response omitted a space ID")
+    return rendered
+
+
+def _approved_space_poststate(
+    action: AgentAction,
+    observed: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": _provider_space_id(observed),
+        "key": _required_text(action.parameters, "key").upper(),
+        "name": _required_text(action.parameters, "name"),
+        "type": "global",
+        "status": "current",
+    }
+
+
+def _space_matches(
+    observed: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> bool:
+    return all(
+        type(observed.get(key)) is type(expected.get(key))
+        and observed.get(key) == expected.get(key)
+        for key in ("id", "key", "name", "type", "status")
+    )
 
 
 def _provider_version(value: Any) -> int:

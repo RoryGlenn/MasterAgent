@@ -439,6 +439,112 @@ class JiraWriteConnectorTests(unittest.TestCase):
 class ConfluenceWriteConnectorTests(unittest.TestCase):
     """Validate cloud page update and exact-content rollback."""
 
+    def test_cloud_space_create_verify_and_compensate(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/spaces"
+        item = "/wiki/api/v2/spaces/9001"
+        deletion = "/wiki/rest/api/space/BMS"
+        space = _confluence_space()
+        transport.add_json("POST", collection, {"id": "9001"}, status=201)
+        for _ in range(3):
+            transport.add_json("GET", item, space)
+        transport.add_json(
+            "GET",
+            item + "/pages",
+            {"results": [{"id": "HOME"}]},
+        )
+        transport.add_bytes("DELETE", deletion, b"", status=202)
+        transport.add_bytes("GET", item, b"{}", status=404)
+        connector = _confluence_connector(transport)
+        action = _confluence_space_action()
+
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+        compensation = connector.compensate(action, result)
+        self.assertTrue(
+            connector.verify_compensation(action, result, compensation).verified
+        )
+        self.assertEqual(result.after["key"], "BMS")
+        self.assertTrue(compensation.after["deleted"])
+
+    def test_space_compensation_refuses_concurrently_added_page(self) -> None:
+        transport = ScriptedTransport()
+        collection = "/wiki/api/v2/spaces"
+        item = "/wiki/api/v2/spaces/9001"
+        transport.add_json("POST", collection, {"id": "9001"}, status=201)
+        transport.add_json("GET", item, _confluence_space())
+        transport.add_json("GET", item, _confluence_space())
+        transport.add_json(
+            "GET",
+            item + "/pages",
+            {"results": [{"id": "HOME"}, {"id": "OTHER"}]},
+        )
+        connector = _confluence_connector(transport)
+        action = _confluence_space_action()
+        result = connector.execute(action)
+
+        with self.assertRaisesRegex(VersionConflictError, "another page"):
+            connector.compensate(action, result)
+
+        self.assertNotIn("DELETE", [request.method for request in transport.requests])
+
+    def test_cloud_page_create_resolves_approved_space_key(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/wiki/api/v2/spaces",
+            {"results": [_confluence_space()]},
+        )
+        transport.add_json(
+            "POST",
+            "/wiki/api/v2/pages",
+            {"id": "42"},
+            status=200,
+        )
+        transport.add_json(
+            "GET",
+            "/wiki/api/v2/pages/42",
+            _confluence_page("Status", "<p>Approved</p>", 1, space_id="9001"),
+        )
+        connector = _confluence_connector(transport)
+        action = action_for(
+            "confluence.page.create",
+            system="confluence",
+            resource_type="page",
+            resource_id="new",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "space_key": "bms",
+                "title": "Status",
+                "body": "<p>Approved</p>",
+                "representation": "storage",
+                "status": "current",
+            },
+        )
+
+        result = connector.execute(action)
+
+        self.assertEqual(result.after["space_id"], "9001")
+        self.assertIn("keys=BMS", transport.requests[0].url)
+
+    def test_space_create_rejects_provider_identity_change(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "POST",
+            "/wiki/api/v2/spaces",
+            {"id": "9001"},
+            status=201,
+        )
+        transport.add_json(
+            "GET",
+            "/wiki/api/v2/spaces/9001",
+            _confluence_space(name="Provider altered"),
+        )
+        connector = _confluence_connector(transport)
+
+        with self.assertRaisesRegex(ConnectorError, "poststate"):
+            connector.execute(_confluence_space_action())
+
     def test_cloud_update_and_compensation(self) -> None:
         transport = ScriptedTransport()
         path = "/wiki/api/v2/pages/42"
@@ -1178,12 +1284,13 @@ def _confluence_page(
     *,
     representation: str = "storage",
     page_id: str = "42",
+    space_id: str = "SPACE",
 ) -> dict[str, object]:
     return {
         "id": page_id,
         "title": title,
         "status": "current",
-        "spaceId": "SPACE",
+        "spaceId": space_id,
         "version": {"number": version},
         "body": {
             representation: {
@@ -1191,6 +1298,35 @@ def _confluence_page(
                 "value": body,
             }
         },
+    }
+
+
+def _confluence_space_action() -> AgentAction:
+    return action_for(
+        "confluence.space.create",
+        system="confluence",
+        resource_type="space",
+        resource_id="BMS",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        parameters={
+            "key": "BMS",
+            "name": "Blow Me Sideways",
+            "description": "A private educational space.",
+        },
+    )
+
+
+def _confluence_space(
+    *,
+    name: str = "Blow Me Sideways",
+) -> dict[str, object]:
+    return {
+        "id": "9001",
+        "key": "BMS",
+        "name": name,
+        "type": "global",
+        "status": "current",
+        "homepageId": "HOME",
     }
 
 

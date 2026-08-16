@@ -98,6 +98,13 @@ authentication = "local"
 risk = "local_generation"
 description = "Render a local Confluence page-update proposal."
 
+[capabilities."confluence.space.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create and verify a Confluence Cloud space; compensation removes the exact created space."
+
 [capabilities."github.checks.read"]
 enabled = true
 authentication = "configured_connector"
