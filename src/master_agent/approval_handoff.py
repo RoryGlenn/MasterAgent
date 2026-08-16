@@ -495,12 +495,13 @@ def _publish_restricted_bytes(
     reuse_identical: bool,
 ) -> None:
     if name in {"", ".", ".."} or Path(name).name != name:
-        raise ConfigurationError("approval artifact escaped its private directory")
+        raise ConfigurationError("restricted artifact escaped its private directory")
     if len(payload) > _MAX_REQUEST_BYTES:
-        raise ValidationError("approval artifact exceeds the 8 MiB limit")
+        raise ValidationError("restricted artifact exceeds the 8 MiB limit")
     parent = directory.fileno()
     descriptor = -1
     created_identity: tuple[int, int, int, int, int] | None = None
+    owned_identity: tuple[int, int, int] | None = None
     completed = False
     try:
         try:
@@ -518,39 +519,48 @@ def _publish_restricted_bytes(
             if reuse_identical and _read_restricted_bytes(directory, name) == payload:
                 return
             raise ConfigurationError(
-                "approval artifact already exists; use a fresh private output name"
+                "restricted artifact already exists; use a fresh private output name"
             ) from None
+        initial = os.fstat(descriptor)
+        owned_identity = (initial.st_dev, initial.st_ino, initial.st_uid)
+        if (
+            not stat.S_ISREG(initial.st_mode)
+            or initial.st_uid != os.getuid()
+            or initial.st_nlink != 1
+            or stat.S_IMODE(initial.st_mode) & 0o077
+        ):
+            raise ConfigurationError("restricted artifact file is unsafe")
         os.fchmod(descriptor, 0o600)
         created_identity = _restricted_identity(os.fstat(descriptor))
         remaining = memoryview(payload)
         while remaining:
             written = os.write(descriptor, remaining)
             if written <= 0:
-                raise OSError("short approval artifact write")
+                raise OSError("short restricted artifact write")
             remaining = remaining[written:]
         os.fsync(descriptor)
         directory.validate()
         published = os.stat(name, dir_fd=parent, follow_symlinks=False)
         if _restricted_identity(published) != created_identity:
-            raise ConfigurationError("approval artifact publication was replaced")
+            raise ConfigurationError("restricted artifact publication was replaced")
         os.lseek(descriptor, 0, os.SEEK_SET)
         if _read_descriptor(descriptor) != payload:
-            raise ConfigurationError("approval artifact bytes changed during write")
+            raise ConfigurationError("restricted artifact bytes changed during write")
         os.fsync(parent)
         directory.validate()
         completed = True
     except OSError as error:
-        raise ConfigurationError("approval artifact destination changed") from error
+        raise ConfigurationError("restricted artifact destination changed") from error
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if not completed and created_identity is not None:
-            _unlink_if_identity(parent, name, created_identity)
+        if not completed and owned_identity is not None:
+            _unlink_if_owned(parent, name, owned_identity)
 
 
 def _read_restricted_bytes(directory: PinnedDirectory, name: str) -> bytes:
     if name in {"", ".", ".."} or Path(name).name != name:
-        raise ConfigurationError("approval artifact escaped its private directory")
+        raise ConfigurationError("restricted artifact escaped its private directory")
     try:
         descriptor = os.open(
             name,
@@ -559,7 +569,7 @@ def _read_restricted_bytes(directory: PinnedDirectory, name: str) -> bytes:
         )
     except OSError as error:
         raise ConfigurationError(
-            "approval artifact could not be opened safely"
+            "restricted artifact could not be opened safely"
         ) from error
     try:
         _restricted_identity(os.fstat(descriptor))
@@ -581,7 +591,7 @@ def _read_descriptor(descriptor: int) -> bytes:
         remaining -= len(chunk)
     payload = b"".join(chunks)
     if len(payload) > _MAX_REQUEST_BYTES:
-        raise ValidationError("approval artifact exceeds the 8 MiB limit")
+        raise ValidationError("restricted artifact exceeds the 8 MiB limit")
     return payload
 
 
@@ -601,21 +611,39 @@ def _restricted_identity(
         or stat.S_IMODE(metadata.st_mode) != 0o600
         or metadata.st_nlink != 1
     ):
-        raise ConfigurationError("approval artifact file is unsafe")
+        raise ConfigurationError("restricted artifact file is unsafe")
     return identity
 
 
-def _unlink_if_identity(
+def _unlink_if_owned(
     parent: int,
     name: str,
-    expected: tuple[int, int, int, int, int],
+    expected: tuple[int, int, int],
 ) -> None:
+    """Remove only the exact owner-private inode created by this call."""
+
     try:
         current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if _restricted_identity(current) == expected:
-            os.unlink(name, dir_fd=parent)
-    except (ConfigurationError, FileNotFoundError, OSError):
+    except FileNotFoundError:
         return
+    observed = (current.st_dev, current.st_ino, current.st_uid)
+    if (
+        observed != expected
+        or not stat.S_ISREG(current.st_mode)
+        or current.st_uid != os.getuid()
+        or current.st_nlink != 1
+        or stat.S_IMODE(current.st_mode) & 0o077
+    ):
+        raise ConfigurationError(
+            "restricted artifact rollback refused after identity change"
+        )
+    try:
+        os.unlink(name, dir_fd=parent)
+        os.fsync(parent)
+    except OSError as error:
+        raise ConfigurationError(
+            "restricted artifact rollback was incomplete"
+        ) from error
 
 
 def _json_bytes(payload: Mapping[str, Any]) -> bytes:

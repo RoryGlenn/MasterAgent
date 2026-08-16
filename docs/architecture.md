@@ -176,6 +176,13 @@ replays the captured arguments through the normal execution-context gates.
 This closes the usability gap without letting chat text, an edited request, or
 the agent create authority.
 
+All other CLI JSON output uses that same restricted publication boundary:
+pin and validate the preexisting parent, create the final name exclusively as
+mode `0600` without following symlinks, verify its descriptor identity, write
+and read back the exact serialized bytes, and fsync the file and directory.
+Publication never creates a security-boundary directory or replaces an
+existing name.
+
 ### Audit
 
 The SQLite audit log is tamper-evident through a hash chain. Default audit summaries exclude document/message bodies and secret values. Full evidence is written only through an explicit output/retention path.

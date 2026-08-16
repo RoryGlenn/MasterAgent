@@ -390,9 +390,11 @@ mkdir -m 700 /absolute/state/audit /absolute/state/results /absolute/state/draft
 mkdir -m 700 /absolute/path/to/approved/workspaces
 ```
 
-Draft artifacts and retained result/evidence files are create-only. Use fresh
-filenames or a fresh private output directory for each applied run; the runtime
-will not overwrite a prior or concurrently created file.
+Every CLI JSON output, draft artifact, and retained result/evidence file is
+create-only and mode `0600` from creation. The runtime pins and validates the
+preexisting private parent, refuses symlinks and existing destinations, and
+will not overwrite a prior or concurrently created file. Use a fresh filename
+or a fresh private output directory for each command.
 `draft-package` additionally requires its dedicated output directory to be
 empty before it reads workflow configuration.
 

@@ -4,6 +4,14 @@
 documents every public command and, critically, whether it can perform network
 or filesystem side effects.
 
+Every JSON `--output` is published through the same restricted-artifact
+primitive. Its parent directory must already exist, be owned by the current
+account, and not be writable by group or world. Publication pins that directory,
+creates the final name with mode `0600`, refuses symlinks and every existing
+destination, verifies the opened identity, writes and reads back the exact
+bytes, and fsyncs both the file and directory. Use a fresh output filename for
+each invocation; commands never create the parent or overwrite prior output.
+
 | Command | Purpose | Side-effect boundary |
 |---|---|---|
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |

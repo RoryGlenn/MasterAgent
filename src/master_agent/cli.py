@@ -992,7 +992,7 @@ def _bind_context(
         include_connectors=connector_mode == "live",
     )
     bound = replace(plan, execution_context=context)
-    _write_json(output, bound.to_dict(), restricted=True)
+    _write_json(output, bound.to_dict())
     print(f"wrote {output}")
     print(f"execution context fingerprint: {context.fingerprint}")
     print(f"plan fingerprint: {bound.fingerprint}")
@@ -1604,7 +1604,7 @@ def _plugins(*, output: Path | None) -> int:
     if not plugins:
         print("no connector plugins installed")
     if output is not None:
-        _write_json(output, PluginLock(plugins=plugins).to_dict(), restricted=True)
+        _write_json(output, PluginLock(plugins=plugins).to_dict())
         print(f"wrote {output}")
     return 0
 
@@ -1765,7 +1765,7 @@ def _readiness(
     for error in report.errors:
         print(f"error: {error}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 0 if report.ready else 2
 
@@ -1903,7 +1903,7 @@ def _compensation_plan(
     ):
         raise ValueError("run report does not belong to the supplied immutable plan")
     plan = build_compensation_plan(original, report, created_by=created_by)
-    _write_json(output, plan.to_dict(), restricted=True)
+    _write_json(output, plan.to_dict())
     print(f"wrote {output}")
     print(f"plan fingerprint: {plan.fingerprint}")
     return 0
@@ -1932,7 +1932,6 @@ def _recurring_status(
         _write_json(
             output,
             {"schema": "master-agent/recurring-status@1", "workflows": records},
-            restricted=True,
         )
         print(f"wrote {output}")
     return 0
@@ -2180,7 +2179,7 @@ def _discover(
         if record.error_message:
             print(f"  {record.error_type}: {record.error_message}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     unavailable = {DiscoveryStatus.MISSING_ENVIRONMENT, DiscoveryStatus.FAILED}
     return 0 if all(record.status not in unavailable for record in records) else 2
@@ -2344,7 +2343,7 @@ def _connect(
             if record.error_message:
                 print(f"  {record.error_type}: {record.error_message}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return (
         0
@@ -2760,7 +2759,7 @@ def _github_repositories(
         suffix = f" — {url}" if url else ""
         print(f"- {name} ({access}){suffix}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 0
 
@@ -2865,7 +2864,7 @@ def _bitbucket_repositories(
         suffix = f" - {url}" if url else ""
         print(f"- {workspace}/{slug}{suffix}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 0
 
@@ -2948,7 +2947,7 @@ def _identity_resolve(
         for name, value in sorted(person.identifiers.items()):
             print(f"{name}: {value}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 0
 
@@ -2994,7 +2993,7 @@ def _evidence_prune(*, root: Path, apply: bool, output: Path | None) -> int:
     for error in result.errors:
         print(f"error: {error}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 2 if result.errors else 0
 
@@ -3014,7 +3013,7 @@ def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
     for error in result.errors:
         print(f"error: {error!r}")
     if output is not None:
-        _write_json(output, payload, restricted=True)
+        _write_json(output, payload)
         print(f"wrote {output}")
     return 2 if result.errors else 0
 
@@ -3036,7 +3035,6 @@ def _citations(path: Path, *, output: Path | None) -> int:
         _write_json(
             output,
             {"schema": "master-agent/citations@1", "citations": citations},
-            restricted=True,
         )
         print(f"wrote {output}")
     return 0
@@ -3330,19 +3328,10 @@ def _optional_path(value: str | None) -> Path | None:
 def _write_json(
     path: Path,
     payload: object,
-    *,
-    restricted: bool = False,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-    if restricted:
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+    if not isinstance(payload, Mapping):
+        raise StructuredDataTypeError("JSON output must be an object")
+    write_restricted_json(path, payload)
 
 
 def _print_report(report: RunReport, *, mode_label: str | None = None) -> None:

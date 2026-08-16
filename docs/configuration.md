@@ -96,9 +96,12 @@ world. Create reviewed boundaries explicitly before binding, for example with
 The audit parent, artifact root, and result parent must be pairwise distinct by
 both canonical path and filesystem identity; use dedicated directories for
 each writer.
-Draft and retained-evidence publication is create-only, so each run must bind
-fresh output filenames or a fresh private output directory. Existing and
-concurrently created files are preserved and cause the run to fail closed.
+All CLI JSON output, draft, and retained-evidence publication is create-only,
+so each invocation must use fresh output filenames or a fresh private output
+directory. The final name is created as a mode-`0600` regular file beneath a
+pinned, preexisting private parent. Symlinks, existing or concurrently created
+files, and parent-identity changes are preserved and cause publication to fail
+closed.
 
 An unbound policy dry run remains free of live connector credential resolution
 and is non-persistent: its audit chain exists only in a temporary directory

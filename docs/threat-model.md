@@ -258,6 +258,9 @@ Controls:
 - verification that refuses missing, empty, malformed, or tail-truncated audit
   databases without creating them;
 - evidence SHA-256 digests and manifests;
+- one restricted-artifact primitive for every CLI JSON output: pinned private
+  parent, no-follow exclusive mode-`0600` creation, descriptor-identity checks,
+  exact-byte readback, file and directory fsync, and identity-bound rollback;
 - mode-`0600` same-directory staging, fsync, create-only manifest-first
   publication, and transaction-owned rollback;
 - descriptor-relative, no-follow orphan detection and recoverable quarantine;
