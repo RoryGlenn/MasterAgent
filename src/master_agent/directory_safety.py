@@ -73,6 +73,7 @@ class PinnedDirectory:
         descriptors: tuple[int, ...],
         names: tuple[str | None, ...],
         identities: tuple[DirectoryIdentity, ...],
+        require_private: bool,
     ) -> None:
         if not descriptors or not (len(descriptors) == len(names) == len(identities)):
             raise ValueError("pinned directory descriptor chain is invalid")
@@ -80,6 +81,7 @@ class PinnedDirectory:
         self._descriptors = descriptors
         self._names = names
         self._identities = identities
+        self._require_private = require_private
         self._lock = RLock()
         self._finalizer = weakref.finalize(
             self,
@@ -96,8 +98,14 @@ class PinnedDirectory:
         create: bool = False,
         mode: int = 0o700,
         expected_identity: DirectoryIdentity | None = None,
+        require_private: bool = True,
     ) -> PinnedDirectory:
-        """Open and pin one preexisting canonical directory path."""
+        """Open and pin one preexisting canonical directory path.
+
+        Runtime write boundaries use the private default. Read-only callers may
+        disable that permission policy only when they apply their own ownership
+        policy to the pinned identity and every descriptor-relative child.
+        """
 
         if create:
             raise ConfigurationError("runtime directories must exist before approval")
@@ -126,7 +134,7 @@ class PinnedDirectory:
                 identities.append(
                     _directory_identity(
                         descriptor,
-                        private=index == len(components) - 1,
+                        private=require_private and index == len(components) - 1,
                     )
                 )
                 _validate_public_component(
@@ -134,7 +142,7 @@ class PinnedDirectory:
                     component,
                     identities[-1],
                 )
-            if not components:
+            if not components and require_private:
                 _validate_private_directory(os.fstat(root_descriptor))
             if expected_identity is not None and identities[-1] != expected_identity:
                 raise ConfigurationError(
@@ -145,6 +153,7 @@ class PinnedDirectory:
                 descriptors=tuple(descriptors),
                 names=tuple(names),
                 identities=tuple(identities),
+                require_private=require_private,
             )
             pinned.validate()
             return pinned
@@ -215,6 +224,7 @@ class PinnedDirectory:
                     descriptors=tuple(descriptors),
                     names=self._names,
                     identities=self._identities,
+                    require_private=self._require_private,
                 )
             except BaseException:
                 _close_descriptor_values(descriptors)
@@ -260,7 +270,9 @@ class PinnedDirectory:
                 identities.append(
                     _directory_identity(
                         descriptor,
-                        private=index == len(child_parts) - 1,
+                        private=(
+                            self._require_private and index == len(child_parts) - 1
+                        ),
                     )
                 )
                 _validate_public_component(
@@ -277,6 +289,7 @@ class PinnedDirectory:
                 descriptors=tuple(descriptors),
                 names=tuple(names),
                 identities=tuple(identities),
+                require_private=self._require_private,
             )
             pinned.validate()
             return pinned
@@ -296,7 +309,7 @@ class PinnedDirectory:
                 current = os.fstat(descriptor)
                 if not identity.matches(current):
                     raise ConfigurationError("runtime directory identity changed")
-                if index == len(self._descriptors) - 1:
+                if index == len(self._descriptors) - 1 and self._require_private:
                     _validate_private_directory(current)
                 if index:
                     name = self._names[index]

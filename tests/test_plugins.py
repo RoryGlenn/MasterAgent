@@ -6,10 +6,12 @@ import os
 import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
+from unittest.mock import patch
 
+from master_agent import plugins
 from master_agent.connectors.mock import MockConnector
 from master_agent.errors import ConfigurationError
 from master_agent.plugins import (
@@ -40,9 +42,11 @@ class _FakeDistribution:
     name: str
     version: str
     root: Path
-    files: tuple[Path, ...]
+    files: tuple[object, ...]
+    locate_calls: list[str] = field(default_factory=list)
 
-    def locate_file(self, relative: Path) -> Path:
+    def locate_file(self, relative: object) -> Path:
+        self.locate_calls.append(str(relative))
         return self.root / relative
 
 
@@ -153,6 +157,247 @@ class PluginTests(unittest.TestCase):
         self.assertNotEqual(before.artifact_sha256, after.artifact_sha256)
         self.assertNotEqual(before.identity_sha256, after.identity_sha256)
         self.assertEqual(entry.load_count, 0)
+
+    def test_unsafe_inventory_paths_fail_before_any_lookup_or_read(self) -> None:
+        unsafe_paths = (
+            "",
+            ".",
+            "..",
+            "/etc/passwd",
+            "../secret.txt",
+            "safe/../secret.txt",
+            "safe\\secret.txt",
+            "safe//secret.txt",
+            "./secret.txt",
+            "safe/./secret.txt",
+            "C:/secret.txt",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for unsafe in unsafe_paths:
+                with self.subTest(path=unsafe):
+                    distribution = _FakeDistribution(
+                        name="master-agent-unsafe-test",
+                        version="1.0.0",
+                        root=root,
+                        files=(unsafe,),
+                    )
+                    entry = _FakeEntryPoint(
+                        name="unsafe",
+                        value="unsafe:build",
+                        factory=lambda: object(),
+                        dist=distribution,
+                    )
+
+                    with (
+                        patch("master_agent.plugins.os.read", wraps=os.read) as read,
+                        self.assertRaisesRegex(
+                            ConfigurationError, "unsafe artifact path"
+                        ),
+                    ):
+                        discover_connector_plugins(entries=(entry,))
+
+                    self.assertEqual(distribution.locate_calls, [])
+                    read.assert_not_called()
+
+    def test_late_invalid_inventory_entry_prevents_all_artifact_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "safe.py").write_text("SAFE = True\n", encoding="utf-8")
+            distribution = _FakeDistribution(
+                name="master-agent-invalid-tail-test",
+                version="1.0.0",
+                root=root,
+                files=("safe.py", "../outside.txt"),
+            )
+            entry = _FakeEntryPoint(
+                name="invalid-tail",
+                value="safe:build",
+                factory=lambda: object(),
+                dist=distribution,
+            )
+
+            with (
+                patch("master_agent.plugins.os.read", wraps=os.read) as read,
+                self.assertRaisesRegex(ConfigurationError, "unsafe artifact path"),
+            ):
+                discover_connector_plugins(entries=(entry,))
+
+            self.assertEqual(distribution.locate_calls, [])
+            read.assert_not_called()
+
+    def test_parent_symlink_and_hardlink_escape_are_rejected_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            distribution_root = root / "distribution"
+            outside = root / "outside"
+            distribution_root.mkdir()
+            outside.mkdir()
+            secret = outside / "secret.txt"
+            secret.write_text("outside-canary\n", encoding="utf-8")
+
+            cases: tuple[tuple[str, tuple[object, ...]], ...] = (
+                ("parent-symlink", ("escaped/secret.txt",)),
+                ("hardlink", ("hardlink.txt",)),
+            )
+            (distribution_root / "escaped").symlink_to(
+                outside, target_is_directory=True
+            )
+            os.link(secret, distribution_root / "hardlink.txt")
+
+            for label, files in cases:
+                with self.subTest(label=label):
+                    distribution = _FakeDistribution(
+                        name=f"master-agent-{label}-test",
+                        version="1.0.0",
+                        root=distribution_root,
+                        files=files,
+                    )
+                    entry = _FakeEntryPoint(
+                        name=label,
+                        value="unsafe:build",
+                        factory=lambda: object(),
+                        dist=distribution,
+                    )
+
+                    with (
+                        patch("master_agent.plugins.os.read", wraps=os.read) as read,
+                        self.assertRaises(ConfigurationError),
+                    ):
+                        discover_connector_plugins(entries=(entry,))
+
+                    read.assert_not_called()
+                    self.assertEqual(
+                        secret.read_text(encoding="utf-8"), "outside-canary\n"
+                    )
+
+    def test_world_writable_distribution_root_is_rejected_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "plugin.py"
+            artifact.write_text("SAFE = True\n", encoding="utf-8")
+            root.chmod(0o777)
+            distribution = _FakeDistribution(
+                name="master-agent-world-writable-test",
+                version="1.0.0",
+                root=root,
+                files=("plugin.py",),
+            )
+            entry = _FakeEntryPoint(
+                name="world-writable",
+                value="plugin:build",
+                factory=lambda: object(),
+                dist=distribution,
+            )
+
+            with (
+                patch("master_agent.plugins.os.read", wraps=os.read) as read,
+                self.assertRaisesRegex(ConfigurationError, "owner-controlled"),
+            ):
+                discover_connector_plugins(entries=(entry,))
+
+            read.assert_not_called()
+
+    def test_distribution_file_count_and_byte_budgets_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.bin"
+            second = root / "second.bin"
+            first.write_bytes(b"abc")
+            second.write_bytes(b"def")
+
+            count_distribution = _FakeDistribution(
+                name="master-agent-count-test",
+                version="1.0.0",
+                root=root,
+                files=("first.bin", "second.bin"),
+            )
+            count_entry = _FakeEntryPoint(
+                name="count",
+                value="count:build",
+                factory=lambda: object(),
+                dist=count_distribution,
+            )
+            with (
+                patch.object(plugins, "_MAX_DISTRIBUTION_FILES", 1),
+                self.assertRaisesRegex(ConfigurationError, "file limit"),
+            ):
+                discover_connector_plugins(entries=(count_entry,))
+            self.assertEqual(count_distribution.locate_calls, [])
+
+            size_distribution = _FakeDistribution(
+                name="master-agent-size-test",
+                version="1.0.0",
+                root=root,
+                files=("first.bin",),
+            )
+            size_entry = _FakeEntryPoint(
+                name="size",
+                value="size:build",
+                factory=lambda: object(),
+                dist=size_distribution,
+            )
+            with (
+                patch.object(plugins, "_MAX_ARTIFACT_BYTES", 2),
+                self.assertRaisesRegex(ConfigurationError, "32 MiB limit"),
+            ):
+                discover_connector_plugins(entries=(size_entry,))
+
+            aggregate_distribution = _FakeDistribution(
+                name="master-agent-aggregate-test",
+                version="1.0.0",
+                root=root,
+                files=("first.bin", "second.bin"),
+            )
+            aggregate_entry = _FakeEntryPoint(
+                name="aggregate",
+                value="aggregate:build",
+                factory=lambda: object(),
+                dist=aggregate_distribution,
+            )
+            with (
+                patch.object(plugins, "_MAX_DISTRIBUTION_BYTES", 5),
+                self.assertRaisesRegex(ConfigurationError, "128 MiB limit"),
+            ):
+                discover_connector_plugins(entries=(aggregate_entry,))
+
+    def test_artifact_namespace_replacement_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "plugin.py"
+            displaced = root / "plugin-old.py"
+            artifact.write_bytes(b"SAFE")
+            distribution = _FakeDistribution(
+                name="master-agent-race-test",
+                version="1.0.0",
+                root=root,
+                files=("plugin.py",),
+            )
+            entry = _FakeEntryPoint(
+                name="race",
+                value="plugin:build",
+                factory=lambda: object(),
+                dist=distribution,
+            )
+            real_read = os.read
+            replaced = False
+
+            def replace_after_read(descriptor: int, size: int) -> bytes:
+                nonlocal replaced
+                value = real_read(descriptor, size)
+                if value and not replaced:
+                    artifact.rename(displaced)
+                    artifact.write_bytes(b"EVIL")
+                    replaced = True
+                return value
+
+            with (
+                patch("master_agent.plugins.os.read", side_effect=replace_after_read),
+                self.assertRaisesRegex(ConfigurationError, "changed"),
+            ):
+                discover_connector_plugins(entries=(entry,))
+
+            self.assertTrue(replaced)
 
     def test_locked_plugin_import_ignores_cwd_shadow_module(self) -> None:
         module_name = "master_agent_verified_shadow_plugin"

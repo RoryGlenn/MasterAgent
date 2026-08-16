@@ -136,6 +136,22 @@ class PinnedDirectoryTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(unsafe.stat().st_mode), 0o777)
 
+    def test_read_only_pin_can_delegate_permissions_without_weakening_default(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            readable = root / "readable"
+            readable.mkdir(mode=0o700)
+            readable.chmod(0o775)
+
+            with self.assertRaisesRegex(ConfigurationError, "group- or world-writable"):
+                PinnedDirectory.open(readable)
+
+            with PinnedDirectory.open(readable, require_private=False) as pinned:
+                pinned.validate()
+                self.assertEqual(pinned.identity.owner, os.geteuid())
+
     def test_expected_identity_mismatch_is_rejected(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

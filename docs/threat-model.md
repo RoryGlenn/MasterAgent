@@ -225,6 +225,9 @@ An installed plugin may execute code, leak data, or claim broad capabilities.
 Controls:
 
 - discovery reads entry-point metadata without importing;
+- distribution inventories are validated in full before lookup, and bounded
+  owner-checked regular artifacts are read only descriptor-relatively beneath
+  one pinned root without following symlinks or accepting hardlinks;
 - installation grants no authority;
 - exact plugin name, distribution, version, entry point, and artifact digest are
   operator-locked and approval-bound;
