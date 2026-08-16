@@ -3,5 +3,12 @@
 
 [authorities.rory]
 subject = "rory@example.com"
+issuer = "master-agent.example.com"
+tenant = "example-organization"
+roles = ["change-approver"]
 secret_env = "MASTER_AGENT_APPROVAL_KEY_RORY"
 enabled = true
+# Optional emergency revocation controls. Values are authenticated configuration,
+# not fields supplied by an approval artifact.
+# revoked_before = "2026-08-16T12:00:00+00:00"
+# revoked_approval_ids = ["00000000-0000-0000-0000-000000000000"]

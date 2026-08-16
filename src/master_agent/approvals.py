@@ -11,9 +11,10 @@ import hashlib
 import hmac
 import os
 import tomllib
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -29,17 +30,47 @@ class ApprovalAuthority:
 
     key_id: str
     subject: str
+    issuer: str
+    tenant: str
+    roles: tuple[str, ...]
     secret: bytes
+    revoked_before: datetime | None = None
+    revoked_approval_ids: frozenset[UUID] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.key_id.strip() or self.key_id != self.key_id.strip():
             raise ConfigurationError("approval authority key_id must be normalized")
+        _validate_claim(self.key_id, "key_id")
         if not self.subject.strip() or self.subject != self.subject.strip():
             raise ConfigurationError("approval authority subject must be normalized")
+        _validate_claim(self.subject, "subject")
+        _validate_claim(self.issuer, "issuer")
+        _validate_claim(self.tenant, "tenant")
+        if not self.roles:
+            raise ConfigurationError("approval authority roles must not be empty")
+        role_keys: set[str] = set()
+        for role in self.roles:
+            _validate_claim(role, "role")
+            key = _claim_key(role)
+            if key in role_keys:
+                raise ConfigurationError("approval authority roles must be unique")
+            role_keys.add(key)
+        object.__setattr__(
+            self,
+            "roles",
+            tuple(sorted(self.roles, key=lambda item: item.casefold())),
+        )
         if len(self.secret) < 32:
             raise ConfigurationError(
                 f"approval authority {self.key_id} requires at least 32 secret bytes"
             )
+        if self.revoked_before is not None:
+            _require_aware_datetime(self.revoked_before, "revoked_before")
+        object.__setattr__(
+            self,
+            "revoked_approval_ids",
+            frozenset(self.revoked_approval_ids),
+        )
 
 
 class ApprovalAuthenticator(Protocol):
@@ -128,7 +159,35 @@ class HmacApprovalAuthenticator:
                 continue
             if selected_key_ids is not None and key_id not in selected_key_ids:
                 continue
-            subject = str(item.get("subject", ""))
+            subject = _required_string(item, "subject", key_id=str(key_id))
+            issuer = _required_string(item, "issuer", key_id=str(key_id))
+            tenant = _required_string(item, "tenant", key_id=str(key_id))
+            roles_raw = item.get("roles")
+            if (
+                not isinstance(roles_raw, list)
+                or not roles_raw
+                or not all(isinstance(role, str) for role in roles_raw)
+            ):
+                raise ConfigurationError(
+                    f"approval authority {key_id} roles must be a non-empty string list"
+                )
+            revoked_before = _optional_datetime(
+                item.get("revoked_before"),
+                key_id=str(key_id),
+            )
+            revoked_ids_raw = item.get("revoked_approval_ids", [])
+            if not isinstance(revoked_ids_raw, list) or not all(
+                isinstance(value, str) for value in revoked_ids_raw
+            ):
+                raise ConfigurationError(
+                    f"approval authority {key_id} revoked_approval_ids must be a string list"
+                )
+            try:
+                revoked_ids = frozenset(UUID(value) for value in revoked_ids_raw)
+            except ValueError as error:
+                raise ConfigurationError(
+                    f"approval authority {key_id} has an invalid revoked approval ID"
+                ) from error
             secret_env = str(item.get("secret_env", "")).strip()
             if not secret_env:
                 raise ConfigurationError(
@@ -143,6 +202,11 @@ class HmacApprovalAuthenticator:
                 key_id=str(key_id),
                 subject=subject,
                 secret=secret,
+                issuer=issuer,
+                tenant=tenant,
+                roles=tuple(roles_raw),
+                revoked_before=revoked_before,
+                revoked_approval_ids=revoked_ids,
             )
             authorities[authority.key_id] = authority
         if selected_key_ids is not None and set(authorities) != set(selected_key_ids):
@@ -180,6 +244,9 @@ class HmacApprovalAuthenticator:
             plan_fingerprint=plan.fingerprint,
             approved_action_ids=approved_action_ids,
             approved_by=authority.subject,
+            issuer=authority.issuer,
+            tenant=authority.tenant,
+            roles=authority.roles,
             issued_at=issued_at,
             expires_at=expires_at,
             key_id=authority.key_id,
@@ -198,7 +265,19 @@ class HmacApprovalAuthenticator:
         if approval.signature_scheme != "hmac-sha256":
             return None
         authority = self._authorities.get(approval.key_id)
-        if authority is None or approval.approved_by != authority.subject:
+        if authority is None or (
+            approval.approved_by != authority.subject
+            or approval.issuer != authority.issuer
+            or approval.tenant != authority.tenant
+            or approval.roles != authority.roles
+        ):
+            return None
+        if approval.approval_id in authority.revoked_approval_ids:
+            return None
+        if (
+            authority.revoked_before is not None
+            and approval.issued_at <= authority.revoked_before
+        ):
             return None
         expected = hmac.new(
             authority.secret,
@@ -207,4 +286,73 @@ class HmacApprovalAuthenticator:
         ).hexdigest()
         if not hmac.compare_digest(expected, approval.signature):
             return None
-        return authority.subject
+        return _principal_id(authority)
+
+
+def _principal_id(authority: ApprovalAuthority) -> str:
+    """Return a canonical issuer/tenant/subject identity for distinctness."""
+
+    return "|".join(
+        (
+            _claim_key(authority.issuer),
+            _claim_key(authority.tenant),
+            _claim_key(authority.subject),
+        )
+    )
+
+
+def _claim_key(value: str) -> str:
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _validate_claim(value: str, name: str) -> None:
+    if not value or value != value.strip():
+        raise ConfigurationError(
+            f"approval authority {name} must be a non-empty normalized value"
+        )
+    if unicodedata.normalize("NFC", value) != value:
+        raise ConfigurationError(
+            f"approval authority {name} must use Unicode NFC normalization"
+        )
+    if any(unicodedata.category(character) in {"Cc", "Cf"} for character in value):
+        raise ConfigurationError(
+            f"approval authority {name} must not contain control characters"
+        )
+
+
+def _required_string(
+    item: Mapping[str, object],
+    name: str,
+    *,
+    key_id: str,
+) -> str:
+    value = item.get(name)
+    if not isinstance(value, str) or not value:
+        raise ConfigurationError(
+            f"approval authority {key_id} requires string field {name}"
+        )
+    return value
+
+
+def _optional_datetime(value: object, *, key_id: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError(
+            f"approval authority {key_id} revoked_before must be an ISO datetime"
+        )
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ConfigurationError(
+            f"approval authority {key_id} revoked_before must be an ISO datetime"
+        ) from error
+    _require_aware_datetime(parsed, "revoked_before")
+    return parsed.astimezone(UTC)
+
+
+def _require_aware_datetime(value: datetime, name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ConfigurationError(
+            f"approval authority {name} must include a timezone offset"
+        )

@@ -131,6 +131,9 @@ class OrchestratorCompensationTests(unittest.TestCase):
                     "rory": ApprovalAuthority(
                         key_id="rory",
                         subject="rory",
+                        issuer="master-agent.test",
+                        tenant="test-tenant",
+                        roles=("change-approver",),
                         secret=b"rory-test-approval-secret-32-bytes!!",
                     )
                 }

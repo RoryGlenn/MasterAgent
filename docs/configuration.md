@@ -76,6 +76,13 @@ rejected before connector construction.
 If policy or governance requires human approval, `bind-context` requires an
 explicit `--approval-authorities` path. The snapshot digest becomes part of the
 plan before anyone reviews it; the signing secret is not loaded at bind time.
+Every enabled authority explicitly declares its issuer, tenant, subject, and
+non-empty role list. Approval artifacts authenticate those claims together with
+the exact plan/actions and bounded validity window. Optional `revoked_before`
+and `revoked_approval_ids` entries in the trusted snapshot invalidate issued
+artifacts without trusting fields supplied by those artifacts. Identity
+distinctness uses the canonical issuer/tenant/subject tuple, including Unicode
+compatibility normalization and case folding.
 An approval-required apply writes its secret-free resumable request beneath the
 bound artifact root. `resume-approval` restores only the captured invocation,
 so there is no supported path for adding or replacing a trust configuration,

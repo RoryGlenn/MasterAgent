@@ -120,6 +120,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
                 name: ApprovalAuthority(
                     key_id=name,
                     subject=name,
+                    issuer="master-agent.test",
+                    tenant="test-tenant",
+                    roles=("change-approver",),
                     secret=(f"{name}-approval-secret-" + "x" * 32).encode(),
                 )
                 for name in ("alice", "bob")
