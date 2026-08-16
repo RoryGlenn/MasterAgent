@@ -16,6 +16,11 @@ from master_agent.models import (
     ConnectorExecutionBinding,
     RiskLevel,
 )
+from master_agent.resource_limits import (
+    MAX_ACTION_PARAMETER_BYTES,
+    MAX_LOCAL_ARTIFACT_BYTES,
+    measure_json_resources,
+)
 
 _AUTHENTICATION_MODES: dict[str, frozenset[str]] = {
     "anonymous_or_configured_connector": frozenset(
@@ -77,6 +82,9 @@ class CapabilityDefinition:
         Exact target identity contract.
     parameter_schema
         Closed top-level parameter names and primitive type descriptors.
+    max_input_bytes, max_output_bytes
+        Required per-action input and generated-artifact byte ceilings for
+        local-generation capabilities; prohibited for live capabilities.
     uses_external_model
         Whether organization external-model data policy must be consulted.
     description
@@ -94,6 +102,8 @@ class CapabilityDefinition:
     target_system: str = ""
     target_resource_types: tuple[str, ...] = ()
     parameter_schema: Mapping[str, str] = field(default_factory=dict)
+    max_input_bytes: int | None = None
+    max_output_bytes: int | None = None
     uses_external_model: bool = False
     description: str = ""
 
@@ -157,6 +167,28 @@ class CapabilityDefinition:
             raise ConfigurationError(
                 f"enabled modifying capability {self.name} requires a "
                 "provider_precondition"
+            )
+        if self.risk is RiskLevel.LOCAL_GENERATION:
+            if not _is_positive_int(self.max_input_bytes) or not _is_positive_int(
+                self.max_output_bytes
+            ):
+                raise ConfigurationError(
+                    f"local-generation capability {self.name} requires positive "
+                    "max_input_bytes and max_output_bytes quotas"
+                )
+            assert self.max_input_bytes is not None
+            assert self.max_output_bytes is not None
+            if self.max_input_bytes > MAX_ACTION_PARAMETER_BYTES:
+                raise ConfigurationError(
+                    f"capability {self.name} max_input_bytes exceeds the model ceiling"
+                )
+            if self.max_output_bytes > MAX_LOCAL_ARTIFACT_BYTES:
+                raise ConfigurationError(
+                    f"capability {self.name} max_output_bytes exceeds the artifact ceiling"
+                )
+        elif self.max_input_bytes is not None or self.max_output_bytes is not None:
+            raise ConfigurationError(
+                f"non-local capability {self.name} must not declare artifact quotas"
             )
         object.__setattr__(self, "target_system", target_system)
         object.__setattr__(self, "target_resource_types", resource_types)
@@ -260,6 +292,14 @@ class CapabilityCatalog:
                 parameter_schema={
                     str(key): str(item) for key, item in parameter_schema.items()
                 },
+                max_input_bytes=_optional_positive_int(
+                    value.get("max_input_bytes"),
+                    f"capability {name} max_input_bytes",
+                ),
+                max_output_bytes=_optional_positive_int(
+                    value.get("max_output_bytes"),
+                    f"capability {name} max_output_bytes",
+                ),
                 uses_external_model=_strict_bool(
                     value.get("uses_external_model", False),
                     f"capability {name} uses_external_model",
@@ -322,6 +362,17 @@ class CapabilityCatalog:
         )
         if parameter_error is not None:
             return False, f"capability parameter schema mismatch: {parameter_error}"
+        if definition.risk is RiskLevel.LOCAL_GENERATION:
+            if definition.max_input_bytes is None:  # pragma: no cover - load invariant.
+                return False, "local-generation input quota is missing"
+            try:
+                measure_json_resources(
+                    action.parameters,
+                    context=f"{action.capability} input",
+                    max_bytes=definition.max_input_bytes,
+                )
+            except ValidationError as error:
+                return False, f"capability input quota exceeded: {error}"
         if definition.requires_expected_version and not action.target.expected_version:
             return (
                 False,
@@ -413,6 +464,16 @@ class CapabilityCatalog:
             sorted(name for name, item in self.definitions.items() if item.enabled)
         )
 
+    def local_generation_output_limits(self) -> dict[str, int]:
+        """Return declared per-action output ceilings for local generators."""
+
+        return {
+            name: item.max_output_bytes
+            for name, item in self.definitions.items()
+            if item.risk is RiskLevel.LOCAL_GENERATION
+            and item.max_output_bytes is not None
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the catalog without credential material."""
 
@@ -429,6 +490,8 @@ class CapabilityCatalog:
                     "target_system": item.target_system,
                     "target_resource_types": list(item.target_resource_types),
                     "parameter_schema": dict(item.parameter_schema),
+                    "max_input_bytes": item.max_input_bytes,
+                    "max_output_bytes": item.max_output_bytes,
                     "uses_external_model": item.uses_external_model,
                     "description": item.description,
                 }
@@ -441,6 +504,18 @@ def _strict_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigurationError(f"{name} must be a boolean")
     return value
+
+
+def _optional_positive_int(value: Any, name: str) -> int | None:
+    if value is None:
+        return None
+    if not _is_positive_int(value):
+        raise ConfigurationError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _validate_parameters(

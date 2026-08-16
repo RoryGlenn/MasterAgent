@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
+from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import ConnectorConfig, IntegrationConfig
 from master_agent.connectors.base import Connector
 from master_agent.connectors.bitbucket import BitbucketConnector
@@ -17,6 +18,7 @@ from master_agent.connectors.communications import (
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.confluence_write import ConfluenceWriteConnector
 from master_agent.connectors.drafts import (
+    ArtifactBudget,
     ConfluenceDraftConnector,
     JiraDraftConnector,
     OutlookDraftConnector,
@@ -291,18 +293,35 @@ def build_live_registry(
 def register_draft_connectors(
     registry: ConnectorRegistry,
     output_root: Path | PinnedDirectory,
+    *,
+    catalog: CapabilityCatalog | None = None,
+    artifact_budget: ArtifactBudget | None = None,
 ) -> ConnectorRegistry:
     """Register all local, non-publishing Phase 3 generators."""
 
     root = pin_directory(output_root)
+    budget = artifact_budget or ArtifactBudget()
+    output_limits = catalog.local_generation_output_limits() if catalog else None
     try:
         for connector in (
-            JiraDraftConnector(root),
-            ConfluenceDraftConnector(root),
-            OutlookDraftConnector(root),
-            TeamsDraftConnector(root),
-            PowerPointDraftConnector(root),
-            RepositoryDraftConnector(root),
+            JiraDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            ConfluenceDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            OutlookDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            TeamsDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            PowerPointDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            RepositoryDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
         ):
             registry.register(connector)
     finally:
@@ -310,10 +329,20 @@ def register_draft_connectors(
     return registry
 
 
-def build_draft_registry(output_root: Path | PinnedDirectory) -> ConnectorRegistry:
+def build_draft_registry(
+    output_root: Path | PinnedDirectory,
+    *,
+    catalog: CapabilityCatalog | None = None,
+    artifact_budget: ArtifactBudget | None = None,
+) -> ConnectorRegistry:
     """Build a registry containing only local draft generators."""
 
-    return register_draft_connectors(ConnectorRegistry(), output_root)
+    return register_draft_connectors(
+        ConnectorRegistry(),
+        output_root,
+        catalog=catalog,
+        artifact_budget=artifact_budget,
+    )
 
 
 def _feature_enabled(config: ConnectorConfig, key: str) -> bool:

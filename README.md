@@ -398,6 +398,13 @@ or a fresh private output directory for each command.
 `draft-package` additionally requires its dedicated output directory to be
 empty before it reads workflow configuration.
 
+Plan files are bounded before parsing and before recursive model construction.
+Local generators also enforce catalog-declared input/output quotas and share a
+64 MiB whole-run artifact budget; large artifact verification is streamed in
+bounded chunks. See
+[Configuration](docs/configuration.md#executable-capability-contracts) for the
+exact ceilings.
+
 ```bash
 master-agent bind-context change-plan.json \
   --connector-mode live \

@@ -276,6 +276,25 @@ but an administrator able to rewrite the entire SQLite database can rewrite the
 checkpoint too. Local SQLite is therefore a development sink, not an immutable
 external compliance record.
 
+### Resource exhaustion
+
+An attacker-controlled or accidentally enormous plan, generated draft, or
+artifact set may exhaust memory, CPU, or local storage before policy can make a
+decision.
+
+Controls:
+
+- reject plan files over 8 MiB before JSON parsing;
+- iteratively bound JSON nesting, collection fan-out, node count, string size,
+  per-action parameters, aggregate plan parameters, actions, and dependencies
+  before recursive model construction;
+- require every local-generation capability to declare input and output byte
+  quotas beneath hard runtime ceilings;
+- reserve one 64 MiB aggregate budget across all artifacts in a complete local
+  run and reject over-budget bundles before any final artifact name is created;
+- stream artifact readback and verification in bounded chunks instead of
+  holding a duplicate whole-file buffer.
+
 ## Packaged prohibitions
 
 - protected-branch write;

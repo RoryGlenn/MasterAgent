@@ -35,6 +35,7 @@ from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConf
 from master_agent.config_sources import ConfigSource, resolve_config_source
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.bitbucket import BitbucketConnector
+from master_agent.connectors.drafts import ArtifactBudget
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
@@ -94,6 +95,7 @@ from master_agent.recurring import (
     validate_plan_scope,
 )
 from master_agent.registry import ConnectorRegistry
+from master_agent.resource_limits import MAX_PLAN_BYTES
 from master_agent.retention import (
     RetainedJSONReservation,
     RetentionConfig,
@@ -1236,6 +1238,9 @@ def _run(
         capabilities_path=capabilities_path,
         governance_path=governance_path,
     )
+    capability_catalog = CapabilityCatalog.from_toml(
+        configuration_sources["capabilities"]
+    )
     approval_authenticator: HmacApprovalAuthenticator | None = None
     if not apply:
         # A policy-only dry run must not resolve credentials or construct live
@@ -1260,6 +1265,7 @@ def _run(
                     policy_source=configuration_sources["policy"],
                     sources_of_truth_source=configuration_sources["sources_of_truth"],
                     capabilities_source=configuration_sources["capabilities"],
+                    capabilities=capability_catalog,
                     governance_source=configuration_sources["governance"],
                     approval_authenticator=approval_authenticator,
                     audit=ephemeral_audit,
@@ -1425,7 +1431,11 @@ def _run(
             )
         if connector_mode == "mock":
             connectors = _mock_registry()
-            register_draft_connectors(connectors, artifact_directory)
+            register_draft_connectors(
+                connectors,
+                artifact_directory,
+                catalog=capability_catalog,
+            )
         else:
             connectors = build_live_registry(
                 integration_config,
@@ -1438,7 +1448,11 @@ def _run(
                 artifact_directory=artifact_directory,
                 approved_execution_context=plan.execution_context,
             )
-            register_draft_connectors(connectors, artifact_directory)
+            register_draft_connectors(
+                connectors,
+                artifact_directory,
+                catalog=capability_catalog,
+            )
             identities = IdentityRegistry.from_toml(configuration_sources["identities"])
             if "identity" not in connectors.systems():
                 connectors.register(IdentityMapConnector(identities))
@@ -1512,6 +1526,7 @@ def _run(
                 policy_source=configuration_sources["policy"],
                 sources_of_truth_source=configuration_sources["sources_of_truth"],
                 capabilities_source=configuration_sources["capabilities"],
+                capabilities=capability_catalog,
                 governance_source=configuration_sources["governance"],
                 approval_authenticator=approval_authenticator,
                 audit=applied_audit,
@@ -1865,7 +1880,15 @@ def _draft_package(
             resolve_config_source(workflow_path, "draft-package.toml")
         )
         plan = build_draft_package_plan(settings)
-        registry = build_draft_registry(output_directory)
+        capability_catalog = CapabilityCatalog.from_toml(
+            resolve_config_source(None, "capabilities.toml")
+        )
+        artifact_budget = ArtifactBudget()
+        registry = build_draft_registry(
+            output_directory,
+            catalog=capability_catalog,
+            artifact_budget=artifact_budget,
+        )
         for connector in registry.connectors():
             if isinstance(connector, ClosableConnector):
                 resources.callback(connector.close)
@@ -1874,9 +1897,14 @@ def _draft_package(
         report = _orchestrator(
             registry,
             canonical_database,
+            capabilities=capability_catalog,
             audit=audit,
         ).run(plan, dry_run=False)
-        artifacts = render_draft_package(report, output_dir=output_directory)
+        artifacts = render_draft_package(
+            report,
+            output_dir=output_directory,
+            artifact_budget=artifact_budget,
+        )
         _print_report(report, mode_label="local generation")
         print(f"summary: {artifacts.summary_markdown}")
         print(f"manifest: {artifacts.manifest_json}")
@@ -3246,6 +3274,7 @@ def _orchestrator(
     policy_source: ConfigSource | None = None,
     sources_of_truth_source: ConfigSource | None = None,
     capabilities_source: ConfigSource | None = None,
+    capabilities: CapabilityCatalog | None = None,
     governance_source: ConfigSource | None = None,
     approval_authenticator: HmacApprovalAuthenticator | None = None,
     audit: AuditLog | None = None,
@@ -3265,9 +3294,12 @@ def _orchestrator(
         ),
         connectors=connectors,
         audit=audit if audit is not None else AuditLog(database),
-        capabilities=CapabilityCatalog.from_toml(
-            capabilities_source
-            or resolve_config_source(capabilities_path, "capabilities.toml")
+        capabilities=(
+            capabilities
+            or CapabilityCatalog.from_toml(
+                capabilities_source
+                or resolve_config_source(capabilities_path, "capabilities.toml")
+            )
         ),
         governance=GovernanceProfile.from_toml(
             governance_source
@@ -3314,7 +3346,19 @@ def _live_systems_for_plan(
 
 
 def _load_plan(path: Path) -> ChangePlan:
-    return ChangePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    with path.open("rb") as handle:
+        payload = handle.read(MAX_PLAN_BYTES + 1)
+    if len(payload) > MAX_PLAN_BYTES:
+        raise ValidationError(
+            f"change plan exceeds the {MAX_PLAN_BYTES}-byte file limit"
+        )
+    try:
+        raw = json.loads(payload.decode("utf-8"))
+    except (ValueError, RecursionError, MemoryError) as error:
+        raise ValidationError("change plan is not bounded valid UTF-8 JSON") from error
+    if not isinstance(raw, Mapping):
+        raise ValidationError("change plan must be a JSON object")
+    return ChangePlan.from_dict(raw)
 
 
 def _load_approval(path: Path) -> Approval:

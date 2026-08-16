@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from master_agent.directory_safety import PinnedDirectory, pin_directory
@@ -24,6 +25,10 @@ from master_agent.models import (
     ExecutionResult,
     ResourceRef,
     VerificationResult,
+)
+from master_agent.resource_limits import (
+    MAX_LOCAL_ARTIFACT_BYTES,
+    MAX_RUN_ARTIFACT_BYTES,
 )
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -49,6 +54,62 @@ class GeneratedArtifact:
         }
 
 
+class ArtifactBudget:
+    """One thread-safe aggregate byte budget shared by a complete local run."""
+
+    def __init__(self, max_bytes: int = MAX_RUN_ARTIFACT_BYTES) -> None:
+        if (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or max_bytes <= 0
+            or max_bytes > MAX_RUN_ARTIFACT_BYTES
+        ):
+            raise ValueError(
+                f"artifact budget must be between 1 and {MAX_RUN_ARTIFACT_BYTES} bytes"
+            )
+        self._max_bytes = max_bytes
+        self._used_bytes = 0
+        self._lock = Lock()
+
+    @property
+    def max_bytes(self) -> int:
+        """Return the immutable aggregate ceiling."""
+
+        return self._max_bytes
+
+    @property
+    def used_bytes(self) -> int:
+        """Return the bytes retained by successful artifact publications."""
+
+        with self._lock:
+            return self._used_bytes
+
+    def reserve(self, amount: int) -> None:
+        """Reserve bytes before any final artifact name is created."""
+
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise ValueError("artifact reservation must be a non-negative integer")
+        with self._lock:
+            if self._used_bytes + amount > self._max_bytes:
+                raise ConnectorError(
+                    "aggregate generated artifact budget would be exceeded"
+                )
+            self._used_bytes += amount
+
+    def release(self, amount: int) -> None:
+        """Release a failed transaction's exact prior reservation."""
+
+        with self._lock:
+            if (
+                isinstance(amount, bool)
+                or not isinstance(amount, int)
+                or amount < 0
+                or amount > self._used_bytes
+            ):
+                raise RuntimeError("artifact budget release is inconsistent")
+            self._used_bytes -= amount
+
+
 class _LocalDraftConnector:
     """Base connector for generation under one controlled output root."""
 
@@ -58,11 +119,28 @@ class _LocalDraftConnector:
         system: str,
         capabilities: frozenset[str],
         output_root: Path | PinnedDirectory,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
     ) -> None:
         self._system = system
         self._capabilities = capabilities
         self._output_directory = pin_directory(output_root)
         self._output_root = self._output_directory.path
+        self._artifact_budget = artifact_budget or ArtifactBudget()
+        supplied_limits = dict(output_limits or {})
+        self._output_limits: dict[str, int] = {}
+        for capability in capabilities:
+            limit = supplied_limits.get(capability, MAX_LOCAL_ARTIFACT_BYTES)
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or limit <= 0
+                or limit > MAX_LOCAL_ARTIFACT_BYTES
+            ):
+                raise ConfigurationError(
+                    f"local artifact output quota is invalid for {capability}"
+                )
+            self._output_limits[capability] = limit
 
     @property
     def system(self) -> str:
@@ -96,11 +174,15 @@ class _LocalDraftConnector:
         if not matches:
             return None
         path = self._output_root / matches[0]
-        payload = _read_bytes(self._output_directory, path)
+        digest, size = _inspect_artifact(
+            self._output_directory,
+            path,
+            max_bytes=MAX_LOCAL_ARTIFACT_BYTES,
+        )
         return {
             "path": str(path),
-            "sha256": hashlib.sha256(payload).hexdigest(),
-            "size": len(payload),
+            "sha256": digest,
+            "size": size,
         }
 
     def verify(
@@ -122,17 +204,19 @@ class _LocalDraftConnector:
             )
         path = Path(path_value)
         try:
-            payload = _read_bytes(self._output_directory, path)
+            observed_digest, observed_size = _inspect_artifact(
+                self._output_directory,
+                path,
+                max_bytes=self._output_limits[action.capability],
+            )
         except ConnectorError:
-            payload = None
-        observed_digest = (
-            hashlib.sha256(payload).hexdigest() if payload is not None else None
-        )
-        verified = payload is not None and observed_digest == digest
+            observed_digest = None
+            observed_size = None
+        verified = observed_digest is not None and observed_digest == digest
         observed = {
             "path": str(path),
             "sha256": observed_digest,
-            "size": len(payload) if payload is not None else None,
+            "size": observed_size,
         }
         return VerificationResult(
             action_id=action.action_id,
@@ -169,34 +253,63 @@ class _LocalDraftConnector:
 
     def _write_json(
         self,
+        action: AgentAction,
         path: Path,
         payload: Mapping[str, Any],
     ) -> GeneratedArtifact:
-        return _write_json(self._output_directory, path, payload)
+        return _write_json(
+            self._output_directory,
+            path,
+            payload,
+            artifact_budget=self._artifact_budget,
+            max_output_bytes=self._output_limits[action.capability],
+        )
 
     def _write_text(
         self,
+        action: AgentAction,
         path: Path,
         text: str,
         media_type: str,
     ) -> GeneratedArtifact:
-        return _write_text(self._output_directory, path, text, media_type)
+        return _write_text(
+            self._output_directory,
+            path,
+            text,
+            media_type,
+            artifact_budget=self._artifact_budget,
+            max_output_bytes=self._output_limits[action.capability],
+        )
 
     def _write_bytes(
         self,
+        action: AgentAction,
         path: Path,
-        payload: bytes,
+        payload: bytes | memoryview,
         media_type: str,
     ) -> GeneratedArtifact:
-        return _write_bytes(self._output_directory, path, payload, media_type)
+        return _write_bytes(
+            self._output_directory,
+            path,
+            payload,
+            media_type,
+            artifact_budget=self._artifact_budget,
+            max_output_bytes=self._output_limits[action.capability],
+        )
 
     def _write_bundle(
         self,
-        files: Sequence[tuple[Path, bytes, str]],
+        action: AgentAction,
+        files: Sequence[tuple[Path, bytes | memoryview, str]],
     ) -> tuple[GeneratedArtifact, ...]:
         """Create a companion-file bundle with transaction-owned rollback."""
 
-        return _write_bundle(self._output_directory, files)
+        return _write_bundle(
+            self._output_directory,
+            files,
+            artifact_budget=self._artifact_budget,
+            max_output_bytes=self._output_limits[action.capability],
+        )
 
     def _result(
         self,
@@ -230,11 +343,19 @@ class JiraDraftConnector(_LocalDraftConnector):
         }
     )
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="jira",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -278,10 +399,11 @@ class JiraDraftConnector(_LocalDraftConnector):
             after=after,
         )
         artifact, preview_artifact = self._write_bundle(
+            action,
             (
                 (path, _json_bytes(payload), "application/json"),
                 (preview_path, preview.encode("utf-8"), "text/markdown"),
-            )
+            ),
         )
         return self._result(
             action,
@@ -298,11 +420,19 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
         {"confluence.page.create.draft", "confluence.page.update.draft"}
     )
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="confluence",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -342,10 +472,11 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
             after=after,
         )
         artifact, preview_artifact = self._write_bundle(
+            action,
             (
                 (path, _json_bytes(payload), "application/json"),
                 (path.with_suffix(".md"), preview.encode("utf-8"), "text/markdown"),
-            )
+            ),
         )
         return self._result(
             action,
@@ -360,11 +491,19 @@ class OutlookDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"outlook.email.draft"})
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="outlook",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -395,10 +534,11 @@ class OutlookDraftConnector(_LocalDraftConnector):
             "send": False,
         }
         artifact, manifest = self._write_bundle(
+            action,
             (
                 (path, message.as_bytes(), "message/rfc822"),
                 (path.with_suffix(".json"), _json_bytes(metadata), "application/json"),
-            )
+            ),
         )
         return self._result(
             action,
@@ -416,11 +556,19 @@ class TeamsDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"teams.message.draft"})
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="teams",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -448,10 +596,11 @@ class TeamsDraftConnector(_LocalDraftConnector):
             "post": False,
         }
         artifact, manifest = self._write_bundle(
+            action,
             (
                 (path, header.encode("utf-8"), "text/markdown"),
                 (path.with_suffix(".json"), _json_bytes(metadata), "application/json"),
-            )
+            ),
         )
         return self._result(
             action,
@@ -466,11 +615,19 @@ class PowerPointDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"powerpoint.presentation.generate"})
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="powerpoint",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -537,11 +694,16 @@ class PowerPointDraftConnector(_LocalDraftConnector):
             path = path.with_suffix(".pptx")
         output = BytesIO()
         presentation.save(output)
-        artifact = self._write_bytes(
-            path,
-            output.getvalue(),
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
+        payload = output.getbuffer()
+        try:
+            artifact = self._write_bytes(
+                action,
+                path,
+                payload,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+        finally:
+            payload.release()
         return self._result(
             action,
             artifact,
@@ -555,11 +717,19 @@ class RepositoryDraftConnector(_LocalDraftConnector):
 
     _CAPABILITIES = frozenset({"repository.patch.generate", "repository.branch.plan"})
 
-    def __init__(self, output_root: Path | PinnedDirectory) -> None:
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
         super().__init__(
             system="repository",
             capabilities=self._CAPABILITIES,
             output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
         )
 
     def execute(self, action: AgentAction) -> ExecutionResult:
@@ -583,7 +753,7 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             if not diff:
                 raise ConnectorError("patch generation produced no changes")
             path = self._artifact_path(action, default_suffix=".patch")
-            artifact = self._write_text(path, diff, "text/x-diff")
+            artifact = self._write_text(action, path, diff, "text/x-diff")
             return self._result(
                 action,
                 artifact,
@@ -604,7 +774,7 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             "push": False,
         }
         path = self._artifact_path(action, default_suffix=".branch-plan.json")
-        artifact = self._write_json(path, payload)
+        artifact = self._write_json(action, path, payload)
         return self._result(
             action,
             artifact,
@@ -649,8 +819,18 @@ def _write_json(
     directory: PinnedDirectory,
     path: Path,
     payload: Mapping[str, Any],
+    *,
+    artifact_budget: ArtifactBudget,
+    max_output_bytes: int,
 ) -> GeneratedArtifact:
-    return _write_bytes(directory, path, _json_bytes(payload), "application/json")
+    return _write_bytes(
+        directory,
+        path,
+        _json_bytes(payload),
+        "application/json",
+        artifact_budget=artifact_budget,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _write_text(
@@ -658,28 +838,62 @@ def _write_text(
     path: Path,
     text: str,
     media_type: str,
+    *,
+    artifact_budget: ArtifactBudget,
+    max_output_bytes: int,
 ) -> GeneratedArtifact:
-    return _write_bytes(directory, path, text.encode("utf-8"), media_type)
+    return _write_bytes(
+        directory,
+        path,
+        text.encode("utf-8"),
+        media_type,
+        artifact_budget=artifact_budget,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _write_bytes(
     directory: PinnedDirectory,
     path: Path,
-    payload: bytes,
+    payload: bytes | memoryview,
     media_type: str,
+    *,
+    artifact_budget: ArtifactBudget,
+    max_output_bytes: int,
 ) -> GeneratedArtifact:
-    return _write_bundle(directory, ((path, payload, media_type),))[0]
+    return _write_bundle(
+        directory,
+        ((path, payload, media_type),),
+        artifact_budget=artifact_budget,
+        max_output_bytes=max_output_bytes,
+    )[0]
 
 
 def _write_bundle(
     directory: PinnedDirectory,
-    files: Sequence[tuple[Path, bytes, str]],
+    files: Sequence[tuple[Path, bytes | memoryview, str]],
+    *,
+    artifact_budget: ArtifactBudget,
+    max_output_bytes: int,
 ) -> tuple[GeneratedArtifact, ...]:
     """Create all files or remove only earlier transaction-owned files."""
 
     if not files:
         raise ConnectorError("generated artifact bundle must not be empty")
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or max_output_bytes <= 0
+        or max_output_bytes > MAX_LOCAL_ARTIFACT_BYTES
+    ):
+        raise ConnectorError("generated artifact output quota is invalid")
+    total_bytes = sum(len(payload) for _path, payload, _media_type in files)
+    if total_bytes > max_output_bytes:
+        raise ConnectorError(
+            "generated artifact bundle exceeds the capability output quota"
+        )
     descriptor = directory.fileno()
+    artifact_budget.reserve(total_bytes)
     owned: list[tuple[str, tuple[int, int, int, int, int], GeneratedArtifact]] = []
     try:
         for path, payload, media_type in files:
@@ -700,12 +914,16 @@ def _write_bundle(
             os.fsync(descriptor)
         except OSError:
             pass
+        artifact_budget.release(total_bytes)
         raise
 
 
 def write_artifact_bundle(
     output_root: Path | PinnedDirectory,
-    files: Sequence[tuple[Path, bytes, str]],
+    files: Sequence[tuple[Path, bytes | memoryview, str]],
+    *,
+    artifact_budget: ArtifactBudget | None = None,
+    max_output_bytes: int = MAX_LOCAL_ARTIFACT_BYTES,
 ) -> tuple[GeneratedArtifact, ...]:
     """Create a local artifact bundle through one pinned output directory.
 
@@ -715,14 +933,19 @@ def write_artifact_bundle(
     """
 
     with pin_directory(output_root) as directory:
-        return _write_bundle(directory, files)
+        return _write_bundle(
+            directory,
+            files,
+            artifact_budget=artifact_budget or ArtifactBudget(),
+            max_output_bytes=max_output_bytes,
+        )
 
 
 def _create_bytes(
     directory: PinnedDirectory,
     name: str,
     path: Path,
-    payload: bytes,
+    payload: bytes | memoryview,
     media_type: str,
 ) -> tuple[GeneratedArtifact, tuple[int, int, int, int, int]]:
     """Create and verify one final-name file without overwrite or rename."""
@@ -731,6 +954,8 @@ def _create_bytes(
     file_descriptor = -1
     created_identity: tuple[int, int, int, int, int] | None = None
     completed = False
+    expected_size = len(payload)
+    expected_digest = hashlib.sha256(payload).hexdigest()
     try:
         file_descriptor = os.open(
             name,
@@ -752,10 +977,24 @@ def _create_bytes(
         if _restricted_identity(published) != created_identity:
             raise ConfigurationError("generated artifact publication was replaced")
         os.lseek(file_descriptor, 0, os.SEEK_SET)
-        observed = bytearray()
-        while chunk := os.read(file_descriptor, 1024 * 1024):
-            observed.extend(chunk)
-        if bytes(observed) != payload:
+        observed_digest = hashlib.sha256()
+        observed_size = 0
+        remaining_bytes = expected_size
+        while remaining_bytes:
+            chunk = os.read(file_descriptor, min(1024 * 1024, remaining_bytes))
+            if not chunk:
+                raise ConfigurationError(
+                    "generated artifact bytes changed during write"
+                )
+            observed_size += len(chunk)
+            remaining_bytes -= len(chunk)
+            observed_digest.update(chunk)
+        if os.read(file_descriptor, 1):
+            raise ConfigurationError("generated artifact bytes changed during write")
+        if (
+            observed_size != expected_size
+            or observed_digest.hexdigest() != expected_digest
+        ):
             raise ConfigurationError("generated artifact bytes changed during write")
         os.fsync(descriptor)
         directory.validate()
@@ -776,9 +1015,9 @@ def _create_bytes(
     return (
         GeneratedArtifact(
             path=path,
-            sha256=hashlib.sha256(payload).hexdigest(),
+            sha256=expected_digest,
             media_type=media_type,
-            size=len(payload),
+            size=expected_size,
         ),
         created_identity,
     )
@@ -792,7 +1031,14 @@ def _json_bytes(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _read_bytes(directory: PinnedDirectory, path: Path) -> bytes:
+def _inspect_artifact(
+    directory: PinnedDirectory,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> tuple[str, int]:
+    """Stream a bounded artifact digest without retaining a second full copy."""
+
     name = _pinned_name(directory, path)
     descriptor = directory.fileno()
     try:
@@ -805,13 +1051,31 @@ def _read_bytes(directory: PinnedDirectory, path: Path) -> bytes:
         raise ConnectorError("generated artifact destination changed") from error
     try:
         metadata = os.fstat(file_descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ConnectorError("generated artifact is not a regular file")
-        chunks: list[bytes] = []
-        while chunk := os.read(file_descriptor, 1024 * 1024):
-            chunks.append(chunk)
+        try:
+            identity = _restricted_identity(metadata)
+        except ConfigurationError as error:
+            raise ConnectorError("generated artifact file is unsafe") from error
+        if metadata.st_size > max_bytes:
+            raise ConnectorError("generated artifact exceeds its output quota")
+        digest = hashlib.sha256()
+        total = 0
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(file_descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ConnectorError("generated artifact changed during verification")
+            total += len(chunk)
+            remaining -= len(chunk)
+            digest.update(chunk)
+        if os.read(file_descriptor, 1):
+            raise ConnectorError("generated artifact changed during verification")
+        if _restricted_identity(os.fstat(file_descriptor)) != identity:
+            raise ConnectorError("generated artifact changed during verification")
+        published = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if _restricted_identity(published) != identity:
+            raise ConnectorError("generated artifact changed during verification")
         directory.validate()
-        return b"".join(chunks)
+        return digest.hexdigest(), total
     finally:
         os.close(file_descriptor)
 

@@ -37,6 +37,13 @@ overwritten. The CLI locks and verifies that directory is empty before reading
 workflow configuration. The audit database parent and artifact output
 directory must be different directories.
 
+Every local-generation capability declares its own input and output quota. A
+single action can publish at most 16 MiB across its complete artifact bundle,
+and all connectors plus the package summary and manifest share one 64 MiB
+budget for the complete run. An over-budget bundle is rejected before any of
+its final filenames are created. Verification hashes large files in bounded
+chunks rather than keeping another full copy in memory.
+
 ## Acceptance boundary
 
 Phase 3 does not:
