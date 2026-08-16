@@ -102,10 +102,17 @@ class CredentialStoreSnapshot:
             or "credentials" in raw
             or _uses_direct_names(raw, allowed_names)
         ):
-            credentials = _parse_direct_or_canonical_credentials(
-                raw,
-                allowed_names=allowed_names,
-            )
+            if explicit_mappings:
+                credentials = _parse_explicitly_mapped_credentials(
+                    raw,
+                    allowed_names=allowed_names,
+                    explicit_mappings=explicit_mappings,
+                )
+            else:
+                credentials = _parse_direct_or_canonical_credentials(
+                    raw,
+                    allowed_names=allowed_names,
+                )
         else:
             credentials = _parse_provider_credentials(
                 raw,
@@ -242,6 +249,59 @@ def _parse_credentials_document(
     if len(values) > _MAX_CREDENTIALS:
         raise ConfigurationError("credential store contains too many credentials")
     return _validate_credentials(values, allowed_names=allowed_names)
+
+
+def _parse_explicitly_mapped_credentials(
+    raw: Mapping[str, Any],
+    *,
+    allowed_names: Sequence[str],
+    explicit_mappings: Mapping[str, str],
+) -> dict[str, str]:
+    """Select and rename explicit fields from a direct or canonical store.
+
+    This lets one private multi-provider store reuse an intentionally selected
+    credential for a related connector without loading or rejecting unrelated
+    entries. Values remain in memory and the source file is never rewritten.
+    """
+
+    if "schema" in raw or "credentials" in raw:
+        if set(raw) - {"schema", "credentials"}:
+            raise ConfigurationError(
+                "credential store contains unknown top-level fields"
+            )
+        if raw.get("schema") != _SCHEMA:
+            raise ConfigurationError("credential store schema is unsupported")
+        values = raw.get("credentials")
+        if not isinstance(values, Mapping) or not values:
+            raise ConfigurationError(
+                "credential store credentials must be a non-empty object"
+            )
+    else:
+        values = raw
+    if len(values) > _MAX_CREDENTIALS:
+        raise ConfigurationError("credential store contains too many credentials")
+
+    missing = sorted(set(explicit_mappings) - set(values))
+    if missing:
+        raise ConfigurationError(
+            "credential mapping names are absent from the file: " + ", ".join(missing)
+        )
+    allowed = frozenset(allowed_names)
+    invalid = sorted(set(explicit_mappings.values()) - allowed)
+    if invalid:
+        raise ConfigurationError(
+            "credential mappings target names not declared by integrations: "
+            + ", ".join(invalid)
+        )
+    selected: dict[str, Any] = {}
+    for source, destination in explicit_mappings.items():
+        if destination in selected:
+            raise ConfigurationError(
+                "credential mappings target the same declared credential: "
+                + destination
+            )
+        selected[destination] = values[source]
+    return _validate_credentials(selected, allowed_names=allowed_names)
 
 
 def _validate_credentials(

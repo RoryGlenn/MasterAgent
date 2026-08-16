@@ -186,6 +186,75 @@ class CredentialStoreTests(unittest.TestCase):
             )
             self.assertEqual(snapshot.overlay({})["JIRA_TOKEN"], _SECRET)
 
+    def test_explicit_mapping_selects_from_canonical_multi_provider_store(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "tokens.json"
+            original = json.dumps(
+                {
+                    "schema": "master-agent/credential-store@1",
+                    "credentials": {
+                        "MASTER_AGENT_GITHUB_TOKEN": "unselected-secret",
+                        "JIRA_EMAIL": "operator@example.test",
+                        "MASTER_AGENT_JIRA_TOKEN": _SECRET,
+                    },
+                }
+            )
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+
+            snapshot = CredentialStoreSnapshot.load_provider_compatible(
+                path,
+                allowed_names=(
+                    "MASTER_AGENT_CONFLUENCE_USERNAME",
+                    "MASTER_AGENT_CONFLUENCE_TOKEN",
+                ),
+                aliases={
+                    "confluence": {
+                        "username": "MASTER_AGENT_CONFLUENCE_USERNAME",
+                        "token": "MASTER_AGENT_CONFLUENCE_TOKEN",
+                    }
+                },
+                explicit_mappings={
+                    "JIRA_EMAIL": "MASTER_AGENT_CONFLUENCE_USERNAME",
+                    "MASTER_AGENT_JIRA_TOKEN": "MASTER_AGENT_CONFLUENCE_TOKEN",
+                },
+            )
+
+            environ = snapshot.overlay({})
+            self.assertEqual(
+                environ["MASTER_AGENT_CONFLUENCE_USERNAME"],
+                "operator@example.test",
+            )
+            self.assertEqual(environ["MASTER_AGENT_CONFLUENCE_TOKEN"], _SECRET)
+            self.assertNotIn("MASTER_AGENT_GITHUB_TOKEN", environ)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_explicit_mapping_of_canonical_store_rejects_missing_source(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "tokens.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "master-agent/credential-store@1",
+                        "credentials": {"MASTER_AGENT_JIRA_TOKEN": _SECRET},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigurationError, "absent from the file"):
+                CredentialStoreSnapshot.load_provider_compatible(
+                    path,
+                    allowed_names=("MASTER_AGENT_CONFLUENCE_TOKEN",),
+                    aliases={"confluence": {"token": "MASTER_AGENT_CONFLUENCE_TOKEN"}},
+                    explicit_mappings={
+                        "MISSING_JIRA_TOKEN": "MASTER_AGENT_CONFLUENCE_TOKEN"
+                    },
+                )
+
     def test_friendly_key_rejects_terminal_controls_before_rendering(self) -> None:
         with private_temporary_directory() as directory:
             path = Path(directory) / "unsafe-key.json"

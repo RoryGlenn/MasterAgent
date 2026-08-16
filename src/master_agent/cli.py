@@ -167,6 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 capabilities_path=args.capabilities,
                 governance_path=args.governance,
                 credentials_file=args.credentials_file,
+                credential_mappings=args.credential_map,
                 output=args.output,
             )
         if args.command == "approve":
@@ -203,6 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 plugin_names=args.plugin,
                 plugin_lock_path=args.plugin_lock,
                 credentials_file=args.credentials_file,
+                credential_mappings=args.credential_map,
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
@@ -398,6 +400,13 @@ def _build_parser() -> argparse.ArgumentParser:
     bind_context.add_argument("--governance", type=Path, default=None)
     bind_context.add_argument("--credentials-file", type=Path)
     bind_context.add_argument(
+        "--credential-map",
+        action="append",
+        default=[],
+        metavar="FILE_KEY=DECLARED_NAME",
+        help="select or rename a private credential field for this invocation",
+    )
+    bind_context.add_argument(
         "--plugin",
         action="append",
         default=[],
@@ -474,6 +483,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--capabilities", type=Path, default=None)
     run.add_argument("--governance", type=Path, default=None)
     run.add_argument("--credentials-file", type=Path)
+    run.add_argument(
+        "--credential-map",
+        action="append",
+        default=[],
+        metavar="FILE_KEY=DECLARED_NAME",
+        help="select or rename a private credential field for this invocation",
+    )
     run.add_argument("--policy", type=Path, default=None)
     run.add_argument("--sources-of-truth", type=Path, default=None)
     run.add_argument(
@@ -780,6 +796,7 @@ def _bind_context(
     governance_path: Path | None,
     credentials_file: Path | None,
     output: Path,
+    credential_mappings: Sequence[str] = (),
 ) -> int:
     """Write a plan whose fingerprint covers the complete applied runtime."""
 
@@ -801,6 +818,7 @@ def _bind_context(
         integrations=integrations,
         governance=governance,
         connector_mode=connector_mode,
+        credential_mappings=credential_mappings,
     )
     execution_environ = _credential_environment(credential_store, os.environ)
     live_systems = _live_systems_for_plan(plan, integrations)
@@ -910,6 +928,7 @@ def _run(
     plugin_names: list[str],
     plugin_lock_path: Path | None,
     credentials_file: Path | None,
+    credential_mappings: Sequence[str] = (),
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -926,6 +945,8 @@ def _run(
         )
     if not apply and credentials_file is not None:
         raise ValueError("--credentials-file requires --apply")
+    if not apply and credential_mappings:
+        raise ValueError("--credential-map requires --apply and --credentials-file")
     plan = _load_plan(plan_path)
     approvals = tuple(_load_approval(path) for path in approval_paths)
     if approvals and approval_authorities is None:
@@ -997,6 +1018,7 @@ def _run(
             integrations=integration_config,
             governance=governance,
             connector_mode=connector_mode,
+            credential_mappings=credential_mappings,
         )
         execution_environ = _credential_environment(credential_store, os.environ)
         live_systems = _live_systems_for_plan(plan, integration_config)
@@ -1252,10 +1274,13 @@ def _load_credential_store(
     integrations: IntegrationConfig,
     governance: GovernanceProfile,
     connector_mode: str,
+    credential_mappings: Sequence[str] = (),
 ) -> CredentialStoreSnapshot | None:
     """Load an explicitly selected development-only connector credential store."""
 
     if path is None:
+        if credential_mappings:
+            raise ConfigurationError("--credential-map requires --credentials-file")
         return None
     if connector_mode != "live":
         raise ConfigurationError(
@@ -1266,8 +1291,15 @@ def _load_credential_store(
             "--credentials-file is restricted to the development environment; "
             "use the approved secret manager for non-development execution"
         )
-    return CredentialStoreSnapshot.load(
-        path, allowed_names=integrations.credential_environment_variables()
+    return CredentialStoreSnapshot.load_provider_compatible(
+        path,
+        allowed_names=integrations.credential_environment_variables(),
+        aliases=_provider_credential_aliases(
+            integrations,
+            configurations=set(integrations.connectors),
+            systems=set(),
+        ),
+        explicit_mappings=_parse_credential_mappings(tuple(credential_mappings)),
     )
 
 
