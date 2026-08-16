@@ -43,13 +43,22 @@ The selected canonical path is part of the bound execution context.
 cross-connector credential selection in memory and lets bind/apply use the
 same mapping without rewriting a canonical multi-provider store.
 
+The same commands accept repeatable `--connector-url SYSTEM=URL` arguments for
+operator-supplied Jira and Confluence Cloud URLs. UI paths such as
+`/wiki/spaces` are normalized to the HTTPS `atlassian.net` tenant origin. Only
+selected connectors may be overridden; unsafe origins, embedded credentials,
+duplicates, nondefault ports, and Data Center targets fail before credential
+loading or network access. Bind and apply must receive the same override
+because the normalized target is part of the execution context.
+
 `connect` accepts a comma-separated `--systems` selection from Jira,
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,
 and OneNote. It activates only the selected connector configurations for that
-probe and performs each connector's fixed read-only check. Atlassian
-systems require an explicit reviewed integrations file when the packaged base
-URL is still the placeholder. This command verifies connectivity; the agent
-must continue with a typed feature command to complete the requested outcome.
+probe and performs each connector's fixed read-only check. An Atlassian Cloud
+URL supplied through `--connector-url` replaces the packaged placeholder only
+in memory; Data Center still requires an explicit reviewed integrations file.
+This command verifies connectivity; the agent must continue with a typed
+feature command to complete the requested outcome.
 
 `github-repositories --username USERNAME` is credential-free and accepts only
 public visibility. It ignores ambient GitHub tokens by constructing an
@@ -65,10 +74,13 @@ environment names directly, for example
 names, such as `myJiraApiToken`, are inferred without inspecting values. An
 ambiguous key stops with candidate declared names; after clarification,
 `connect --credential-map FILE_KEY=DECLARED_NAME` supplies a one-run mapping
-without rewriting the file. Unknown fields and duplicate destinations fail
-closed. An explicit credential file wins over ambient values for these two
-commands; neither value is printed or persisted. Selected output is written
-mode `0600`.
+without rewriting the file. For selected Jira or Confluence Cloud Basic-auth
+connectors, a missing selected-product name automatically falls back to the
+other connector's Atlassian email/API-token pair in memory. Explicit selected-
+product credentials win, the other connector remains inactive, and a fixed
+probe decides access. Unknown fields and duplicate destinations fail closed.
+An explicit credential file wins over ambient values for the names it contains;
+no value is printed or persisted. Selected output is written mode `0600`.
 
 ## Configuration behavior
 

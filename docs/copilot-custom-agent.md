@@ -128,6 +128,18 @@ unambiguous friendly-key forms. Infer friendly mappings only from key names. If
 a key is ambiguous, ask once what it represents and retry `connect` with
 `--credential-map FILE_KEY=DECLARED_NAME`; never inspect a secret value to
 guess, and never rewrite the credential file merely to change its wrapper.
+When Jira or Confluence Cloud is selected, the runtime automatically tries a
+missing product-specific email/API-token pair from the other configured
+Atlassian product in memory. The selected product's explicit names take
+precedence, the other connector remains inactive, and the provider probe—not
+the JSON key label—decides whether access exists.
+
+If the operator supplies a Jira or Confluence Cloud page or site URL, pass it
+as `--connector-url SYSTEM=URL` instead of stopping at the packaged placeholder
+or creating a persistent configuration. The runtime reduces the UI URL to a
+validated Atlassian tenant origin. Reuse that exact argument for
+`bind-context` and `run --apply` so the destination remains approval-bound.
+Data Center deployments still require an explicitly reviewed context root.
 
 GitHub repository discovery is routed by the data the operator requested. When
 the operator names a GitHub user or supplies a public profile URL, extract the

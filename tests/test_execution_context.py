@@ -47,6 +47,69 @@ from tests.helpers import private_temporary_directory
 class ExecutionContextTests(unittest.TestCase):
     """Verify approvals cover runtime destinations and trust roots."""
 
+    def test_connector_url_override_is_normalized_and_approval_bound(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            integrations_path = root / "integrations.toml"
+            integrations_path.write_text(_JIRA_ENV_CONFIG, encoding="utf-8")
+            source_plan = root / "plan.json"
+            source_plan.write_text(json.dumps(_plan().to_dict()), encoding="utf-8")
+            bound_plan = root / "bound-plan.json"
+            database = root / "audit.sqlite3"
+            drafts = root / "drafts"
+            _mkdir_private(drafts)
+            runtime_arguments = [
+                "--connector-mode",
+                "live",
+                "--integrations",
+                str(integrations_path),
+                "--database",
+                str(database),
+                "--draft-output-dir",
+                str(drafts),
+            ]
+
+            with redirect_stdout(io.StringIO()):
+                result = main(
+                    [
+                        "bind-context",
+                        str(source_plan),
+                        *runtime_arguments,
+                        "--connector-url",
+                        "jira=https://tenant-a.atlassian.net/jira/software/projects/ENG",
+                        "--output",
+                        str(bound_plan),
+                    ]
+                )
+            self.assertEqual(result, 0)
+            bound = ChangePlan.from_dict(json.loads(bound_plan.read_text()))
+            self.assertIsNotNone(bound.execution_context)
+            assert bound.execution_context is not None
+            self.assertEqual(
+                bound.execution_context.connectors[0].resolved_base_url,
+                "https://tenant-a.atlassian.net",
+            )
+
+            stderr = io.StringIO()
+            with (
+                patch("master_agent.cli.build_live_registry") as build_registry,
+                redirect_stderr(stderr),
+            ):
+                result = main(
+                    [
+                        "run",
+                        str(bound_plan),
+                        "--apply",
+                        *runtime_arguments,
+                        "--connector-url",
+                        "jira=https://tenant-b.atlassian.net/jira/software/projects/ENG",
+                    ]
+                )
+
+            self.assertEqual(result, 1)
+            self.assertIn("connector origin or CA identity", stderr.getvalue())
+            build_registry.assert_not_called()
+
     def test_changed_resolved_origin_is_rejected_before_connector_construction(
         self,
     ) -> None:

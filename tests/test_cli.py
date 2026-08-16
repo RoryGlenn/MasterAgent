@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import stat
@@ -49,11 +50,12 @@ class CliTests(unittest.TestCase):
                 output=None,
             )
 
-    def test_bind_and_run_forward_repeatable_credential_mappings(self) -> None:
+    def test_bind_and_run_forward_connection_adapters(self) -> None:
         mappings = (
             "JIRA_EMAIL=MASTER_AGENT_CONFLUENCE_USERNAME",
             "MASTER_AGENT_JIRA_TOKEN=MASTER_AGENT_CONFLUENCE_TOKEN",
         )
+        connector_urls = ("confluence=https://tenant.atlassian.net/wiki/spaces",)
         with patch("master_agent.cli._bind_context", return_value=0) as bind_context:
             status = main(
                 [
@@ -66,11 +68,19 @@ class CliTests(unittest.TestCase):
                         for mapping in mappings
                         for item in ("--credential-map", mapping)
                     ),
+                    *(
+                        item
+                        for value in connector_urls
+                        for item in ("--connector-url", value)
+                    ),
                 ]
             )
         self.assertEqual(status, 0)
         self.assertEqual(
             bind_context.call_args.kwargs["credential_mappings"], list(mappings)
+        )
+        self.assertEqual(
+            bind_context.call_args.kwargs["connector_urls"], list(connector_urls)
         )
 
         with patch("master_agent.cli._run", return_value=0) as run:
@@ -84,10 +94,16 @@ class CliTests(unittest.TestCase):
                         for mapping in mappings
                         for item in ("--credential-map", mapping)
                     ),
+                    *(
+                        item
+                        for value in connector_urls
+                        for item in ("--connector-url", value)
+                    ),
                 ]
             )
         self.assertEqual(status, 0)
         self.assertEqual(run.call_args.kwargs["credential_mappings"], list(mappings))
+        self.assertEqual(run.call_args.kwargs["connector_urls"], list(connector_urls))
 
     def test_live_mode_dry_run_does_not_require_credentials(self) -> None:
         """A policy-only dry run must not construct live connectors."""
@@ -559,6 +575,291 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         self.assertNotIn(username, authorization)
         self.assertNotIn(token, authorization)
         self.assertNotIn(token, stdout.getvalue())
+
+    def test_connect_reuses_jira_atlassian_credentials_for_confluence_url(
+        self,
+    ) -> None:
+        email = "operator@example.test"
+        token = "shared-atlassian-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/wiki/rest/api/content/search",
+            {"results": []},
+            host="tenant.atlassian.net",
+        )
+
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "tokens.json"
+            original = json.dumps(
+                {
+                    "schema": "master-agent/credential-store@1",
+                    "credentials": {
+                        "JIRA_EMAIL": email,
+                        "MASTER_AGENT_JIRA_TOKEN": token,
+                    },
+                }
+            )
+            credentials.write_text(original, encoding="utf-8")
+            credentials.chmod(0o600)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"confluence"},
+                    output=None,
+                    transport=transport,
+                    connector_urls=(
+                        "confluence=https://tenant.atlassian.net/wiki/spaces",
+                    ),
+                )
+
+            self.assertEqual(credentials.read_text(encoding="utf-8"), original)
+
+        self.assertEqual(status, 0)
+        self.assertIn("connected: confluence", stdout.getvalue())
+        self.assertNotIn(token, stdout.getvalue())
+        self.assertEqual(len(transport.requests), 1)
+        request = transport.requests[0]
+        self.assertTrue(
+            request.url.startswith(
+                "https://tenant.atlassian.net/wiki/rest/api/content/search"
+            )
+        )
+        expected = base64.b64encode(f"{email}:{token}".encode()).decode()
+        self.assertEqual(request.headers["Authorization"], f"Basic {expected}")
+
+    def test_connect_prefers_explicit_confluence_credentials_over_jira_fallback(
+        self,
+    ) -> None:
+        jira_token = "jira-labelled-token-canary"
+        confluence_email = "confluence-operator@example.test"
+        confluence_token = "explicit-confluence-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/wiki/rest/api/content/search",
+            {"results": []},
+            host="tenant.atlassian.net",
+        )
+
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "tokens.json"
+            credentials.write_text(
+                json.dumps(
+                    {
+                        "schema": "master-agent/credential-store@1",
+                        "credentials": {
+                            "JIRA_EMAIL": "jira-operator@example.test",
+                            "MASTER_AGENT_JIRA_TOKEN": jira_token,
+                            "MASTER_AGENT_CONFLUENCE_USERNAME": confluence_email,
+                            "MASTER_AGENT_CONFLUENCE_TOKEN": confluence_token,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            with redirect_stdout(StringIO()):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"confluence"},
+                    output=None,
+                    transport=transport,
+                    connector_urls=(
+                        "confluence=https://tenant.atlassian.net/wiki/spaces/ENG",
+                    ),
+                )
+
+        self.assertEqual(status, 0)
+        expected = base64.b64encode(
+            f"{confluence_email}:{confluence_token}".encode()
+        ).decode()
+        self.assertEqual(
+            transport.requests[0].headers["Authorization"], f"Basic {expected}"
+        )
+
+    def test_connect_reuses_confluence_atlassian_credentials_for_jira(self) -> None:
+        email = "operator@example.test"
+        token = "confluence-labelled-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/3/serverInfo",
+            {
+                "baseUrl": "https://tenant.atlassian.net",
+                "version": "1001.0.0",
+                "deploymentType": "Cloud",
+            },
+            host="tenant.atlassian.net",
+        )
+
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "tokens.json"
+            credentials.write_text(
+                json.dumps(
+                    {
+                        "schema": "master-agent/credential-store@1",
+                        "credentials": {
+                            "MASTER_AGENT_CONFLUENCE_USERNAME": email,
+                            "MASTER_AGENT_CONFLUENCE_TOKEN": token,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            with redirect_stdout(StringIO()):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"jira"},
+                    output=None,
+                    transport=transport,
+                    connector_urls=(
+                        "jira=https://tenant.atlassian.net/jira/software/projects/ENG",
+                    ),
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(transport.requests), 1)
+        expected = base64.b64encode(f"{email}:{token}".encode()).decode()
+        self.assertEqual(
+            transport.requests[0].headers["Authorization"], f"Basic {expected}"
+        )
+
+    def test_connect_does_not_reuse_atlassian_credentials_for_data_center(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            integrations = root / "integrations.toml"
+            integrations.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://tenant.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+
+[connectors.confluence]
+enabled = true
+deployment = "data_center"
+base_url = "https://confluence.example.test"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_CONFLUENCE_USERNAME"
+secret_env = "MASTER_AGENT_CONFLUENCE_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            credentials = root / "tokens.json"
+            credentials.write_text(
+                json.dumps(
+                    {
+                        "schema": "master-agent/credential-store@1",
+                        "credentials": {
+                            "JIRA_EMAIL": "operator@example.test",
+                            "MASTER_AGENT_JIRA_TOKEN": "jira-token-canary",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+
+            with redirect_stdout(StringIO()):
+                status = _connect(
+                    integrations_path=integrations,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"confluence"},
+                    output=None,
+                    transport=transport,
+                )
+
+        self.assertEqual(status, 2)
+        self.assertEqual(transport.requests, [])
+
+    def test_connect_rejects_unsafe_or_unselected_connector_urls(self) -> None:
+        scenarios = {
+            "non-HTTPS": (
+                "confluence=http://tenant.atlassian.net/wiki/spaces",
+                "HTTPS",
+            ),
+            "credential-bearing": (
+                "confluence=https://user:secret@tenant.atlassian.net/wiki/spaces",
+                "must not contain credentials",
+            ),
+            "foreign origin": (
+                "confluence=https://tenant.atlassian.net.example.test/wiki/spaces",
+                "atlassian.net tenant",
+            ),
+            "unselected": (
+                "jira=https://tenant.atlassian.net/jira/software",
+                "unselected connector",
+            ),
+        }
+        for name, (connector_url, message) in scenarios.items():
+            with self.subTest(name=name):
+                transport = ScriptedTransport()
+                with self.assertRaisesRegex(ConfigurationError, message):
+                    _connect(
+                        integrations_path=None,
+                        governance_path=None,
+                        credentials_file=None,
+                        systems={"confluence"},
+                        output=None,
+                        transport=transport,
+                        connector_urls=(connector_url,),
+                    )
+                self.assertEqual(transport.requests, [])
+
+        with self.assertRaisesRegex(ConfigurationError, "repeats connector"):
+            _connect(
+                integrations_path=None,
+                governance_path=None,
+                credentials_file=None,
+                systems={"confluence"},
+                output=None,
+                connector_urls=(
+                    "confluence=https://first.atlassian.net/wiki/spaces",
+                    "confluence=https://second.atlassian.net/wiki/spaces",
+                ),
+            )
+
+        with private_temporary_directory() as directory:
+            integrations = Path(directory) / "integrations.toml"
+            integrations.write_text(
+                """
+[connectors.confluence]
+enabled = true
+deployment = "data_center"
+base_url = "https://confluence.example.test"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "Data Center"):
+                _connect(
+                    integrations_path=integrations,
+                    governance_path=None,
+                    credentials_file=None,
+                    systems={"confluence"},
+                    output=None,
+                    connector_urls=(
+                        "confluence=https://tenant.atlassian.net/wiki/spaces",
+                    ),
+                )
 
     def test_connect_rejects_placeholder_provider_before_network(self) -> None:
         transport = ScriptedTransport()

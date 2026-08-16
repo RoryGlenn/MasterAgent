@@ -58,6 +58,11 @@ Controls:
   require an owner-controlled `0700` parent and `0600` regular file, reject
   ambient-variable collisions, and bind only the canonical path into applied
   execution; non-development environments require an approved secret manager;
+- Jira/Confluence credential fallback is limited to selected Cloud connectors
+  using Basic authentication and copies only the configured Atlassian account
+  email/API-token pair in memory. Explicit target-product names win, the source
+  connector is not activated, and the fixed provider probe remains authoritative
+  for actual product/site access;
 - capability authentication is authoritative: a typed anonymous public-data
   route never resolves or forwards an ambient credential and cannot be silently
   upgraded to a broader authenticated route;
@@ -167,6 +172,10 @@ A provider response may redirect to an attacker-controlled host or temporary dow
 Controls:
 
 - HTTPS and same-origin authenticated requests;
+- operator-supplied Jira/Confluence Cloud URLs are reduced to an HTTPS
+  `atlassian.net` tenant origin; embedded credentials, nondefault ports, and
+  unselected connectors are rejected, and the result is approval-bound for
+  live execution;
 - authenticated cross-origin redirects blocked;
 - SharePoint download host suffix allowlist;
 - no Graph Authorization header on temporary download URLs;

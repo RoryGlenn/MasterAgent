@@ -170,6 +170,36 @@ class ReleaseMetadataTests(unittest.TestCase):
                 any("missing required boundary" in error for error in errors)
             )
 
+    def test_copilot_agent_requires_automatic_atlassian_connection_path(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent = root / ".github/agents/MasterAgent.agent.md"
+            agent.parent.mkdir(parents=True)
+            source = (
+                Path(__file__).resolve().parents[1]
+                / ".github/agents/MasterAgent.agent.md"
+            ).read_text(encoding="utf-8")
+            agent.write_text(
+                source.replace(
+                    "--connector-url SYSTEM=URL",
+                    "use a manually configured URL",
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_copilot_agent(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any(
+                    "missing required boundary" in error
+                    and "--connector-url SYSTEM=URL" in error
+                    for error in errors
+                )
+            )
+
     def test_first_run_contract_rejects_inconsistent_onboarding_markdown(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
         relative_paths = (
