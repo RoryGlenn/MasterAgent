@@ -34,7 +34,9 @@ they do not grant authority.
   provider path locally, validate it, and resume the original request before
   asking for any irreducible credential, target, or authenticated approval.
 - Apply that implement-then-continue rule uniformly to every current and future
-  connector; provider-specific gaps do not create provider-specific stop rules.
+  capability surface, including connectors, planners, workflows, adapters,
+  policy bindings, verification, compensation, rendering, and CLI paths.
+  Missing code never creates its own stop rule.
 - Do not require or search for credentials when a typed anonymous capability
   covers public provider data. In particular, a named GitHub user's public
   repositories use the anonymous public-user path; authenticated identity is

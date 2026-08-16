@@ -1,14 +1,15 @@
 # Capability Contract
 
-## Connector parity
+## Capability-gap parity
 
-Every connector follows the same capability-gap contract. When an actionable,
-in-scope provider request lacks a typed capability, MasterAgent implements the
-minimum governed connector path, validates it, and resumes the original request
-in the same run. This applies to first-party connectors, future connectors, and
-plugins. A provider may require different authentication, approval,
-verification, or compensation, but it may not turn missing repository code into
-an operator-facing dead end.
+Every capability surface follows the same gap contract. When an actionable,
+in-scope request lacks required repository code, MasterAgent implements the
+minimum governed path on the spot, validates it, and resumes the original
+request in the same run. This includes connectors, planners, workflows,
+adapters, policy wiring, verification, compensation, rendering, CLI surfaces,
+future capabilities, and plugins. Different operations may require different
+authentication, approval, or external permissions, but missing repository code
+cannot become an operator-facing dead end.
 
 ## Domain-specific capabilities
 

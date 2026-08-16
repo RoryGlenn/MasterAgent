@@ -257,9 +257,7 @@ def _validate_credentials(
             candidates = tuple(
                 candidate
                 for candidate in username_names
-                if candidate.removeprefix("MASTER_AGENT_").removesuffix(
-                    "_USERNAME"
-                )
+                if candidate.removeprefix("MASTER_AGENT_").removesuffix("_USERNAME")
                 == provider
             )
             if len(candidates) == 1 and candidates[0] not in result:
@@ -284,8 +282,7 @@ def _validate_credentials(
             )
         if destination in result:
             raise ConfigurationError(
-                "credential store contains duplicate credential aliases: "
-                + destination
+                "credential store contains duplicate credential aliases: " + destination
             )
         result[destination] = value
     if not result:
