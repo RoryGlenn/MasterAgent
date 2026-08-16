@@ -880,6 +880,232 @@ class ConfluenceWriteConnectorTests(unittest.TestCase):
         self.assertEqual(result.after["id"], "42")
         self.assertEqual(result.after["version"], 1)
 
+    def test_cloud_create_verification_rejects_wrong_or_missing_placement(
+        self,
+    ) -> None:
+        wrong_space = _confluence_page(
+            "Status",
+            "<p>Approved</p>",
+            1,
+            space_id="OTHER",
+            parent_id="PARENT",
+        )
+        wrong_parent = _confluence_page(
+            "Status",
+            "<p>Approved</p>",
+            1,
+            parent_id="OTHER",
+        )
+        wrong_status = _confluence_page(
+            "Status",
+            "<p>Approved</p>",
+            1,
+            status="draft",
+            parent_id="PARENT",
+        )
+        missing_space = _confluence_page(
+            "Status", "<p>Approved</p>", 1, parent_id="PARENT"
+        )
+        del missing_space["spaceId"]
+        missing_parent = _confluence_page(
+            "Status", "<p>Approved</p>", 1, parent_id="PARENT"
+        )
+        del missing_parent["parentId"]
+        missing_status = _confluence_page(
+            "Status", "<p>Approved</p>", 1, parent_id="PARENT"
+        )
+        del missing_status["status"]
+
+        for label, altered in (
+            ("wrong space", wrong_space),
+            ("wrong parent", wrong_parent),
+            ("wrong status", wrong_status),
+            ("missing space", missing_space),
+            ("missing parent", missing_parent),
+            ("missing status", missing_status),
+        ):
+            with self.subTest(label=label):
+                transport = ScriptedTransport()
+                transport.add_json(
+                    "POST",
+                    "/wiki/api/v2/pages",
+                    {"id": "42"},
+                    status=201,
+                )
+                transport.add_json(
+                    "GET",
+                    "/wiki/api/v2/pages/42",
+                    _confluence_page(
+                        "Status",
+                        "<p>Approved</p>",
+                        1,
+                        parent_id="PARENT",
+                    ),
+                )
+                transport.add_json(
+                    "GET",
+                    "/wiki/api/v2/pages/42",
+                    altered,
+                )
+                connector = _confluence_connector(transport)
+                action = _confluence_create_action(
+                    "<p>Approved</p>",
+                    parent_id="PARENT",
+                )
+
+                result = connector.execute(action)
+                verification = connector.verify(action, result)
+
+                self.assertFalse(verification.verified)
+
+    def test_cloud_update_verification_rejects_placement_substitution(self) -> None:
+        altered_pages = (
+            _confluence_page(
+                "Status",
+                "<p>Approved</p>",
+                5,
+                space_id="OTHER",
+                parent_id="PARENT",
+            ),
+            _confluence_page(
+                "Status",
+                "<p>Approved</p>",
+                5,
+                parent_id="OTHER",
+            ),
+            _confluence_page(
+                "Status",
+                "<p>Approved</p>",
+                5,
+                status="draft",
+                parent_id="PARENT",
+            ),
+        )
+        for altered in altered_pages:
+            with self.subTest(altered=altered):
+                transport = ScriptedTransport()
+                path = "/wiki/api/v2/pages/42"
+                transport.add_json(
+                    "GET",
+                    path,
+                    _confluence_page("Status", "<p>Old</p>", 4, parent_id="PARENT"),
+                )
+                transport.add_json("PUT", path, {})
+                transport.add_json(
+                    "GET",
+                    path,
+                    _confluence_page(
+                        "Status", "<p>Approved</p>", 5, parent_id="PARENT"
+                    ),
+                )
+                transport.add_json("GET", path, altered)
+                connector = _confluence_connector(transport)
+                action = _confluence_update_action("<p>Approved</p>")
+
+                result = connector.execute(action)
+
+                self.assertFalse(connector.verify(action, result).verified)
+
+    def test_data_center_create_verification_rejects_wrong_or_missing_placement(
+        self,
+    ) -> None:
+        wrong_space = _data_center_confluence_page(
+            "Status", "<p>Approved</p>", 1, space_id="OTHER"
+        )
+        wrong_parent = _data_center_confluence_page(
+            "Status", "<p>Approved</p>", 1, parent_id="OTHER"
+        )
+        wrong_status = _data_center_confluence_page(
+            "Status", "<p>Approved</p>", 1, status="draft"
+        )
+        missing_space = _data_center_confluence_page("Status", "<p>Approved</p>", 1)
+        del missing_space["space"]
+        missing_parent = _data_center_confluence_page("Status", "<p>Approved</p>", 1)
+        del missing_parent["ancestors"]
+        missing_status = _data_center_confluence_page("Status", "<p>Approved</p>", 1)
+        del missing_status["status"]
+
+        for label, altered in (
+            ("wrong space", wrong_space),
+            ("wrong parent", wrong_parent),
+            ("wrong status", wrong_status),
+            ("missing space", missing_space),
+            ("missing parent", missing_parent),
+            ("missing status", missing_status),
+        ):
+            with self.subTest(label=label):
+                transport = ScriptedTransport()
+                transport.add_json(
+                    "GET",
+                    "/rest/api/space/DC",
+                    _data_center_confluence_space(),
+                )
+                transport.add_json(
+                    "POST",
+                    "/rest/api/content",
+                    {"id": "42"},
+                    status=201,
+                )
+                transport.add_json(
+                    "GET",
+                    "/rest/api/content/42",
+                    _data_center_confluence_page("Status", "<p>Approved</p>", 1),
+                )
+                transport.add_json("GET", "/rest/api/content/42", altered)
+                connector = _data_center_confluence_connector(transport)
+                action = _data_center_confluence_create_action("<p>Approved</p>")
+
+                result = connector.execute(action)
+                verification = connector.verify(action, result)
+
+                self.assertFalse(verification.verified)
+                page_reads = [
+                    request
+                    for request in transport.requests
+                    if request.method == "GET" and "/rest/api/content/42" in request.url
+                ]
+                self.assertIn(
+                    "expand=body.storage%2Cversion%2Cspace%2Cancestors",
+                    page_reads[-1].url,
+                )
+
+    def test_data_center_update_verification_rejects_placement_substitution(
+        self,
+    ) -> None:
+        altered_pages = (
+            _data_center_confluence_page(
+                "Status", "<p>Approved</p>", 5, space_id="OTHER"
+            ),
+            _data_center_confluence_page(
+                "Status", "<p>Approved</p>", 5, parent_id="OTHER"
+            ),
+            _data_center_confluence_page(
+                "Status", "<p>Approved</p>", 5, status="draft"
+            ),
+        )
+        for altered in altered_pages:
+            with self.subTest(altered=altered):
+                transport = ScriptedTransport()
+                path = "/rest/api/content/42"
+                transport.add_json(
+                    "GET",
+                    path,
+                    _data_center_confluence_page("Status", "<p>Old</p>", 4),
+                )
+                transport.add_json("PUT", path, {})
+                transport.add_json(
+                    "GET",
+                    path,
+                    _data_center_confluence_page("Status", "<p>Approved</p>", 5),
+                )
+                transport.add_json("GET", path, altered)
+                connector = _data_center_confluence_connector(transport)
+                action = _confluence_update_action("<p>Approved</p>")
+
+                result = connector.execute(action)
+
+                self.assertFalse(connector.verify(action, result).verified)
+
 
 class BitbucketWriteConnectorTests(unittest.TestCase):
     """Validate pull-request creation and decline compensation."""
@@ -1393,6 +1619,19 @@ def _confluence_connector(
     )
 
 
+def _data_center_confluence_connector(
+    transport: ScriptedTransport,
+) -> ConfluenceWriteConnector:
+    return ConfluenceWriteConnector(
+        resolved_config(
+            "confluence",
+            deployment=DeploymentType.DATA_CENTER,
+            base_url="https://confluence.example.com",
+        ),
+        transport=transport,
+    )
+
+
 def _confluence_update_action(
     body: str,
     *,
@@ -1414,7 +1653,31 @@ def _confluence_update_action(
     )
 
 
-def _confluence_create_action(body: str) -> AgentAction:
+def _confluence_create_action(
+    body: str,
+    *,
+    parent_id: str | None = None,
+) -> AgentAction:
+    parameters: dict[str, object] = {
+        "space_id": "SPACE",
+        "title": "Status",
+        "body": body,
+        "representation": "storage",
+        "status": "current",
+    }
+    if parent_id is not None:
+        parameters["parent_id"] = parent_id
+    return action_for(
+        "confluence.page.create",
+        system="confluence",
+        resource_type="page",
+        resource_id="new",
+        risk=RiskLevel.REVERSIBLE_WRITE,
+        parameters=parameters,
+    )
+
+
+def _data_center_confluence_create_action(body: str) -> AgentAction:
     return action_for(
         "confluence.page.create",
         system="confluence",
@@ -1422,7 +1685,8 @@ def _confluence_create_action(body: str) -> AgentAction:
         resource_id="new",
         risk=RiskLevel.REVERSIBLE_WRITE,
         parameters={
-            "space_id": "SPACE",
+            "space_key": "dc",
+            "parent_id": "PARENT",
             "title": "Status",
             "body": body,
             "representation": "storage",
@@ -1439,12 +1703,15 @@ def _confluence_page(
     representation: str = "storage",
     page_id: str = "42",
     space_id: str = "SPACE",
+    status: str = "current",
+    parent_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "id": page_id,
         "title": title,
-        "status": "current",
+        "status": status,
         "spaceId": space_id,
+        "parentId": parent_id,
         "version": {"number": version},
         "body": {
             representation: {
@@ -1453,6 +1720,42 @@ def _confluence_page(
             }
         },
     }
+
+
+def _data_center_confluence_page(
+    title: str,
+    body: str,
+    version: int,
+    *,
+    page_id: str = "42",
+    status: str = "current",
+    space_id: str = "9001",
+    space_key: str = "DC",
+    parent_id: str | None = "PARENT",
+) -> dict[str, object]:
+    return {
+        "id": page_id,
+        "type": "page",
+        "status": status,
+        "title": title,
+        "space": {"id": space_id, "key": space_key},
+        "ancestors": [] if parent_id is None else [{"id": parent_id}],
+        "version": {"number": version},
+        "body": {
+            "storage": {
+                "representation": "storage",
+                "value": body,
+            }
+        },
+    }
+
+
+def _data_center_confluence_space(
+    *,
+    space_id: str = "9001",
+    space_key: str = "DC",
+) -> dict[str, object]:
+    return {"id": space_id, "key": space_key}
 
 
 def _confluence_space_action() -> AgentAction:

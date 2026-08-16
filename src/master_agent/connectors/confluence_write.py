@@ -134,10 +134,21 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 message="Confluence result did not identify an approved poststate",
             )
         page_id = str(expected["id"])
-        observed = self._read_page(
-            page_id,
-            representation=str(expected["representation"]),
-        )
+        try:
+            observed = self._read_page(
+                page_id,
+                representation=str(expected["representation"]),
+                status=str(expected["status"]),
+            )
+        except ConnectorError:
+            return VerificationResult(
+                action_id=action.action_id,
+                verified=False,
+                observed=None,
+                message=(
+                    "Confluence page re-read omitted required content or placement"
+                ),
+            )
         verified = _poststate_matches(after, expected) and _poststate_matches(
             observed,
             expected,
@@ -149,7 +160,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
             message=(
                 "verified Confluence page by independent re-read"
                 if verified
-                else "Confluence page did not match approved content"
+                else "Confluence page did not match approved content and placement"
             ),
         )
 
@@ -168,6 +179,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
             before = self._read_page(
                 page_id,
                 representation=str(after.get("representation", "storage")),
+                status=_state_required_text(after, "status"),
             )
             if not _page_matches(before, after):
                 raise VersionConflictError(
@@ -196,6 +208,7 @@ class ConfluenceWriteConnector(CompensatingConnector):
         current = self._read_page(
             page_id,
             representation=str(after.get("representation", "storage")),
+            status=_state_required_text(after, "status"),
         )
         if not _page_matches(current, after):
             raise VersionConflictError(
@@ -362,19 +375,36 @@ class ConfluenceWriteConnector(CompensatingConnector):
             action.parameters,
             self._config.deployment,
         )
+        parent_id = _approved_parent_id(action.parameters)
+        status = _approved_status(
+            action.parameters,
+            default=(
+                "draft"
+                if self._config.deployment is DeploymentType.CLOUD
+                else "current"
+            ),
+        )
         if self._config.deployment is DeploymentType.CLOUD:
-            space_id = str(action.parameters.get("space_id", "")).strip()
-            if not space_id:
-                space_key = _required_text(action.parameters, "space_key").upper()
+            supplied_space_id = _optional_text(action.parameters, "space_id")
+            supplied_space_key = _optional_text(action.parameters, "space_key")
+            if bool(supplied_space_id) == bool(supplied_space_key):
+                raise ConnectorError(
+                    "Confluence Cloud create requires exactly one of space_id "
+                    "or space_key"
+                )
+            space_key = supplied_space_key.upper() if supplied_space_key else None
+            if space_key is not None:
                 space_id = self._resolve_cloud_space_id(space_key)
+            else:
+                assert supplied_space_id is not None
+                space_id = supplied_space_id
             payload: dict[str, Any] = {
                 "spaceId": space_id,
-                "status": str(action.parameters.get("status", "draft")),
+                "status": status,
                 "title": title,
                 "body": {"representation": representation, "value": body},
             }
-            parent_id = str(action.parameters.get("parent_id", "")).strip()
-            if parent_id:
+            if parent_id is not None:
                 payload["parentId"] = parent_id
             data, response = self._client.request_json(
                 "POST",
@@ -382,15 +412,20 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 json_body=payload,
             )
         else:
-            space_key = _required_text(action.parameters, "space_key")
+            if _optional_text(action.parameters, "space_id") is not None:
+                raise ConnectorError(
+                    "Confluence Data Center create requires space_key, not space_id"
+                )
+            space_key = _required_text(action.parameters, "space_key").upper()
+            space_id = self._resolve_data_center_space_id(space_key)
             payload = {
                 "type": "page",
+                "status": status,
                 "title": title,
                 "space": {"key": space_key},
                 "body": {"storage": {"value": body, "representation": "storage"}},
             }
-            parent_id = str(action.parameters.get("parent_id", "")).strip()
-            if parent_id:
+            if parent_id is not None:
                 payload["ancestors"] = [{"id": parent_id}]
             data, response = self._client.request_json(
                 "POST",
@@ -400,19 +435,20 @@ class ConfluenceWriteConnector(CompensatingConnector):
         if not isinstance(data, Mapping) or not data.get("id"):
             raise ConnectorError("Confluence create response omitted a page ID")
         page_id = _provider_page_id(data)
-        after = self._read_page(page_id, representation=representation)
-        if (
-            self._config.deployment is DeploymentType.CLOUD
-            and str(after.get("space_id", "")) != space_id
-        ):
-            raise ConnectorError(
-                "Confluence create provider poststate used another space"
-            )
+        after = self._read_page(
+            page_id,
+            representation=representation,
+            status=status,
+        )
         expected = _approved_poststate(
             action,
             page_id=page_id,
             version=1,
             deployment=self._config.deployment,
+            status=status,
+            space_id=space_id,
+            space_key=space_key,
+            parent_id=parent_id,
         )
         _require_poststate(after, expected, "create")
         return ExecutionResult(
@@ -449,13 +485,22 @@ class ConfluenceWriteConnector(CompensatingConnector):
             )
         enforce_expected_version(action, before.get("version"))
         message = str(action.parameters.get("version_message", "")).strip()
+        status = _approved_status(
+            action.parameters,
+            default=_state_required_text(before, "status"),
+        )
+        space_id = _state_required_identity(before, "space_id")
+        parent_id = _state_optional_identity(before, "parent_id")
+        space_key: str | None = None
 
         if self._config.deployment is DeploymentType.CLOUD:
+            if _optional_text(action.parameters, "space_key") is not None:
+                raise ConnectorError(
+                    "Confluence Cloud update cannot change space placement"
+                )
             payload: dict[str, Any] = {
                 "id": page_id,
-                "status": str(
-                    action.parameters.get("status", before.get("status") or "current")
-                ),
+                "status": status,
                 "title": title,
                 "body": {"representation": representation, "value": body},
                 "version": {"number": next_version},
@@ -475,14 +520,19 @@ class ConfluenceWriteConnector(CompensatingConnector):
                     ) from error
                 raise
         else:
-            space_key = str(
-                action.parameters.get("space_key", before.get("space_key") or "")
-            ).strip()
-            if not space_key:
-                raise ConnectorError("Confluence Data Center update requires space_key")
+            before_space_key = _state_required_text(before, "space_key")
+            space_key = (
+                _optional_text(action.parameters, "space_key") or before_space_key
+            ).upper()
+            if space_key != before_space_key:
+                raise ConnectorError(
+                    "Confluence Data Center space moves require a separate "
+                    "placement capability"
+                )
             payload = {
                 "id": page_id,
                 "type": "page",
+                "status": status,
                 "title": title,
                 "space": {"key": space_key},
                 "body": {"storage": {"value": body, "representation": "storage"}},
@@ -503,12 +553,20 @@ class ConfluenceWriteConnector(CompensatingConnector):
                     ) from error
                 raise
 
-        observed = self._read_page(page_id, representation=representation)
+        observed = self._read_page(
+            page_id,
+            representation=representation,
+            status=status,
+        )
         expected = _approved_poststate(
             action,
             page_id=page_id,
             version=next_version,
             deployment=self._config.deployment,
+            status=status,
+            space_id=space_id,
+            space_key=space_key,
+            parent_id=parent_id,
         )
         _require_poststate(observed, expected, "update")
         compensation_parameters: dict[str, Any] = {
@@ -549,14 +607,80 @@ class ConfluenceWriteConnector(CompensatingConnector):
         if action.capability == "confluence.page.create":
             page_id = _provider_page_id(result.after or {})
             version = 1
+            status = _approved_status(
+                action.parameters,
+                default=(
+                    "draft"
+                    if self._config.deployment is DeploymentType.CLOUD
+                    else "current"
+                ),
+            )
+            parent_id = _approved_parent_id(action.parameters)
+            supplied_space_id = _optional_text(action.parameters, "space_id")
+            supplied_space_key = _optional_text(action.parameters, "space_key")
+            if self._config.deployment is DeploymentType.CLOUD:
+                if bool(supplied_space_id) == bool(supplied_space_key):
+                    raise ConnectorError(
+                        "Confluence Cloud create requires exactly one of space_id "
+                        "or space_key"
+                    )
+                space_key = supplied_space_key.upper() if supplied_space_key else None
+                space_id = (
+                    self._resolve_cloud_space_id(space_key)
+                    if space_key is not None
+                    else supplied_space_id
+                )
+                assert space_id is not None
+            else:
+                if supplied_space_id is not None:
+                    raise ConnectorError(
+                        "Confluence Data Center create requires space_key, not space_id"
+                    )
+                if supplied_space_key is None:
+                    raise ConnectorError(
+                        "Confluence Data Center create requires space_key"
+                    )
+                space_key = supplied_space_key.upper()
+                space_id = self._resolve_data_center_space_id(space_key)
         else:
             page_id = action.target.resource_id
             version = _expected_updated_version(action)
+            before = result.before
+            if not isinstance(before, Mapping):
+                raise ConnectorError(
+                    "Confluence update result omitted its verified prestate"
+                )
+            status = _approved_status(
+                action.parameters,
+                default=_state_required_text(before, "status"),
+            )
+            space_id = _state_required_identity(before, "space_id")
+            parent_id = _state_optional_identity(before, "parent_id")
+            if self._config.deployment is DeploymentType.CLOUD:
+                if _optional_text(action.parameters, "space_key") is not None:
+                    raise ConnectorError(
+                        "Confluence Cloud update cannot change space placement"
+                    )
+                space_key = None
+            else:
+                before_space_key = _state_required_text(before, "space_key")
+                space_key = (
+                    _optional_text(action.parameters, "space_key") or before_space_key
+                ).upper()
+                if space_key != before_space_key:
+                    raise ConnectorError(
+                        "Confluence Data Center space moves require a separate "
+                        "placement capability"
+                    )
         return _approved_poststate(
             action,
             page_id=page_id,
             version=version,
             deployment=self._config.deployment,
+            status=status,
+            space_id=space_id,
+            space_key=space_key,
+            parent_id=parent_id,
         )
 
     def _read_page(
@@ -564,13 +688,17 @@ class ConfluenceWriteConnector(CompensatingConnector):
         page_id: str,
         *,
         representation: str = "storage",
+        status: str | None = None,
     ) -> dict[str, Any]:
         encoded = quote_segment(page_id)
         if self._config.deployment is DeploymentType.CLOUD:
+            query: dict[str, object] = {"body-format": representation}
+            if status is not None:
+                query["status"] = status
             data, response = self._client.request_json(
                 "GET",
                 f"wiki/api/v2/pages/{encoded}",
-                query={"body-format": representation},
+                query=query,
             )
             if not isinstance(data, Mapping):
                 raise ConnectorError("Confluence page response must be an object")
@@ -583,10 +711,19 @@ class ConfluenceWriteConnector(CompensatingConnector):
             return {
                 "id": _provider_page_id(data),
                 "title": str(data.get("title", "")),
-                "status": data.get("status"),
+                "status": _mapping_required_text(data, "status", context="page"),
                 "version": _provider_version(version.get("number")),
-                "space_id": data.get("spaceId"),
+                "space_id": _mapping_required_identity(
+                    data,
+                    "spaceId",
+                    context="page",
+                ),
                 "space_key": None,
+                "parent_id": _mapping_optional_identity(
+                    data,
+                    "parentId",
+                    context="page",
+                ),
                 "body": body_value,
                 "body_text": html_to_text(body_value)
                 if observed_representation == "storage"
@@ -595,10 +732,13 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 "reference": response.url,
             }
 
+        query = {"expand": "body.storage,version,space,ancestors"}
+        if status is not None:
+            query["status"] = status
         data, response = self._client.request_json(
             "GET",
             f"rest/api/content/{encoded}",
-            query={"expand": "body.storage,version,space"},
+            query=query,
         )
         if not isinstance(data, Mapping):
             raise ConnectorError("Confluence page response must be an object")
@@ -614,10 +754,19 @@ class ConfluenceWriteConnector(CompensatingConnector):
         return {
             "id": _provider_page_id(data),
             "title": str(data.get("title", "")),
-            "status": data.get("status"),
+            "status": _mapping_required_text(data, "status", context="page"),
             "version": _provider_version(version.get("number")),
-            "space_id": space.get("id"),
-            "space_key": space.get("key"),
+            "space_id": _mapping_required_identity(
+                space,
+                "id",
+                context="page space",
+            ),
+            "space_key": _mapping_required_text(
+                space,
+                "key",
+                context="page space",
+            ),
+            "parent_id": _data_center_parent_id(data),
             "body": body_value,
             "body_text": html_to_text(body_value),
             "representation": "storage",
@@ -662,6 +811,22 @@ class ConfluenceWriteConnector(CompensatingConnector):
                 "Confluence space key did not resolve to exactly one visible space"
             )
         return _provider_space_id(matches[0])
+
+    def _resolve_data_center_space_id(self, space_key: str) -> str:
+        data, _ = self._client.request_json(
+            "GET",
+            f"rest/api/space/{quote_segment(space_key)}",
+        )
+        if not isinstance(data, Mapping):
+            raise ConnectorError(
+                "Confluence Data Center space response must be an object"
+            )
+        observed_key = _mapping_required_text(data, "key", context="space")
+        if observed_key.upper() != space_key.upper():
+            raise ConnectorError(
+                "Confluence Data Center space lookup returned another space"
+            )
+        return _provider_space_id(data)
 
     def _read_space_page_ids(self, space_id: str) -> tuple[str, ...]:
         data, _ = self._client.request_json(
@@ -711,10 +876,19 @@ def _cloud_body(
 
 
 def _page_matches(observed: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
-    return all(
-        observed.get(key) == expected.get(key)
-        for key in ("id", "title", "body", "representation", "version")
+    keys = (
+        "id",
+        "title",
+        "body",
+        "representation",
+        "version",
+        "status",
+        "space_id",
+        "space_key",
+        "parent_id",
     )
+    exact_expected = {key: expected.get(key) for key in keys}
+    return _poststate_matches(observed, exact_expected)
 
 
 def _approved_poststate(
@@ -723,8 +897,12 @@ def _approved_poststate(
     page_id: str,
     version: int,
     deployment: DeploymentType,
+    status: str,
+    space_id: str,
+    space_key: str | None,
+    parent_id: str | None,
 ) -> dict[str, Any]:
-    return {
+    expected = {
         "id": page_id,
         "title": _required_text(action.parameters, "title"),
         "body": _required_text(action.parameters, "body"),
@@ -733,16 +911,27 @@ def _approved_poststate(
             deployment,
         ),
         "version": version,
+        "status": status,
+        "space_id": space_id,
+        "parent_id": parent_id,
     }
+    if deployment is DeploymentType.DATA_CENTER:
+        if space_key is None:
+            raise ConnectorError(
+                "Confluence Data Center poststate requires a stable space key"
+            )
+        expected["space_key"] = space_key
+    return expected
 
 
 def _poststate_matches(
     observed: Mapping[str, Any],
     expected: Mapping[str, Any],
 ) -> bool:
-    for key in ("id", "title", "body", "representation", "version"):
+    for key, approved in expected.items():
+        if key not in observed:
+            return False
         actual = observed.get(key)
-        approved = expected.get(key)
         if type(actual) is not type(approved) or actual != approved:
             return False
     return True
@@ -755,7 +944,8 @@ def _require_poststate(
 ) -> None:
     if not _poststate_matches(observed, expected):
         raise ConnectorError(
-            f"Confluence {operation} provider poststate did not match approved content"
+            f"Confluence {operation} provider poststate did not match approved "
+            "content and placement"
         )
 
 
@@ -777,6 +967,76 @@ def _provider_space_id(data: Mapping[str, Any]) -> str:
     if not rendered:
         raise ConnectorError("Confluence space response omitted a space ID")
     return rendered
+
+
+def _mapping_required_identity(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    context: str,
+) -> str:
+    if key not in data:
+        raise ConnectorError(f"Confluence {context} response omitted {key}")
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ConnectorError(f"Confluence {context} response has invalid {key}")
+    rendered = str(value).strip()
+    if not rendered:
+        raise ConnectorError(f"Confluence {context} response has empty {key}")
+    return rendered
+
+
+def _mapping_optional_identity(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    context: str,
+) -> str | None:
+    if key not in data:
+        raise ConnectorError(f"Confluence {context} response omitted {key}")
+    if data[key] is None:
+        return None
+    return _mapping_required_identity(data, key, context=context)
+
+
+def _mapping_required_text(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    context: str,
+) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ConnectorError(f"Confluence {context} response omitted {key}")
+    if not value or value != value.strip():
+        raise ConnectorError(f"Confluence {context} response has invalid {key}")
+    return value
+
+
+def _data_center_parent_id(data: Mapping[str, Any]) -> str | None:
+    ancestors = data.get("ancestors")
+    if not isinstance(ancestors, list):
+        raise ConnectorError("Confluence page response omitted expanded ancestors")
+    identities: list[str] = []
+    for ancestor in ancestors:
+        if not isinstance(ancestor, Mapping):
+            raise ConnectorError("Confluence page response has invalid ancestors")
+        identities.append(
+            _mapping_required_identity(ancestor, "id", context="page ancestor")
+        )
+    return identities[-1] if identities else None
+
+
+def _state_required_identity(data: Mapping[str, Any], key: str) -> str:
+    return _mapping_required_identity(data, key, context="normalized page")
+
+
+def _state_optional_identity(data: Mapping[str, Any], key: str) -> str | None:
+    return _mapping_optional_identity(data, key, context="normalized page")
+
+
+def _state_required_text(data: Mapping[str, Any], key: str) -> str:
+    return _mapping_required_text(data, key, context="normalized page")
 
 
 def _approved_space_poststate(
@@ -828,6 +1088,24 @@ def _required_text(parameters: Mapping[str, Any], key: str) -> str:
     if not value:
         raise ConnectorError(f"missing required parameter: {key}")
     return value
+
+
+def _optional_text(parameters: Mapping[str, Any], key: str) -> str | None:
+    value = parameters.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConnectorError(f"parameter must be a string: {key}")
+    rendered = value.strip()
+    return rendered or None
+
+
+def _approved_parent_id(parameters: Mapping[str, Any]) -> str | None:
+    return _optional_text(parameters, "parent_id")
+
+
+def _approved_status(parameters: Mapping[str, Any], *, default: str) -> str:
+    return _optional_text(parameters, "status") or default
 
 
 def _representation(parameters: Mapping[str, Any]) -> str:
