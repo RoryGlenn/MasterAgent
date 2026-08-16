@@ -54,9 +54,19 @@ cannot be derived exactly.
 ### Confluence
 
 - Cloud space creation with exact key/name verification and manual deletion recovery;
-- page creation with manual deletion recovery;
-- version-checked page update;
+- Cloud and Data Center page creation with exact page, version, content,
+  representation, publication-status, space, and direct-parent verification,
+  plus manual deletion recovery;
+- version-checked page update with an independent deployment-specific re-read
+  that proves the approved status and stable space/parent placement as well as
+  the exact content;
 - atomic version-checked prior-version/body restoration.
+
+Cloud verification uses the v2 page response's `spaceId` and `parentId`.
+Data Center verification explicitly expands `space` and `ancestors`, treats the
+last ancestor as the direct parent, and resolves the approved space key to its
+stable provider ID. A missing placement or publication field is an unverified
+outcome, not a partial success.
 
 ### Bitbucket and Git
 

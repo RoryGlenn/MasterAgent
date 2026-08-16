@@ -129,7 +129,10 @@ Controls:
 - expected version/eTag/commit preconditions;
 - local Git patch/branch/commit/push definitions remain disabled and
   non-routable until every metadata transaction is descriptor-bound;
-- independent provider re-read;
+- independent provider re-read whose capability-specific contract includes
+  every effect-bearing field; Confluence page writes prove content,
+  representation, version, publication status, space, and direct parent;
+- fail closed when a provider omits required poststate fields;
 - fail-closed conflict states;
 - no automatic overwrite/rebase after conflict.
 
