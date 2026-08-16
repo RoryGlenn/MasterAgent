@@ -21,13 +21,20 @@ they do not grant authority.
   by a typed connector.
 - Apply policy, governance, source-of-truth, approval, and runtime gates before
   every side effect.
-- Keep every live connector, mutation gate, communication gate, and recurring
-  workflow disabled at rest. A direct provider goal explicitly authorizes the
-  minimum read connector, provider network access, and safe probes in memory for
-  that goal; it never authorizes persistent enablement or another provider.
+- Keep supported read connectors available at rest, but activate and resolve
+  only the provider selected by the operator's goal. Keep every mutation gate,
+  communication gate, and recurring workflow disabled at rest. A direct
+  provider goal authorizes the minimum provider network access and safe probes
+  for that goal; it never authorizes another provider or a side effect.
 - Treat a missing safe capability as implementation work when adding it is
   necessary and in scope. Add its typed contract and tests, then continue the
   original outcome instead of returning setup instructions to the operator.
+- Never report a missing typed capability or read-only connector as the final
+  blocker while the repository is writable. Implement the minimum governed
+  provider path locally, validate it, and resume the original request before
+  asking for any irreducible credential, target, or authenticated approval.
+- Apply that implement-then-continue rule uniformly to every current and future
+  connector; provider-specific gaps do not create provider-specific stop rules.
 - Do not require or search for credentials when a typed anonymous capability
   covers public provider data. In particular, a named GitHub user's public
   repositories use the anonymous public-user path; authenticated identity is

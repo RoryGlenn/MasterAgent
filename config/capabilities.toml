@@ -1,5 +1,5 @@
-# Master Agent v1 capability catalog. Live provider connectors remain disabled
-# in packaged integration defaults; enabling a capability does not grant credentials.
+# Master Agent v1 capability catalog. Read connectors are available by default
+# but remain inactive until selected; capabilities never grant credentials.
 
 [capabilities."bitbucket.branch.push"]
 enabled = false
@@ -103,6 +103,27 @@ enabled = true
 authentication = "configured_connector"
 risk = "read_only"
 
+[capabilities."github.collaborator.access.update"]
+enabled = true
+authentication = "configured_connector"
+risk = "high_impact"
+reversible = false
+description = "Change the built-in role of an existing collaborator; invitations and custom roles are excluded."
+
+[capabilities."github.issue.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create and verify a GitHub issue; compensation closes it after a conflict check."
+
+[capabilities."github.pull_request.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+description = "Create and verify a GitHub pull request; compensation closes it after a conflict check."
+
 [capabilities."github.pull_request.read"]
 enabled = true
 authentication = "configured_connector"
@@ -129,6 +150,14 @@ description = "List repositories visible to the authenticated GitHub user."
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+
+[capabilities."github.repository.settings.update"]
+enabled = true
+authentication = "configured_connector"
+risk = "reversible_write"
+reversible = true
+requires_expected_version = true
+description = "Update an allowlisted set of boolean repository settings with verified restoration."
 
 [capabilities."identity.identifier.resolve"]
 enabled = true

@@ -55,7 +55,9 @@ non-routable.
 - exact approvals and idempotency;
 - provider-side compare-and-swap and reconstructable compensation remain
   required before production write enablement;
-- protected branches, force pushes, merge, permissions, and broad deletion prohibited.
+- protected branches, force pushes, merge, invitations, arbitrary permissions,
+  and broad deletion prohibited; existing GitHub collaborator roles use one
+  separately gated dual-approved capability.
 
 ### Phase 5
 

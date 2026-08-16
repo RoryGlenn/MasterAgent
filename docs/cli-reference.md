@@ -21,7 +21,7 @@ or filesystem side effects.
 | `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
 | `discover` | Inspect connector configuration | Offline unless `--probe`; probing performs bounded read-only provider requests |
 | `connect` | Enable selected supported read connectors in memory and verify access | Fixed bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
-| `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; enables only the GitHub read connector in memory and never edits credentials or persistent configuration |
+| `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; selects only the GitHub read connector and never edits credentials or persistent configuration |
 | `weekly-status-plan` | Build a read-only weekly-status plan | Writes only the selected local plan |
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
@@ -40,8 +40,8 @@ The selected canonical path is part of the bound execution context.
 
 `connect` accepts a comma-separated `--systems` selection from Jira,
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,
-and OneNote. It enables only the underlying selected connector configurations
-in memory and performs each connector's fixed read-only probe. Atlassian
+and OneNote. It activates only the selected connector configurations for that
+probe and performs each connector's fixed read-only check. Atlassian
 systems require an explicit reviewed integrations file when the packaged base
 URL is still the placeholder. This command verifies connectivity; the agent
 must continue with a typed feature command to complete the requested outcome.

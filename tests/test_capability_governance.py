@@ -180,6 +180,41 @@ class CapabilityGovernanceTests(unittest.TestCase):
             governance.approval_tier_for("repository.permission.change"),
             ApprovalTier.PROHIBITED,
         )
+        for capability in (
+            "github.repository.settings.update",
+            "github.collaborator.access.update",
+        ):
+            with self.subTest(capability=capability):
+                self.assertEqual(
+                    governance.approval_tier_for(capability), ApprovalTier.DUAL
+                )
+
+    def test_typed_github_admin_is_not_blocked_by_generic_permission_ban(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        policy = PolicyEngine(PolicyConfig.from_toml(ROOT / "config/policy.toml"))
+        action = AgentAction(
+            capability="github.collaborator.access.update",
+            target=ResourceRef("github", "collaborator", "RoryGlenn/alice"),
+            parameters={
+                "owner": "RoryGlenn",
+                "repository": "MasterAgent",
+                "username": "alice",
+                "role": "push",
+            },
+            risk=RiskLevel.HIGH_IMPACT,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="github-existing-collaborator-role",
+            justification="test typed access administration",
+        )
+
+        allowed, reason = catalog.validate_action(action)
+        self.assertTrue(allowed, reason)
+        decision = policy.evaluate(
+            ChangePlan(goal="test", actions=(action,), created_by="test"), action
+        )
+        self.assertFalse(decision.permitted)
+        self.assertIn("approval", decision.reason)
 
     def test_governance_minimum_forces_approval_even_if_risk_is_auto_permitted(
         self,

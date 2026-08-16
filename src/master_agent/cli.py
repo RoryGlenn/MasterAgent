@@ -573,7 +573,7 @@ def _build_parser() -> argparse.ArgumentParser:
     connect = subparsers.add_parser(
         "connect",
         help=(
-            "enable requested read connectors in memory and verify them without "
+            "select requested read connectors and verify them without "
             "changing persistent configuration"
         ),
     )
@@ -803,6 +803,7 @@ def _bind_context(
         connector_mode=connector_mode,
     )
     execution_environ = _credential_environment(credential_store, os.environ)
+    live_systems = _live_systems_for_plan(plan, integrations)
     plugin_lock = _load_plugin_lock(plugin_names, plugin_lock_path)
     descriptors = (
         resolve_locked_plugin_descriptors(
@@ -815,6 +816,7 @@ def _bind_context(
     context = build_execution_context(
         integrations,
         environ=execution_environ,
+        systems=live_systems,
         plugin_descriptors=descriptors,
         runtime=build_runtime_execution_binding(
             integrations,
@@ -997,6 +999,7 @@ def _run(
             connector_mode=connector_mode,
         )
         execution_environ = _credential_environment(credential_store, os.environ)
+        live_systems = _live_systems_for_plan(plan, integration_config)
         approved_path_bindings = (
             *approved_context.runtime.runtime_paths,
             *approved_context.runtime.publication_roots,
@@ -1017,6 +1020,7 @@ def _run(
         observed_context = build_execution_context(
             integration_config,
             environ=execution_environ,
+            systems=live_systems,
             runtime=build_runtime_execution_binding(
                 integration_config,
                 connector_mode=connector_mode,
@@ -1115,6 +1119,7 @@ def _run(
             connectors = build_live_registry(
                 integration_config,
                 environ=execution_environ,
+                systems=live_systems,
                 include_writes=include_writes,
                 include_communications=include_communications,
                 workspace_root=workspace_root,
@@ -1152,6 +1157,7 @@ def _run(
             build_execution_context(
                 current_integrations,
                 environ=current_environ,
+                systems=live_systems,
                 runtime=build_runtime_execution_binding(
                     current_integrations,
                     connector_mode=connector_mode,
@@ -1329,9 +1335,15 @@ def _readiness(
         if str(check.get("name", "")).startswith("connector:")
     )
     if connector_checks:
-        print(f"live connectors: {len(connector_checks)} configured")
+        ready_connectors = sum(
+            bool(check.get("credential_ready")) for check in connector_checks
+        )
+        print(
+            f"live connectors: {len(connector_checks)} available, "
+            f"{ready_connectors} credential-ready"
+        )
     else:
-        print("live connectors: 0 (safe local mode only)")
+        print("live connectors: 0 available")
     for check in report.checks:
         print(f"  {'PASS' if check.get('passed') else 'FAIL'} {check.get('name')}")
     for warning in report.warnings:
@@ -1968,8 +1980,8 @@ def _github_repositories(
 ) -> int:
     """Complete public-user or authenticated GitHub repository discovery.
 
-    The packaged GitHub connector remains disabled at rest. This explicit
-    command enables only that read connector in memory for the request. With a
+    The packaged GitHub connector is available but inactive at rest. This
+    command selects only that read connector for the request. With a
     username it uses GitHub's anonymous public-user endpoint and never loads or
     sends a credential. Without a username it attests the provider identity and
     lists repositories visible to that authenticated account. Both paths
@@ -2524,6 +2536,31 @@ def _require_systems(
         raise ValueError(
             f"{workflow} requires enabled connectors: " + ", ".join(sorted(missing))
         )
+
+
+def _live_systems_for_plan(
+    plan: ChangePlan, integrations: IntegrationConfig
+) -> set[str]:
+    """Select plan providers while preserving mismatched-config validation."""
+
+    requested = {
+        action.target.system
+        for action in plan.actions
+        if action.target.system in _CONNECT_CONFIGURATION_BY_SYSTEM
+    }
+    configured = set(integrations.connectors)
+    requested_configurations = {
+        _CONNECT_CONFIGURATION_BY_SYSTEM[system] for system in requested
+    }
+    if not requested:
+        return set()
+    if requested_configurations & configured:
+        return requested
+    return {
+        system
+        for system, configuration in _CONNECT_CONFIGURATION_BY_SYSTEM.items()
+        if configuration in configured
+    }
 
 
 def _load_plan(path: Path) -> ChangePlan:

@@ -12,7 +12,8 @@ Typed anonymous public-data capabilities require no credential activation.
   passes on Python 3.12, 3.13, and 3.14 in CI.
 - Repository configuration and all 12 wheel-packaged TOML defaults match exactly.
 - Every packaged live connector, provider mutation gate, and recurring workflow is disabled.
-- All 76 typed capabilities have governance coverage; the sole high-impact merge capability remains disabled.
+- All 80 typed capabilities have governance coverage; GitHub administration
+  requires dual approval and the high-impact Bitbucket merge remains disabled.
 - Release/version claims, the README guide index, the complete CLI command
   reference, capability summaries, checked-in plan schemas, local Markdown
   links, source-tree hygiene, and the credential-free v1 demonstration
@@ -38,6 +39,9 @@ Typed anonymous public-data capabilities require no credential activation.
 Ruff linting and formatting plus strict mypy checks pass without file
 exclusions and are required CI gates. Tool versions are pinned in the project
 development dependencies so local and CI results use the same rule set.
+Release validation also pins the capability-gap contract: an actionable request
+must implement a missing governed connector path and resume the original goal,
+never return a hypothetical implementation checklist as the outcome.
 
 Run the equivalent local gates from the project root:
 

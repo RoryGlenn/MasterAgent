@@ -43,6 +43,25 @@ disabled and absent from the live registry. They remain quarantined internals
 until every repository metadata/ref/reflog/index/object/lock transaction is
 descriptor-bound to one approved repository identity.
 
+### GitHub
+
+- create an issue and close the exact created issue during compensation;
+- create a pull request and close the exact created pull request during
+  compensation;
+- update an allowlisted set of boolean repository settings with an expected
+  version, independent re-read, and exact prior-value restoration;
+- change the built-in role of an existing collaborator with dual approval and
+  independent re-read.
+
+GitHub administration is separately gated from ordinary writes. Collaborator
+invitations, removals, custom roles, repository deletion, secrets, branch
+protection, and merge are not exposed. Existing-collaborator role changes do
+not have automatic compensation because the provider's permission endpoint
+reports the highest effective role across direct and inherited grants, not the
+specific grant that would need to be restored. A race that makes the provider
+return a new invitation is handled by cancelling the invitation and failing the
+action.
+
 ### SharePoint
 
 - upload or replace a bounded file from an approved artifact root;

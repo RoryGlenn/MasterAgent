@@ -25,6 +25,10 @@ from master_agent.connectors.drafts import (
     TeamsDraftConnector,
 )
 from master_agent.connectors.github import GitHubConnector
+from master_agent.connectors.github_write import (
+    GitHubAdminConnector,
+    GitHubWriteConnector,
+)
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.microsoft import (
@@ -73,7 +77,7 @@ def build_live_connectors(
     artifact_directory: PinnedDirectory | None = None,
     approved_execution_context: ExecutionContext | None = None,
 ) -> tuple[Connector, ...]:
-    """Construct explicitly enabled live connectors.
+    """Construct available live connectors selected for this operation.
 
     Provider mutation surfaces are double-gated: the caller must explicitly
     include them and the provider configuration must enable the corresponding
@@ -111,11 +115,12 @@ def build_live_connectors(
     """
 
     source = dict(environ if environ is not None else os.environ)
-    selected = systems or set(_READ_SYSTEMS) | {"repository"}
+    selected = set(_READ_SYSTEMS) | {"repository"} if systems is None else set(systems)
     connectors: list[Connector] = []
     captured = capture_connector_executions(
         config,
         environ=source,
+        systems=selected,
         require_trusted_principal=approved_execution_context is not None,
         principal_transport=transport,
     )
@@ -142,7 +147,9 @@ def build_live_connectors(
 
     for name in sorted(config.connectors):
         unresolved = config.connectors[name]
-        if not unresolved.enabled:
+        if not unresolved.enabled or not _connector_is_selected(
+            unresolved.system, selected
+        ):
             continue
         if name not in {"jira", "confluence", "bitbucket", "github", "microsoft"}:
             continue
@@ -188,6 +195,18 @@ def build_live_connectors(
 
         if name == "github" and "github" in selected:
             connectors.append(GitHubConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "writes_enabled")
+            ):
+                connectors.append(GitHubWriteConnector(resolved, transport=transport))
+            if (
+                include_writes
+                and _feature_enabled(unresolved, "write_enabled")
+                and _feature_enabled(unresolved, "admin_enabled")
+            ):
+                connectors.append(GitHubAdminConnector(resolved, transport=transport))
             continue
 
         if name != "microsoft":
@@ -304,6 +323,16 @@ def _feature_enabled(config: ConnectorConfig, key: str) -> bool:
             f"connector {config.system} setting {key} must be a boolean"
         )
     return value
+
+
+def _connector_is_selected(system: str, selected: set[str]) -> bool:
+    """Return whether a provider configuration backs a selected runtime system."""
+
+    if system == "microsoft":
+        return bool(
+            selected & {"microsoft", "sharepoint", "outlook", "teams", "onenote"}
+        )
+    return system in selected
 
 
 def _verify_approved_execution_context(

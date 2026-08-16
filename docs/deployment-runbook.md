@@ -35,13 +35,13 @@ master-agent readiness \
 ```
 
 Resolve every error and review every warning. `ready: True` validates the
-selected configuration; also confirm that the reported live connector count
-matches the intended deployment. Omitting the configuration arguments validates
-the packaged safe defaults, not files in the current checkout.
+selected configuration; also confirm that the available and credential-ready
+connector counts match the intended deployment. Omitting the configuration
+arguments validates the packaged safe defaults, not files in the current checkout.
 
 ## 6. Validate read-only access
 
-Enable one read connector at a time and run:
+Select and probe one read connector at a time:
 
 ```bash
 master-agent discover \
@@ -81,10 +81,16 @@ Review the generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
 
 ## 8. Validate reversible writes in non-production
 
-Use disposable Jira issues, Confluence pages, and SharePoint files. Capture
+Use disposable Jira issues, Confluence pages, GitHub issues/pull requests and
+test repositories, and SharePoint files. Capture
 expected versions. Obtain exact approvals. Enable only one granular provider
 flag. Execute, verify, and test compensation. Do not enable local Git or OneNote
 writes; their catalog, governance, and live-registry routes are disabled.
+
+For GitHub administration, use a test repository, require two distinct
+approvers, and enable only `admin_enabled`. Test repository-setting restoration
+separately. Existing-collaborator role changes require manual recovery review;
+the runtime never invites or removes a collaborator.
 
 ## 9. Validate communication
 

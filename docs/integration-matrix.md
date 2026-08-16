@@ -5,7 +5,7 @@
 | Jira | Cloud basic/API token; Data Center bearer/basic | server info, search, issue read | update/comment/transition proposal | field update, comment, transition | independent read; restore fields; delete created comment; configured reverse transition | disabled |
 | Confluence | Cloud basic/API token; Data Center bearer/basic | page search/read | create/update proposal | create/update page | version check; independent read; restore prior version/body or remove created page | disabled |
 | Bitbucket | Cloud token/basic or bearer; Data Center PAT/bearer | repository, PR, diffstat/changes, build status | branch/patch plan | create PR; local-Git branch publication disabled | verify exact PR; decline created PR | disabled |
-| GitHub | Cloud anonymous public reads or bearer token with provider-verified numeric-user attestation | public-user and authenticated-user repository lists, repository read, PR search/read, commit check runs | — | unavailable | anonymous route omits credentials; authenticated principal check before apply; independent normalized re-read | disabled |
+| GitHub | Cloud anonymous public reads or bearer token with provider-verified numeric-user attestation | public-user and authenticated-user repository lists, repository read, PR search/read, commit check runs | — | issue/PR create; allowlisted repository settings; existing-collaborator built-in role | anonymous route omits credentials; authenticated principal check; exact post-write re-read; close/restore compensation where safe | disabled |
 | Microsoft identity | delegated or explicit application user | current/explicit user and directory search | — | — | normalized identity/citation | disabled |
 | Outlook | Microsoft Graph delegated by default | folders, message search/read, attachment metadata, allowlisted UTF-8 text | `.eml` | send | create provider draft, re-read exact content, then send; non-reversible | disabled |
 | Teams | Microsoft Graph delegated for normal sends | chats, teams, channels, messages, replies | Markdown message draft | chat/channel send; channel reply | re-read created message; non-reversible | disabled |
@@ -18,8 +18,10 @@
 ## Hard exclusions
 
 - Bitbucket pull-request merge is catalogued but disabled.
-- The GitHub connector exposes no create, update, merge, permission, or generic HTTP capability.
-- No connector exposes permission modification.
+- GitHub exposes no generic HTTP, merge, delete, invite, custom-role, secret,
+  or branch-protection capability. Its existing-collaborator role update is a
+  separately gated, dual-approved exception to the general permission ban.
+- No other connector exposes permission modification.
 - No generic arbitrary HTTP connector exists.
 - No arbitrary shell capability exists.
 - No force push or protected-branch write exists.

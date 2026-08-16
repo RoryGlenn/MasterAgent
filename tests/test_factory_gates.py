@@ -13,6 +13,47 @@ from master_agent.connectors.factory import build_live_connectors
 class ConnectorFactoryGateTests(unittest.TestCase):
     """Verify that broad runtime flags cannot bypass provider-specific gates."""
 
+    def test_selected_connector_does_not_require_unrelated_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://example.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            connectors = build_live_connectors(
+                IntegrationConfig.from_toml(path),
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "token"},
+                systems={"github"},
+            )
+
+            self.assertEqual([item.system for item in connectors], ["github"])
+
+    def test_empty_selection_activates_no_available_connector(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = IntegrationConfig.from_toml(root / "config/integrations.toml")
+
+        self.assertEqual(
+            build_live_connectors(config, environ={}, systems=set()),
+            (),
+        )
+
     def test_jira_write_requires_runtime_and_both_config_gates(self) -> None:
         """Jira writes remain unavailable until both reviewed flags are true."""
 
@@ -116,6 +157,42 @@ class ConnectorFactoryGateTests(unittest.TestCase):
             self.assertIn("teams.chat.message.send", capabilities)
             self.assertIn("onenote.page.read", capabilities)
 
+    def test_github_write_and_admin_surfaces_have_independent_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                _github_config(writes_enabled=True, admin_enabled=False),
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+            connectors = build_live_connectors(
+                config,
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "token"},
+                systems={"github"},
+                include_writes=True,
+            )
+            capabilities = {
+                capability for item in connectors for capability in item.capabilities
+            }
+            self.assertIn("github.issue.create", capabilities)
+            self.assertNotIn("github.repository.settings.update", capabilities)
+
+            path.write_text(
+                _github_config(writes_enabled=False, admin_enabled=True),
+                encoding="utf-8",
+            )
+            connectors = build_live_connectors(
+                IntegrationConfig.from_toml(path),
+                environ={"MASTER_AGENT_GITHUB_TOKEN": "token"},
+                systems={"github"},
+                include_writes=True,
+            )
+            capabilities = {
+                capability for item in connectors for capability in item.capabilities
+            }
+            self.assertNotIn("github.issue.create", capabilities)
+            self.assertIn("github.repository.settings.update", capabilities)
+
 
 def _jira_config(*, write_enabled: bool, writes_enabled: bool) -> str:
     return f"""[connectors.jira]
@@ -152,6 +229,19 @@ onenote_read_enabled = {flag}
 onenote_writes_enabled = {flag}
 outlook_send_enabled = {flag}
 teams_send_enabled = {flag}
+"""
+
+
+def _github_config(*, writes_enabled: bool, admin_enabled: bool) -> str:
+    return f"""[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+write_enabled = true
+writes_enabled = {str(writes_enabled).lower()}
+admin_enabled = {str(admin_enabled).lower()}
 """
 
 

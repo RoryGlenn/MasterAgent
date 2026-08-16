@@ -6,10 +6,13 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- a 76-capability catalog spanning read, local generation, reversible writes, external communication, and prohibited high-impact operations;
-- a bounded, read-only GitHub Cloud connector for authenticated-user repository
+- an 80-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a bounded GitHub Cloud read connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run
   reads;
+- separately gated GitHub issue and pull-request creation with verified close
+  compensation, plus dual-approved repository-setting and existing-collaborator
+  role administration;
 - a credential-free `github.public_repository.list` path for bounded,
   independently verified public repositories owned by a specified GitHub user;
 - Phase 3 complete local draft packages containing Jira and Confluence proposals, Outlook `.eml`, Teams draft, PowerPoint, repository patch, summary, and integrity manifest;
@@ -49,6 +52,15 @@
 
 ### Changed
 
+- capability gaps now trigger immediate governed runtime implementation and a
+  same-run return to the operator's original goal; a read-only connector or
+  missing typed capability is explicitly forbidden as a final response;
+- the implement-validate-resume contract applies uniformly to every existing,
+  future, and plugin-provided connector;
+- packaged read connectors are available by default and lazily resolve only the
+  provider selected by the current operation; credentials for unrelated
+  providers are never required, while write, admin, send, and schedule gates
+  remain disabled;
 - live read, write, and communication connectors are constructed independently;
 - configuration now requires granular provider gates in addition to runtime flags;
 - policy evaluation now combines the capability catalog, organization governance, source-of-truth rules, immutable approvals, and risk rules;
@@ -67,7 +79,8 @@
   directories must be pairwise distinct;
 - evidence expiry/orphan maintenance is preview-only; destructive pruning and
   quarantine are disabled pending descriptor-relative recursive traversal;
-- packaged defaults include every v1 configuration file while keeping all live access, mutations, sends, and schedules disabled;
+- packaged defaults include every v1 configuration file while keeping provider
+  access inactive until selected and all mutation, send, and schedule gates disabled;
 - HTTP user agent and package version are now `1.0.0`.
 
 ### Security
@@ -77,7 +90,10 @@
 - communication approvals bind to exact recipients/destinations and exact content;
 - plugin discovery never imports plugin code, and CLI plugin apply fails closed before import;
 - provider mutation connectors require runtime, generic, and granular provider gates;
-- PR merge, permissions, protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion remain prohibited.
+- PR merge, generic permission changes, invitations, custom roles,
+  protected-branch writes, arbitrary HTTP, arbitrary shell, and broad deletion
+  remain prohibited; an existing GitHub collaborator's built-in role is the
+  only typed, dual-approved access-management exception.
 - all local Git mutation definitions are catalog-disabled,
   governance-prohibited, and non-routable because descriptor-pinning a Git child
   working directory does not bind every ref, reflog, index, object, and lock

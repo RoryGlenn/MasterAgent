@@ -21,7 +21,9 @@ scanned for prompt-injection indicators, and independently re-read for
 verification where practical. The GitHub Cloud connector constructs fixed
 public-user and authenticated-user repository-list, repository, pull-request,
 check-run, and identity endpoints internally and uses bounded numbered
-pagination; it exposes no write or arbitrary-request surface.
+pagination. Separately constructed GitHub mutation connectors expose only
+issue/PR creation, allowlisted repository settings, and existing-collaborator
+built-in-role updates; no connector exposes an arbitrary-request surface.
 `github.public_repository.list` uses the public-user endpoint anonymously and
 does not resolve or forward an ambient credential. Authenticated GitHub reads
 bind the provider-returned numeric principal during context review and

@@ -1,5 +1,15 @@
 # Capability Contract
 
+## Connector parity
+
+Every connector follows the same capability-gap contract. When an actionable,
+in-scope provider request lacks a typed capability, MasterAgent implements the
+minimum governed connector path, validates it, and resumes the original request
+in the same run. This applies to first-party connectors, future connectors, and
+plugins. A provider may require different authentication, approval,
+verification, or compensation, but it may not turn missing repository code into
+an operator-facing dead end.
+
 ## Domain-specific capabilities
 
 Capabilities preserve the semantics required for policy and verification:
@@ -16,6 +26,10 @@ github.repository.read
 github.pull_request.search
 github.pull_request.read
 github.checks.read
+github.issue.create
+github.pull_request.create
+github.repository.settings.update
+github.collaborator.access.update
 microsoft.identity.search
 outlook.message.search
 outlook.message.read
@@ -29,6 +43,12 @@ teams.message.draft
 ```
 
 Do not reduce these to generic `create`, `read`, or `update`. Domain semantics determine authentication, limits, risk, reversibility, concurrency, retention, and verification.
+
+GitHub issue and pull-request creation are reversible writes. GitHub repository
+settings are reversible writes with dual approval. Existing-collaborator access
+updates are high-impact and also require dual approval; they are deliberately
+non-reversible because the provider
+does not identify which direct or inherited grant produced the effective role.
 
 ## Action envelope
 

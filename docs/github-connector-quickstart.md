@@ -15,10 +15,14 @@ The built-in GitHub connector can:
 - read repository details;
 - list open, closed, or all pull requests;
 - read one pull request; and
-- read check runs for a branch or commit.
+- read check runs for a branch or commit;
+- create an issue or pull request through the reversible-write gate; and
+- update allowlisted repository settings or an existing collaborator's
+  built-in role through the separate dual-approved administration gate.
 
-It is read-only. It cannot create issues, comment, push code, create a pull
-request, change permissions, or merge a pull request.
+The default and convenience-command paths are read-only. There is no generic
+GitHub request, comment, push, merge, delete, invitation, custom-role, secret,
+or branch-protection capability.
 
 ## Public repositories need no credential
 
@@ -105,8 +109,10 @@ Other useful requests include:
 - “Read PR #27, then check CI for its head commit.”
 
 MasterAgent keeps GitHub disabled in checked-in and packaged configuration. A
-direct GitHub request authorizes only the minimum ephemeral read path for that
-goal; it does not enable GitHub writes or persistent access.
+direct GitHub read request authorizes only the minimum ephemeral read path for
+that goal; it does not enable GitHub writes, administration, or persistent
+access. Mutation plans require the runtime, generic, and granular gates plus an
+exact approval; administration requires two distinct approvers.
 
 ## If access truly cannot continue
 

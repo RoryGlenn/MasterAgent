@@ -33,11 +33,11 @@ execution runtime.
 4. Look for this plain-language confirmation:
 
    ```text
-   MasterAgent is ready locally. Workplace connections and write actions are still off.
+   MasterAgent is ready locally. No workplace connection has been opened, and write actions are still off.
    ```
 
-   The agent then continues the original request. The warning that no live
-   connectors are enabled is the expected safe starting state.
+   The agent then continues the original request. Read connectors being
+   available but inactive is the expected safe starting state.
 
 For a non-mutating first interaction, say so explicitly: “Inspect the
 repository without changing or installing anything.” MasterAgent will answer
@@ -93,6 +93,26 @@ in-scope prerequisite, and resolves errors rather than handing commands back to
 the operator. A capability gap that can safely be filled in this repository is
 implementation work: add the typed capability and regression tests, then
 continue the original request.
+
+“No governed capability exists” and “the connector is read-only” are diagnosis,
+not valid final responses to an actionable request. The agent must implement
+the minimum complete Python connector path, typed catalog and governance
+entries, factory and planner wiring, verification or compensation, tests, and
+documentation before asking for external input. It then resumes the original
+provider operation in the same run.
+
+For example, given `create a Kanban board for me and create the first todo
+item`, the agent should use safe names such as `Kanban Board` and `First todo
+item`, inspect Jira for a unique usable project, and implement missing Jira
+board and issue capabilities immediately. If a project cannot be selected
+unambiguously, the agent completes and validates the local implementation
+first, then asks one project-target question instead of returning a hypothetical
+implementation checklist.
+
+The behavior is universal rather than Jira-specific. Every existing, new, or
+plugin-provided connector must implement, validate, and resume when its typed
+runtime surface is missing an in-scope operation. Provider-specific security
+requirements still apply, but missing local code is never the final blocker.
 
 For an outcome that requires authenticated provider access, the request itself
 authorizes the minimum selected read connector, fixed probe, and provider

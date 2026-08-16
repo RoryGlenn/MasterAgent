@@ -87,7 +87,7 @@ auth_mode = "none"
         self.assertEqual(report.connectors[0].probe["deployment_type"], "Cloud")
         self.assertEqual(len(transport.requests), 1)
 
-    def test_all_disabled_is_not_live_ready(self) -> None:
+    def test_defaults_are_available_but_need_credentials(self) -> None:
         root = Path(__file__).resolve().parents[1]
         report = EnvironmentDiscovery(
             IntegrationConfig.from_toml(root / "config/integrations.toml"),
@@ -95,7 +95,10 @@ auth_mode = "none"
         ).inspect()
         self.assertFalse(report.ready)
         self.assertTrue(
-            all(item.status is DiscoveryStatus.DISABLED for item in report.connectors)
+            all(
+                item.status is DiscoveryStatus.MISSING_ENVIRONMENT
+                for item in report.connectors
+            )
         )
 
     def test_explicit_onenote_discovery_builds_the_opted_in_runtime(self) -> None:

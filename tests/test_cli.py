@@ -186,7 +186,9 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
 
         self.assertEqual(status, 0, stderr.getvalue())
         self.assertIn("ready: True", stdout.getvalue())
-        self.assertIn("live connectors: 1 configured", stdout.getvalue())
+        self.assertIn(
+            "live connectors: 1 available, 1 credential-ready", stdout.getvalue()
+        )
         self.assertIn("PASS connector:github", stdout.getvalue())
 
     def test_packaged_defaults_allow_dry_run_outside_repository(self) -> None:
@@ -222,7 +224,7 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             self.assertIn("mode: dry-run", stdout.getvalue())
 
     def test_packaged_integrations_support_default_discovery(self) -> None:
-        """Default discovery should use packaged disabled connector settings."""
+        """Default discovery should show available connectors needing credentials."""
 
         with private_temporary_directory() as directory:
             root = Path(directory)
@@ -235,8 +237,8 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                     status = main(["discover"])
             finally:
                 os.chdir(original)
-            self.assertEqual(status, 0, stderr.getvalue())
-            self.assertIn("disabled", stdout.getvalue())
+            self.assertEqual(status, 2, stderr.getvalue())
+            self.assertIn("missing_environment", stdout.getvalue())
             self.assertIn("jira", stdout.getvalue())
 
     def test_github_repositories_completes_read_only_onboarding_in_memory(

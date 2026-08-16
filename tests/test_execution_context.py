@@ -809,13 +809,13 @@ secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
                     ):
                         build_execution_context(integrations, environ={})
 
-    def test_disabled_default_opaque_connector_does_not_block_safe_context(
+    def test_unselected_default_connectors_do_not_block_safe_context(
         self,
     ) -> None:
         root = Path(__file__).resolve().parents[1]
         integrations = IntegrationConfig.from_toml(root / "config/integrations.toml")
 
-        context = build_execution_context(integrations, environ={})
+        context = build_execution_context(integrations, environ={}, systems=set())
 
         self.assertEqual(context.connectors, ())
 

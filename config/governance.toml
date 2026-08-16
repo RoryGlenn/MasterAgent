@@ -171,6 +171,24 @@ environments = ["development", "non_production", "production"]
 enabled = true
 
 [[rules]]
+pattern = "github.repository.settings.update"
+owner = "source-control-owner"
+authentication = "configured_connector"
+data_classifications = ["internal", "confidential"]
+approval_tier = "dual"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
+pattern = "github.collaborator.access.update"
+owner = "security-owner"
+authentication = "configured_connector"
+data_classifications = ["internal", "confidential", "restricted"]
+approval_tier = "dual"
+environments = ["development", "non_production", "production"]
+enabled = true
+
+[[rules]]
 pattern = "*.update"
 owner = "system-owner"
 authentication = "provider_specific"

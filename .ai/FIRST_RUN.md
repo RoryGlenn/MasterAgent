@@ -52,23 +52,24 @@ Python, `venv`, pip, package-index access, or another prerequisite is missing,
 exhaust safe repository-local alternatives before reporting the exact blocker.
 Do not repair the operating system or replace an existing environment.
 
-Setup never supplies credentials, enables connectors or runtime gates, changes
-permissions outside `.venv`, accesses a workplace provider, grants approval,
-sends content, or performs an enterprise mutation.
+Read connectors are available but inactive during setup. Setup never supplies
+credentials, activates a connector, enables mutation or communication gates,
+changes permissions outside `.venv`, accesses a workplace provider, grants
+approval, sends content, or performs an enterprise mutation.
 
 ## Response contract
 
 Keep the first-run response useful to a nontechnical operator:
 
-- On success, say: **“MasterAgent is ready locally. Workplace connections and
-  write actions are still off.”** Summarize readiness in plain language, then
+- On success, say: **“MasterAgent is ready locally. No workplace connection has
+  been opened, and write actions are still off.”** Summarize readiness in plain language, then
   continue with the operator's original request.
 - If setup is blocked, say: **“I couldn't finish local setup.”** Name the exact
   missing prerequisite and the smallest manual action needed. Confirm that
   nothing was connected or enabled. Do not ask the operator to activate a
   virtual environment or repeat commands the agent can run itself.
-- Treat the normal warning that no live connectors are enabled as the expected
-  safe starting state, not as a failed installation.
+- Treat available connectors without credentials as the expected safe starting
+  state, not as a failed installation or an active workplace connection.
 - Do not stop after local readiness when the original prompt requested an
   operation. Continue through setup, connection, implementation, validation,
   and verification needed for the requested outcome under the force-multiplier

@@ -86,7 +86,9 @@ class VersionOneCliTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 0, stderr)
                 self.assertIn("ready: True", stdout)
-                self.assertIn("live connectors: 0 (safe local mode only)", stdout)
+                self.assertIn(
+                    "live connectors: 5 available, 0 credential-ready", stdout
+                )
                 readiness = json.loads((root / "readiness.json").read_text())
                 self.assertTrue(readiness["ready"])
 
