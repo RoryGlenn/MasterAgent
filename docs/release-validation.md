@@ -74,12 +74,18 @@ handling, and independent verification.
   explicit no-local-change mode, provider-neutral connection flow,
   capability-gap ownership, late operator-question rule, and resumable
   approval handoff.
-- The exact advisory-agent inventory contains one non-user-invocable read
-  researcher and one non-user-invocable plan reviewer.
-- Both advisory profiles have narrower tool allowlists, cannot recursively
-  delegate, and return untrusted advisory data rather than authority.
-- All three profiles, the first-run and autonomy contracts, and the bootstrap
-  script are present in the source distribution.
+- The exact advisory-agent inventory contains one selected parent and two
+  read/search-only child contracts. Direct child user/model invocation and the
+  parent's `agent` tool are disabled.
+- The repository-owned integration harness enforces exact-parent routing,
+  depth one, three-research/one-review counters, context minimization,
+  profile-derived dispatch, untrusted-output validation, and parent citation
+  re-read.
+- Adversarial fixtures prove no filesystem, environment, network, provider,
+  credential, approval, audit, target, recipient, connector, tenant, or
+  `ChangePlan` authority crosses the advisory boundary.
+- All profiles, harness code, fixtures, tests, first-run and autonomy contracts,
+  and the bootstrap script are present in the source distribution.
 - The actionable capability-gap contract is pinned: a safe missing repository
   path must be implemented, tested, documented, and followed by a return to the
   original goal rather than a hypothetical checklist.

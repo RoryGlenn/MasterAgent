@@ -156,10 +156,13 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-For complex work, the selected parent may ask **MasterAgent Read Researcher**
-for bounded evidence gathering and **MasterAgent Plan Reviewer** for one
-independent review. Their output is untrusted advisory data; neither receives
-execution or approval authority. Simple work stays direct. See the
+The two checked-in advisory profiles define a fail-closed contract rather
+than active GitHub-host children. The parent has no `agent` tool; both children
+are non-user- and non-model-invocable and expose only repository `read` and
+`search`. A repository-owned advisory integration harness verifies exact-parent
+routing, depth and call budgets, context minimization, pre-dispatch denials, and
+parent citation re-read for any future approved adapter. Until such an adapter
+exists, MasterAgent completes the same research or review directly. See the
 [advisory sub-agent contract](docs/advisory-subagents.md).
 
 A missing safe repository capability is implementation work, not a reason to
