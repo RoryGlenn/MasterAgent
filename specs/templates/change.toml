@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0001-short-description"
+title = "Short change title"
+status = "draft"
+github_issue = 1
+created = "YYYY-MM-DD"
+updated = "YYYY-MM-DD"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DOMAIN-001"
+destination = "domain/MA-DOMAIN-001.md"
+source = "current/MA-DOMAIN-001.md"

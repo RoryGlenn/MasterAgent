@@ -1,0 +1,32 @@
+schema = "master-agent/change@1"
+id = "0075-native-specification-lifecycle"
+title = "Build a MasterAgent-native behavioral specification lifecycle"
+status = "archived"
+github_issue = 75
+created = "2026-08-17"
+updated = "2026-08-17"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-SPEC-001"
+destination = "development/MA-SPEC-001.md"
+source = "current/MA-SPEC-001.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-SPEC-002"
+destination = "development/MA-SPEC-002.md"
+source = "current/MA-SPEC-002.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-SPEC-003"
+destination = "development/MA-SPEC-003.md"
+source = "current/MA-SPEC-003.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-SPEC-004"
+destination = "development/MA-SPEC-004.md"
+source = "current/MA-SPEC-004.md"

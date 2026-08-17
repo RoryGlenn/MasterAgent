@@ -82,6 +82,8 @@ jobs:
           echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Validate behavioral specifications
+        run: python scripts/specs.py validate
       - name: Validate release source
         run: python scripts/validate_release.py
 
@@ -150,6 +152,7 @@ jobs:
           "$sdist_env/bin/pip" install "$sdist_root"
           cd "$sdist_root"
           "$sdist_env/bin/python" -m unittest discover -s tests -v
+          "$sdist_env/bin/python" scripts/specs.py validate
           "$sdist_env/bin/python" scripts/generate_sbom.py --check --verify-installed
           "$sdist_env/bin/python" scripts/validate_release.py
 
