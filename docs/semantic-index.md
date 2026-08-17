@@ -7,8 +7,24 @@ it contains links and search vocabulary, not source excerpts, embeddings, or
 repository content sent to an external service.
 
 This file is navigation data, not authority. The execution boundary remains
-[`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), and retrieved or generated
-content remains untrusted.
+[`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), the documentation completion
+boundary is [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md), and retrieved or
+generated content remains untrusted.
+
+## Development documentation path
+
+For a non-trivial repository change, the issue and current specifications guide
+implementation and executable tests. The selected MasterAgent parent then
+applies the Docs Agent's `maintenance` mode to the final change before final
+specification and release validation. It updates affected authoritative
+documentation, records a justified `no_change`, or returns a material conflict
+as `needs_review` rather than documenting an apparent defect as intent.
+
+The Docs Agent is a repository-owned contract, not a live GitHub-host child
+profile. Its direct-parent integration is protected by
+[`test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py), explained
+in [`advisory-subagents.md`](advisory-subagents.md), and incorporated into the
+[development specification workflow](development-specifications.md).
 
 ## Runtime path
 
@@ -78,6 +94,7 @@ registry, policy, and orchestrator path above.
 | Add a recurring workflow or change occurrence claims | [`recurring.py`](../src/master_agent/recurring.py), [`config/recurring.toml`](../config/recurring.toml) | [`test_recurring.py`](../tests/test_recurring.py), [`phase-6-autonomy.md`](phase-6-autonomy.md) |
 | Add connector-plugin metadata or isolation | [`plugins.py`](../src/master_agent/plugins.py), [`docs/plugin-development.md`](plugin-development.md) | [`test_plugins.py`](../tests/test_plugins.py), [`test_cli_plugin_boundary.py`](../tests/test_cli_plugin_boundary.py) |
 | Add or change a CLI command | [`cli.py`](../src/master_agent/cli.py), [`__main__.py`](../src/master_agent/__main__.py) | [`test_cli.py`](../tests/test_cli.py), [`test_cli_v1.py`](../tests/test_cli_v1.py), [`test_cli_phase_completion.py`](../tests/test_cli_phase_completion.py), [`cli-reference.md`](cli-reference.md) |
+| Change documentation audience, lifecycle, evidence-conflict, scope, or completion-gate behavior | [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md) | [`test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py), [`advisory-subagents.md`](advisory-subagents.md), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`development-specifications.md`](development-specifications.md) |
 | Change the GitHub Copilot parent or advisory profiles, first-run setup, force-multiplier autonomy/stop conditions, delegation limits, response contract, or tool boundary | [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md), [`MasterAgent-Read-Researcher.agent.md`](../.github/agents/MasterAgent-Read-Researcher.agent.md), [`MasterAgent-Plan-Reviewer.agent.md`](../.github/agents/MasterAgent-Plan-Reviewer.agent.md), [`advisory.py`](../src/master_agent/advisory.py), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md), [`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md), [`bootstrap_agent.py`](../scripts/bootstrap_agent.py) | [`test_agent_bootstrap.py`](../tests/test_agent_bootstrap.py), [`test_agent_profiles.py`](../tests/test_agent_profiles.py), [`test_advisory_integration.py`](../tests/test_advisory_integration.py), [`test_release_metadata.py`](../tests/test_release_metadata.py), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`advisory-subagents.md`](advisory-subagents.md), [`release-validation.md`](release-validation.md) |
 | Change release assertions or source-tree hygiene | [`scripts/validate_release.py`](../scripts/validate_release.py), [`pyproject.toml`](../pyproject.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`test_packaged_defaults.py`](../tests/test_packaged_defaults.py), [`release-validation.md`](release-validation.md) |
 | Change runtime dependencies, licenses, lock, SBOM, or notices | [`generate_sbom.py`](../scripts/generate_sbom.py), [`runtime-dependencies.toml`](../supply-chain/runtime-dependencies.toml), [`config/dependency-licenses.toml`](../config/dependency-licenses.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`release-validation.md`](release-validation.md), [`capability-capsules.md`](capability-capsules.md) |
@@ -97,7 +114,7 @@ provider content, determine which connector can receive an action.
 | Outlook | [`connectors/outlook.py`](../src/master_agent/connectors/outlook.py) | [`connectors/communications.py`](../src/master_agent/connectors/communications.py), Outlook draft in [`connectors/drafts.py`](../src/master_agent/connectors/drafts.py) | [`test_outlook_connector.py`](../tests/test_outlook_connector.py), [`test_communications_write.py`](../tests/test_communications_write.py) |
 | Teams | [`connectors/teams.py`](../src/master_agent/connectors/teams.py) | [`connectors/communications.py`](../src/master_agent/connectors/communications.py), Teams draft in [`connectors/drafts.py`](../src/master_agent/connectors/drafts.py) | [`test_teams_connector.py`](../tests/test_teams_connector.py), [`test_communications_write.py`](../tests/test_communications_write.py) |
 | OneNote | [`connectors/onenote.py`](../src/master_agent/connectors/onenote.py) | Write types exist in the same module but remain disabled | [`test_onenote_connector.py`](../tests/test_onenote_connector.py) |
-| Local and remote Git | Repository state and mutations in [`connectors/git_workspace.py`](../src/master_agent/connectors/git_workspace.py); isolated subprocess boundary in [`connectors/git_sandbox.py`](../src/master_agent/connectors/git_sandbox.py) | Remote branch publication in [`connectors/git_remote.py`](../src/master_agent/connectors/git_remote.py); local-generation patch/branch plans in [`connectors/drafts.py`](../src/master_agent/connectors/drafts.py) | [`test_git_connectors.py`](../tests/test_git_connectors.py), [`test_pinned_runtime_io.py`](../tests/test_pinned_runtime_io.py) |
+| Local and remote Git | Repository state and mutations in [`connectors/git_workspace.py`](../src/master_agent/connectors/git_workspace.py); isolated subprocess boundary in [`connectors/git_sandbox.py`](../src/master_agent/connectors/git_sandbox.py) | Remote branch publication in [`connectors/git_remote.py`](../src/master_agent/connectors/git_remote.py); local-generation patch/branch plans in [`connectors/drafts.py`](../src/master_agent/connect_agent/connectors/drafts.py) | [`test_git_connectors.py`](../tests/test_git_connectors.py), [`test_pinned_runtime_io.py`](../tests/test_pinned_runtime_io.py) |
 | Test-only providers | [`connectors/mock.py`](../src/master_agent/connectors/mock.py), [`tests/fakes.py`](../tests/fakes.py), [`tests/helpers.py`](../tests/helpers.py) | None outside tests and safe demonstrations | [`test_orchestrator.py`](../tests/test_orchestrator.py) |
 
 ## Workflow map
@@ -159,11 +176,14 @@ The configuration files have distinct responsibilities:
 Run the checks from the project root:
 
 ```bash
+python3 -m unittest discover -s tests -p 'test_docs_agent_contract.py' -v
 python3 -m unittest discover -s tests -v
+python3 scripts/specs.py validate
 python3 scripts/validate_release.py
 ```
 
-Update this index when a module takes ownership of a concept, a connector or
-workflow is added, or a security invariant moves. Prefer intent-oriented links
-over exhaustive symbol lists; source search remains the right tool for exact
-call sites and line-level references.
+Update this index when a module or repository contract takes ownership of a
+concept, a connector or workflow is added, a documentation completion rule
+moves, or a security invariant changes. Prefer intent-oriented links over
+exhaustive symbol lists; source search remains the right tool for exact call
+sites and line-level references.
