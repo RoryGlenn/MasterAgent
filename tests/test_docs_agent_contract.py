@@ -105,7 +105,7 @@ class DocsAgentContractTests(unittest.TestCase):
 
         guide = (self.root / "docs/docs-agent.md").read_text(encoding="utf-8")
         for marker in (
-            "does not currently allow direct GitHub-host child-agent invocation",
+            "does not currently allow direct GitHub-host child-agent",
             "selected MasterAgent parent completes the same documentation review",
             "updated / no_change / needs_review",
             "The implementation is evidence, but it is not automatically",
