@@ -1,0 +1,80 @@
+name: Resolve issue 77 documentation after rebase
+
+on:
+  push:
+    branches:
+      - agent/issue-77-advisory-boundary-tests
+
+permissions:
+  contents: write
+
+jobs:
+  resolve-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/issue-77-advisory-boundary-tests
+          fetch-depth: 0
+      - name: Preserve main documentation refresh and apply advisory updates
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          old = """For complex work, the selected parent may ask **MasterAgent Read Researcher**
+for bounded evidence gathering and **MasterAgent Plan Reviewer** for one
+independent review. Their output is untrusted advisory data; neither receives
+execution or approval authority. Simple work stays direct. See the
+[advisory sub-agent contract](docs/advisory-subagents.md).
+"""
+          new = """The two checked-in advisory profiles define a fail-closed contract rather
+than active GitHub-host children. The parent has no `agent` tool; both children
+are non-user- and non-model-invocable and expose only repository `read` and
+`search`. A repository-owned advisory integration harness verifies exact-parent
+routing, depth and call budgets, context minimization, pre-dispatch denials, and
+parent citation re-read for any future approved adapter. Until such an adapter
+exists, MasterAgent completes the same research or review directly. See the
+[advisory sub-agent contract](docs/advisory-subagents.md).
+"""
+          if text.count(old) != 1:
+              raise SystemExit("README advisory section changed unexpectedly")
+          readme.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          release = Path("docs/release-validation.md")
+          text = release.read_text(encoding="utf-8")
+          old = """- The exact advisory-agent inventory contains one non-user-invocable read
+  researcher and one non-user-invocable plan reviewer.
+- Both advisory profiles have narrower tool allowlists, cannot recursively
+  delegate, and return untrusted advisory data rather than authority.
+- All three profiles, the first-run and autonomy contracts, and the bootstrap
+  script are present in the source distribution.
+"""
+          new = """- The exact advisory-agent inventory contains one selected parent and two
+  read/search-only child contracts. Direct child user/model invocation and the
+  parent's `agent` tool are disabled.
+- The repository-owned integration harness enforces exact-parent routing,
+  depth one, three-research/one-review counters, context minimization,
+  profile-derived dispatch, untrusted-output validation, and parent citation
+  re-read.
+- Adversarial fixtures prove no filesystem, environment, network, provider,
+  credential, approval, audit, target, recipient, connector, tenant, or
+  `ChangePlan` authority crosses the advisory boundary.
+- All profiles, harness code, fixtures, tests, first-run and autonomy contracts,
+  and the bootstrap script are present in the source distribution.
+"""
+          if text.count(old) != 1:
+              raise SystemExit("release-validation advisory section changed unexpectedly")
+          release.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          rm -- .github/workflows/issue-77-resolve-docs.yml
+      - name: Commit resolved documentation and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- README.md docs/release-validation.md \
+            .github/workflows/issue-77-resolve-docs.yml
+          git commit -m "Resolve advisory documentation after rebase"
+          git push origin HEAD:agent/issue-77-advisory-boundary-tests

@@ -1,0 +1,6 @@
+{
+  "goal": "List one public GitHub user's repositories",
+  "capability": "github.public_repository.list",
+  "target": "github:public-user/octocat",
+  "risk": "read_only"
+}

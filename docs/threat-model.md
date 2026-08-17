@@ -62,22 +62,26 @@ attempt to execute work that belongs to the parent and governed runtime.
 
 Controls:
 
-- exactly two repository-scoped advisory profiles with release-pinned prompts,
-  invocation flags, and tool allowlists;
-- the parent alone has the `agent` tool; both children omit it, limiting
-  delegation to one level;
-- the researcher has no edit tool and may execute only typed read-only runtime
-  commands or bounded diagnostics; the reviewer has only read/search tools;
-- at most three research tasks and one plan review per operator goal, with
-  simple requests staying on the direct path;
-- minimal delegated context and explicit exclusion of credential values,
-  approval/signing artifacts, and unrelated private content, plus no delegation
-  of final target selection, provider mutations, or communications;
-- all results remain untrusted advisory data and cannot authorize, approve, or
-  alter a typed plan without parent re-validation;
+- direct GitHub-host advisory invocation is disabled because the host cannot
+  prove the selected-parent allowlist, depth-one routing, or per-goal counters;
+- the parent profile omits `agent`, and both children are non-user- and
+  non-model-invocable with only `read` and `search`;
+- the repository-owned advisory integration harness loads the exact checked-in
+  profiles, binds every session to MasterAgent, denies nested delegation, and
+  enforces at most three research attempts and one plan review;
+- payload minimization rejects credentials, approval/signing artifacts,
+  targets, recipients, connectors, tenants, unrelated private context, and
+  `ChangePlan` data before worker invocation;
+- the profile-derived dispatcher denies execute, edit, agent, MCP, HTTP,
+  environment, credential, provider, approval, audit, and mutation categories
+  before dispatch;
+- repository and provider-content prompt injections remain inert test data;
+- child reports cannot select targets, claim approval, propose plans, return
+  secret-like content, or become evidence without parent citation re-read;
+- unavailable, failed, unsafe, nested, or over-budget delegation falls back to the parent without changing filesystem, environment, network, provider,
+  credential, approval, audit, or plan state; and
 - the deterministic policy, approval, connector, verification, compensation,
-  retention, and audit runtime remains the only provider-effect path; and
-- direct parent fallback when custom-agent invocation is unavailable.
+  retention, and audit runtime remains the only provider-effect path.
 
 ### Excessive permissions
 
