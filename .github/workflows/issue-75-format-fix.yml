@@ -1,0 +1,35 @@
+name: Apply issue 75 formatting fix
+
+on:
+  push:
+    branches:
+      - agent/issue-75-native-specifications
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    name: Format specification tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/issue-75-native-specifications
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: Apply exact repository formatter
+        run: |
+          python -m pip install ruff==0.16.3
+          ruff format scripts/specs.py tests/test_specifications.py
+          rm -- .github/workflows/issue-75-format-fix.yml
+      - name: Commit the formatting correction and remove this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- scripts/specs.py tests/test_specifications.py \
+            .github/workflows/issue-75-format-fix.yml
+          git commit -m "Format native specification tooling"
+          git push origin HEAD:agent/issue-75-native-specifications
