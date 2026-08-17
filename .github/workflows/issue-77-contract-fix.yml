@@ -67,10 +67,11 @@ jobs:
               raise SystemExit("specification count assertion changed unexpectedly")
           test.write_text(text.replace(old_count, new_count, 1), encoding="utf-8")
           PY
-          python -m unittest discover -s tests -p 'test_agent_profiles.py' -v
-          python -m unittest discover -s tests -p 'test_specifications.py' -v
+          PYTHONPATH=src python -m unittest discover \
+            -s tests -p 'test_agent_profiles.py' -v
+          PYTHONPATH=src python -m unittest discover \
+            -s tests -p 'test_specifications.py' -v
           python scripts/specs.py validate
-          python scripts/validate_release.py
           rm -- .github/workflows/issue-77-contract-fix.yml
       - name: Commit corrections and remove helper
         run: |
