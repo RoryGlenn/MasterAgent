@@ -5,7 +5,8 @@
   source-of-truth, scope, no-change, validation, and output rules.
 - [x] Add the parent documentation completion gate to `AGENTS.md`,
   `.ai/MASTER_AGENT.md`, and `.github/agents/MasterAgent.agent.md`.
-- [x] Explain the current direct-parent execution model in `docs/docs-agent.md`.
+- [x] Explain the current direct-parent execution model and Docs Agent behavior
+  in `docs/advisory-subagents.md`.
 - [x] Add drift coverage in `tests/test_docs_agent_contract.py`.
 - [x] Add maintained requirements under `specs/current/development/`.
 - [x] Preserve the exact reviewed GitHub Copilot profile inventory and existing
