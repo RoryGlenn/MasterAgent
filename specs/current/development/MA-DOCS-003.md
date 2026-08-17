@@ -52,7 +52,7 @@ reviewable.
 ## Implementation
 
 - `.ai/DOCS_AGENT.md`
-- `docs/docs-agent.md`
+- `docs/advisory-subagents.md`
 
 ## Verification
 
