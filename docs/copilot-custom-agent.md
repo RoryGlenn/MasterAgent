@@ -81,8 +81,7 @@ The profile:
 ## Advisory sub-agents
 
 The repository keeps **MasterAgent Read Researcher** and **MasterAgent Plan
-Reviewer** as checked-in read/search-only contracts, but direct GitHub-host
-invocation is disabled. The current host cannot enforce the selected-parent
+Reviewer** as checked-in read/search-only contracts, but direct GitHub-host invocation is disabled. The current host cannot enforce the selected-parent
 allowlist, deterministic depth-one routing, or the per-goal maximum of three
 research attempts and one review. The parent profile therefore omits `agent`,
 and both child profiles set `user-invocable: false` and
