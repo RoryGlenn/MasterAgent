@@ -1,0 +1,82 @@
+name: Align issue 77 contract markers
+
+on:
+  push:
+    branches:
+      - agent/issue-77-advisory-boundary-tests
+
+permissions:
+  contents: write
+
+jobs:
+  fix-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/issue-77-advisory-boundary-tests
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: Align durable contract text and integration expectation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+          old = "\n".join(
+              (
+                  "The two checked-in advisory profiles define a fail-closed contract rather",
+                  "than active GitHub-host children. The parent has no `agent` tool; both children",
+                  "are non-user- and non-model-invocable and expose only repository `read` and",
+                  "`search`. A repository-owned advisory integration harness verifies exact-parent",
+                  "routing, depth and call budgets, context minimization, pre-dispatch denials, and",
+                  "parent citation re-read for any future approved adapter. Until such an adapter",
+                  "exists, MasterAgent completes the same research or review directly. See the",
+                  "[advisory sub-agent contract](docs/advisory-subagents.md).",
+                  "",
+              )
+          )
+          new = "\n".join(
+              (
+                  "The checked-in advisory profiles now define a fail-closed contract rather than",
+                  "active GitHub-host children. Direct GitHub-host advisory invocation is disabled:",
+                  "the parent has no `agent` tool; both children are non-user- and",
+                  "non-model-invocable and expose only repository `read` and `search`. A",
+                  "repository-owned advisory integration harness verifies exact-parent routing,",
+                  "depth and call budgets, context minimization, pre-dispatch denials, and parent",
+                  "citation re-read for any future approved adapter. Until such an adapter exists,",
+                  "MasterAgent completes the same research or review directly and will complete the",
+                  "same work directly when delegation is unavailable. See the",
+                  "[advisory sub-agent contract](docs/advisory-subagents.md).",
+                  "",
+              )
+          )
+          if text.count(old) != 1:
+              raise SystemExit("README advisory paragraph changed unexpectedly")
+          readme.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          test = Path("tests/test_specifications.py")
+          text = test.read_text(encoding="utf-8")
+          old_count = "validated 4 current behavioral requirements"
+          new_count = "validated 8 current behavioral requirements"
+          if text.count(old_count) != 1:
+              raise SystemExit("specification count assertion changed unexpectedly")
+          test.write_text(text.replace(old_count, new_count, 1), encoding="utf-8")
+          PY
+          python -m unittest discover -s tests -p 'test_agent_profiles.py' -v
+          python -m unittest discover -s tests -p 'test_specifications.py' -v
+          python scripts/specs.py validate
+          python scripts/validate_release.py
+          rm -- .github/workflows/issue-77-contract-fix.yml
+      - name: Commit corrections and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- README.md tests/test_specifications.py \
+            .github/workflows/issue-77-contract-fix.yml
+          git commit -m "Align advisory release contracts"
+          git push origin HEAD:agent/issue-77-advisory-boundary-tests
