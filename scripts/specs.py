@@ -13,7 +13,7 @@ import tempfile
 import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -305,7 +305,7 @@ def archive_change(root: Path, change_id: str) -> Path:
     archived_metadata = replace(
         metadata,
         status="archived",
-        updated=date.today().isoformat(),
+        updated=datetime.now(UTC).date().isoformat(),
     )
     transaction_parent = specs_root.parent
     transaction_parent.mkdir(parents=True, exist_ok=True)
