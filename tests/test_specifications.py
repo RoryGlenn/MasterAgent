@@ -415,10 +415,7 @@ class SpecificationTests(unittest.TestCase):
 
         self.assertFalse(report.ok)
         self.assertTrue(
-            any(
-                "must use filename MA-SPEC-001.md" in error
-                for error in report.errors
-            )
+            any("must use filename MA-SPEC-001.md" in error for error in report.errors)
         )
 
     def test_duplicate_required_section_is_rejected(self) -> None:
@@ -436,10 +433,7 @@ class SpecificationTests(unittest.TestCase):
 
         self.assertFalse(report.ok)
         self.assertTrue(
-            any(
-                "repeats sections: ## Requirement" in error
-                for error in report.errors
-            )
+            any("repeats sections: ## Requirement" in error for error in report.errors)
         )
 
     def test_two_changes_cannot_link_the_same_github_issue(self) -> None:
@@ -477,8 +471,10 @@ class SpecificationTests(unittest.TestCase):
         filename: str | None = None,
         verification: str = "- `tests/test_specifications.py`",
     ) -> Path:
-        target = self.root / "specs/current/development" / (
-            filename or f"{requirement_id}.md"
+        target = (
+            self.root
+            / "specs/current/development"
+            / (filename or f"{requirement_id}.md")
         )
         target.write_text(
             self._requirement_text(requirement_id, verification=verification),

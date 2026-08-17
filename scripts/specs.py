@@ -25,12 +25,8 @@ _TERMINAL_STATES = frozenset({"archived", "rejected", "superseded"})
 _CURRENT_STATES = frozenset({"Active", "Deprecated", "Retired"})
 _OPERATIONS = frozenset({"add", "modify", "remove"})
 _REQUIREMENT_ID = re.compile(r"MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}\Z")
-_REQUIREMENT_HEADING = re.compile(
-    r"# (MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}) — (\S.*)\Z"
-)
-_DELTA_HEADING = re.compile(
-    r"### (MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}) — (\S.*)\Z"
-)
+_REQUIREMENT_HEADING = re.compile(r"# (MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}) — (\S.*)\Z")
+_DELTA_HEADING = re.compile(r"### (MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}) — (\S.*)\Z")
 _CHANGE_ID = re.compile(r"[0-9]{4,}-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _TASK = re.compile(r"^- \[([ xX])\] \S.*$")
 _PATH_REFERENCE = re.compile(
@@ -843,8 +839,7 @@ def _load_change_metadata(change_path: Path, root: Path) -> ChangeMetadata:
     issue_prefix = int(change_id.split("-", 1)[0])
     if issue_prefix != github_issue:
         raise SpecificationError(
-            f"change {change_id} prefix does not match GitHub issue "
-            f"#{github_issue}"
+            f"change {change_id} prefix does not match GitHub issue #{github_issue}"
         )
     created = _required_date(document, "created", change_id)
     updated = _required_date(document, "updated", change_id)
@@ -883,8 +878,7 @@ def _parse_delta(change_id: str, raw: object) -> Delta:
     unexpected = sorted(set(raw) - allowed)
     if unexpected:
         raise SpecificationError(
-            f"change {change_id} delta has unsupported fields: "
-            + ", ".join(unexpected)
+            f"change {change_id} delta has unsupported fields: " + ", ".join(unexpected)
         )
     operation = _required_string(raw, "operation")
     if operation not in _OPERATIONS:
@@ -956,8 +950,7 @@ def _validate_tree_safety(specs_root: Path, root: Path, errors: list[str]) -> No
                 continue
             if stat.S_ISLNK(metadata.st_mode):
                 errors.append(
-                    "specification tree contains a symlink: "
-                    f"{_display(root, path)}"
+                    f"specification tree contains a symlink: {_display(root, path)}"
                 )
             elif not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
                 errors.append(
@@ -1020,8 +1013,7 @@ def _validate_markdown_references(
                 _resolve_relative(root, reference, root, must_exist=True)
         except SpecificationError as error:
             errors.append(
-                f"{_display(root, path)} has invalid reference "
-                f"{reference!r}: {error}"
+                f"{_display(root, path)} has invalid reference {reference!r}: {error}"
             )
 
 
