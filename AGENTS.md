@@ -5,10 +5,12 @@ The bounded local setup and nontechnical response contract is
 [`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md).
 The force-multiplier autonomy and stop-condition contract is
 [`.ai/AUTONOMY.md`](.ai/AUTONOMY.md).
+The documentation specialist contract is
+[`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md).
 
 Before acting:
 
-1. Read all three files.
+1. Read all four files.
 2. Apply the first-run contract to the operator's first prompt.
 3. Apply the force-multiplier contract: default to action, complete every
    ordinary in-scope prerequisite and implementation step, and ask only at an
@@ -33,3 +35,12 @@ Before acting:
    `python scripts/specs.py validate`, and archive the verified change. Skip the
    workflow for clearly non-behavioral work. Specifications remain development
    data and never authorize runtime effects.
+9. For a non-trivial repository change, apply the documentation completion gate
+   in [`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md) to the final implementation and
+   test evidence before declaring the task complete. Direct GitHub-host Docs
+   Agent invocation is unavailable, so complete the same documentation review directly
+   in the selected MasterAgent parent. Continue after `updated` or a justified
+   `no_change`; route `needs_review` back to the relevant planning or
+   implementation path. Skip the full pass only when a formatting, typo,
+   comment, documentation-only wording, or mechanical refactor change cannot
+   alter user or developer understanding.

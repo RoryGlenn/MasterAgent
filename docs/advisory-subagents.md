@@ -23,6 +23,59 @@ HTTP, environment, credentials, provider calls, approval, audit mutation, or any
 other effect-bearing tool. Provider reads remain in the selected parent and the
 typed deterministic runtime; they are not delegated through the child profile.
 
+## Documentation specialist contract
+
+The Docs Agent is a repository-owned specialist contract, not a third active
+GitHub-host child profile. Its authoritative instructions live in
+[`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md).
+
+Think of the Docs Agent as the person who checks an instruction manual after the
+product changes. That is only a mental model. Technically, the selected
+MasterAgent parent examines the final repository change, identifies affected
+documentation, applies the contract, validates the result, and reports what was
+updated or reviewed.
+
+After implementation and tests for a non-trivial repository change, the selected
+MasterAgent parent applies the contract's `maintenance` mode and completes the
+same documentation review directly. This permits the existing parent to update
+documentation through its reviewed repository edit surface without weakening
+the child profile inventory or pretending that a safe host adapter exists.
+
+The contract can also run in `authoring` mode for new documentation and `audit`
+mode for reviewing existing documentation. Maintenance returns one of three
+statuses:
+
+| Status | Meaning |
+|---|---|
+| `updated` | Affected documentation changed and was validated as far as practical. |
+| `no_change` | Relevant documentation was reviewed and remains correct. This is a successful result. |
+| `needs_review` | Conflicting evidence or a missing authoritative decision prevents an accurate update. |
+
+The Docs Agent classifies each affected document for a non-technical user, mixed
+audience, developer, maintainer, or decision-maker. For mixed audiences, it
+explains the idea in plain language first and then introduces the exact technical
+detail needed to act correctly. Analogies are optional, must materially improve
+understanding, and must be followed by the literal technical explanation. They
+never replace command syntax, configuration, API schemas, constraints, or
+failure behavior.
+
+The implementation is evidence, but it is not automatically the final statement
+of intent. If an accepted requirement and test specify a 30-second timeout while
+the implementation uses 3 seconds, the Docs Agent does not rewrite the guide to
+make 3 seconds look deliberate. It returns `needs_review` with the conflicting
+evidence so the requirement or implementation can be corrected first.
+
+The contract also distinguishes current-state, historical, planned, and
+generated documentation. It does not rewrite historical records to match the
+present, present planned work as shipped, or hand-edit generated output when an
+authoritative source or generator exists. It prefers one authoritative location
+for each maintainable fact or procedure.
+
+A future adapter may delegate the Docs Agent work only if it can enforce the
+same parent identity, depth, tool, context, authority, and failure boundaries.
+Until then, adding another `.github/agents/` profile would be misleading and is
+intentionally rejected by release validation.
+
 ## Repository-owned integration harness
 
 [`advisory.py`](../src/master_agent/advisory.py) provides the deterministic
