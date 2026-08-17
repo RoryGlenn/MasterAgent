@@ -108,7 +108,7 @@ class DocsAgentContractTests(unittest.TestCase):
         )
         for marker in (
             "Think of the Docs Agent as the person who checks an instruction manual",
-            "selected MasterAgent parent applies the contract's `maintenance` mode",
+            "MasterAgent parent applies the contract's `maintenance` mode",
             "`updated`",
             "`no_change`",
             "`needs_review`",
