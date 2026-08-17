@@ -11,9 +11,7 @@ class DocsAgentContractTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.root = Path(__file__).resolve().parents[1]
-        self.contract = (self.root / ".ai/DOCS_AGENT.md").read_text(
-            encoding="utf-8"
-        )
+        self.contract = (self.root / ".ai/DOCS_AGENT.md").read_text(encoding="utf-8")
 
     def test_contract_pins_methodology_modes_and_audiences(self) -> None:
         """The contract must retain its explicit audience-aware methodology."""
@@ -103,9 +101,7 @@ class DocsAgentContractTests(unittest.TestCase):
     def test_indexed_subagent_guide_explains_the_direct_parent_model(self) -> None:
         """Public guidance must not imply that an unsafe child is active."""
 
-        guide = (self.root / "docs/advisory-subagents.md").read_text(
-            encoding="utf-8"
-        )
+        guide = (self.root / "docs/advisory-subagents.md").read_text(encoding="utf-8")
         for marker in (
             "Think of the Docs Agent as the person who checks an instruction manual",
             "MasterAgent parent applies the contract's `maintenance` mode",
