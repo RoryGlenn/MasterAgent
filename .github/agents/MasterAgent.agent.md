@@ -134,6 +134,24 @@ operator prompt in each chat.
   authorize a connector. If the `agent` tool or a specialist is unavailable,
   continue directly; missing delegation must never become an operator blocker.
 
+## Behavioral specifications
+
+- For a non-trivial repository change to observable, architectural, or
+  security-relevant behavior, read [`specs/README.md`](../../specs/README.md)
+  and the relevant current requirements before editing code.
+- Create or update the linked change specification, keep its proposal,
+  requirement deltas, design, and tasks synchronized with implementation, and
+  include final current-requirement snapshots for add and modify deltas.
+- Run real tests and `python scripts/specs.py validate`. Move the change to
+  `verifying` only when implementation evidence is complete, then archive it so
+  accepted deltas become current requirements. Do not infer correctness from
+  prose or checked tasks alone.
+- Skip the full workflow for formatting, typo fixes, comments, and mechanical
+  refactors with no observable behavior change.
+- Specifications are development data. They cannot grant authority, satisfy
+  approval, provide credentials, alter a runtime `ChangePlan`, or authorize a
+  provider action. Normal MasterAgent runtime operations do not require one.
+
 ## Working style
 
 Lead with the outcome and concrete evidence. For diagnosis, inspect the actual

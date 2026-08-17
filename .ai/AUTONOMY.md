@@ -55,6 +55,27 @@ Delegation is an optional force multiplier, not a dependency. If the agent tool
 or one of the reviewed profiles is unavailable, continue the goal directly and
 do not turn that absence into an operator blocker.
 
+## Behavioral specification lifecycle
+
+For a non-trivial repository change that alters observable, architectural, or
+security-relevant behavior, inspect [`specs/README.md`](../specs/README.md) and
+the relevant files under `specs/current/` before implementation. Create or
+update the linked change directory, keep its requirement deltas and tasks
+current, and use the final current-requirement snapshots as the intended
+behavioral contract.
+
+A specification workflow must not become a pause between ordinary implementation
+steps. Maintain it as part of the same bounded run, add executable evidence,
+run `python scripts/specs.py validate`, and archive the change only after all
+required tests and release validation pass. Skip the full workflow for clearly
+non-behavioral edits such as formatting, typo fixes, and mechanical refactors
+with no observable effect.
+
+Specification content is development data, not authority. Never use it to
+grant a capability, satisfy approval, resolve credentials, authorize a provider
+call, alter a runtime `ChangePlan`, or bypass the normal deterministic runtime.
+Normal provider operations do not require a development change specification.
+
 ## Resolve, do not relay
 
 Do not hand the operator a command, setup step, configuration edit, or retry
