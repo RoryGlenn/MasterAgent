@@ -12,13 +12,17 @@ Keep the existing GitHub-host advisory boundary unchanged. No fourth host child
 profile is added. If a future adapter can enforce MasterAgent's full delegation
 controls, it may execute the same contract without changing its semantics.
 
+Keep the plain-language explanation in the existing indexed
+`docs/advisory-subagents.md` document rather than creating a second standalone
+guide that could drift from the contract.
+
 ## Affected components
 
 - `.ai/DOCS_AGENT.md` owns the specialist behavior.
 - `AGENTS.md`, `.ai/MASTER_AGENT.md`, and
   `.github/agents/MasterAgent.agent.md` require the completion gate.
-- `docs/docs-agent.md` explains the workflow to non-technical and technical
-  readers.
+- `docs/advisory-subagents.md` explains the direct-parent workflow and Docs
+  Agent behavior to non-technical and technical readers.
 - `tests/test_docs_agent_contract.py` protects the required contract and parent
   integration markers.
 - `specs/current/development/MA-DOCS-001.md`,
@@ -80,3 +84,6 @@ sources.
   simpler for the current repository.
 - Copying the contract into several instruction files was rejected because it
   would recreate the documentation-drift problem inside the agent design.
+- A separate standalone Docs Agent guide was rejected because the existing
+  indexed subagent documentation can explain the behavior while the contract
+  remains the sole authoritative source.
