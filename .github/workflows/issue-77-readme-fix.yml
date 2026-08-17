@@ -1,0 +1,49 @@
+name: Make issue 77 README marker contiguous
+
+on:
+  push:
+    branches:
+      - agent/issue-77-advisory-boundary-tests
+
+permissions:
+  contents: write
+
+jobs:
+  fix-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/issue-77-advisory-boundary-tests
+          fetch-depth: 0
+      - name: Normalize exact release marker
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
+          old = (
+              "MasterAgent completes the same research or review directly and will complete the\n"
+              "same work directly when delegation is unavailable."
+          )
+          new = (
+              "MasterAgent completes the same research or review directly and will\n"
+              "complete the same work directly when delegation is unavailable."
+          )
+          if text.count(old) != 1:
+              raise SystemExit("README fallback marker changed unexpectedly")
+          text = text.replace(old, new, 1)
+          if "complete the same work directly" not in text:
+              raise SystemExit("README fallback marker is still split")
+          path.write_text(text, encoding="utf-8")
+          PY
+          rm -- .github/workflows/issue-77-readme-fix.yml
+      - name: Commit correction and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- README.md .github/workflows/issue-77-readme-fix.yml
+          git commit -m "Normalize advisory fallback release marker"
+          git push origin HEAD:agent/issue-77-advisory-boundary-tests
