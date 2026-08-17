@@ -2,112 +2,176 @@
 
 ## Overall status
 
-The v1 governed core and provider connectors are implemented. Release-hardening
-gates keep incomplete local-Git metadata mutation, non-manifest package
-execution, recurring execution, and destructive retention maintenance
-non-routable.
+The v1 governed core, provider contracts, bounded advisory profiles, capability
+capsule path, and native behavioral specification lifecycle are implemented.
+Release-hardening gates keep incomplete local-Git mutation, non-manifest
+workflow execution, recurring execution, destructive retention maintenance,
+raw plugin execution, and unsafe provider mutations non-routable.
 
-| Phase | Software status | Operational status |
+| Area | Software status | Operational status |
 |---|---|---|
-| 0 — environment/governance | Complete | Replace example governance and run readiness in the target organization |
+| 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
-| 2A — Jira/Confluence/Bitbucket/GitHub/SharePoint reads | Complete | Contract-tested; credentialed capabilities require approved credentials, while `bitbucket.public_repository.list` and `github.public_repository.list` operate anonymously |
-| 2B — Outlook/Teams/identity/citations/retention | Complete | Contract-tested; target deployment requires approved credentials |
-| 2C — authentication/readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
+| 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
+| 2B — Outlook, Teams, identity, citations, and retention | Complete | Contract-tested; authenticated deployment requires approved applications and credentials |
+| 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
-| 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; local Git disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
+| 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
-| 6 — recurring autonomy | Registration/status only | Execution disabled pending exact target/config/runtime binding |
-| Capability promotion | Complete for dependency-free pure test/local capsules | Provider/side-effect and production capsules remain fail closed pending production broker, authenticated approval, and external audit adapters |
+| 6 — recurring autonomy | Registration and status only | Execution disabled pending exact target, configuration, source, and runtime binding |
+| Advisory sub-agents | Complete | Optional host-level read research and plan review; parent and deterministic runtime retain authority |
+| Capability promotion | Complete for dependency-free pure test/local capsules | Provider, side-effect, dependent, raw-plugin, and production capsules remain fail closed |
+| Behavioral specifications | Complete | Native current/change/archive model, validation, archival, templates, CI integration, and self-hosted pilot shipped; current requirements grow organically |
+
+## What “complete” means
+
+“Complete” means the source release contains the typed contract, validation,
+tests, and fail-closed behavior claimed for that area. It does not claim that a
+particular organization has approved applications, connected credentials,
+configured retention, or enabled provider effects.
+
+Provider access remains inactive until the selected deployment supplies its
+approved configuration. Anonymous public-data routes are the exception to the
+credential requirement, not to governance, bounded retrieval, or independent
+verification.
 
 ## Phase acceptance criteria
 
-### Phase 0
+### Phase 0 — environment and governance
 
 - capability owners and approval tiers are machine-readable;
-- production configuration fails closed without explicit approval;
-- secret-free readiness output identifies missing variable names and permissions;
-- no network call occurs during readiness.
+- production configuration fails closed without explicit organization choices;
+- secret-free readiness identifies missing variable names and permissions; and
+- configuration-only readiness performs no network request.
 
-### Phase 1
+### Phase 1 — governed runtime
 
-- immutable plans and exact-plan approvals;
-- policy and canonical-source enforcement;
-- atomic action-bound idempotency with durable failure/indeterminate outcomes,
-  dependency handling, audit hash chain, and prompt-injection scanning;
-- independent verification.
+- plans and actions are immutable and fingerprinted;
+- approvals bind to the exact plan and action IDs;
+- policy, governance, and canonical-source rules are independently enforced;
+- idempotency records pending, completed, failed, and indeterminate outcomes;
+- connector results are independently verified;
+- reversible failures use typed compensation only where atomic preconditions
+  can be enforced; and
+- audit records form a tamper-evident chain.
 
-### Phase 2
+### Phase 2 — read-only context
 
-- read-only connectors for all target systems;
-- bounded retrieval and safe authentication boundaries;
-- normalized evidence, citations, and retention;
-- real provider probes are explicit rather than automatic.
+- all target systems expose typed, bounded read contracts;
+- authentication class is selected by the capability, not a provider-wide
+  default;
+- anonymous public routes never resolve ambient credentials;
+- retrieved content remains untrusted;
+- normalized evidence, citations, and retention are implemented; and
+- live provider probes are explicit rather than automatic.
 
-### Phase 3
+### Phase 3 — draft-only output
 
-- complete local review package across Jira, Confluence, Outlook, Teams, PowerPoint, and repository patch;
-- integrity manifest;
-- no external side effects.
+- one local review package can contain Jira and Confluence proposals, Outlook
+  and Teams drafts, PowerPoint, and a repository patch;
+- the package includes an integrity manifest; and
+- no external side effect occurs.
 
-### Phase 4
+### Phase 4 — approved reversible writes
 
-- separate write connectors;
-- expected-version or commit preconditions;
-- exact approvals and idempotency;
-- enabled modifying capabilities use provider-side compare-and-swap; adapters
-  without an atomic provider precondition remain disabled;
-- protected branches, force pushes, merge, invitations, arbitrary permissions,
-  and broad deletion prohibited; GitHub administration and Jira mutations stay
-  disabled until they gain a real provider-side concurrency precondition.
+- write connectors are separate from read and draft connectors;
+- every enabled modifying capability has an exact target and reviewed parameter
+  contract;
+- the provider operation uses an expected version or equivalent atomic
+  precondition;
+- approval, idempotency, readback verification, and compensation descriptors
+  are enforced; and
+- protected branches, force pushes, merges, broad deletion, invitations,
+  arbitrary permissions, and non-atomic administration remain prohibited.
 
-### Phase 5
+### Phase 5 — external communication
 
-- exact recipient/destination and content are inside the approved plan;
-- Outlook provider draft is re-read before sending;
-- Teams response is re-read after posting;
-- sends are labeled non-reversible and correction is a new approved action.
+- exact recipients or destinations and exact content are inside the approved
+  plan;
+- Outlook provider drafts are re-read before send;
+- Teams results are independently re-read;
+- uncertain sends remain indeterminate rather than guessed successful; and
+- correction is a new approved action because sends are non-reversible.
 
-### Phase 6 release boundary
+### Phase 6 — recurring workflow boundary
 
-- registered built-in workflows and due state can be inspected;
-- timezone-aware due calculation and maximum lateness;
-- execution is disabled before config, credentials, connectors, or audit access;
-- reactivation requires exact target, source, delivery, config, and runtime
-  manifest binding rather than capability-name-only scope checks.
+- built-in registrations and due state can be inspected;
+- schedules are timezone-aware and have maximum lateness;
+- capability, recipient, source, and delivery allowlists are explicit; and
+- execution remains disabled until every target, source, configuration, and
+  runtime identity is included in the immutable execution manifest.
 
-### Capability-promotion release boundary
+### Advisory sub-agent boundary
 
-- immutable signed quarantine, test, sandbox, review, publish, enable,
-  deprecate, and revoke states;
-- complete artifact/dependency/SBOM/test/contract/worker identity and distinct
-  publisher/reviewer binding;
-- Linux bubblewrap execution with no network or ambient credentials and bounded
-  process, CPU, memory, time, request, and output resources;
-- exact capsule facts in the plan, approval fingerprint, audit chain, active
-  session, and signed execution receipt;
-- policy-first advisory routing, canonical contextual constraints, exact-run
-  checkpoints, and normal orchestrator idempotency/verification;
-- dependency-free pure read/local-generation execution demonstrated end to end;
+- the parent may use no more than three depth-one research tasks and one plan
+  review for one operator goal;
+- specialists cannot edit, approve, execute provider effects, or recursively
+  delegate;
+- all specialist output is untrusted advisory data;
+- the parent owns final target selection and typed plan construction; and
+- the deterministic runtime remains the only connector, approval, and audit
+  path.
+
+### Capability-promotion boundary
+
+- lifecycle states and transitions are immutable and separately signed;
+- source, artifact, dependency, SBOM, test, contract, worker, publisher, and
+  reviewer identities are bound;
+- Linux bubblewrap supplies no network, ambient credentials, or writable
+  runtime mounts;
+- process, CPU, memory, time, input, and output resources are bounded;
+- activated capabilities enter the normal catalog, policy, session,
+  orchestrator, verification, audit, and receipt path;
+- dependency-free pure read/local-generation execution is demonstrated; and
 - provider destinations, side effects, runtime dependencies, raw plugins, and
-  production promotion blocked before connector construction; and
-- production readiness requires the isolated worker plus a real production
-  credential adapter, authenticated approvals, and an external
-  tamper-resistant audit sink. Those deployment adapters are not bundled.
+  production promotion remain blocked before connector construction.
 
-## Deployment work that cannot be completed generically
+### Behavioral-specification boundary
 
-The following are intentionally outside a source-code release and must be performed in the target organization:
+- accepted requirements live under `specs/current/` with stable IDs, normative
+  behavior, scenarios, implementation references, and executable evidence;
+- active changes have machine-readable metadata, proposal, requirement deltas,
+  tasks, and design when required;
+- validation detects malformed IDs, lifecycle errors, conflicts, missing
+  references, unsafe paths, symlinks, and incomplete archival;
+- archival transactionally applies deltas, validates the result, and preserves
+  history;
+- CI and source-distribution validation run `python scripts/specs.py validate`;
+- the workflow is required for non-trivial behavioral changes and skipped for
+  clearly non-behavioral edits;
+- brownfield adoption is delta-first rather than a bulk conversion; and
+- specifications remain development data and cannot alter runtime `ChangePlan`,
+  approval, credentials, policy, connector execution, or audit.
+
+## Remaining product and deployment work
+
+### Source-code boundaries intentionally deferred
+
+- descriptor-bound local and remote Git mutation;
+- recurring execution under a complete immutable runtime manifest;
+- destructive retention pruning;
+- raw plugin execution with a sealed dependency filesystem;
+- provider or side-effect capability capsules;
+- production credential-broker and external receipt/audit adapters;
+- provider operations that cannot enforce an atomic concurrency precondition;
+  and
+- any broad permission, merge, deletion, or arbitrary execution surface.
+
+### Organization-specific deployment work
+
+A target organization must still:
 
 1. choose Cloud or Data Center endpoints;
 2. register Microsoft Entra and/or Atlassian applications;
 3. obtain administrator consent and assign least-privilege scopes;
-4. satisfy Conditional Access and device/network requirements;
-5. provision a secret manager and production audit sink;
+4. satisfy Conditional Access and device or network requirements;
+5. provision a secret manager and external tamper-resistant audit sink;
 6. define data classification, retention, legal hold, and external-model policy;
-7. replace sample identities, project keys, sites, repositories, recipients, and canonical resources;
+7. replace sample identities, project keys, sites, repositories, recipients,
+   and canonical resources;
 8. validate read-only probes in non-production;
-9. validate reversible writes using disposable resources;
+9. validate reversible writes using disposable resources; and
 10. approve a narrow production rollout.
 
-The runtime reports this distinction rather than representing simulated API-contract tests as a successful company deployment.
+The runtime reports this distinction instead of representing contract tests or
+a local demonstration as a successful company deployment.
