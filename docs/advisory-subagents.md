@@ -23,6 +23,23 @@ HTTP, environment, credentials, provider calls, approval, audit mutation, or any
 other effect-bearing tool. Provider reads remain in the selected parent and the
 typed deterministic runtime; they are not delegated through the child profile.
 
+## Documentation specialist contract
+
+The Docs Agent is a repository-owned specialist contract, not a third active
+GitHub-host child profile. Its authoritative instructions live in
+[`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md), and its human-facing behavior is
+explained in [Docs Agent](docs-agent.md).
+
+After implementation and tests for a non-trivial repository change, the selected
+MasterAgent parent applies the contract's maintenance mode and completes the same documentation review directly. This permits the existing parent to update documentation
+through its reviewed repository edit surface without weakening the child
+profile inventory or pretending that a safe host adapter exists.
+
+A future adapter may delegate the Docs Agent work only if it can enforce the
+same parent identity, depth, tool, context, authority, and failure boundaries.
+Until then, adding another `.github/agents/` profile would be misleading and is
+intentionally rejected by release validation.
+
 ## Repository-owned integration harness
 
 [`advisory.py`](../src/master_agent/advisory.py) provides the deterministic
