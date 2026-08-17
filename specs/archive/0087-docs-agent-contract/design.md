@@ -71,8 +71,8 @@ sources.
 
 ## Rejected alternatives
 
-- A live `.github/agents/MasterAgent-Docs.agent.md` profile was rejected because
-  the repository cannot currently enforce a safe host dispatch path for it.
+- A live Docs Agent host profile was rejected because the repository cannot
+  currently enforce a safe host dispatch path for it.
 - A new Python subagent runtime was rejected because the requirement is a
   development completion contract, not an enterprise provider capability.
 - CI-only automatic rewriting was rejected because generated documentation
