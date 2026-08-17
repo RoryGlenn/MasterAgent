@@ -27,7 +27,8 @@ bugs as intent, respect historical/planned/generated documents, allow a real
 ## Scope
 
 - add the authoritative `.ai/DOCS_AGENT.md` contract;
-- add a plain-language guide at `docs/docs-agent.md`;
+- add the plain-language Docs Agent explanation to the existing
+  `docs/advisory-subagents.md` guide;
 - update `AGENTS.md`, `.ai/MASTER_AGENT.md`, and
   `.github/agents/MasterAgent.agent.md` with the documentation completion gate;
 - add drift tests in `tests/test_docs_agent_contract.py`;
@@ -48,6 +49,10 @@ universal “write for non-technical people” rule. Conditional analogies impro
 mental models without weakening command, schema, API, or configuration
 precision.
 
+Keeping the human explanation in the existing indexed subagent guide avoids a
+second, partly duplicative document while leaving `.ai/DOCS_AGENT.md` as the
+single authoritative behavior contract.
+
 ## Alternatives considered
 
 - Relying on the operator to type “update docs” was rejected because it remains
@@ -59,6 +64,9 @@ precision.
   setup for the current repository and team size.
 - Treating every document as non-technical was rejected because API, command,
   architecture, and maintainer references require exact technical language.
+- Maintaining a separate human guide was rejected because the existing indexed
+  subagent guide can explain the behavior without creating another source that
+  can drift from the authoritative contract.
 
 ## Non-goals
 
