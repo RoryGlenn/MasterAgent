@@ -1,5 +1,12 @@
 # Changelog
 
+- Harden advisory sub-agent boundaries end to end. Direct GitHub-host child
+  invocation is now disabled, the researcher no longer has generic execution,
+  both child profiles are read/search-only and non-invocable, and a deterministic
+  repository-owned harness enforces exact-parent routing, depth/call budgets,
+  context minimization, pre-dispatch denial, untrusted-output validation, and
+  citation re-read under adversarial prompt-injection tests.
+
 - Add two depth-one GitHub Copilot advisory sub-agents for bounded read-only
   research and independent plan review. The user-selected MasterAgent caps
   delegation, treats every result as untrusted data, keeps simple work direct,

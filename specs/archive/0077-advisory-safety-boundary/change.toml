@@ -1,0 +1,32 @@
+schema = "master-agent/change@1"
+id = "0077-advisory-safety-boundary"
+title = "Add end-to-end advisory sub-agent safety boundaries"
+status = "archived"
+github_issue = 77
+created = "2026-08-17"
+updated = "2026-08-17"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-ADVISORY-001"
+destination = "security/MA-ADVISORY-001.md"
+source = "current/MA-ADVISORY-001.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-ADVISORY-002"
+destination = "security/MA-ADVISORY-002.md"
+source = "current/MA-ADVISORY-002.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-ADVISORY-003"
+destination = "security/MA-ADVISORY-003.md"
+source = "current/MA-ADVISORY-003.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-ADVISORY-004"
+destination = "security/MA-ADVISORY-004.md"
+source = "current/MA-ADVISORY-004.md"

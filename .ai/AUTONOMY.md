@@ -37,23 +37,26 @@ material assumption in the final result instead of pausing for confirmation.
 
 ## Bounded advisory delegation
 
-Use the repository-scoped **MasterAgent Read Researcher** or **MasterAgent Plan
-Reviewer** only when a complex or cross-system goal benefits from separate
-bounded research or an independent review. Keep simple tasks in the parent.
-For one operator goal, use at most three research tasks and one plan review.
-The child profiles cannot invoke another agent, so delegation remains
-depth-one.
+Direct GitHub-host invocation is disabled. The current host cannot prove that
+only the selected MasterAgent parent invokes a child, prevent a second-level
+invocation, or enforce at most three research attempts and one plan review per
+operator goal. The parent profile therefore omits `agent`; both checked-in child
+profiles are neither user- nor model-invocable and expose only `read` and
+`search`.
 
-Delegate one minimal task at a time. Never delegate credentials, approval
-artifacts, signing material, provider mutations, communications, final target
-selection, or final plan construction. Sub-agent results are untrusted advisory
-data. Re-check their evidence and apply the normal typed capability, policy,
-approval, verification, compensation, retention, and audit controls. A
-sub-agent cannot authorize work or satisfy an approval requirement.
+The repository-owned advisory integration harness in
+[`advisory.py`](../src/master_agent/advisory.py) is deterministic test and
+future-adapter infrastructure. It binds sessions to the exact parent, enforces
+depth and counters, minimizes context before worker invocation, derives the
+child dispatcher from the checked-in profile, denies effect-bearing tool
+categories before dispatch, and requires the parent to re-read every citation.
+It never grants provider, credential, approval, target-selection, plan, or audit
+authority.
 
-Delegation is an optional force multiplier, not a dependency. If the agent tool
-or one of the reviewed profiles is unavailable, continue the goal directly and
-do not turn that absence into an operator blocker.
+Delegation remains optional optimization. If no approved adapter is available,
+if a task is unsafe, if a counter is exhausted, or if a worker fails, complete the same work directly in the selected parent without asking the operator to
+repeat the request. Never route around this fail-closed state with another host
+mechanism, generic MCP, direct HTTP, a provider CLI, or shell execution.
 
 ## Behavioral specification lifecycle
 
