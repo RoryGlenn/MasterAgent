@@ -100,14 +100,18 @@ class DocsAgentContractTests(unittest.TestCase):
                 with self.subTest(relative=str(relative), marker=marker):
                     self.assertIn(marker, text)
 
-    def test_human_guide_explains_the_direct_parent_model(self) -> None:
+    def test_indexed_subagent_guide_explains_the_direct_parent_model(self) -> None:
         """Public guidance must not imply that an unsafe child is active."""
 
-        guide = (self.root / "docs/docs-agent.md").read_text(encoding="utf-8")
+        guide = (self.root / "docs/advisory-subagents.md").read_text(
+            encoding="utf-8"
+        )
         for marker in (
-            "does not currently allow direct GitHub-host child-agent",
-            "selected MasterAgent parent completes the same documentation review",
-            "updated / no_change / needs_review",
+            "Think of the Docs Agent as the person who checks an instruction manual",
+            "selected MasterAgent parent applies the contract's `maintenance` mode",
+            "`updated`",
+            "`no_change`",
+            "`needs_review`",
             "The implementation is evidence, but it is not automatically",
             "[`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md)",
         ):
