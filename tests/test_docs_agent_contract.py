@@ -90,7 +90,7 @@ class DocsAgentContractTests(unittest.TestCase):
             Path(".github/agents/MasterAgent.agent.md"): (
                 "[Docs Agent contract](../../.ai/DOCS_AGENT.md)",
                 "## Documentation completion gate",
-                "complete the same documentation review directly",
+                "Complete the same documentation review directly",
             ),
         }
 
