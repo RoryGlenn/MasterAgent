@@ -98,11 +98,20 @@ For a non-trivial change:
 2. Create or update `specs/changes/<change-id>/`.
 3. Keep the proposal, requirement deltas, design, and tasks synchronized with
    implementation.
-4. Add real executable evidence.
-5. Run relevant tests, specification validation, and release validation.
-6. Set the change to `verifying` only when every task and required evidence is
-   complete.
-7. Archive it with the repository tool.
+4. Add real executable evidence and run the relevant implementation tests.
+5. Apply `maintenance` mode from [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) to
+   the final change. Update affected authoritative documentation or record a
+   justified `no_change`; return a material evidence conflict as
+   `needs_review` before completion.
+6. Run final specification and release validation after documentation updates.
+7. Set the change to `verifying` only when every task and required
+   implementation, documentation, and test evidence is complete.
+8. Archive it with the repository tool.
+
+The documentation completion gate compares the issue, accepted requirements,
+current specifications, decisions, tests, implementation, configuration, and
+existing documentation. It does not make an apparent defect official merely
+because the current code exhibits it.
 
 Archival applies declared deltas to `specs/current/`, validates the resulting
 tree, and then moves the change into `specs/archive/`. Historical snapshots
