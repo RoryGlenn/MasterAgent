@@ -28,7 +28,7 @@ Typed anonymous public-data capabilities require no credential activation.
   reference, capability summaries, checked-in plan schemas, local Markdown
   links, source-tree hygiene, and the credential-free v1 demonstration
   manifest pass validation.
-- The repository-scoped GitHub Copilot profile is user-invocable,
+- The repository-scoped parent GitHub Copilot profile is user-invocable,
   policy-bound, constrained to its reviewed tools, and aligned with the
   first-prompt contract and force-multiplier default-to-action contract across
   every instruction and onboarding Markdown file.
@@ -36,6 +36,12 @@ Typed anonymous public-data capabilities require no credential activation.
   explicit no-local-change safeguards, provider-neutral ephemeral connection,
   capability-gap ownership, last-resort question rules, script, and policy are
   included in the source distribution.
+- The exact advisory-agent inventory contains one non-user-invocable read
+  researcher and one non-user-invocable plan reviewer. Validation pins their
+  narrower tools, automatic parent invocation, depth-one behavior, delegation
+  limits, untrusted-output treatment, credential/approval exclusion, direct
+  fallback, and absence of a second provider-effect path. All three profiles
+  must be present in the source distribution.
 - The resumable approval handoff is tested from missing approval through
   private request inspection, trusted signing, exact-run resume, and dual
   approval. Tampered, stale, unsafe-permission, symlinked, or authority-drifted

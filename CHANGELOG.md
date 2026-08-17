@@ -1,5 +1,10 @@
 # Changelog
 
+- Add two depth-one GitHub Copilot advisory sub-agents for bounded read-only
+  research and independent plan review. The user-selected MasterAgent caps
+  delegation, treats every result as untrusted data, keeps simple work direct,
+  and retains sole ownership of typed plans and governed runtime execution.
+
 - Add an immutable signed capability-capsule lifecycle for dependency-free pure
   generated capabilities: descriptor-pinned quarantine storage, separate
   promotion roles, Linux bubblewrap isolation, strict source language and

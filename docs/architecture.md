@@ -7,7 +7,18 @@ Master Agent is a governed workflow runtime, not one omnipotent model process. T
 ## Runtime flow
 
 ```text
-Authenticated user or registered workflow
+Authenticated user
+                 │
+                 ▼
+     user-selected MasterAgent profile
+       ┌─────────┴──────────┐
+       ▼                    ▼
+ direct handling     optional advisory sub-agents
+       │            research / plan review only
+       └─────────┬──────────┘
+                 │ re-check untrusted advice
+                 ▼
+       parent or registered workflow
                  │
                  ▼
           Planner / plan loader
@@ -51,7 +62,31 @@ read connector  draft connector  mutation/send connector
  compensation          audit/evidence
 ```
 
+The advisory branch is part of the GitHub Copilot host, not the Python runtime.
+It cannot grant authority or create a second connector path. The selected parent
+uses no more than three depth-one research tasks and one plan review, re-checks
+their output as untrusted data, and constructs the final typed plan itself.
+Simple requests bypass the branch. If the host surface cannot invoke a reviewed
+specialist, the parent continues directly. See
+[`advisory-subagents.md`](advisory-subagents.md).
+
 ## Principal components
+
+### Advisory sub-agents
+
+`MasterAgent-Read-Researcher.agent.md` can read/search the repository and may
+execute only bounded diagnostics or typed read-only `master-agent` commands.
+It cannot edit or recursively delegate. `MasterAgent-Plan-Reviewer.agent.md`
+has only read/search tools and cannot execute, edit, approve, or rewrite a plan.
+Both profiles are non-user-invocable and available for model invocation by the
+parent.
+
+Their profiles and tool allowlists are defense in depth, not an authorization
+boundary. The parent treats every returned claim as untrusted, supplies no raw
+credential or approval material, and remains responsible for target selection
+and `ChangePlan` construction. Policy, authenticated approval, connector
+execution, provider verification, compensation, retention, and audit remain in
+the deterministic runtime below.
 
 ### Domain models
 
