@@ -1,0 +1,26 @@
+schema = "master-agent/change@1"
+id = "0087-docs-agent-contract"
+title = "Add an audience-aware Docs Agent and documentation completion gate"
+status = "archived"
+github_issue = 87
+created = "2026-08-17"
+updated = "2026-08-17"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DOCS-001"
+destination = "development/MA-DOCS-001.md"
+source = "current/MA-DOCS-001.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DOCS-002"
+destination = "development/MA-DOCS-002.md"
+source = "current/MA-DOCS-002.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DOCS-003"
+destination = "development/MA-DOCS-003.md"
+source = "current/MA-DOCS-003.md"
