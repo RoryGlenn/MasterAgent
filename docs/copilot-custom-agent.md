@@ -64,13 +64,15 @@ The profile:
   [repository policy](../.ai/MASTER_AGENT.md), then applies the
   [first-run contract](../.ai/FIRST_RUN.md) and
   [force-multiplier contract](../.ai/AUTONOMY.md) before work begins;
+- applies the [Docs Agent contract](../.ai/DOCS_AGENT.md) as a completion gate
+  for non-trivial repository changes after implementation and tests;
 - limits Copilot to repository read, search, edit, and command-execution
   tools; the parent profile does not expose direct custom-agent invocation;
 - keeps both advisory profiles non-user- and non-model-invocable until a
   supported adapter can prove the repository-owned boundary;
 - gives nontechnical users a stable success or blocked response, defaults to
-  action, and owns setup, connection, implementation, repair, tests, and
-  verification without repeated confirmation prompts;
+  action, and owns setup, connection, implementation, repair, tests,
+  documentation, and verification without repeated confirmation prompts;
 - requires enterprise operations to use the existing typed `master-agent`
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
@@ -96,7 +98,33 @@ When no approved adapter is available or a task fails closed, MasterAgent
 completes the same work directly. It does not ask the operator to repeat the
 request and never substitutes another host mechanism, MCP server, direct API,
 or shell workaround. See the complete
-[advisory sub-agent contract](advisory-subagents.md).
+[advisory and documentation specialist contracts](advisory-subagents.md).
+
+## Documentation completion gate
+
+For a non-trivial repository change, the selected MasterAgent parent applies
+`maintenance` mode from [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) after
+implementation and tests but before declaring the work complete. The Docs Agent
+is a repository-owned specialist contract, not an additional live GitHub-host
+child profile.
+
+The review compares the issue or task, accepted requirements, current
+specifications, architecture decisions, tests, implementation, configuration,
+and existing documentation. It classifies the intended audience and document
+lifecycle, searches for indirect terminology and command impact, and then
+updates only documentation that became inaccurate, incomplete, misleading, or
+hard to use.
+
+A result of `updated` means affected documentation changed. A justified
+`no_change` means the relevant documents were reviewed and remain correct. A
+material conflict returns `needs_review` to planning or implementation; the
+parent does not make an apparent defect official by rewriting documentation to
+match it.
+
+For mixed audiences, the documentation starts with a plain-language
+explanation and progressively introduces the exact technical detail needed to
+act correctly. An analogy is optional, must improve understanding, and is
+always followed by the literal technical explanation.
 
 The first ordinary prompt permits only the bounded `.venv` bootstrap above. It
 never upgrades pip, installs globally or into the user site, uses `sudo` or an
@@ -241,3 +269,8 @@ missing its bounded bootstrap and fail-closed advisory safeguards. It pins the
 exact three-profile inventory, disables direct child user/model invocation,
 requires read/search-only child tools, and checks the repository-owned harness,
 adversarial fixtures, and integration tests in the source distribution.
+
+[`tests/test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py)
+independently pins the Docs Agent methodology, audience and analogy rules,
+evidence-conflict behavior, lifecycle and scope boundaries, structured result,
+direct-parent execution model, and parent instruction integration.

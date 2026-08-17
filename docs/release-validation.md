@@ -34,7 +34,8 @@ handling, and independent verification.
   deltas, incomplete tasks or evidence, unsafe archival, transaction rollback,
   and historical snapshot drift.
 - The completed self-hosted pilot proves the full issue → change specification
-  → implementation/tests → current requirement → archive lifecycle.
+  → implementation/tests → Docs Agent maintenance review → final validation →
+  current requirement → archive lifecycle.
 - Validation keeps specifications in the development plane. They cannot grant
   a capability, satisfy approval, alter a runtime `ChangePlan`, resolve
   credentials, authorize provider execution, or enter runtime audit authority.
@@ -89,6 +90,17 @@ handling, and independent verification.
 - The actionable capability-gap contract is pinned: a safe missing repository
   path must be implemented, tested, documented, and followed by a return to the
   original goal rather than a hypothetical checklist.
+- [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) remains the single authoritative
+  documentation specialist contract. No additional live GitHub-host profile is
+  permitted by the reviewed inventory.
+- [`tests/test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py)
+  pins maintenance, authoring, and audit modes; audience and analogy rules;
+  evidence-conflict and lifecycle behavior; default edit scope; `updated`,
+  `no_change`, and `needs_review` results; and direct-parent integration across
+  the durable instruction files.
+- Documentation workflow guides must preserve the post-implementation
+  completion gate and must not imply that direct host child invocation is
+  operational.
 
 ### Capability capsules and supply chain
 
@@ -128,8 +140,8 @@ handling, and independent verification.
   builder's umask.
 - CI installs and tests from owner-private virtual environments rather than a
   hosted runner's shared site-packages.
-- The source archive includes workflow definitions and the tests that validate
-  them.
+- The source archive includes workflow definitions, `.ai/DOCS_AGENT.md`, and
+  the tests that validate them.
 
 ### Optional live sandbox validation
 
