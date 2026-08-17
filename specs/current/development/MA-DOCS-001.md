@@ -45,7 +45,7 @@ fail-closed subagent boundary.
 - `AGENTS.md`
 - `.ai/MASTER_AGENT.md`
 - `.github/agents/MasterAgent.agent.md`
-- `docs/docs-agent.md`
+- `docs/advisory-subagents.md`
 
 ## Verification
 
