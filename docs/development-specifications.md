@@ -49,6 +49,9 @@ Feature, defect, or architecture concern
                   ↓
          implementation + executable tests
                   ↓
+       Docs Agent maintenance review
+       update / no_change / needs_review
+                  ↓
       specification and release validation
                   ↓
                 archive
@@ -163,11 +166,21 @@ For a non-trivial behavioral change:
 2. Create or update the linked directory under `specs/changes/`.
 3. Keep the proposal, requirement deltas, design, and tasks synchronized with
    the implementation.
-4. Add or update executable evidence.
-5. Run the relevant tests, specification validation, and release validation.
-6. Move the change to `verifying` only when implementation and evidence are
-   complete.
-7. Archive it through the repository tool.
+4. Add or update executable evidence and run the relevant implementation tests.
+5. Apply `maintenance` mode from [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) to
+   the final change and strongest available evidence. Update affected
+   authoritative documentation or record a justified `no_change`; return a
+   material conflict to planning or implementation as `needs_review`.
+6. Run final specification and release validation after any documentation
+   updates.
+7. Move the change to `verifying` only when implementation, documentation, and
+   evidence are complete.
+8. Archive it through the repository tool.
+
+The documentation review is evidence-aware rather than a request to make prose
+match code blindly. It distinguishes current, historical, planned, and generated
+documents, and it must not document an apparent implementation defect as
+intended behavior.
 
 Archival applies declared deltas to `specs/current/`, verifies the resulting
 tree, and then moves the change into `specs/archive/`. Checked tasks or prose
