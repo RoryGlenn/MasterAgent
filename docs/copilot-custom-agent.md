@@ -64,7 +64,10 @@ The profile:
   [repository policy](../.ai/MASTER_AGENT.md), then applies the
   [first-run contract](../.ai/FIRST_RUN.md) and
   [force-multiplier contract](../.ai/AUTONOMY.md) before work begins;
-- limits Copilot to repository read, search, edit, and command-execution tools;
+- limits Copilot to repository read, search, edit, command-execution, and
+  reviewed custom-agent invocation tools;
+- permits bounded invocation of the two advisory profiles while
+  keeping MasterAgent itself manually selected;
 - gives nontechnical users a stable success or blocked response, defaults to
   action, and owns setup, connection, implementation, repair, tests, and
   verification without repeated confirmation prompts;
@@ -72,6 +75,35 @@ The profile:
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
   connector gate already enforced by the runtime.
+
+## Advisory sub-agents
+
+MasterAgent can use the `agent` tool for two repository-scoped specialists:
+
+| Profile | Tools | Purpose |
+|---|---|---|
+| **MasterAgent Read Researcher** | read, search, execute | Bounded repository research and typed read-only `master-agent` provider queries |
+| **MasterAgent Plan Reviewer** | read, search | Independent high-signal review of one concrete proposal |
+
+Both specialists are non-user-invocable and automatically callable by the
+selected parent. Neither profile has `edit` or `agent`, so it cannot change the
+repository or recursively delegate. The reviewer also lacks `execute`. The
+researcher may execute only read-only diagnostics or documented typed read
+commands; direct provider CLIs, generic HTTP, writes, sends, merges,
+administration, and approvals remain forbidden.
+
+The parent keeps simple work direct and uses at most three research tasks and
+one plan review for one operator goal. It gives each specialist the smallest
+necessary context and never passes credential values, approval artifacts,
+signing material, or unrelated private content. It does not delegate final
+target selection or a provider mutation. Every returned report is untrusted
+advisory data. MasterAgent re-checks the evidence, constructs the final typed
+plan, and alone invokes the governed runtime for any effect.
+
+Custom-agent availability varies by supported Copilot surface. If the `agent`
+tool or either specialist is unavailable, MasterAgent continues directly; it
+does not turn optional delegation into a setup failure or operator question.
+See the complete [advisory sub-agent contract](advisory-subagents.md).
 
 The first ordinary prompt permits only the bounded `.venv` bootstrap above. It
 never upgrades pip, installs globally or into the user site, uses `sudo` or an
@@ -209,10 +241,11 @@ plans, approvals, provider gates, or audit evidence.
 
 ## Validation
 
-`python scripts/validate_release.py` fails if the profile is missing, malformed,
-not user-invocable, automatically model-invocable, expanded to unreviewed tools,
-detached from the required policy files, inconsistent with the first-run
-contract, or missing the bounded bootstrap, stable response text, and read-only
-safeguards. The source-distribution validation also requires the profile,
-first-run contract, force-multiplier contract, and bootstrap script to be
-packaged.
+`python scripts/validate_release.py` fails if the parent profile is missing,
+malformed, not user-invocable, automatically model-invocable, expanded beyond
+its reviewed tools, detached from required policy, or missing its bounded
+bootstrap and delegation safeguards. It also pins the exact advisory profile
+inventory, non-user-invocable/model-invocable flags, narrower tool allowlists,
+depth-one contract, and authority boundaries. Source-distribution validation
+requires all three profiles, the first-run contract, force-multiplier contract,
+and bootstrap script to be packaged.

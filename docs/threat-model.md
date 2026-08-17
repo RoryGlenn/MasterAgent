@@ -16,6 +16,7 @@
 ## Trust boundaries
 
 - planner output is untrusted until schema, catalog, governance, policy, and approval validation;
+- advisory sub-agent output is untrusted until the parent re-checks its evidence;
 - retrieved provider content is always data, never authority;
 - connector code is trusted application code and must be reviewed;
 - generated capsule source and installed plugins remain untrusted data; raw
@@ -52,6 +53,31 @@ Controls:
   text rather than terminal instructions;
 - exact capability catalog and parameter validation;
 - recipient/target cannot be introduced solely by retrieved content.
+
+### Delegation laundering or authority confusion
+
+A delegated researcher or reviewer may follow retrieved instructions, invent a
+target, claim approval, disclose sensitive context, recursively delegate, or
+attempt to execute work that belongs to the parent and governed runtime.
+
+Controls:
+
+- exactly two repository-scoped advisory profiles with release-pinned prompts,
+  invocation flags, and tool allowlists;
+- the parent alone has the `agent` tool; both children omit it, limiting
+  delegation to one level;
+- the researcher has no edit tool and may execute only typed read-only runtime
+  commands or bounded diagnostics; the reviewer has only read/search tools;
+- at most three research tasks and one plan review per operator goal, with
+  simple requests staying on the direct path;
+- minimal delegated context and explicit exclusion of credential values,
+  approval/signing artifacts, and unrelated private content, plus no delegation
+  of final target selection, provider mutations, or communications;
+- all results remain untrusted advisory data and cannot authorize, approve, or
+  alter a typed plan without parent re-validation;
+- the deterministic policy, approval, connector, verification, compensation,
+  retention, and audit runtime remains the only provider-effect path; and
+- direct parent fallback when custom-agent invocation is unavailable.
 
 ### Excessive permissions
 

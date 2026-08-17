@@ -146,6 +146,15 @@ CLI paths are implemented on the spot and validated before MasterAgent resumes
 the original goal. This does not permit code to bypass credentials, external
 permissions, policy, or authenticated approval.
 
+For a complex or cross-system request, the selected MasterAgent may delegate
+bounded research to **MasterAgent Read Researcher** and one independent review
+to **MasterAgent Plan Reviewer**. The specialists cannot recursively delegate;
+they return untrusted advice and never receive execution or approval authority.
+The parent still constructs the final typed plan, and the deterministic Python
+runtime remains the only path to credentials, connectors, writes, verification,
+and audit. Simple requests stay on the direct path. See the
+[advisory sub-agent contract](docs/advisory-subagents.md).
+
 A repository-inspection, diagnosis-only, or explicit no-local-change prompt
 never installs anything. A provider operation or feature request may bootstrap
 locally and continue to the requested result in the same run. See the
@@ -658,6 +667,7 @@ future sealed dependency filesystem. See
 - [Semantic codebase index](docs/semantic-index.md)
 - [CLI reference](docs/cli-reference.md)
 - [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
+- [Advisory sub-agent contract](docs/advisory-subagents.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)
