@@ -42,7 +42,7 @@ and oversimplified reference material for developers and maintainers.
 ## Implementation
 
 - `.ai/DOCS_AGENT.md`
-- `docs/docs-agent.md`
+- `docs/advisory-subagents.md`
 
 ## Verification
 
