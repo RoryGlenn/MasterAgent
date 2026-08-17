@@ -163,8 +163,8 @@ non-model-invocable and expose only repository `read` and `search`. A
 repository-owned advisory integration harness verifies exact-parent routing,
 depth and call budgets, context minimization, pre-dispatch denials, and parent
 citation re-read for any future approved adapter. Until such an adapter exists,
-MasterAgent completes the same research or review directly and will complete the
-same work directly when delegation is unavailable. See the
+MasterAgent completes the same research or review directly and will
+complete the same work directly when delegation is unavailable. See the
 [advisory sub-agent contract](docs/advisory-subagents.md).
 
 A missing safe repository capability is implementation work, not a reason to
