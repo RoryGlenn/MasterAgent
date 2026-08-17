@@ -35,7 +35,8 @@ software**:
 
 ```text
 Development plane
-GitHub issue → behavioral change specification → code/tests → verification
+GitHub issue → behavioral change specification → code/tests
+             → Docs Agent maintenance → verification
              → archive → maintained current requirements
 
 Runtime plane
@@ -48,6 +49,8 @@ User/workflow request → ChangePlan → policy/governance → approval
 - [`specs/current/`](specs/current/) records **required current behavior**.
 - [`specs/changes/`](specs/changes/) records active behavioral deltas, design,
   and implementation tasks.
+- [`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md) defines the evidence-aware
+  documentation completion gate for non-trivial repository changes.
 - Tests provide executable evidence.
 - A runtime `ChangePlan` binds exact provider effects and approvals.
 
@@ -71,6 +74,7 @@ unsafe surfaces remain deliberately non-routable.
 | Approved reversible writes | Narrow Jira, Confluence, Bitbucket, and GitHub operations implemented; unsafe or non-atomic mutations remain disabled |
 | External communication | Exact-approved Outlook sends and Teams messages/replies implemented behind separate gates |
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
+| Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
 | Capability capsule promotion | Signed test/local promotion for dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
 
@@ -165,7 +169,14 @@ depth and call budgets, context minimization, pre-dispatch denials, and parent
 citation re-read for any future approved adapter. Until such an adapter exists,
 MasterAgent completes the same research or review directly and will
 complete the same work directly when delegation is unavailable. See the
-[advisory sub-agent contract](docs/advisory-subagents.md).
+[advisory and documentation specialist contracts](docs/advisory-subagents.md).
+
+For every non-trivial repository change, the selected parent also applies the
+[Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
+before completion. It updates affected authoritative documentation or records a
+justified `no_change`; a material requirement, test, implementation, or
+documentation conflict returns `needs_review` rather than being documented as
+intent. This is direct parent work, not a live GitHub-host child-agent path.
 
 A missing safe repository capability is implementation work, not a reason to
 stop with “the connector is read-only.” MasterAgent adds the smallest complete
@@ -334,6 +345,12 @@ python scripts/specs.py status
 python scripts/specs.py archive <change-id>
 ```
 
+After implementation and relevant tests, apply the Docs Agent maintenance
+contract to the final change before declaring it complete. Continue after
+`updated` or a justified `no_change`; route `needs_review` back to planning or
+implementation, then run final specification and release validation before
+archival.
+
 Use the workflow for capabilities, approvals, policy, governance, connectors,
 workflows, verification, compensation, retention, audit, and cross-component
 contracts. Skip it for formatting, typo fixes, minor documentation corrections,
@@ -376,7 +393,7 @@ creating another runtime planner or authorization layer. See
 ### Agents and extensibility
 
 - [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
-- [Advisory sub-agent contract](docs/advisory-subagents.md)
+- [Advisory sub-agent and Docs Agent contracts](docs/advisory-subagents.md)
 - [Capability capsule promotion](docs/capability-capsules.md)
 - [Plugin development](docs/plugin-development.md)
 
