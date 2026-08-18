@@ -279,7 +279,9 @@ def _permission_handler() -> Callable[[object, object], object]:
     approve_once = getattr(rpc, "PermissionDecisionApproveOnce", None)
     reject = getattr(rpc, "PermissionDecisionReject", None)
     if approve_once is None or reject is None:
-        raise CopilotSdkUnavailable("installed Copilot SDK permission API is unsupported")
+        raise CopilotSdkUnavailable(
+            "installed Copilot SDK permission API is unsupported"
+        )
 
     def decide(request: object, invocation: object) -> object:
         del invocation
@@ -300,9 +302,13 @@ def _response_content(response: object) -> str:
         if isinstance(response, str):
             content = response
         else:
-            raise CopilotResponseRejected("Copilot specialist response has no text content")
+            raise CopilotResponseRejected(
+                "Copilot specialist response has no text content"
+            )
     if len(content.encode("utf-8")) > _MAX_RESPONSE_BYTES:
-        raise CopilotResponseRejected("Copilot specialist response exceeds the byte limit")
+        raise CopilotResponseRejected(
+            "Copilot specialist response exceeds the byte limit"
+        )
     return content.strip()
 
 
@@ -314,8 +320,14 @@ def _parse_report(content: str) -> AdvisoryReport:
     try:
         value = json.loads(content)
     except json.JSONDecodeError as error:
-        raise CopilotResponseRejected("Copilot specialist output is not valid JSON") from error
-    if not isinstance(value, dict) or set(value) != {"summary", "findings", "citations"}:
+        raise CopilotResponseRejected(
+            "Copilot specialist output is not valid JSON"
+        ) from error
+    if not isinstance(value, dict) or set(value) != {
+        "summary",
+        "findings",
+        "citations",
+    }:
         raise CopilotResponseRejected(
             "Copilot specialist output must contain only summary, findings, citations"
         )
@@ -327,13 +339,18 @@ def _parse_report(content: str) -> AdvisoryReport:
     if (
         not isinstance(findings, list)
         or len(findings) > _MAX_FINDINGS
-        or not all(isinstance(item, str) and 0 < len(item) <= _MAX_ITEM_TEXT for item in findings)
+        or not all(
+            isinstance(item, str) and 0 < len(item) <= _MAX_ITEM_TEXT
+            for item in findings
+        )
     ):
         raise CopilotResponseRejected("Copilot specialist findings are invalid")
     if (
         not isinstance(citations, list)
         or len(citations) > _MAX_CITATIONS
-        or not all(isinstance(item, str) and 0 < len(item) <= 1024 for item in citations)
+        or not all(
+            isinstance(item, str) and 0 < len(item) <= 1024 for item in citations
+        )
     ):
         raise CopilotResponseRejected("Copilot specialist citations are invalid")
     return AdvisoryReport(summary, tuple(findings), tuple(citations))
