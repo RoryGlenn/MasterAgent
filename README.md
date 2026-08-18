@@ -74,6 +74,7 @@ unsafe surfaces remain deliberately non-routable.
 | Approved reversible writes | Narrow Jira, Confluence, Bitbucket, and GitHub operations implemented; unsafe or non-atomic mutations remain disabled |
 | External communication | Exact-approved Outlook sends and Teams messages/replies implemented behind separate gates |
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
+| Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
 | Capability capsule promotion | Signed test/local promotion for dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
@@ -160,15 +161,14 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-The checked-in advisory profiles now define a fail-closed contract rather than
-active GitHub-host children. Direct GitHub-host advisory invocation is disabled:
-the parent has no `agent` tool; both children are non-user- and
-non-model-invocable and expose only repository `read` and `search`. A
-repository-owned advisory integration harness verifies exact-parent routing,
-depth and call budgets, context minimization, pre-dispatch denials, and parent
-citation re-read for any future approved adapter. Until such an adapter exists,
-MasterAgent completes the same research or review directly and will
-complete the same work directly when delegation is unavailable. See the
+The checked-in advisory profiles remain fail closed as GitHub-host children.
+Direct GitHub-host advisory invocation is disabled: the parent has no `agent`
+tool; both children are non-user- and non-model-invocable. MasterAgent can
+instead run the Researcher or Plan Reviewer through the optional broker-owned
+Copilot SDK adapter. That path still passes through the repository-owned parent,
+depth and call budgets, context sanitizer, read-only tool policy, state binding,
+and parent citation re-read. If the optional adapter is unavailable or fails
+closed, MasterAgent completes the same work directly. See the
 [advisory and documentation specialist contracts](docs/advisory-subagents.md).
 
 For every non-trivial repository change, the selected parent also applies the
@@ -201,6 +201,16 @@ source .venv/bin/activate
 python -m pip install -e .
 master-agent readiness
 ```
+
+To enable the optional broker-owned Researcher and Plan Reviewer adapter in a
+development checkout, install the separate subagent extra:
+
+```bash
+python -m pip install -e '.[subagents]'
+```
+
+The base installation remains usable without that extra; unavailable specialist
+delegation falls back to the selected MasterAgent parent.
 
 ### From a wheel
 
