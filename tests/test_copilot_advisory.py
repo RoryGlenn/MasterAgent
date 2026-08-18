@@ -165,7 +165,9 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         self.assertEqual(client.session_kwargs["agent"], "masteragent-plan-reviewer")
         agents = client.session_kwargs["custom_agents"]
         assert isinstance(agents, list)
-        self.assertEqual([item["name"] for item in agents], ["masteragent-plan-reviewer"])
+        self.assertEqual(
+            [item["name"] for item in agents], ["masteragent-plan-reviewer"]
+        )
 
     def test_pre_tool_hook_denies_writes_shell_and_outside_paths(self) -> None:
         """A second SDK hook gate blocks widened or escaping tool requests."""
