@@ -17,7 +17,7 @@ Neither specialist may edit files, execute shell commands, call providers, acces
 
 ### GitHub host path remains disabled
 
-Direct GitHub-host invocation is still fail-closed. The parent profile does not expose the generic `agent` tool, and both child profiles keep `user-invocable: false` and `disable-model-invocation: true`.
+Direct GitHub-host invocation is disabled. The parent profile does not expose the generic `agent` tool, and both child profiles keep `user-invocable: false` and `disable-model-invocation: true`.
 
 This matters because host-native inference does not pass through MasterAgent's repository-owned parent identity, depth, per-goal budgets, sensitive-context sanitizer, state binding, or report re-validation. Enabling those profiles directly would create a second orchestration control plane.
 
@@ -81,9 +81,9 @@ The GitHub Copilot SDK remains an optional integration. If it is not installed, 
 
 That fallback is successful degradation, not a setup failure. MasterAgent completes the same research or review directly and continues the operator's original goal. It does not switch to GitHub's generic `agent` tool, another MCP server, a direct API, or a provider-side workaround.
 
-## Repository-owned broker
+## Repository-owned integration harness
 
-[`advisory.py`](../src/master_agent/advisory.py) remains the authoritative orchestration boundary. It enforces:
+[`advisory.py`](../src/master_agent/advisory.py) remains the authoritative orchestration boundary and repository-owned integration harness. It enforces:
 
 1. exactly one selected MasterAgent parent and two reviewed read-only specialist profiles;
 2. depth one, at most three research attempts, and at most one plan review per operator goal;
@@ -93,13 +93,23 @@ That fallback is successful degradation, not a setup failure. MasterAgent comple
 6. bounded untrusted specialist reports; and
 7. independent parent re-reading of every cited repository path.
 
-[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) additionally proves that the live adapter preselects one role, disables ambient extension discovery, exposes only read-only tools, denies outside-repository paths, rejects malformed output, rejects stale repository state, preserves pre-dispatch sensitive-context filtering, and falls back when the SDK is unavailable.
+## Hermetic end-to-end tests
+
+[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) additionally proves that the live adapter preselects one role, disables ambient extension discovery, exposes only read-only tools, denies outside-repository paths, rejects malformed output, rejects stale repository state, preserves pre-dispatch sensitive-context filtering, and falls back when the SDK is unavailable.
+
+No live Copilot canary is bundled. A live SDK session is an optional execution adapter, not evidence that host-native inference or an unrestricted child path is safe. Pull-request security remains grounded in deterministic broker, release, packaging, dependency, security, and coverage validation.
 
 ## Documentation specialist contract
 
-The Docs Agent remains a repository-owned specialist contract rather than a live writer child. Its authoritative instructions are in [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md). After implementation and tests for a non-trivial repository change, the selected parent applies its `maintenance` mode directly.
+The Docs Agent remains a repository-owned specialist contract rather than a live writer child. Its authoritative instructions are in [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md).
 
-The Docs Agent may also operate in `authoring` and `audit` modes. Maintenance returns `updated`, `no_change`, or `needs_review`. It classifies the intended audience, starts mixed-audience explanations in plain language, uses analogies only when they improve understanding, and never lets simplicity override technical accuracy.
+Think of the Docs Agent as the person who checks an instruction manual after the product changes. That is only a mental model. Technically, the selected MasterAgent parent examines the final repository change, identifies affected documentation, applies the contract, validates the result, and reports what was updated or reviewed.
+
+After implementation and tests for a non-trivial repository change, the selected MasterAgent parent applies the contract's `maintenance` mode directly. The Docs Agent may also operate in `authoring` and `audit` modes. Maintenance returns `updated`, `no_change`, or `needs_review`.
+
+The implementation is evidence, but it is not automatically the final statement of intent. The Docs Agent compares accepted requirements, tests, architecture decisions, configuration, implementation, and existing documentation instead of rewriting prose to make an apparent defect look deliberate.
+
+The Docs Agent classifies the intended audience, starts mixed-audience explanations in plain language, uses analogies only when they improve understanding, and never lets simplicity override technical accuracy.
 
 A future writer adapter must use a separate patch-validation boundary. It must not inherit the read-only adapter and simply add `edit` or shell access.
 
@@ -107,4 +117,4 @@ A future writer adapter must use a separate patch-validation boundary. It must n
 
 Advisory output is untrusted data. It cannot select the final target, grant or claim approval, create or modify a runtime `ChangePlan`, resolve credentials, construct a provider connector, or trigger a provider operation.
 
-The deterministic MasterAgent runtime remains the only path to capabilities, policy, governance, source-of-truth checks, authenticated approval, credentials, provider connectors, verification, compensation, retention, and audit.
+The deterministic runtime remains the only path to capabilities, policy, governance, source-of-truth checks, authenticated approval, credentials, provider connectors, verification, compensation, retention, and audit.
