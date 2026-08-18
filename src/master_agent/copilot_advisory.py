@@ -2,13 +2,13 @@
 
 This module provides the Phase 1 live adapter for MasterAgent's existing
 read-only Researcher and Plan Reviewer contracts. The GitHub Copilot SDK is an
-optional public-preview integration: importing MasterAgent does not require it,
-and an unavailable or failed adapter falls back through ``AdvisorySession``.
+optional integration: importing MasterAgent does not require it, and an
+unavailable or failed adapter falls back through ``AdvisorySession``.
 
-The adapter intentionally does not use host-native agent inference. Each call
-creates one isolated SDK session with exactly one explicitly preselected role,
-a read-only built-in tool allowlist, a second pre-tool-use deny gate, no config
-discovery, and no child-to-child delegation surface.
+The adapter does not use host-native agent inference. Each call creates one
+isolated SDK session with exactly one explicitly preselected role, a read-only
+tool allowlist, a second pre-tool-use deny gate, no ambient config discovery,
+and no child-to-child delegation surface.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import hashlib
 import importlib
 import json
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -32,8 +32,6 @@ from master_agent.advisory import (
     load_agent_inventory,
 )
 
-# GitHub documents these as read-only Copilot CLI tools. The profile itself
-# remains repository-level read/search-only; this is the SDK adapter mapping.
 _READ_ONLY_SDK_TOOLS = ("view", "read_file", "grep", "glob")
 _MAX_RESPONSE_BYTES = 64 * 1024
 _MAX_FINDINGS = 32
@@ -94,6 +92,16 @@ ClientFactory = Callable[[Path], _SdkClient]
 StateReader = Callable[[Path], str]
 
 
+def _jsonable(value: object) -> object:
+    """Convert broker-frozen containers into deterministic JSON-safe values."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_jsonable(item) for item in value]
+    return value
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -143,7 +151,7 @@ def _task_digest(envelope: AdvisoryEnvelope) -> str:
         "role": envelope.role.value,
         "profile_name": envelope.profile_name,
         "depth": envelope.depth,
-        "payload": envelope.payload,
+        "payload": _jsonable(envelope.payload),
     }
     return _sha256_text(
         json.dumps(material, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -190,7 +198,7 @@ def _specialist_prompt(profile: AgentProfile) -> str:
 
 def _task_prompt(envelope: AdvisoryEnvelope, binding: AdvisoryStateBinding) -> str:
     safe_payload = json.dumps(
-        envelope.payload,
+        _jsonable(envelope.payload),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
