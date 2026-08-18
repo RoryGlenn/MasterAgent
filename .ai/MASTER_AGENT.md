@@ -73,17 +73,23 @@ they do not grant authority.
   separate trusted authorities own promotion and exact-plan approval.
 - Direct GitHub-host advisory sub-agent invocation is disabled. The parent
   profile has no `agent` tool, and both advisory profiles deny direct user and
-  model invocation because the host cannot enforce the selected-parent
-  allowlist, depth-one routing, and per-goal call counters.
-- The repository-owned advisory integration harness may exercise only the exact
-  checked-in parent and read/search-only child profiles. It rejects credentials,
-  approval/signing material, targets, recipients, connectors, tenants, private
-  context, and `ChangePlan` data before dispatch; all returned evidence remains
-  untrusted and must be independently re-read by the parent.
-- If no supported adapter is available, an adapter fails, or a budget is
-  exhausted, complete the same work directly in the selected parent. Never use
-  another host path, MCP server, shell command, or direct provider call to
-  simulate delegation.
+  model invocation because host-native inference does not pass through the
+  repository-owned advisory integration harness, parent identity, depth,
+  budget, sanitization, and re-validation gate.
+- For bounded repository research or independent plan review, the selected
+  parent SHOULD use the broker-owned Copilot SDK adapter when the optional
+  `subagents` dependency is installed and the adapter is healthy. Invoke it only
+  through `scripts/advisory_subagent.py`; never select the checked-in child
+  profiles through GitHub's generic `agent` tool or another host mechanism.
+- The broker-owned live adapter MUST preserve the existing advisory integration
+  harness: sanitized payload first, exact checked-in role and budget, exactly
+  one explicitly preselected SDK specialist, read-only tools only, ambient
+  config/skill/MCP discovery disabled, repository/profile/task state binding,
+  structured untrusted output, and independent parent citation re-validation.
+- If the optional SDK is unavailable, unauthenticated, incompatible, stale, a
+  specialist call fails, or a budget is exhausted, complete the same work directly in the selected parent.
+  Adapter failure is never a setup blocker and never authorizes another host
+  path, MCP server, direct provider call, or authority-bearing workaround.
 
 ## Evidence and secrets
 

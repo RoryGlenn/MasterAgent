@@ -20,7 +20,7 @@ provider mutations non-routable.
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
 | 6 — recurring autonomy | Registration and status only | Execution disabled pending exact target, configuration, source, and runtime binding |
-| Advisory sub-agents | Checked-in contracts and deterministic harness complete | Direct GitHub-host invocation is disabled; the selected parent performs equivalent research and review directly |
+| Advisory sub-agents | Checked-in contracts, deterministic broker, and optional live Copilot SDK worker complete | Direct GitHub-host invocation is disabled; the selected parent may use the broker-owned read-only adapter and falls back to direct work when unavailable |
 | Documentation completion gate | Complete | The selected parent applies the repository-owned Docs Agent contract directly; no live host child profile is implied |
 | Capability promotion | Complete for dependency-free pure test/local capsules | Provider, side-effect, dependent, raw-plugin, and production capsules remain fail closed |
 | Behavioral specifications | Complete | Native current/change/archive model, validation, archival, templates, CI integration, and self-hosted pilot shipped; current requirements grow organically |
@@ -105,15 +105,23 @@ verification.
 
 ### Advisory sub-agent boundary
 
-- direct GitHub-host child invocation remains disabled until a supported adapter
-  can enforce the selected-parent allowlist, depth, tools, context, and budgets;
-- the repository harness permits no more than three depth-one research tasks and
+- direct GitHub-host child invocation remains disabled; the generic host
+  `agent` tool and automatic child-model invocation stay outside the reviewed
+  path;
+- the repository broker permits no more than three depth-one research tasks and
   one plan review for one operator goal;
+- an optional broker-owned Copilot SDK worker may execute one explicitly
+  preselected read-only Researcher or Plan Reviewer session after payload
+  sanitization;
+- live specialist sessions disable ambient config, skill, and MCP discovery,
+  enforce a repository-root read-only tool boundary, and bind results to the
+  exact task, profile, and repository state;
 - specialists cannot edit, approve, execute provider effects, or recursively
   delegate;
-- all specialist output is untrusted advisory data;
+- all specialist output is untrusted advisory data and cited files are reread by
+  the selected parent;
 - the selected parent performs equivalent work directly when delegation is
-  unavailable;
+  unavailable or rejected;
 - the parent owns final target selection and typed plan construction; and
 - the deterministic runtime remains the only connector, approval, and audit
   path.
