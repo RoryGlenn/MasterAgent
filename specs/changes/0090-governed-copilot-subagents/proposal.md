@@ -12,7 +12,9 @@ MasterAgent can use real isolated model specialists for bounded repository resea
 
 This change adds an optional GitHub Copilot SDK worker behind `AdvisorySession.delegate()`, a repository-owned runner for the two existing read-only roles, deterministic fake-SDK tests, state binding, and the documentation and behavioral specification needed to describe that path.
 
-It does not add writer agents, a live Docs Agent child, implementation agents, automatic host inference, provider operations, approval delegation, generic shell access, generic editing, or child-to-child delegation.
+## Non-goals
+
+This change does not add writer agents, a live Docs Agent child, implementation agents, automatic host inference, provider operations, approval delegation, generic shell access, generic editing, or child-to-child delegation.
 
 ## Proposed change
 
