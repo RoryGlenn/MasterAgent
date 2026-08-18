@@ -1,10 +1,10 @@
 schema = "master-agent/change@1"
 id = "0090-governed-copilot-subagents"
 title = "Add broker-owned read-only Copilot SDK subagents"
-status = "implementing"
+status = "archived"
 github_issue = 90
 created = "2026-08-17"
-updated = "2026-08-17"
+updated = "2026-08-18"
 design_required = true
 
 [[deltas]]
