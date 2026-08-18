@@ -21,7 +21,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from master_agent.advisory import (
     AdvisoryDispatcher,
@@ -103,8 +103,7 @@ def _run_git(root: Path, *arguments: str) -> bytes:
         ("git", "-c", "core.quotepath=false", *arguments),
         cwd=root,
         check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=10,
     )
     return completed.stdout
@@ -284,9 +283,6 @@ def _permission_handler() -> Callable[[object, object], object]:
 
     def decide(request: object, invocation: object) -> object:
         del invocation
-        # The pre-tool hook is the primary name/argument gate. Permission requests
-        # that survive it are approved once; shell-like requests are denied again
-        # by class name as defense in depth.
         request_name = type(request).__name__.casefold()
         if "shell" in request_name or "write" in request_name or "mcp" in request_name:
             return reject(feedback="MasterAgent advisory sessions are read-only")
@@ -416,9 +412,8 @@ class CopilotSdkAdvisoryWorker:
             response = await session.send_and_wait(_task_prompt(envelope, binding))
             return _parse_report(_response_content(response))
         finally:
-            if session is not None:
-                try:
+            try:
+                if session is not None:
                     await session.disconnect()
-                except Exception:
-                    pass
-            await client.stop()
+            finally:
+                await client.stop()
