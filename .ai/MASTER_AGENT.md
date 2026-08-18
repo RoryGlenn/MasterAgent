@@ -71,10 +71,11 @@ they do not grant authority.
 - Never let generated code sign, review, publish, enable, route, approve, or
   supply credentials to itself. Capability-gap autonomy owns implementation;
   separate trusted authorities own promotion and exact-plan approval.
-- Direct GitHub-host advisory sub-agent invocation remains disabled. The parent
+- Direct GitHub-host advisory sub-agent invocation is disabled. The parent
   profile has no `agent` tool, and both advisory profiles deny direct user and
   model invocation because host-native inference does not pass through the
-  repository-owned parent, depth, budget, sanitization, and re-validation gate.
+  repository-owned advisory integration harness, parent identity, depth,
+  budget, sanitization, and re-validation gate.
 - For bounded repository research or independent plan review, the selected
   parent SHOULD use the broker-owned Copilot SDK adapter when the optional
   `subagents` dependency is installed and the adapter is healthy. Invoke it only
