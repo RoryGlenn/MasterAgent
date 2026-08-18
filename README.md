@@ -161,15 +161,7 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-The checked-in advisory profiles remain fail closed as GitHub-host children.
-Direct GitHub-host advisory invocation is disabled: the parent has no `agent`
-tool; both children are non-user- and non-model-invocable. MasterAgent can
-instead run the Researcher or Plan Reviewer through the optional broker-owned
-Copilot SDK adapter. That path still passes through the repository-owned parent,
-depth and call budgets, context sanitizer, read-only tool policy, state binding,
-and parent citation re-read. If the optional adapter is unavailable or fails
-closed, MasterAgent completes the same work directly. See the
-[advisory and documentation specialist contracts](docs/advisory-subagents.md).
+The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including parent ownership, depth and call budgets, context sanitization, read-only tool policy, state binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, MasterAgent completes the same research or review directly. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
 
 For every non-trivial repository change, the selected parent also applies the
 [Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
