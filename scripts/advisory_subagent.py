@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Run one optional broker-owned Copilot advisory specialist."""
 
 from __future__ import annotations
