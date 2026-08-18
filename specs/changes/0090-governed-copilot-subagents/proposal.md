@@ -12,19 +12,15 @@ MasterAgent can use real isolated model specialists for bounded repository resea
 
 This change adds an optional GitHub Copilot SDK worker behind `AdvisorySession.delegate()`, a repository-owned runner for the two existing read-only roles, deterministic fake-SDK tests, state binding, and the documentation and behavioral specification needed to describe that path.
 
-## Non-goals
+Each call creates one isolated SDK session with one explicitly preselected specialist, read-only tools only, config discovery disabled, MCP disabled, a pre-tool deny hook, and structured JSON output. The repository, task, and profile are bound before the call and checked again before accepting the result.
 
-This change does not add writer agents, a live Docs Agent child, implementation agents, automatic host inference, provider operations, approval delegation, generic shell access, generic editing, or child-to-child delegation.
-
-## Proposed change
-
-Add an optional GitHub Copilot SDK worker that is invoked only through the existing `AdvisorySession.delegate()` path. Each call creates one isolated SDK session with one explicitly preselected specialist, read-only tools only, config discovery disabled, MCP disabled, a pre-tool deny hook, and structured JSON output. The repository, task, and profile are bound before the call and checked again before accepting the result.
-
-The SDK remains optional and public-preview. If it is absent, unauthenticated, incompatible, stale, or fails, MasterAgent returns the existing explicit parent fallback rather than blocking the operator or widening authority.
+The SDK remains optional. If it is absent, unauthenticated, incompatible, stale, or fails, MasterAgent returns the existing explicit parent fallback rather than blocking the operator or widening authority.
 
 ## Rationale
 
 The useful part of subagents is isolated specialist reasoning, not a second host-controlled authorization layer. Reusing the existing broker preserves parent ownership, bounded role budgets, sanitized inputs, narrow tools, untrusted outputs, citation revalidation, and fail-closed fallback while allowing a live model to perform the specialist work.
+
+The parent GitHub profile still does not expose `agent`. Child profiles remain non-user- and non-model-invocable through the host. No child receives edit, shell, provider, credential, approval, MCP, or nested-agent tools. Sensitive or authority-bearing payloads are rejected before SDK startup, and returned specialist output remains an untrusted `AdvisoryReport` until parent citation revalidation succeeds. Provider effects remain exclusively in the existing governed runtime.
 
 ## Alternatives considered
 
@@ -44,14 +40,9 @@ Rejected for Phase 1 because those tools would turn an advisory role into an eff
 
 Safe but leaves the specialist contracts unable to provide isolated model reasoning even when a controlled adapter is available.
 
-## Safety properties
+## Non-goals
 
-- The parent GitHub profile still does not expose `agent`.
-- Child profiles remain non-user- and non-model-invocable through the host.
-- No child receives edit, shell, provider, credential, approval, MCP, or nested-agent tools.
-- Sensitive or authority-bearing payloads are rejected by the broker before SDK startup.
-- Specialist output remains an untrusted `AdvisoryReport` and must pass parent citation revalidation.
-- Provider effects remain exclusively in the existing governed runtime.
+This change does not add writer agents, a live Docs Agent child, implementation agents, automatic host inference, provider operations, approval delegation, generic shell access, generic editing, or child-to-child delegation.
 
 ## Risks
 
