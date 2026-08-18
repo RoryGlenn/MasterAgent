@@ -87,10 +87,9 @@ they do not grant authority.
   config/skill/MCP discovery disabled, repository/profile/task state binding,
   structured untrusted output, and independent parent citation re-validation.
 - If the optional SDK is unavailable, unauthenticated, incompatible, stale, a
-  specialist call fails, or a budget is exhausted, complete the same work
-  directly in the selected parent. Adapter failure is never a setup blocker and
-  never authorizes another host path, MCP server, direct provider call, or
-  authority-bearing workaround.
+  specialist call fails, or a budget is exhausted, complete the same work directly in the selected parent.
+  Adapter failure is never a setup blocker and never authorizes another host
+  path, MCP server, direct provider call, or authority-bearing workaround.
 
 ## Evidence and secrets
 
