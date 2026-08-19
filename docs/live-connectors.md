@@ -97,6 +97,30 @@ Outlook and Teams sends are separate from local draft generation. They require `
 
 A provider acceptance response proves submission, not human delivery or readership. The runtime therefore reports provider acceptance and content verification, not guaranteed delivery.
 
+## Connector integration tests
+
+`tests/test_connector_integration_matrix.py` is the factory-level integration
+suite for connector wiring. It builds every enabled read, write,
+administration, and communication connector through the real configuration,
+factory, and registry path; verifies that every advertised capability resolves
+to exactly one connector; runs every safe read connector's provider probe
+against a deterministic scripted transport; and creates and digest-verifies an
+artifact from every local draft connector.
+
+The suite also inventories connector classes that are intentionally local or
+quarantined. A newly added connector therefore fails the inventory test until
+it is assigned an integration path, while disabled Git and OneNote mutation
+surfaces must remain disabled in the capability catalog.
+
+Run the matrix without provider credentials or network access:
+
+```bash
+python -m unittest tests.test_connector_integration_matrix -v
+```
+
+The normal CI discovery command runs the same tests on every supported Python
+version.
+
 ## Plugins
 
 Connector plugins are Python entry points. Discovery, locking, and plan binding
