@@ -1,15 +1,15 @@
-"""Integration coverage for every MasterAgent connector surface."""
+"""Credentialed live integration tests for external connector implementations."""
 
 from __future__ import annotations
 
-import importlib
-import inspect
-import textwrap
+import hashlib
+import os
+import tempfile
 import unittest
 from pathlib import Path
-from urllib.parse import urlparse
+from uuid import uuid4
 
-from master_agent.capabilities import CapabilityCatalog
+from master_agent.auth import AuthMode
 from master_agent.config import IntegrationConfig
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.bitbucket import BitbucketConnector
@@ -20,103 +20,47 @@ from master_agent.connectors.communications import (
 )
 from master_agent.connectors.confluence import ConfluenceConnector
 from master_agent.connectors.confluence_write import ConfluenceWriteConnector
-from master_agent.connectors.drafts import (
-    ConfluenceDraftConnector,
-    JiraDraftConnector,
-    OutlookDraftConnector,
-    PowerPointDraftConnector,
-    RepositoryDraftConnector,
-    TeamsDraftConnector,
-)
-from master_agent.connectors.factory import build_draft_registry, build_live_registry
-from master_agent.connectors.git_remote import GitBranchPushConnector
-from master_agent.connectors.git_workspace import GitWorkspaceConnector
+from master_agent.connectors.factory import build_live_registry
 from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.github_write import (
     GitHubAdminConnector,
     GitHubWriteConnector,
 )
-from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.microsoft import (
     MicrosoftIdentityConnector,
     SharePointConnector,
 )
-from master_agent.connectors.mock import MockConnector
-from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
+from master_agent.connectors.onenote import OneNoteReadConnector
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
-from master_agent.identity import IdentityRegistry, PersonIdentity
-from master_agent.models import RiskLevel
+from master_agent.models import AgentAction, ExecutionResult, RiskLevel
 from master_agent.registry import ConnectorRegistry
-from tests.fakes import ScriptedTransport
-from tests.helpers import action_for, private_temporary_directory
+from tests.helpers import action_for, read_action
 
-ROOT = Path(__file__).resolve().parents[1]
-
-_LIVE_CONNECTOR_TYPES = frozenset(
+_READ_SYSTEMS = frozenset(
     {
-        BitbucketConnector,
-        BitbucketWriteConnector,
-        ConfluenceConnector,
-        ConfluenceWriteConnector,
-        GitHubConnector,
-        GitHubWriteConnector,
-        GitHubAdminConnector,
-        JiraConnector,
-        JiraWriteConnector,
-        MicrosoftIdentityConnector,
-        SharePointConnector,
-        SharePointWriteConnector,
-        OutlookConnector,
-        OutlookSendConnector,
-        TeamsConnector,
-        TeamsSendConnector,
-        OneNoteReadConnector,
+        "jira",
+        "confluence",
+        "bitbucket",
+        "github",
+        "microsoft",
+        "sharepoint",
+        "outlook",
+        "teams",
+        "onenote",
     }
 )
-_DRAFT_CONNECTOR_TYPES = frozenset(
-    {
-        JiraDraftConnector,
-        ConfluenceDraftConnector,
-        OutlookDraftConnector,
-        TeamsDraftConnector,
-        PowerPointDraftConnector,
-        RepositoryDraftConnector,
-    }
-)
-_DIRECT_OR_QUARANTINED_CONNECTOR_TYPES = frozenset(
-    {
-        GitBranchPushConnector,
-        GitWorkspaceConnector,
-        IdentityMapConnector,
-        MockConnector,
-        OneNoteWriteConnector,
-    }
-)
-_CONNECTOR_MODULES = (
-    "bitbucket",
-    "bitbucket_write",
-    "communications",
-    "confluence",
-    "confluence_write",
-    "drafts",
-    "git_remote",
-    "git_workspace",
-    "github",
-    "github_write",
-    "identity",
+_PROVIDER_CONFIG_NAMES = (
     "jira",
-    "jira_write",
+    "confluence",
+    "bitbucket",
+    "github",
     "microsoft",
-    "onenote",
-    "outlook",
-    "sharepoint_write",
-    "teams",
 )
-_READ_PROBE_TYPES = {
+_READ_CONNECTOR_TYPES = {
     "jira": JiraConnector,
     "confluence": ConfluenceConnector,
     "bitbucket": BitbucketConnector,
@@ -127,366 +71,502 @@ _READ_PROBE_TYPES = {
     "teams": TeamsConnector,
     "onenote": OneNoteReadConnector,
 }
+_EFFECT_CONNECTOR_TYPES = (
+    JiraWriteConnector,
+    ConfluenceWriteConnector,
+    BitbucketWriteConnector,
+    GitHubWriteConnector,
+    SharePointWriteConnector,
+    OutlookSendConnector,
+    TeamsSendConnector,
+)
+_GITHUB_ADMIN_SETTINGS = frozenset(
+    {
+        "has_issues",
+        "has_projects",
+        "has_wiki",
+        "has_discussions",
+        "allow_squash_merge",
+        "allow_merge_commit",
+        "allow_rebase_merge",
+        "allow_auto_merge",
+        "delete_branch_on_merge",
+        "web_commit_signoff_required",
+    }
+)
 
 
-class LiveConnectorIntegrationTests(unittest.TestCase):
-    """Exercise live connector construction through the shared runtime boundary."""
+@unittest.skipUnless(
+    os.environ.get("MASTER_AGENT_RUN_LIVE_CONNECTOR_TESTS") == "1",
+    "credentialed live connector tests are opt-in",
+)
+class CredentialedReadConnectorIntegrationTests(unittest.TestCase):
+    """Use real credentials and provider requests for every read connector."""
 
-    def test_all_live_connectors_build_and_resolve_every_capability(self) -> None:
-        with private_temporary_directory() as directory:
-            root = Path(directory)
-            registry = _build_live_registry(root, enable_effects=True)
-            try:
-                self.assertEqual(
-                    {type(connector) for connector in registry.connectors()},
-                    _LIVE_CONNECTOR_TYPES,
+    config: IntegrationConfig
+    registry: ConnectorRegistry
+    temporary_directory: tempfile.TemporaryDirectory[str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = _load_live_config()
+        _require_credentialed_provider_configs(cls.config)
+        cls.temporary_directory = _private_temporary_directory()
+        root = Path(cls.temporary_directory.name)
+        cls.registry = build_live_registry(
+            cls.config,
+            environ=os.environ,
+            systems=set(_READ_SYSTEMS),
+            include_writes=False,
+            include_communications=False,
+            workspace_root=root,
+            artifact_root=root,
+        )
+        for system, connector_type in _READ_CONNECTOR_TYPES.items():
+            _connector(cls.registry, system, connector_type)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        _close_connectors(cls.registry)
+        cls.temporary_directory.cleanup()
+
+    def test_every_read_connector_reaches_its_real_provider(self) -> None:
+        """Run each connector's fixed credentialed provider probe."""
+
+        for system, connector_type in _READ_CONNECTOR_TYPES.items():
+            with self.subTest(system=system):
+                connector = _connector(self.registry, system, connector_type)
+                probe = connector.probe()
+                self.assertTrue(probe.get("reachable"))
+                reference = probe.get("reference")
+                self.assertIsInstance(reference, str)
+                self.assertTrue(str(reference).startswith("https://"))
+
+    def test_every_read_connector_executes_and_independently_verifies(self) -> None:
+        """Exercise one stable typed read and provider re-read per connector."""
+
+        for action in _read_actions():
+            with self.subTest(system=action.target.system, capability=action.capability):
+                connector = self.registry.resolve(
+                    action.target.system,
+                    action.capability,
                 )
-                for connector in registry.connectors():
-                    with self.subTest(connector=type(connector).__name__):
-                        self.assertTrue(connector.capabilities)
-                        for capability in connector.capabilities:
-                            self.assertIs(
-                                registry.resolve(connector.system, capability),
-                                connector,
-                            )
-            finally:
-                _close_connectors(registry)
+                result = connector.execute(action)
+                self.assertIsNotNone(result.after)
+                self.assertTrue(
+                    connector.verify(action, result).verified,
+                    msg=f"provider re-read failed for {action.capability}",
+                )
+                self.assertTrue(result.connector_reference.startswith("https://"))
 
-    def test_every_read_connector_completes_its_provider_probe(self) -> None:
-        transport = ScriptedTransport()
-        _register_probe_responses(transport)
-        with private_temporary_directory() as directory:
-            registry = _build_live_registry(
-                Path(directory),
-                enable_effects=False,
-                transport=transport,
-            )
-            try:
-                for system, connector_type in _READ_PROBE_TYPES.items():
-                    with self.subTest(system=system):
-                        connector = _only_connector_of_type(
-                            registry,
-                            system,
-                            connector_type,
-                        )
-                        probe = connector.probe()
-                        self.assertTrue(probe["reachable"])
-            finally:
-                _close_connectors(registry)
 
-        self.assertEqual(
-            {urlparse(request.url).path for request in transport.requests},
-            {
-                "/rest/api/3/serverInfo",
-                "/wiki/rest/api/content/search",
-                "/2.0/user",
-                "/user",
-                "/v1.0/me",
-                "/v1.0/sites/root",
-                "/v1.0/me/mailFolders/inbox",
-                "/v1.0/me/chats",
-                "/v1.0/me/onenote/notebooks",
+@unittest.skipUnless(
+    os.environ.get("MASTER_AGENT_RUN_LIVE_EFFECT_TESTS") == "1",
+    "credentialed live connector effect tests are opt-in",
+)
+class CredentialedEffectConnectorIntegrationTests(unittest.TestCase):
+    """Exercise real sandbox writes, compensation, and communications."""
+
+    config: IntegrationConfig
+    registry: ConnectorRegistry
+    temporary_directory: tempfile.TemporaryDirectory[str]
+    artifact_root: Path
+    run_label: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        _require_exact_env("MASTER_AGENT_LIVE_NON_PRODUCTION", "true")
+        cls.config = _load_live_config()
+        _require_credentialed_provider_configs(cls.config)
+        cls.temporary_directory = _private_temporary_directory()
+        cls.artifact_root = Path(cls.temporary_directory.name)
+        cls.run_label = os.environ.get("MASTER_AGENT_LIVE_RUN_ID", "").strip()
+        if not cls.run_label:
+            cls.run_label = f"local-{uuid4().hex[:12]}"
+        cls.registry = build_live_registry(
+            cls.config,
+            environ=os.environ,
+            systems=set(_READ_SYSTEMS),
+            include_writes=True,
+            include_communications=True,
+            workspace_root=cls.artifact_root,
+            artifact_root=cls.artifact_root,
+        )
+        for connector_type in _EFFECT_CONNECTOR_TYPES:
+            _connector_by_type(cls.registry, connector_type)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        _close_connectors(cls.registry)
+        cls.temporary_directory.cleanup()
+
+    def test_jira_comment_create_verify_and_delete(self) -> None:
+        connector = _connector_by_type(self.registry, JiraWriteConnector)
+        action = action_for(
+            "jira.issue.comment.create",
+            system="jira",
+            resource_type="issue",
+            resource_id=_required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID"),
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "body": (
+                    "MasterAgent credentialed integration test "
+                    f"{self.run_label}. This comment should be deleted automatically."
+                )
             },
         )
-        self.assertEqual(len(transport.requests), len(_READ_PROBE_TYPES))
+        self._execute_verify_and_compensate(connector, action)
 
+    def test_confluence_page_create_verify_and_delete(self) -> None:
+        connector = _connector_by_type(self.registry, ConfluenceWriteConnector)
+        parameters: dict[str, object] = {
+            "title": f"MasterAgent integration {self.run_label}",
+            "body": (
+                "<p>Credentialed MasterAgent integration test. "
+                "This page should be deleted automatically.</p>"
+            ),
+            "representation": "storage",
+            "status": "current",
+            "space_id": _required_env("MASTER_AGENT_LIVE_CONFLUENCE_SPACE_ID"),
+        }
+        parent_id = os.environ.get(
+            "MASTER_AGENT_LIVE_CONFLUENCE_PARENT_ID",
+            "",
+        ).strip()
+        if parent_id:
+            parameters["parent_id"] = parent_id
+        action = action_for(
+            "confluence.page.create",
+            system="confluence",
+            resource_type="page",
+            resource_id=f"integration-{self.run_label}",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters=parameters,
+        )
+        self._execute_verify_and_compensate(connector, action)
 
-class LocalConnectorIntegrationTests(unittest.TestCase):
-    """Execute local connectors through registry selection and verification."""
+    def test_bitbucket_pull_request_create_verify_and_decline(self) -> None:
+        connector = _connector_by_type(self.registry, BitbucketWriteConnector)
+        action = action_for(
+            "bitbucket.pull_request.create",
+            system="bitbucket",
+            resource_type="pull_request",
+            resource_id=f"integration-{self.run_label}",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "workspace": _required_env("MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE"),
+                "repository": _required_env(
+                    "MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"
+                ),
+                "title": f"MasterAgent integration {self.run_label}",
+                "description": "Credentialed integration test; decline after verify.",
+                "source_branch": _required_env(
+                    "MASTER_AGENT_LIVE_BITBUCKET_SOURCE_BRANCH"
+                ),
+                "destination_branch": _required_env(
+                    "MASTER_AGENT_LIVE_BITBUCKET_DESTINATION_BRANCH"
+                ),
+                "close_source_branch": False,
+            },
+        )
+        self._execute_verify_and_compensate(connector, action)
 
-    def test_every_draft_connector_creates_and_verifies_an_artifact(self) -> None:
-        with private_temporary_directory() as directory:
-            root = Path(directory)
-            registry = build_draft_registry(root)
-            try:
-                self.assertEqual(
-                    {type(connector) for connector in registry.connectors()},
-                    _DRAFT_CONNECTOR_TYPES,
+    def test_github_issue_create_verify_and_close(self) -> None:
+        connector = _connector_by_type(self.registry, GitHubWriteConnector)
+        action = action_for(
+            "github.issue.create",
+            system="github",
+            resource_type="issue",
+            resource_id=f"integration-{self.run_label}",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "owner": _required_env("MASTER_AGENT_LIVE_GITHUB_OWNER"),
+                "repository": _required_env("MASTER_AGENT_LIVE_GITHUB_REPOSITORY"),
+                "title": f"MasterAgent integration {self.run_label}",
+                "body": "Credentialed integration test; close after verification.",
+            },
+        )
+        self._execute_verify_and_compensate(connector, action)
+
+    def test_sharepoint_replace_verify_and_restore(self) -> None:
+        connector = _connector_by_type(self.registry, SharePointWriteConnector)
+        local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
+        payload = (
+            f"MasterAgent credentialed SharePoint integration {self.run_label}\n"
+        ).encode("utf-8")
+        local_path.write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        action = action_for(
+            "sharepoint.file.upload",
+            system="sharepoint",
+            resource_type="file",
+            resource_id=_required_env("MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID"),
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            parameters={
+                "drive_id": _required_env("MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID"),
+                "local_path": str(local_path),
+                "local_sha256": digest,
+                "content_type": "text/plain",
+            },
+        )
+        self._execute_verify_and_compensate(connector, action)
+
+    def test_outlook_sends_to_the_dedicated_test_recipient(self) -> None:
+        connector = _connector_by_type(self.registry, OutlookSendConnector)
+        identity = os.environ.get("MASTER_AGENT_LIVE_MICROSOFT_IDENTITY", "me").strip()
+        action = action_for(
+            "outlook.email.send",
+            system="outlook",
+            resource_type="message",
+            resource_id=identity or "me",
+            risk=RiskLevel.EXTERNAL_COMMUNICATION,
+            parameters={
+                "identity": identity or "me",
+                "to": [_required_env("MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT")],
+                "subject": f"MasterAgent integration {self.run_label}",
+                "body": (
+                    "Credentialed MasterAgent Outlook integration test. "
+                    f"Run: {self.run_label}"
+                ),
+                "content_type": "Text",
+            },
+        )
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+
+    def test_teams_posts_to_the_dedicated_test_chat(self) -> None:
+        connector = _connector_by_type(self.registry, TeamsSendConnector)
+        chat_id = _required_env("MASTER_AGENT_LIVE_TEAMS_CHAT_ID")
+        action = action_for(
+            "teams.chat.message.send",
+            system="teams",
+            resource_type="chat",
+            resource_id=chat_id,
+            risk=RiskLevel.EXTERNAL_COMMUNICATION,
+            parameters={
+                "chat_id": chat_id,
+                "body": (
+                    "Credentialed MasterAgent Teams integration test. "
+                    f"Run: {self.run_label}"
+                ),
+                "content_type": "text",
+            },
+        )
+        result = connector.execute(action)
+        self.assertTrue(connector.verify(action, result).verified)
+
+    def _execute_verify_and_compensate(
+        self,
+        connector: object,
+        action: AgentAction,
+    ) -> None:
+        result: ExecutionResult | None = None
+        try:
+            result = connector.execute(action)
+            self.assertTrue(connector.verify(action, result).verified)
+        finally:
+            if result is not None:
+                compensation = connector.compensate(action, result)
+                self.assertTrue(
+                    connector.verify_compensation(
+                        action,
+                        result,
+                        compensation,
+                    ).verified
                 )
-                for case in _draft_cases():
-                    with self.subTest(capability=case[1]):
-                        system, capability, resource_type, resource_id, parameters = (
-                            case
-                        )
-                        connector = registry.resolve(system, capability)
-                        action = action_for(
-                            capability,
-                            system=system,
-                            resource_type=resource_type,
-                            resource_id=resource_id,
-                            risk=RiskLevel.LOCAL_GENERATION,
-                            parameters=parameters,
-                            requires_approval=False,
-                        )
-                        result = connector.execute(action)
-                        self.assertIsNotNone(result.after)
-                        assert result.after is not None
-                        artifact = Path(str(result.after["path"]))
-                        self.assertTrue(artifact.is_file())
-                        self.assertTrue(
-                            artifact.resolve().is_relative_to(root.resolve())
-                        )
-                        self.assertTrue(connector.verify(action, result).verified)
-            finally:
-                _close_connectors(registry)
 
-    def test_identity_and_mock_connectors_execute_through_registry(self) -> None:
-        identity_registry = IdentityRegistry(
-            people={
-                "rory": PersonIdentity(
-                    key="rory",
-                    display_name="Rory Glenn",
-                    aliases=("Rory",),
-                    identifiers={"github": "RoryGlenn"},
+
+@unittest.skipUnless(
+    os.environ.get("MASTER_AGENT_RUN_LIVE_GITHUB_ADMIN_TESTS") == "1",
+    "credentialed GitHub administration integration test is opt-in",
+)
+class CredentialedGitHubAdminConnectorIntegrationTests(unittest.TestCase):
+    """Toggle and restore one benign setting in a dedicated sandbox repository."""
+
+    registry: ConnectorRegistry
+    temporary_directory: tempfile.TemporaryDirectory[str]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        _require_exact_env(
+            "MASTER_AGENT_LIVE_GITHUB_ADMIN_NON_PRODUCTION",
+            "true",
+        )
+        config = _load_live_config()
+        _require_credentialed_provider_configs(config, names=("github",))
+        cls.temporary_directory = _private_temporary_directory()
+        root = Path(cls.temporary_directory.name)
+        cls.registry = build_live_registry(
+            config,
+            environ=os.environ,
+            systems={"github"},
+            include_writes=True,
+            include_communications=False,
+            workspace_root=root,
+            artifact_root=root,
+        )
+        _connector_by_type(cls.registry, GitHubAdminConnector)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        _close_connectors(cls.registry)
+        cls.temporary_directory.cleanup()
+
+    def test_repository_setting_update_verify_and_restore(self) -> None:
+        connector = _connector_by_type(self.registry, GitHubAdminConnector)
+        owner = _required_env("MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER")
+        repository = _required_env("MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY")
+        setting = os.environ.get(
+            "MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING",
+            "has_wiki",
+        ).strip()
+        if setting not in _GITHUB_ADMIN_SETTINGS:
+            self.fail(f"unsupported GitHub administration test setting: {setting}")
+        before = connector._read_settings(owner, repository)
+        settings = before.get("settings")
+        self.assertIsInstance(settings, dict)
+        assert isinstance(settings, dict)
+        current = settings.get(setting)
+        self.assertIsInstance(current, bool)
+        assert isinstance(current, bool)
+        action = action_for(
+            "github.repository.settings.update",
+            system="github",
+            resource_type="repository",
+            resource_id=f"{owner}/{repository}",
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            expected_version=str(before.get("version", "")),
+            parameters={
+                "owner": owner,
+                "repository": repository,
+                "settings": {setting: not current},
+            },
+        )
+        result: ExecutionResult | None = None
+        try:
+            result = connector.execute(action)
+            self.assertTrue(connector.verify(action, result).verified)
+        finally:
+            if result is not None:
+                compensation = connector.compensate(action, result)
+                self.assertTrue(
+                    connector.verify_compensation(
+                        action,
+                        result,
+                        compensation,
+                    ).verified
                 )
-            }
-        )
-        registry = ConnectorRegistry()
-        identity = IdentityMapConnector(identity_registry)
-        mock = MockConnector(
-            "mock",
-            initial_resources={"item-1": {"value": "ready", "version": "1"}},
-            capabilities={"mock.item.read"},
-        )
-        registry.register(identity)
-        registry.register(mock)
-
-        identity_action = action_for(
-            "identity.identifier.resolve",
-            system="identity",
-            resource_type="person",
-            resource_id="rory",
-            risk=RiskLevel.READ_ONLY,
-            parameters={"target_system": "github"},
-            requires_approval=False,
-        )
-        identity_result = registry.resolve(
-            "identity",
-            identity_action.capability,
-        ).execute(identity_action)
-        self.assertEqual(identity_result.after["identifier"], "RoryGlenn")
-        self.assertTrue(identity.verify(identity_action, identity_result).verified)
-
-        mock_action = action_for(
-            "mock.item.read",
-            system="mock",
-            resource_type="item",
-            resource_id="item-1",
-            risk=RiskLevel.READ_ONLY,
-            requires_approval=False,
-        )
-        mock_result = registry.resolve("mock", mock_action.capability).execute(
-            mock_action
-        )
-        self.assertEqual(mock_result.after["value"], "ready")
-        self.assertTrue(mock.verify(mock_action, mock_result).verified)
 
 
-class ConnectorInventoryIntegrationTests(unittest.TestCase):
-    """Prevent connector implementations from bypassing integration coverage."""
+def _read_actions() -> tuple[AgentAction, ...]:
+    microsoft_identity = os.environ.get(
+        "MASTER_AGENT_LIVE_MICROSOFT_IDENTITY",
+        "me",
+    ).strip() or "me"
+    return (
+        read_action(
+            "jira.issue.read",
+            system="jira",
+            resource_type="issue",
+            resource_id=_required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID"),
+        ),
+        read_action(
+            "confluence.page.read",
+            system="confluence",
+            resource_type="page",
+            resource_id=_required_env("MASTER_AGENT_LIVE_CONFLUENCE_PAGE_ID"),
+        ),
+        read_action(
+            "bitbucket.repository.read",
+            system="bitbucket",
+            resource_type="repository",
+            resource_id=_required_env("MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"),
+            parameters={
+                "workspace": _required_env("MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE"),
+                "repository": _required_env(
+                    "MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"
+                ),
+            },
+        ),
+        read_action(
+            "github.repository.read",
+            system="github",
+            resource_type="repository",
+            resource_id=_required_env("MASTER_AGENT_LIVE_GITHUB_REPOSITORY"),
+            parameters={
+                "owner": _required_env("MASTER_AGENT_LIVE_GITHUB_OWNER"),
+                "repository": _required_env("MASTER_AGENT_LIVE_GITHUB_REPOSITORY"),
+            },
+        ),
+        read_action(
+            "microsoft.identity.read",
+            system="microsoft",
+            resource_type="user",
+            resource_id=microsoft_identity,
+        ),
+        read_action(
+            "sharepoint.site.read",
+            system="sharepoint",
+            resource_type="site",
+            resource_id=_required_env("MASTER_AGENT_LIVE_SHAREPOINT_SITE_ID"),
+        ),
+        read_action(
+            "outlook.message.read",
+            system="outlook",
+            resource_type="message",
+            resource_id=_required_env("MASTER_AGENT_LIVE_OUTLOOK_MESSAGE_ID"),
+            parameters={"identity": microsoft_identity},
+        ),
+        read_action(
+            "teams.chat.message.read",
+            system="teams",
+            resource_type="message",
+            resource_id=_required_env("MASTER_AGENT_LIVE_TEAMS_MESSAGE_ID"),
+            parameters={
+                "chat_id": _required_env("MASTER_AGENT_LIVE_TEAMS_CHAT_ID")
+            },
+        ),
+        read_action(
+            "onenote.page.read",
+            system="onenote",
+            resource_type="page",
+            resource_id=_required_env("MASTER_AGENT_LIVE_ONENOTE_PAGE_ID"),
+            parameters={"identity": microsoft_identity},
+        ),
+    )
 
-    def test_every_connector_class_is_accounted_for(self) -> None:
-        discovered = _discover_connector_types()
-        accounted = (
-            _LIVE_CONNECTOR_TYPES
-            | _DRAFT_CONNECTOR_TYPES
-            | _DIRECT_OR_QUARANTINED_CONNECTOR_TYPES
-        )
-        self.assertEqual(
-            {connector.__name__ for connector in discovered},
-            {connector.__name__ for connector in accounted},
-        )
 
-    def test_quarantined_connector_capabilities_remain_disabled(self) -> None:
-        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
-        for connector_type in (GitBranchPushConnector, GitWorkspaceConnector):
-            for capability in connector_type._CAPABILITIES:
-                with self.subTest(
-                    connector=connector_type.__name__,
-                    capability=capability,
-                ):
-                    self.assertFalse(catalog.definitions[capability].enabled)
-        self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
+def _load_live_config() -> IntegrationConfig:
+    path = Path(_required_env("MASTER_AGENT_LIVE_INTEGRATIONS_FILE"))
+    if not path.is_file():
+        raise AssertionError(f"live integrations file does not exist: {path}")
+    return IntegrationConfig.from_toml(path)
 
 
-def _build_live_registry(
-    root: Path,
+def _require_credentialed_provider_configs(
+    config: IntegrationConfig,
     *,
-    enable_effects: bool,
-    transport: ScriptedTransport | None = None,
-) -> ConnectorRegistry:
-    config_path = root / "integrations.toml"
-    config_path.write_text(
-        _integration_text(enable_effects=enable_effects),
-        encoding="utf-8",
-    )
-    config = IntegrationConfig.from_toml(config_path)
-    return build_live_registry(
-        config,
-        environ={},
-        transport=transport,
-        systems={
-            "jira",
-            "confluence",
-            "bitbucket",
-            "github",
-            "microsoft",
-            "sharepoint",
-            "outlook",
-            "teams",
-            "onenote",
-        },
-        include_writes=enable_effects,
-        include_communications=enable_effects,
-        workspace_root=root,
-        artifact_root=root,
-    )
+    names: tuple[str, ...] = _PROVIDER_CONFIG_NAMES,
+) -> None:
+    problems: list[str] = []
+    for name in names:
+        connector = config.connectors.get(name)
+        if connector is None:
+            problems.append(f"missing connector configuration: {name}")
+            continue
+        if not connector.enabled:
+            problems.append(f"connector is disabled: {name}")
+        if connector.auth_mode is AuthMode.NONE:
+            problems.append(f"connector uses auth_mode=none: {name}")
+        problems.extend(
+            f"{name}: {message}"
+            for message in connector.configuration_errors(os.environ)
+        )
+    if problems:
+        raise AssertionError("; ".join(problems))
 
 
-def _integration_text(*, enable_effects: bool) -> str:
-    enabled = "true" if enable_effects else "false"
-    return textwrap.dedent(
-        f"""
-        [connectors.jira]
-        enabled = true
-        deployment = "cloud"
-        base_url = "https://example.atlassian.net"
-        auth_mode = "none"
-        max_pages = 16
-        write_enabled = {enabled}
-        writes_enabled = {enabled}
-
-        [connectors.confluence]
-        enabled = true
-        deployment = "cloud"
-        base_url = "https://example.atlassian.net"
-        auth_mode = "none"
-        max_pages = 16
-        write_enabled = {enabled}
-        writes_enabled = {enabled}
-
-        [connectors.bitbucket]
-        enabled = true
-        deployment = "cloud"
-        base_url = "https://api.bitbucket.org/2.0"
-        auth_mode = "none"
-        max_pages = 16
-        write_enabled = {enabled}
-        pull_request_writes_enabled = {enabled}
-        branch_push_enabled = false
-        branch_prefix = "agent/"
-
-        [connectors.github]
-        enabled = true
-        deployment = "cloud"
-        base_url = "https://api.github.com"
-        auth_mode = "none"
-        max_pages = 16
-        write_enabled = {enabled}
-        writes_enabled = {enabled}
-        admin_enabled = {enabled}
-
-        [connectors.microsoft]
-        enabled = true
-        deployment = "cloud"
-        base_url = "https://graph.microsoft.com/v1.0"
-        auth_mode = "none"
-        max_pages = 16
-        write_enabled = {enabled}
-        send_enabled = {enabled}
-        sharepoint_writes_enabled = {enabled}
-        onenote_read_enabled = true
-        outlook_send_enabled = {enabled}
-        teams_send_enabled = {enabled}
-        identity_mode = "delegated"
-        default_identity = "me"
-        teams_probe = "chats"
-        max_upload_bytes = 1000000
-        """
-    ).strip()
-
-
-def _register_probe_responses(transport: ScriptedTransport) -> None:
-    transport.add_json(
-        "GET",
-        "/rest/api/3/serverInfo",
-        {
-            "baseUrl": "https://example.atlassian.net",
-            "version": "1001.0.0",
-            "deploymentType": "Cloud",
-        },
-        host="example.atlassian.net",
-    )
-    transport.add_json(
-        "GET",
-        "/wiki/rest/api/content/search",
-        {"results": []},
-        host="example.atlassian.net",
-    )
-    transport.add_json(
-        "GET",
-        "/2.0/user",
-        {
-            "uuid": "{user-1}",
-            "display_name": "Rory Glenn",
-            "nickname": "rory",
-        },
-        host="api.bitbucket.org",
-    )
-    transport.add_json(
-        "GET",
-        "/user",
-        {"id": 1, "login": "RoryGlenn"},
-        host="api.github.com",
-    )
-    transport.add_json(
-        "GET",
-        "/v1.0/me",
-        {
-            "id": "user-1",
-            "displayName": "Rory Glenn",
-            "mail": "rory@example.com",
-            "userPrincipalName": "rory@example.com",
-        },
-        host="graph.microsoft.com",
-    )
-    transport.add_json(
-        "GET",
-        "/v1.0/sites/root",
-        {
-            "id": "tenant.sharepoint.com,site,web",
-            "displayName": "Company",
-            "webUrl": "https://tenant.sharepoint.com",
-        },
-        host="graph.microsoft.com",
-    )
-    transport.add_json(
-        "GET",
-        "/v1.0/me/mailFolders/inbox",
-        {
-            "id": "inbox",
-            "displayName": "Inbox",
-            "totalItemCount": 0,
-            "unreadItemCount": 0,
-            "childFolderCount": 0,
-        },
-        host="graph.microsoft.com",
-    )
-    transport.add_json(
-        "GET",
-        "/v1.0/me/chats",
-        {"value": []},
-        host="graph.microsoft.com",
-    )
-    transport.add_json(
-        "GET",
-        "/v1.0/me/onenote/notebooks",
-        {"value": []},
-        host="graph.microsoft.com",
-    )
-
-
-def _only_connector_of_type(
+def _connector(
     registry: ConnectorRegistry,
     system: str,
     connector_type: type[object],
@@ -503,92 +583,45 @@ def _only_connector_of_type(
     return matches[0]
 
 
-def _draft_cases() -> tuple[
-    tuple[str, str, str, str, dict[str, object]],
-    ...,
-]:
-    return (
-        (
-            "jira",
-            "jira.issue.update.draft",
-            "issue",
-            "RISE-1",
-            {"before": {"summary": "Old"}, "fields": {"summary": "New"}},
-        ),
-        (
-            "confluence",
-            "confluence.page.create.draft",
-            "page",
-            "status-page",
-            {
-                "title": "Status",
-                "body": "<p>Ready</p>",
-                "space_id": "SPACE",
-            },
-        ),
-        (
-            "outlook",
-            "outlook.email.draft",
-            "message",
-            "status-email",
-            {
-                "to": ["rory@example.com"],
-                "subject": "Status",
-                "body": "Ready",
-            },
-        ),
-        (
-            "teams",
-            "teams.message.draft",
-            "message",
-            "status-message",
-            {
-                "recipient_type": "chat",
-                "recipient_id": "chat-1",
-                "body": "Ready",
-            },
-        ),
-        (
-            "powerpoint",
-            "powerpoint.presentation.generate",
-            "presentation",
-            "status-deck",
-            {
-                "title": "Status",
-                "slides": [{"title": "Summary", "bullets": ["Ready"]}],
-            },
-        ),
-        (
-            "repository",
-            "repository.patch.generate",
-            "patch",
-            "status-patch",
-            {
-                "relative_path": "README.md",
-                "before_text": "old\n",
-                "after_text": "new\n",
-            },
-        ),
-    )
-
-
-def _discover_connector_types() -> frozenset[type[object]]:
-    discovered: set[type[object]] = set()
-    for module_name in _CONNECTOR_MODULES:
-        module = importlib.import_module(f"master_agent.connectors.{module_name}")
-        for _name, candidate in inspect.getmembers(module, inspect.isclass):
-            if candidate.__module__ != module.__name__:
-                continue
-            if hasattr(candidate, "_CAPABILITIES"):
-                discovered.add(candidate)
-    discovered.add(MockConnector)
-    return frozenset(discovered)
+def _connector_by_type(
+    registry: ConnectorRegistry,
+    connector_type: type[object],
+) -> object:
+    matches = [
+        connector
+        for connector in registry.connectors()
+        if isinstance(connector, connector_type)
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected one {connector_type.__name__}, found {len(matches)}"
+        )
+    return matches[0]
 
 
 def _close_connectors(registry: ConnectorRegistry) -> None:
     for connector in registry.connectors():
         if isinstance(connector, ClosableConnector):
             connector.close()
+
+
+def _private_temporary_directory() -> tempfile.TemporaryDirectory[str]:
+    directory = tempfile.TemporaryDirectory(prefix="master-agent-live-")
+    Path(directory.name).chmod(0o700)
+    return directory
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise AssertionError(f"required live integration variable is missing: {name}")
+    return value
+
+
+def _require_exact_env(name: str, expected: str) -> None:
+    observed = os.environ.get(name, "").strip().lower()
+    if observed != expected.lower():
+        raise AssertionError(f"{name} must equal {expected!r} for this live test")
 
 
 if __name__ == "__main__":
