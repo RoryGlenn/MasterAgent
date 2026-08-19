@@ -293,7 +293,7 @@ class CredentialedEffectConnectorIntegrationTests(unittest.TestCase):
         local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
         payload = (
             f"MasterAgent credentialed SharePoint integration {self.run_label}\n"
-        ).encode("utf-8")
+        ).encode()
         local_path.write_bytes(payload)
         digest = hashlib.sha256(payload).hexdigest()
         action = action_for(
