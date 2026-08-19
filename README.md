@@ -404,6 +404,7 @@ creating another runtime planner or authorization layer. See
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
 - [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Live connector contracts](docs/live-connectors.md)
+- [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)
 - [Phase 2 read-only context](docs/phase-2-read-only.md)
 - [Phase 2B communication context](docs/phase-2b-communication-context.md)
 - [Phase 2C authentication and readiness](docs/phase-2c-authentication.md)
