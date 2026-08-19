@@ -16,7 +16,9 @@ It is intentionally separate from the offline connector contract suite:
   rejects `auth_mode = "none"`, and talks to the configured external systems.
 
 Calling the offline suite an integration suite would be misleading. Both are
-useful, but they prove different things.
+useful, but they prove different things. A skipped live test is not reported as
+a successful provider integration; only an executed protected live job provides
+that evidence.
 
 ## Live coverage
 
