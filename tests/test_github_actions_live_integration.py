@@ -6,7 +6,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from typing import TypeVar
 from uuid import uuid4
 
 from master_agent.auth import AuthMode
@@ -18,8 +17,6 @@ from master_agent.connectors.github_write import GitHubWriteConnector
 from master_agent.models import ExecutionResult, RiskLevel
 from master_agent.registry import ConnectorRegistry
 from tests.helpers import action_for, read_action
-
-_ConnectorType = TypeVar("_ConnectorType")
 
 
 @unittest.skipUnless(
@@ -142,10 +139,10 @@ def _require_credentialed_github_config(config: IntegrationConfig) -> None:
         raise AssertionError("; ".join(problems))
 
 
-def _connector_by_type(
+def _connector_by_type[ConnectorT](
     registry: ConnectorRegistry,
-    connector_type: type[_ConnectorType],
-) -> _ConnectorType:
+    connector_type: type[ConnectorT],
+) -> ConnectorT:
     matches = [
         connector
         for connector in registry.connectors()
