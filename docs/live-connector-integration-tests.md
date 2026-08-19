@@ -66,6 +66,22 @@ benign setting in a dedicated sandbox repository, verifies the provider state,
 and restores the exact prior value. The job requires its own protected GitHub
 environment and explicit non-production marker.
 
+### Repository-scoped GitHub Actions credential
+
+`.github/workflows/github-actions-live-integration.yml` provides an immediately
+executable GitHub-only lifecycle without a stored personal token. It passes the
+repository-scoped `GITHUB_TOKEN` into the production GitHub read and write
+connectors, performs a real repository read plus independent re-read, creates a
+real issue, independently verifies its fields, closes it through connector
+compensation, and independently verifies the closed state.
+
+The workflow runs only from the reviewed default branch and grants only
+`contents: read` and `issues: write`. Because `GITHUB_TOKEN` is an installation
+credential rather than a user bearer token, this lifecycle deliberately does
+not call the connector's `/user` principal-attestation probe. The protected
+credentialed suite remains responsible for testing user-token identity
+attestation and the separately gated administration adapter.
+
 ### Intentionally non-live surfaces
 
 Local draft connectors, `MockConnector`, and `IdentityMapConnector` have no
@@ -97,6 +113,11 @@ Repository variables gate each job:
 
 Set a gate to the literal string `true` only after its protected environment,
 credentials, targets, and reviewer rules are ready.
+
+The GitHub-only workflow has no environment-secret prerequisite. It runs weekly,
+on manual dispatch, and after reviewed default-branch changes to the GitHub
+connector or its live test. Its temporary connector configuration is created
+with mode `0600` under `RUNNER_TEMP`.
 
 ## Private connector configuration
 
