@@ -146,7 +146,9 @@ class CredentialedReadConnectorIntegrationTests(unittest.TestCase):
         """Exercise one stable typed read and provider re-read per connector."""
 
         for action in _read_actions():
-            with self.subTest(system=action.target.system, capability=action.capability):
+            with self.subTest(
+                system=action.target.system, capability=action.capability
+            ):
                 connector = self.registry.resolve(
                     action.target.system,
                     action.capability,
@@ -255,9 +257,7 @@ class CredentialedEffectConnectorIntegrationTests(unittest.TestCase):
             risk=RiskLevel.REVERSIBLE_WRITE,
             parameters={
                 "workspace": _required_env("MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE"),
-                "repository": _required_env(
-                    "MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"
-                ),
+                "repository": _required_env("MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"),
                 "title": f"MasterAgent integration {self.run_label}",
                 "description": "Credentialed integration test; decline after verify.",
                 "source_branch": _required_env(
@@ -459,10 +459,13 @@ class CredentialedGitHubAdminConnectorIntegrationTests(unittest.TestCase):
 
 
 def _read_actions() -> tuple[AgentAction, ...]:
-    microsoft_identity = os.environ.get(
-        "MASTER_AGENT_LIVE_MICROSOFT_IDENTITY",
-        "me",
-    ).strip() or "me"
+    microsoft_identity = (
+        os.environ.get(
+            "MASTER_AGENT_LIVE_MICROSOFT_IDENTITY",
+            "me",
+        ).strip()
+        or "me"
+    )
     return (
         read_action(
             "jira.issue.read",
@@ -483,9 +486,7 @@ def _read_actions() -> tuple[AgentAction, ...]:
             resource_id=_required_env("MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"),
             parameters={
                 "workspace": _required_env("MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE"),
-                "repository": _required_env(
-                    "MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"
-                ),
+                "repository": _required_env("MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY"),
             },
         ),
         read_action(
@@ -522,9 +523,7 @@ def _read_actions() -> tuple[AgentAction, ...]:
             system="teams",
             resource_type="message",
             resource_id=_required_env("MASTER_AGENT_LIVE_TEAMS_MESSAGE_ID"),
-            parameters={
-                "chat_id": _required_env("MASTER_AGENT_LIVE_TEAMS_CHAT_ID")
-            },
+            parameters={"chat_id": _required_env("MASTER_AGENT_LIVE_TEAMS_CHAT_ID")},
         ),
         read_action(
             "onenote.page.read",
