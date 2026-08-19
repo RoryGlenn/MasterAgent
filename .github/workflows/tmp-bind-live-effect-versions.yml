@@ -1,0 +1,150 @@
+name: Temporary live effect precondition updater
+
+on:
+  push:
+    branches:
+      - agent/connector-integration-tests
+
+permissions:
+  contents: write
+
+jobs:
+  bind-provider-versions:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/connector-integration-tests
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Bind current provider versions before reversible writes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_connector_integration_matrix.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_jira = '''    def test_jira_comment_create_verify_and_delete(self) -> None:
+              connector = _connector_by_type(self.registry, JiraWriteConnector)
+              action = action_for(
+                  "jira.issue.comment.create",
+                  system="jira",
+                  resource_type="issue",
+                  resource_id=_required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID"),
+                  risk=RiskLevel.REVERSIBLE_WRITE,
+          '''.replace("          ", "")
+          new_jira = '''    def test_jira_comment_create_verify_and_delete(self) -> None:
+              connector = _connector_by_type(self.registry, JiraWriteConnector)
+              issue_id = _required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID")
+              action = action_for(
+                  "jira.issue.comment.create",
+                  system="jira",
+                  resource_type="issue",
+                  resource_id=issue_id,
+                  risk=RiskLevel.REVERSIBLE_WRITE,
+                  expected_version=_jira_issue_version(self.registry, issue_id),
+          '''.replace("          ", "")
+          if text.count(old_jira) != 1:
+              raise SystemExit("Jira live effect target was not found exactly once")
+          text = text.replace(old_jira, new_jira)
+
+          old_sharepoint = '''    def test_sharepoint_replace_verify_and_restore(self) -> None:
+              connector = _connector_by_type(self.registry, SharePointWriteConnector)
+              local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
+          '''.replace("          ", "")
+          new_sharepoint = '''    def test_sharepoint_replace_verify_and_restore(self) -> None:
+              connector = _connector_by_type(self.registry, SharePointWriteConnector)
+              drive_id = _required_env("MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID")
+              item_id = _required_env("MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID")
+              local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
+          '''.replace("          ", "")
+          if text.count(old_sharepoint) != 1:
+              raise SystemExit("SharePoint live effect target was not found exactly once")
+          text = text.replace(old_sharepoint, new_sharepoint)
+
+          old_sharepoint_action = '''            resource_type="file",
+              resource_id=_required_env("MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID"),
+              risk=RiskLevel.REVERSIBLE_WRITE,
+              parameters={
+                  "drive_id": _required_env("MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID"),
+          '''.replace("          ", "")
+          new_sharepoint_action = '''            resource_type="file",
+              resource_id=item_id,
+              risk=RiskLevel.REVERSIBLE_WRITE,
+              expected_version=_sharepoint_item_version(
+                  self.registry,
+                  drive_id,
+                  item_id,
+              ),
+              parameters={
+                  "drive_id": drive_id,
+          '''.replace("          ", "")
+          if text.count(old_sharepoint_action) != 1:
+              raise SystemExit("SharePoint action shape was not found exactly once")
+          text = text.replace(old_sharepoint_action, new_sharepoint_action)
+
+          marker = '''\n\ndef _load_live_config() -> IntegrationConfig:\n'''
+          helpers = '''
+
+
+def _jira_issue_version(registry: ConnectorRegistry, issue_id: str) -> str:
+    connector = registry.resolve("jira", "jira.issue.read")
+    result = connector.execute(
+        read_action(
+            "jira.issue.read",
+            system="jira",
+            resource_type="issue",
+            resource_id=issue_id,
+        )
+    )
+    issue = (result.after or {}).get("issue")
+    if not isinstance(issue, dict):
+        raise AssertionError("Jira fixture read returned no issue object")
+    version = issue.get("updated_at")
+    if not isinstance(version, str) or not version.strip():
+        raise AssertionError("Jira fixture read returned no stable updated version")
+    return version.strip()
+
+
+def _sharepoint_item_version(
+    registry: ConnectorRegistry,
+    drive_id: str,
+    item_id: str,
+) -> str:
+    connector = registry.resolve("sharepoint", "sharepoint.file.metadata.read")
+    result = connector.execute(
+        read_action(
+            "sharepoint.file.metadata.read",
+            system="sharepoint",
+            resource_type="file",
+            resource_id=item_id,
+            parameters={"drive_id": drive_id},
+        )
+    )
+    metadata = (result.after or {}).get("file")
+    if not isinstance(metadata, dict):
+        raise AssertionError("SharePoint fixture read returned no file metadata")
+    version = metadata.get("etag") or metadata.get("updated_at")
+    if not isinstance(version, str) or not version.strip():
+        raise AssertionError("SharePoint fixture read returned no stable version")
+    return version.strip()
+'''
+          if text.count(marker) != 1:
+              raise SystemExit("helper insertion point was not found exactly once")
+          text = text.replace(marker, helpers + marker)
+          path.write_text(text, encoding="utf-8")
+          PY
+          python -m pip install ruff==0.16.3
+          ruff format tests/test_connector_integration_matrix.py
+          ruff check tests/test_connector_integration_matrix.py
+          rm .github/workflows/tmp-bind-live-effect-versions.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_connector_integration_matrix.py .github/workflows/tmp-bind-live-effect-versions.yml
+          git commit -m "Bind live effect tests to provider versions"
+          git push origin HEAD:agent/connector-integration-tests
