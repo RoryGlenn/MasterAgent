@@ -28,66 +28,72 @@ jobs:
           path = Path("tests/test_connector_integration_matrix.py")
           text = path.read_text(encoding="utf-8")
 
-          old_jira = '''    def test_jira_comment_create_verify_and_delete(self) -> None:
-              connector = _connector_by_type(self.registry, JiraWriteConnector)
-              action = action_for(
-                  "jira.issue.comment.create",
-                  system="jira",
-                  resource_type="issue",
-                  resource_id=_required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID"),
-                  risk=RiskLevel.REVERSIBLE_WRITE,
-          '''.replace("          ", "")
-          new_jira = '''    def test_jira_comment_create_verify_and_delete(self) -> None:
-              connector = _connector_by_type(self.registry, JiraWriteConnector)
-              issue_id = _required_env("MASTER_AGENT_LIVE_JIRA_ISSUE_ID")
-              action = action_for(
-                  "jira.issue.comment.create",
-                  system="jira",
-                  resource_type="issue",
-                  resource_id=issue_id,
-                  risk=RiskLevel.REVERSIBLE_WRITE,
-                  expected_version=_jira_issue_version(self.registry, issue_id),
-          '''.replace("          ", "")
+          old_jira = (
+              "    def test_jira_comment_create_verify_and_delete(self) -> None:\n"
+              "        connector = _connector_by_type(self.registry, JiraWriteConnector)\n"
+              "        action = action_for(\n"
+              "            \"jira.issue.comment.create\",\n"
+              "            system=\"jira\",\n"
+              "            resource_type=\"issue\",\n"
+              "            resource_id=_required_env(\"MASTER_AGENT_LIVE_JIRA_ISSUE_ID\"),\n"
+              "            risk=RiskLevel.REVERSIBLE_WRITE,\n"
+          )
+          new_jira = (
+              "    def test_jira_comment_create_verify_and_delete(self) -> None:\n"
+              "        connector = _connector_by_type(self.registry, JiraWriteConnector)\n"
+              "        issue_id = _required_env(\"MASTER_AGENT_LIVE_JIRA_ISSUE_ID\")\n"
+              "        action = action_for(\n"
+              "            \"jira.issue.comment.create\",\n"
+              "            system=\"jira\",\n"
+              "            resource_type=\"issue\",\n"
+              "            resource_id=issue_id,\n"
+              "            risk=RiskLevel.REVERSIBLE_WRITE,\n"
+              "            expected_version=_jira_issue_version(self.registry, issue_id),\n"
+          )
           if text.count(old_jira) != 1:
               raise SystemExit("Jira live effect target was not found exactly once")
           text = text.replace(old_jira, new_jira)
 
-          old_sharepoint = '''    def test_sharepoint_replace_verify_and_restore(self) -> None:
-              connector = _connector_by_type(self.registry, SharePointWriteConnector)
-              local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
-          '''.replace("          ", "")
-          new_sharepoint = '''    def test_sharepoint_replace_verify_and_restore(self) -> None:
-              connector = _connector_by_type(self.registry, SharePointWriteConnector)
-              drive_id = _required_env("MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID")
-              item_id = _required_env("MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID")
-              local_path = self.artifact_root / f"sharepoint-{self.run_label}.txt"
-          '''.replace("          ", "")
+          old_sharepoint = (
+              "    def test_sharepoint_replace_verify_and_restore(self) -> None:\n"
+              "        connector = _connector_by_type(self.registry, SharePointWriteConnector)\n"
+              "        local_path = self.artifact_root / f\"sharepoint-{self.run_label}.txt\"\n"
+          )
+          new_sharepoint = (
+              "    def test_sharepoint_replace_verify_and_restore(self) -> None:\n"
+              "        connector = _connector_by_type(self.registry, SharePointWriteConnector)\n"
+              "        drive_id = _required_env(\"MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID\")\n"
+              "        item_id = _required_env(\"MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID\")\n"
+              "        local_path = self.artifact_root / f\"sharepoint-{self.run_label}.txt\"\n"
+          )
           if text.count(old_sharepoint) != 1:
               raise SystemExit("SharePoint live effect target was not found exactly once")
           text = text.replace(old_sharepoint, new_sharepoint)
 
-          old_sharepoint_action = '''            resource_type="file",
-              resource_id=_required_env("MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID"),
-              risk=RiskLevel.REVERSIBLE_WRITE,
-              parameters={
-                  "drive_id": _required_env("MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID"),
-          '''.replace("          ", "")
-          new_sharepoint_action = '''            resource_type="file",
-              resource_id=item_id,
-              risk=RiskLevel.REVERSIBLE_WRITE,
-              expected_version=_sharepoint_item_version(
-                  self.registry,
-                  drive_id,
-                  item_id,
-              ),
-              parameters={
-                  "drive_id": drive_id,
-          '''.replace("          ", "")
+          old_sharepoint_action = (
+              "            resource_type=\"file\",\n"
+              "            resource_id=_required_env(\"MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID\"),\n"
+              "            risk=RiskLevel.REVERSIBLE_WRITE,\n"
+              "            parameters={\n"
+              "                \"drive_id\": _required_env(\"MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID\"),\n"
+          )
+          new_sharepoint_action = (
+              "            resource_type=\"file\",\n"
+              "            resource_id=item_id,\n"
+              "            risk=RiskLevel.REVERSIBLE_WRITE,\n"
+              "            expected_version=_sharepoint_item_version(\n"
+              "                self.registry,\n"
+              "                drive_id,\n"
+              "                item_id,\n"
+              "            ),\n"
+              "            parameters={\n"
+              "                \"drive_id\": drive_id,\n"
+          )
           if text.count(old_sharepoint_action) != 1:
               raise SystemExit("SharePoint action shape was not found exactly once")
           text = text.replace(old_sharepoint_action, new_sharepoint_action)
 
-          marker = '''\n\ndef _load_live_config() -> IntegrationConfig:\n'''
+          marker = "\n\ndef _load_live_config() -> IntegrationConfig:\n"
           helpers = '''
 
 
