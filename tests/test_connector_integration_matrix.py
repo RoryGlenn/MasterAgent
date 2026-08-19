@@ -205,7 +205,9 @@ class LocalConnectorIntegrationTests(unittest.TestCase):
                 )
                 for case in _draft_cases():
                     with self.subTest(capability=case[1]):
-                        system, capability, resource_type, resource_id, parameters = case
+                        system, capability, resource_type, resource_id, parameters = (
+                            case
+                        )
                         connector = registry.resolve(system, capability)
                         action = action_for(
                             capability,
@@ -221,7 +223,9 @@ class LocalConnectorIntegrationTests(unittest.TestCase):
                         assert result.after is not None
                         artifact = Path(str(result.after["path"]))
                         self.assertTrue(artifact.is_file())
-                        self.assertTrue(artifact.resolve().is_relative_to(root.resolve()))
+                        self.assertTrue(
+                            artifact.resolve().is_relative_to(root.resolve())
+                        )
                         self.assertTrue(connector.verify(action, result).verified)
             finally:
                 _close_connectors(registry)
@@ -271,7 +275,9 @@ class LocalConnectorIntegrationTests(unittest.TestCase):
             risk=RiskLevel.READ_ONLY,
             requires_approval=False,
         )
-        mock_result = registry.resolve("mock", mock_action.capability).execute(mock_action)
+        mock_result = registry.resolve("mock", mock_action.capability).execute(
+            mock_action
+        )
         self.assertEqual(mock_result.after["value"], "ready")
         self.assertTrue(mock.verify(mock_action, mock_result).verified)
 
