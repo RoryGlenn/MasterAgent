@@ -97,29 +97,28 @@ Outlook and Teams sends are separate from local draft generation. They require `
 
 A provider acceptance response proves submission, not human delivery or readership. The runtime therefore reports provider acceptance and content verification, not guaranteed delivery.
 
-## Connector integration tests
+## Connector testing
 
-`tests/test_connector_integration_matrix.py` is the factory-level integration
-suite for connector wiring. It builds every enabled read, write,
-administration, and communication connector through the real configuration,
-factory, and registry path; verifies that every advertised capability resolves
-to exactly one connector; runs every safe read connector's provider probe
-against a deterministic scripted transport; and creates and digest-verifies an
-artifact from every local draft connector.
+The connector tests are intentionally divided by what they prove:
 
-The suite also inventories connector classes that are intentionally local or
-quarantined. A newly added connector therefore fails the inventory test until
-it is assigned an integration path, while disabled Git and OneNote mutation
-surfaces must remain disabled in the capability catalog.
+- `tests/test_connector_contract_matrix.py` is the offline contract suite. It
+  checks factory wiring, registry routing, connector inventory, local artifact
+  generation, and disabled connector surfaces without credentials or network
+  access.
+- `tests/test_connector_integration_matrix.py` is the credentialed live suite.
+  It rejects anonymous provider configuration, uses real credentials, makes
+  real external requests, and independently re-reads provider state. Protected
+  opt-in jobs also exercise sandbox writes, compensation, communications, and
+  GitHub administration.
 
-Run the matrix without provider credentials or network access:
+The normal CI matrix runs the offline contracts and discovers the live classes
+in skipped state. The live workflow runs only from the reviewed default branch
+and uses protected GitHub environments so pull-request code never receives
+provider credentials.
 
-```bash
-python -m unittest tests.test_connector_integration_matrix -v
-```
-
-The normal CI discovery command runs the same tests on every supported Python
-version.
+See [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md)
+for the covered provider operations, required fixtures, protected environments,
+and local execution commands.
 
 ## Plugins
 
