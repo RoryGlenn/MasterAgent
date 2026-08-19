@@ -1,0 +1,44 @@
+name: Temporary README index updater
+
+on:
+  push:
+    branches:
+      - agent/connector-integration-tests
+
+permissions:
+  contents: write
+
+jobs:
+  update-index:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: agent/connector-integration-tests
+      - name: Add the live integration guide to the documentation index
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
+          old = "- [Live connector contracts](docs/live-connectors.md)\n"
+          new = (
+              old
+              + "- [Credentialed live connector integration tests]"
+              + "(docs/live-connector-integration-tests.md)\n"
+          )
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one live connector index entry")
+          if "docs/live-connector-integration-tests.md" in text:
+              raise SystemExit("live integration guide is already indexed")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          rm .github/workflows/tmp-index-live-connector-doc.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md .github/workflows/tmp-index-live-connector-doc.yml
+          git commit -m "Index credentialed connector integration guide"
+          git push origin HEAD:agent/connector-integration-tests
