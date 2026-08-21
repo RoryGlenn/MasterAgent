@@ -1,5 +1,11 @@
 # Changelog
 
+- Make the optional broker-owned Copilot SDK adapter enforce its documented
+  controls at the real runner boundary: HMAC-authenticated cross-process goal
+  budgets, bounded tracked/staged/untracked-content state binding,
+  repository-owned path-scoped read/search tools, isolated-session client
+  reuse, scope-aware citation revalidation, and content-minimized fallback.
+
 - Harden advisory sub-agent boundaries end to end. Direct GitHub-host child
   invocation is now disabled, the researcher no longer has generic execution,
   both child profiles are read/search-only and non-invocable, and a deterministic

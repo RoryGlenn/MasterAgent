@@ -109,13 +109,17 @@ verification.
   `agent` tool and automatic child-model invocation stay outside the reviewed
   path;
 - the repository broker permits no more than three depth-one research tasks and
-  one plan review for one operator goal;
+  one plan review for one operator goal, with private authenticated reservations
+  shared by retries and independent or concurrent runner processes;
 - an optional broker-owned Copilot SDK worker may execute one explicitly
   preselected read-only Researcher or Plan Reviewer session after payload
   sanitization;
 - live specialist sessions disable ambient config, skill, and MCP discovery,
-  enforce a repository-root read-only tool boundary, and bind results to the
-  exact task, profile, and repository state;
+  expose only repository-owned read/search tools scoped to the required route,
+  and bind results to the exact task, profile, path/file inventory, HEAD, index,
+  tracked and staged changes, and bounded untracked file contents;
+- same-process work for one goal may reuse one SDK client while every specialist
+  call remains an isolated session;
 - specialists cannot edit, approve, execute provider effects, or recursively
   delegate;
 - all specialist output is untrusted advisory data and cited files are reread by

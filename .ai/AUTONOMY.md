@@ -45,18 +45,24 @@ profiles are neither user- nor model-invocable and expose only `read` and
 `search`.
 
 The repository-owned advisory integration harness in
-[`advisory.py`](../src/master_agent/advisory.py) is deterministic test and
-future-adapter infrastructure. It binds sessions to the exact parent, enforces
-depth and counters, minimizes context before worker invocation, derives the
-child dispatcher from the checked-in profile, denies effect-bearing tool
-categories before dispatch, and requires the parent to re-read every citation.
-It never grants provider, credential, approval, target-selection, plan, or audit
+[`advisory.py`](../src/master_agent/advisory.py) is the deterministic boundary
+for tests and the optional current broker-owned Copilot SDK adapter. The live
+runner requires one opaque goal ID reused for the operator goal and at least one
+repository-relative path. It atomically reserves every attempt in private,
+authenticated cross-process state, technically confines repository-owned
+read/search tools to that route, binds tracked, staged, and untracked contents,
+and requires the parent to re-read every citation through the same scope. It
+never grants provider, credential, approval, target-selection, plan, or audit
 authority.
 
-Delegation remains optional optimization. If no approved adapter is available,
-if a task is unsafe, if a counter is exhausted, or if a worker fails, complete the same work directly in the selected parent without asking the operator to
-repeat the request. Never route around this fail-closed state with another host
-mechanism, generic MCP, direct HTTP, a provider CLI, or shell execution.
+Delegation remains an optional optimization. Use only
+`scripts/advisory_subagent.py` when the `subagents` extra is installed and the
+adapter is healthy. If it is unavailable, a task or scope is unsafe, persistent
+state cannot be authenticated, a counter is exhausted, repository state races,
+or a worker fails, complete the same work directly in the selected parent
+without asking the operator to repeat the request. Never route around this
+fail-closed state with another host mechanism, generic MCP, direct HTTP, a
+provider CLI, or shell execution.
 
 ## Behavioral specification lifecycle
 

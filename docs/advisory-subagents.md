@@ -25,41 +25,87 @@ This matters because host-native inference does not pass through MasterAgent's r
 
 MasterAgent now has an optional live adapter in [`copilot_advisory.py`](../src/master_agent/copilot_advisory.py). When the `subagents` optional dependency is installed, the selected parent can run a Researcher or Plan Reviewer through [`scripts/advisory_subagent.py`](../scripts/advisory_subagent.py).
 
+The runner requires one opaque `--goal-id`, reused for every advisory attempt
+in the operator goal, plus one or more existing repository-relative `--path`
+values. Paths must be narrower than the repository root. A directory scope
+contains only its bounded tracked and non-ignored untracked regular-file
+inventory; ignored files, symlinks, `.git`, and `.master-agent` are absent.
+
 The flow is:
 
 ```text
 MasterAgent parent
     ↓
-AdvisorySession.delegate
+private authenticated goal-budget reservation
     ↓
-sanitize input + reserve role budget
+AdvisorySession.delegate + sanitize input
     ↓
 CopilotSdkAdvisoryWorker
     ↓
-exact task/repository/profile binding
+exact task/profile/route/Git-content binding
     ↓
 one isolated Copilot SDK session
     ↓
-one explicitly preselected read-only specialist
+one explicitly preselected specialist + scoped repository-owned tools
     ↓
 structured AdvisoryReport
     ↓
 state recheck + parent citation revalidation
 ```
 
-The SDK integration is deliberately not host inference. Each call supplies exactly one specialist and explicitly preselects it. Automatic config discovery is disabled, no skills or MCP servers are loaded, and the session exposes only the documented read-only SDK tools `view`, `read_file`, `grep`, and `glob`.
+The SDK integration is deliberately not host inference. Each call supplies exactly one specialist and explicitly preselects it. Automatic config discovery is disabled, no skills or MCP servers are loaded, and SDK filesystem built-ins are not exposed. The session receives only the repository-owned `masteragent_read`, `masteragent_search`, and `masteragent_list` tools.
 
-A pre-tool hook independently denies every other tool and rejects file-like arguments that resolve outside the repository root. The SDK permission handler separately rejects shell-, write-, and MCP-like requests as defense in depth.
+A pre-tool hook independently denies every other tool or malformed argument.
+Each custom tool handler repeats the scope check before its read. Reads are
+no-follow, stable, size-bounded UTF-8 operations; search is literal and bounded;
+listing and search use only the immutable route inventory. Because those custom
+tools need no ambient permission grant, the SDK permission handler rejects every
+permission request as defense in depth.
+
+## Goal budget
+
+[`advisory_budget.py`](../src/master_agent/advisory_budget.py) reserves an
+attempt before the SDK starts. The ignored `.master-agent/advisory/` directory
+is mode `0700`; its random HMAC key and race-safe SQLite generations are mode
+`0600`. A row stores only the SHA-256 goal identifier, repository identity
+digest, two counters, and an authentication tag. The repository's pinned SQLite
+layer serializes independent processes, so failures and retries cannot reset or
+race past three research attempts and one plan review. Directory creation walks
+a no-follow descriptor chain, so a symlinked state ancestor is rejected before
+any key or database file is created.
+
+The selected parent owns goal identity: it creates one opaque ID and reuses it
+for the complete operator goal. A new ID means a new goal; changing IDs to evade
+a limit violates the parent contract. This local integrity design does not
+protect against an attacker who controls the same operating-system account and
+can replace both the private key and all state while no runner is active.
+
+## Technical route scope
+
+The prompt's path list is descriptive; `AdvisoryPathScope` is the enforcement
+boundary. It normalizes the requested entries, rejects traversal, root-wide,
+private, ignored-only, and symlink scopes, inventories at most 512 eligible
+files, and binds that inventory into the task. The SDK receives no ambient file
+tool. A pathless search still operates only on the bound inventory, a direct
+read must name one inventory file, and parent citation revalidation uses the
+same scope.
 
 ## State binding
 
-Before a live specialist starts, MasterAgent hashes three things without storing their contents:
+Before a live specialist starts, MasterAgent hashes four things without storing their contents:
 
 - the sanitized task envelope;
 - the exact checked-in specialist profile; and
-- repository HEAD, index, worktree, and untracked-file state.
+- the normalized route and eligible file inventory; and
+- repository HEAD, index, tracked worktree diff, staged diff, untracked paths,
+  and every non-ignored untracked regular file's content digest.
 
-The same values are checked again when the specialist finishes. If the repository or profile changed during the call, the result is rejected and the parent performs the work directly instead. This prevents a review of one repository state from being silently accepted for another.
+Each repository digest requires two matching complete scans. Git output,
+untracked paths, file count, individual bytes, and total bytes have explicit
+limits. Files are opened no-follow and their descriptor/path identity, size,
+timestamps, and content are checked for races. Truncation, unreadable or special
+files, excess, a scan race, or any task/profile/route/repository change before
+completion rejects the result and returns the work to the parent.
 
 ## Result validation
 
@@ -77,7 +123,7 @@ Extra authority-bearing fields are rejected. The result then enters the existing
 
 ## Failure and fallback
 
-The GitHub Copilot SDK remains an optional integration. If it is not installed, authentication is unavailable, the SDK is incompatible, a specialist fails, the repository changes during execution, or a per-goal budget is exhausted, the broker returns an explicit parent fallback.
+The GitHub Copilot SDK remains an optional integration. If it is not installed, authentication is unavailable, the SDK is incompatible, private budget state cannot be authenticated, a specialist or scoped tool fails, the repository changes during execution, or a per-goal budget is exhausted, the broker returns an explicit content-minimized parent fallback.
 
 That fallback is successful degradation, not a setup failure. MasterAgent completes the same research or review directly and continues the operator's original goal. It does not switch to GitHub's generic `agent` tool, another MCP server, a direct API, or a provider-side workaround.
 
@@ -86,16 +132,16 @@ That fallback is successful degradation, not a setup failure. MasterAgent comple
 [`advisory.py`](../src/master_agent/advisory.py) remains the authoritative orchestration boundary and repository-owned integration harness. It enforces:
 
 1. exactly one selected MasterAgent parent and two reviewed read-only specialist profiles;
-2. depth one, at most three research attempts, and at most one plan review per operator goal;
+2. depth one and one authenticated cross-process maximum of three research attempts and one plan review per operator goal;
 3. rejection of credential, approval/signing, target, recipient, connector, tenant, private-context, and `ChangePlan` data before worker invocation;
-4. profile-derived repository `read` and `search` authority only;
+4. repository-owned, route-scoped `read`, literal `search`, and file-listing implementations derived from the profile's read/search authority;
 5. denial of shell, edit, nested-agent, MCP, HTTP, provider, environment, credential, approval, audit, and mutation categories;
 6. bounded untrusted specialist reports; and
 7. independent parent re-reading of every cited repository path.
 
 ## Hermetic end-to-end tests
 
-[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) additionally proves that the live adapter preselects one role, disables ambient extension discovery, exposes only read-only tools, denies outside-repository paths, rejects malformed output, rejects stale repository state, preserves pre-dispatch sensitive-context filtering, and falls back when the SDK is unavailable.
+[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_advisory_budget.py`](../tests/test_advisory_budget.py) proves authenticated private state, restart persistence, consumed failure attempts, and tamper fallback. [`test_advisory_runner.py`](../tests/test_advisory_runner.py) starts independent and concurrent runner processes and mutates an already-untracked file during a live fake-SDK call. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) proves exact Git transitions, scan limits, route-scoped handlers, ignored-file exclusion, one-client/isolated-session reuse, role selection, ambient-discovery denial, malformed-output rejection, sensitive-context filtering, and optional-SDK fallback.
 
 No live Copilot canary is bundled. A live SDK session is an optional execution adapter, not evidence that host-native inference or an unrestricted child path is safe. Pull-request security remains grounded in deterministic broker, release, packaging, dependency, security, and coverage validation.
 

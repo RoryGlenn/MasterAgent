@@ -79,9 +79,13 @@ handling, and independent verification.
   read/search-only child contracts. Direct child user/model invocation and the
   parent's `agent` tool are disabled.
 - The repository-owned integration harness enforces exact-parent routing,
-  depth one, three-research/one-review counters, context minimization,
-  profile-derived dispatch, untrusted-output validation, and parent citation
-  re-read.
+  depth one, authenticated cross-process three-research/one-review counters,
+  context minimization, profile-derived dispatch, required path scope,
+  repository-owned scoped SDK tools, tracked/staged/untracked-content binding,
+  untrusted-output validation, and scope-aware parent citation re-read.
+- Real runner tests cover restart, independent and concurrent processes,
+  untracked-file mutation, scan bounds, ignored/out-of-scope paths, and
+  content-minimized fallback.
 - Adversarial fixtures prove no filesystem, environment, network, provider,
   credential, approval, audit, target, recipient, connector, tenant, or
   `ChangePlan` authority crosses the advisory boundary.

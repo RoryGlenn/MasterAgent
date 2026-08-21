@@ -91,10 +91,14 @@ The repository-owned integration harness in
 [`advisory.py`](../src/master_agent/advisory.py) exercises the exact profile
 inventory, derives the child dispatcher from those profiles, minimizes context,
 denies every effect-bearing tool before dispatch, and makes every report pass a
-parent citation re-read. It is deterministic test and future-adapter
-infrastructure, not a live Copilot child or a route to providers.
+parent citation re-read. When the optional `subagents` extra is installed, the
+current broker-owned adapter may instantiate one profile through
+[`advisory_subagent.py`](../scripts/advisory_subagent.py) with an authenticated
+cross-process goal budget, required minimum path route, repository-owned scoped
+read/search tools, and tracked/staged/untracked-content binding. That is not
+direct GitHub-host invocation and is never a route to providers.
 
-When no approved adapter is available or a task fails closed, MasterAgent
+When the optional adapter is unavailable or a task fails closed, MasterAgent
 completes the same work directly. It does not ask the operator to repeat the
 request and never substitutes another host mechanism, MCP server, direct API,
 or shell workaround. See the complete

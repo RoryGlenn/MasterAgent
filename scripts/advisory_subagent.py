@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,26 +14,22 @@ from master_agent.advisory import (
     RepositoryFixture,
     load_agent_inventory,
 )
-from master_agent.copilot_advisory import CopilotSdkAdvisoryWorker
+from master_agent.advisory_budget import (
+    AdvisoryBudgetStateError,
+    AdvisoryBudgetStore,
+)
+from master_agent.copilot_advisory import (
+    AdvisoryPathScope,
+    CopilotScopeRejected,
+    CopilotSdkAdvisoryWorker,
+    read_scoped_text,
+)
 
 _MAX_CITED_FILE_BYTES = 64 * 1024
 
 
-def _safe_citation_text(root: Path, relative: str) -> str:
-    candidate = (root / relative).resolve(strict=True)
-    try:
-        candidate.relative_to(root)
-    except ValueError as error:
-        raise ValueError(f"citation escapes repository root: {relative}") from error
-    if not candidate.is_file() or candidate.is_symlink():
-        raise ValueError(f"citation is not a regular repository file: {relative}")
-    payload = candidate.read_bytes()
-    if len(payload) > _MAX_CITED_FILE_BYTES:
-        raise ValueError(f"citation exceeds the advisory evidence limit: {relative}")
-    try:
-        return payload.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError(f"citation is not UTF-8 text: {relative}") from error
+def _safe_citation_text(scope: AdvisoryPathScope, relative: str) -> str:
+    return read_scoped_text(scope, relative, max_bytes=_MAX_CITED_FILE_BYTES)
 
 
 def _role(value: str) -> AdvisoryRole:
@@ -43,21 +40,41 @@ def _role(value: str) -> AdvisoryRole:
     raise ValueError(f"unsupported advisory role: {value}")
 
 
-def run(root: Path, role: AdvisoryRole, task: str, paths: tuple[str, ...]) -> int:
+def run(
+    root: Path,
+    role: AdvisoryRole,
+    task: str,
+    paths: tuple[str, ...],
+    *,
+    goal_id: str,
+    state_directory: Path | None = None,
+) -> int:
     """Execute one live specialist call through the repository-owned broker."""
 
     root = root.resolve()
-    inventory = load_agent_inventory(root)
-    broker = AdvisoryBroker(inventory, RepositoryFixture({}))
-    session = broker.start_session("MasterAgent", f"cli-{role.value}")
-    payload: dict[str, object] = {"task": task}
-    if paths:
-        payload["paths"] = list(paths)
-    outcome = session.delegate(
-        role,
-        payload,
-        worker=CopilotSdkAdvisoryWorker(root),
-    )
+    selected_state = state_directory or root / ".master-agent/advisory"
+    try:
+        scope = AdvisoryPathScope.bind(root, paths)
+        inventory = load_agent_inventory(root)
+        task_id = _task_id(goal_id, role, task, scope)
+        with AdvisoryBudgetStore(selected_state, root) as budget:
+            broker = AdvisoryBroker(
+                inventory,
+                RepositoryFixture({}),
+                budget=budget,
+            )
+            session = broker.start_session(
+                "MasterAgent",
+                task_id,
+                goal_id=goal_id,
+            )
+            outcome = session.delegate(
+                role,
+                {"task": task, "paths": list(scope.relative_paths)},
+                worker=CopilotSdkAdvisoryWorker(root, scope=scope),
+            )
+    except (AdvisoryBudgetStateError, CopilotScopeRejected, OSError, ValueError):
+        return _print_fallback("advisory runner prerequisites failed closed")
 
     if outcome.status is not DelegationStatus.COMPLETED or outcome.report is None:
         print(
@@ -74,23 +91,13 @@ def run(root: Path, role: AdvisoryRole, task: str, paths: tuple[str, ...]) -> in
 
     try:
         cited = {
-            path: _safe_citation_text(root, path)
+            path: _safe_citation_text(scope, path)
             for path in sorted(set(outcome.report.citations))
         }
         verification_broker = AdvisoryBroker(inventory, RepositoryFixture(cited))
         verified = verification_broker.recheck_report(outcome.report)
-    except (OSError, ValueError) as error:
-        print(
-            json.dumps(
-                {
-                    "status": "fallback",
-                    "fallback_to_parent": True,
-                    "reason": f"parent citation revalidation failed: {error}",
-                },
-                sort_keys=True,
-            )
-        )
-        return 2
+    except (CopilotScopeRejected, OSError, ValueError):
+        return _print_fallback("parent citation revalidation failed closed")
 
     print(
         json.dumps(
@@ -107,16 +114,72 @@ def run(root: Path, role: AdvisoryRole, task: str, paths: tuple[str, ...]) -> in
     return 0
 
 
+def _task_id(
+    goal_id: str,
+    role: AdvisoryRole,
+    task: str,
+    scope: AdvisoryPathScope,
+) -> str:
+    material = json.dumps(
+        {
+            "goal_id": goal_id,
+            "role": role.value,
+            "scope_digest": scope.digest,
+            "task": task,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return f"cli-{hashlib.sha256(material).hexdigest()}"
+
+
+def _print_fallback(reason: str) -> int:
+    print(
+        json.dumps(
+            {
+                "status": "fallback",
+                "fallback_to_parent": True,
+                "reason": reason,
+            },
+            sort_keys=True,
+        )
+    )
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run one governed read-only MasterAgent Copilot specialist."
     )
     parser.add_argument("role", choices=("research", "plan-review"))
     parser.add_argument("--task", required=True)
-    parser.add_argument("--path", action="append", default=[])
+    parser.add_argument(
+        "--goal-id",
+        required=True,
+        help="Opaque stable identifier reused for one operator goal.",
+    )
+    parser.add_argument(
+        "--path",
+        action="append",
+        required=True,
+        help="Repository-relative file or directory in the technical route scope.",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="Private mode-0700 budget directory (default: .master-agent/advisory).",
+    )
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    return run(root, _role(arguments.role), arguments.task, tuple(arguments.path))
+    return run(
+        root,
+        _role(arguments.role),
+        arguments.task,
+        tuple(arguments.path),
+        goal_id=arguments.goal_id,
+        state_directory=arguments.state_dir,
+    )
 
 
 if __name__ == "__main__":
