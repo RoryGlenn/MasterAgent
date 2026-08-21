@@ -30,7 +30,7 @@ each invocation; commands never create the parent or overwrite prior output.
 | `compensation-plan` | Build a separately reviewable compensation plan from an original plan and run report | Writes only the selected local plan |
 | `recurring-status` | Inspect registered schedules and due state | No provider access; may mark expired claims in an existing configured SQLite state database and can write optional local JSON output |
 | `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
-| `discover` | Inspect connector configuration | Offline unless `--probe`; probing performs bounded read-only provider requests |
+| `discover` | Inspect connector configuration | Offline unless `--probe`; setup gaps are reported without failing ordinary discovery, while `--require-ready` makes them a nonzero readiness failure |
 | `connect` | Enable selected supported read connectors in memory and verify access | Fixed bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
 | `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; selects only the GitHub read connector and never edits credentials or persistent configuration |
 | `bitbucket-repositories` | List a Bitbucket Cloud workspace's public repositories anonymously with `--workspace` | Explicit bounded read-only Bitbucket requests; selects no credentials and never edits persistent configuration |
@@ -46,12 +46,14 @@ each invocation; commands never create the parent or overwrite prior output.
 | `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only; displayed excerpts are terminal-safe and bounded while raw input is not printed |
 | `audit-verify` | Verify an existing SQLite audit hash chain | Read-only verification; missing or malformed state is rejected without creation |
 
-Connector-aware `readiness`, `discover`, `bind-context`, and applied `run`
-commands accept `--credentials-file /absolute/path/credentials.json` in a
-development governance profile. Policy-only `run` commands do not read secrets.
-The selected canonical path is part of the bound execution context.
+Connector-aware `readiness`, `discover`, `bind-context`, direct-read `run`,
+and applied `run` commands accept
+`--credentials-file /absolute/path/credentials.json` in a development
+governance profile. Policy-only `run` commands do not read secrets. The selected
+canonical path is part of the bound execution context only for applied runs;
+direct reads keep their credential selection in memory for the session.
 
-`connect`, `bind-context`, and applied `run` also accept repeatable
+`connect`, `bind-context`, direct-read `run`, and applied `run` also accept repeatable
 `--credential-map FILE_KEY=DECLARED_NAME` arguments. This keeps an explicit
 cross-connector credential selection in memory and lets bind/apply use the
 same mapping without rewriting a canonical multi-provider store.
@@ -63,6 +65,26 @@ selected connectors may be overridden; unsafe origins, embedded credentials,
 duplicates, nondefault ports, and Data Center targets fail before credential
 loading or network access. Bind and apply must receive the same override
 because the normalized target is part of the execution context.
+
+## Direct read sessions
+
+`master-agent run PLAN --direct-read` is the low-friction route for a direct
+user request that is limited to one built-in provider and typed read-only
+actions. It always builds a live `ReadOnlyConnector`, even though ordinary
+`run` defaults to mock mode. Before credentials, connector construction, or a
+provider request, it validates the catalog, governance, policy,
+source-of-truth rules, plan origin, and direct-read shape. It then attests the
+selected connector identity and scope, retains one transport budget across the
+read and independent verification, and renders a bounded, terminal-safe result.
+
+The route accepts an explicit integrations path, credential file or mapping,
+and supported connector URL override for its one selected provider. It never
+creates audit, idempotency, approval, artifact, or result-file state, and it
+rejects `--apply`, approval options, write or communication flags, result and
+retention options, identity/workspace paths, plugins, and non-default state
+paths. A plan with a non-read action, non-direct authority, registered workflow,
+persisted execution context, multiple providers, or an approval requirement is
+rejected before provider dispatch. Use the applied route for every effect.
 
 An approval-required plan must include `--approval-authorities` during
 `bind-context`; adding a trust configuration after review would change the

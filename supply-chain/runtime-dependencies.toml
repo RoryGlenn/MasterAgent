@@ -3,7 +3,9 @@ name = "master-agent"
 version = "1.0.0"
 license = "LicenseRef-MasterAgent-Proprietary"
 purl = "pkg:pypi/master-agent@1.0.0"
-dependencies = ["Pillow", "XlsxWriter", "lxml", "python-pptx", "typing_extensions"]
+dependencies = []
+optional_extra = "drafts"
+optional_dependencies = ["Pillow", "XlsxWriter", "lxml", "python-pptx", "typing_extensions"]
 
 [[components]]
 name = "python-pptx"

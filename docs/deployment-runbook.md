@@ -51,8 +51,10 @@ master-agent discover \
   --probe
 ```
 
-Then generate and review the relevant read-only plan. Execute it only through a
-manifest-bound `run --apply`; the legacy weekly-status and communication-context
+Then generate and review the relevant read-only plan. A direct-user plan for
+one built-in provider can run through `run --direct-read`, which keeps the
+verified read session in memory. Use the manifest-bound `run --apply` route for
+every provider effect; the legacy weekly-status and communication-context
 package commands are disabled.
 
 For a specified GitHub user's public repositories, validate the anonymous typed
@@ -76,9 +78,16 @@ not explicitly marked public.
 
 ## 7. Validate draft-only output
 
-Run `master-agent demo` for a credential-free smoke test. For deployment
-configuration, create distinct private artifact and audit directories outside
-the source checkout, then run:
+Install the optional draft-rendering extra, then run `master-agent demo` for a
+credential-free smoke test. The core runtime does not install local Office and
+draft renderers:
+
+```bash
+python -m pip install 'master-agent[drafts]'
+```
+
+For deployment configuration, create distinct private artifact and audit
+directories outside the source checkout, then run:
 
 ```bash
 mkdir -m 700 /absolute/state/draft-package /absolute/state/audit

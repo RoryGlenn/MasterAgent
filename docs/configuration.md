@@ -208,12 +208,13 @@ master-agent connect \
 
 `connect` normalizes the URL to `https://tenant.atlassian.net`, rejects any
 non-HTTPS, credential-bearing, non-Atlassian, duplicate, or unselected target,
-and uses the override only in memory. `bind-context` and applied `run` accept
-the same repeatable `--connector-url SYSTEM=URL` argument; the normalized
-destination and connector identity are approval-bound. Data Center context
-roots still require the organization's permission-checked integrations file.
+and uses the override only in memory. `bind-context`, direct-read `run`, and
+applied `run` accept the same repeatable `--connector-url SYSTEM=URL` argument;
+the normalized destination and connector identity are approval-bound for an
+applied run. Data Center context roots still require the organization's
+permission-checked integrations file.
 
-`connect`, `bind-context`, and applied `run` accept
+`connect`, `bind-context`, direct-read `run`, and applied `run` accept
 `--credential-map FILE_KEY=DECLARED_NAME` to select and rename fields from a
 canonical multi-provider store for one invocation. This supports, for example,
 explicitly reusing one Atlassian email and API token for both Jira and
@@ -229,6 +230,33 @@ delegated token-file, delegated environment-token, or application
 client-credentials authentication from the available declared values in that
 order. OneNote read access is enabled only in the in-memory overlay when
 OneNote is explicitly selected.
+
+## Direct read-only sessions
+
+Use `master-agent run PLAN --direct-read` when a direct user request already
+has a plan containing only typed read-only actions for exactly one built-in
+provider. It is an execution route for a read, not a replacement for the
+manifest-bound applied runtime. The packaged development profile permits it
+with this organization setting:
+
+```toml
+[organization]
+allow_ephemeral_direct_reads = true
+```
+
+A custom governance profile must opt in with the same Boolean setting. Before
+loading credentials or constructing a connector, the command rejects plans
+that are not direct-user, single-provider, read-only, approval-free, and
+unbound to a workflow, execution context, plugin, or capsule. It then resolves
+one selected typed `ReadOnlyConnector`, validates its identity, scope, and
+fixed endpoint, executes the bounded read, and independently re-reads it.
+
+An optional `--credentials-file`, `--credential-map`, or supported
+`--connector-url` is used only for that session. Direct reads print a bounded
+terminal result and do not create a runtime directory, audit or idempotency
+record, approval artifact, draft artifact, or result file. Effects—including
+writes, sends, administration, deletion, merge, and recurring work—must use
+the normal bound `run --apply` path and retain its approval and state checks.
 
 ## Atlassian deployment type
 
@@ -438,10 +466,12 @@ opt-in and is never loaded by a policy-only dry run:
 
 Store it outside the repository in a private (`0700`) directory and set the file
 mode to `0600`. Pass its absolute path with `--credentials-file` to `readiness`,
-`discover`, `bind-context`, and `run --apply`. Only names already referenced by
-the selected `integrations.toml` are accepted. A name present in both the file and
-the ambient environment is rejected. Applied execution binds the canonical file
-path (but not its contents or digest), so bind and apply must select the same file.
+`discover`, `bind-context`, `run --direct-read`, and `run --apply`. Only names
+already referenced by the selected `integrations.toml` are accepted. A name
+present in both the file and the ambient environment is rejected. Applied
+execution binds the canonical file path (but not its contents or digest), so
+bind and apply must select the same file. A direct-read session uses its selected
+credential only in memory and does not persist the path or contents.
 
 This plaintext format is a local-development convenience, not a production secret
 manager. Non-development governance profiles reject it.

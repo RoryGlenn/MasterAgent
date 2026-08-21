@@ -750,17 +750,27 @@ def _validate_supply_chain(
         errors.append("runtime dependency notice is missing")
 
     direct = project.get("dependencies")
-    if (
-        not isinstance(direct, list)
-        or not direct
-        or not all(isinstance(value, str) and value for value in direct)
-    ):
-        errors.append("project runtime dependency closure is malformed")
+    optional_extra = project.get("optional_extra")
+    optional_dependencies = project.get("optional_dependencies")
+    dependency_scopes_are_valid = (
+        isinstance(direct, list)
+        and all(isinstance(value, str) and value for value in direct)
+        and isinstance(optional_extra, str)
+        and bool(optional_extra)
+        and isinstance(optional_dependencies, list)
+        and bool(optional_dependencies)
+        and all(isinstance(value, str) and value for value in optional_dependencies)
+    )
+    if not dependency_scopes_are_valid:
+        errors.append("project dependency scopes are malformed")
     else:
         by_name = {
             str(item["name"]).replace("_", "-").casefold(): item for item in components
         }
-        pending = [value.replace("_", "-").casefold() for value in direct]
+        pending = [
+            value.replace("_", "-").casefold()
+            for value in (*direct, *optional_dependencies)
+        ]
         reached: set[str] = set()
         while pending:
             name = pending.pop()
@@ -785,8 +795,50 @@ def _validate_supply_chain(
             errors.append(f"runtime project dependency is not exact: {requirement}")
             continue
         declared[match.group(1).replace("_", "-").casefold()] = match.group(2)
-    if declared != {name: value[0] for name, value in expected.items()}:
-        errors.append("pyproject runtime dependencies differ from the complete lock")
+    if dependency_scopes_are_valid:
+        expected_core = {
+            name.replace("_", "-").casefold(): expected.get(
+                name.replace("_", "-").casefold(), ("", "")
+            )[0]
+            for name in direct
+        }
+        if declared != expected_core:
+            errors.append("pyproject core dependencies differ from the inventory")
+
+        optional_metadata = project_metadata.get("optional-dependencies")
+        optional_declared: dict[str, str] = {}
+        optional_requirements = (
+            optional_metadata.get(optional_extra)
+            if isinstance(optional_metadata, dict)
+            else None
+        )
+        if not isinstance(optional_requirements, list) or not all(
+            isinstance(requirement, str) for requirement in optional_requirements
+        ):
+            errors.append("pyproject optional draft dependencies are malformed")
+        else:
+            for requirement in optional_requirements:
+                match = re.fullmatch(
+                    r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", requirement
+                )
+                if match is None:
+                    errors.append(
+                        f"optional draft dependency is not exact: {requirement}"
+                    )
+                    continue
+                optional_declared[match.group(1).replace("_", "-").casefold()] = (
+                    match.group(2)
+                )
+            expected_optional = {
+                name.replace("_", "-").casefold(): expected.get(
+                    name.replace("_", "-").casefold(), ("", "")
+                )[0]
+                for name in optional_dependencies
+            }
+            if optional_declared != expected_optional:
+                errors.append(
+                    "pyproject optional draft dependencies differ from the inventory"
+                )
     lock_entries: dict[str, str] = {}
     for line in (
         (root / "requirements-runtime.lock").read_text(encoding="utf-8").splitlines()
@@ -814,13 +866,30 @@ def _validate_supply_chain(
         and isinstance(item.get("licenses", [None])[0], dict)
         and isinstance(item.get("licenses", [{}])[0].get("license"), dict)
     }
+    metadata = sbom.get("metadata") if isinstance(sbom, dict) else None
+    metadata_component = (
+        metadata.get("component") if isinstance(metadata, dict) else None
+    )
+    properties = (
+        metadata_component.get("properties")
+        if isinstance(metadata_component, dict)
+        else None
+    )
+    marks_optional_drafts = isinstance(properties, list) and any(
+        isinstance(property_, dict)
+        and property_.get("name") == "master-agent:optional-extra"
+        and property_.get("value") == optional_extra
+        for property_ in properties
+    )
     if (
         not isinstance(sbom, dict)
         or sbom.get("bomFormat") != "CycloneDX"
         or str(sbom.get("specVersion")) != "1.5"
         or observed != expected
+        or not dependency_scopes_are_valid
+        or not marks_optional_drafts
     ):
-        errors.append("CycloneDX SBOM differs from the complete runtime lock")
+        errors.append("CycloneDX SBOM differs from the optional draft dependency lock")
     notices = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     if any(
         str(item.get("name", "")) not in notices
@@ -832,7 +901,7 @@ def _validate_supply_chain(
     if len(errors) == error_count:
         checks.append(
             f"license, policy, exact lock, CycloneDX SBOM, and notices cover "
-            f"{len(expected)} runtime components"
+            f"{len(expected)} optional draft components"
         )
 
 
@@ -1514,7 +1583,7 @@ def _validate_demo_powerpoint(
         from pptx.exc import PackageNotFoundError
     except ImportError:
         errors.append(
-            "v1 demonstration PowerPoint validation requires the python-pptx dependency"
+            "v1 demonstration PowerPoint validation requires the optional drafts extra"
         )
         return
 

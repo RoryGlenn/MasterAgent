@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -126,6 +128,38 @@ class AgentBootstrapTests(unittest.TestCase):
                 cwd=root,
                 check=False,
             )
+
+    def test_unmarked_existing_runtime_is_reused_for_offline_readiness(self) -> None:
+        """A usable local environment is not rewritten solely for provenance."""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary_dir = root / ".venv/bin"
+            binary_dir.mkdir(parents=True)
+            (binary_dir / "python").touch()
+            (binary_dir / "master-agent").touch()
+            stdout = StringIO()
+
+            with (
+                redirect_stdout(stdout),
+                patch("scripts.bootstrap_agent.subprocess.run") as run,
+            ):
+                run.return_value = subprocess.CompletedProcess([], 2)
+                status = bootstrap(
+                    root,
+                    python_executable="/usr/bin/python3",
+                    python_version=(3, 12),
+                )
+
+            self.assertEqual(status, 0)
+            run.assert_called_once_with(
+                [str(binary_dir / "master-agent"), "readiness"],
+                cwd=root,
+                check=False,
+            )
+            self.assertIn("Reusing the existing repository-local", stdout.getvalue())
+            self.assertIn("readiness-check-blocked", stdout.getvalue())
+            self.assertFalse((root / ".venv/.master-agent-bootstrap-v1").exists())
 
     def test_symbolic_link_environment_is_rejected_without_commands(self) -> None:
         with TemporaryDirectory() as directory:

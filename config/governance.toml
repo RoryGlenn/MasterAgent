@@ -4,6 +4,7 @@ environment = "development"
 secret_manager = "environment-or-approved-secret-store"
 audit_sink = "local-sqlite-for-development"
 external_model_policy = "no-restricted-data-without-organizational-approval"
+allow_ephemeral_direct_reads = true
 security_owner = "unassigned"
 retention_owner = "unassigned"
 production_approved = false

@@ -11,10 +11,20 @@ from pathlib import Path
 
 _MINIMUM_PYTHON = (3, 12)
 _MARKER_NAME = ".master-agent-bootstrap-v1"
+_READINESS_CONFIGURATION_GAP = 2
 
 
 class BootstrapError(RuntimeError):
     """A safe, actionable first-run setup failure."""
+
+
+def _record_metadata_digest(marker: Path, digest: str) -> None:
+    """Record a successfully prepared local runtime without changing its scope."""
+
+    try:
+        marker.write_text(f"{digest}\n", encoding="utf-8")
+    except OSError as error:
+        raise BootstrapError(f"could not record local setup state: {error}") from error
 
 
 def _metadata_digest(root: Path) -> str:
@@ -67,7 +77,6 @@ def bootstrap(
     environment_python = environment / "bin/python"
     command = environment / "bin/master-agent"
     marker = environment / _MARKER_NAME
-    expected_digest = _metadata_digest(root)
 
     if environment.is_symlink():
         raise BootstrapError(".venv is a symbolic link and will not be used")
@@ -95,10 +104,20 @@ def bootstrap(
     except OSError:
         observed_digest = ""
 
-    install_required = not command.is_file() or observed_digest != expected_digest
+    # Only environments previously prepared by bootstrap are refreshed from
+    # project metadata. A usable pre-existing environment is sufficient for
+    # offline readiness but grants no credential, provider, or effect authority.
+    tracked_runtime = bool(observed_digest)
+    command_present = command.is_file()
+    expected_digest = (
+        _metadata_digest(root) if tracked_runtime or not command_present else ""
+    )
+    install_required = not command_present or (
+        tracked_runtime and observed_digest != expected_digest
+    )
     if install_required:
         print(
-            "Installing MasterAgent and its declared dependencies into .venv...",
+            "Installing the lightweight MasterAgent core into .venv...",
             flush=True,
         )
         if _run(
@@ -120,23 +139,27 @@ def bootstrap(
             raise BootstrapError(
                 "installation finished without creating .venv/bin/master-agent"
             )
-        try:
-            marker.write_text(f"{expected_digest}\n", encoding="utf-8")
-        except OSError as error:
-            raise BootstrapError(
-                f"could not record local setup state: {error}"
-            ) from error
-    else:
+        _record_metadata_digest(marker, expected_digest)
+    elif tracked_runtime:
         print(
             "The repository-local MasterAgent runtime is already prepared.",
+            flush=True,
+        )
+    else:
+        print(
+            "Reusing the existing repository-local MasterAgent runtime.",
             flush=True,
         )
 
     print("Running the offline readiness check...", flush=True)
     readiness_status = _run([str(command), "readiness"], root=root)
-    if readiness_status:
+    if readiness_status == _READINESS_CONFIGURATION_GAP:
         print("setup_status: local-runtime-ready; readiness-check-blocked", flush=True)
-        return readiness_status
+        return 0
+    if readiness_status:
+        raise BootstrapError(
+            "the installed local runtime could not complete the offline readiness check"
+        )
     print("setup_status: ready", flush=True)
     return 0
 
