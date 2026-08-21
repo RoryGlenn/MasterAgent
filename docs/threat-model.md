@@ -68,13 +68,18 @@ Controls:
   non-model-invocable with only `read` and `search`;
 - the repository-owned advisory integration harness loads the exact checked-in
   profiles, binds every session to MasterAgent, denies nested delegation, and
-  enforces at most three research attempts and one plan review;
+  atomically enforces at most three research attempts and one plan review in
+  private HMAC-authenticated state shared across runner processes;
 - payload minimization rejects credentials, approval/signing artifacts,
   targets, recipients, connectors, tenants, unrelated private context, and
   `ChangePlan` data before worker invocation;
 - the profile-derived dispatcher denies execute, edit, agent, MCP, HTTP,
   environment, credential, provider, approval, audit, and mutation categories
   before dispatch;
+- the optional SDK adapter exposes only repository-owned scoped read/search
+  tools, excludes ignored/private/symlink paths, and binds the task, profile,
+  route inventory, HEAD, index, tracked/staged diffs, and bounded untracked file
+  contents before and after each isolated session;
 - repository and provider-content prompt injections remain inert test data;
 - child reports cannot select targets, claim approval, propose plans, return
   secret-like content, or become evidence without parent citation re-read;
@@ -410,6 +415,9 @@ Controls:
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
 - HMAC capsule/receipt signing assumes externally protected authority keys;
+- local advisory-budget HMAC state protects ordinary corruption and
+  cross-process races, not a same-account attacker who can replace both its
+  private key and all state while every runner is stopped;
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;

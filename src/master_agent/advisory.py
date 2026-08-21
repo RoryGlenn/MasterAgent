@@ -2,7 +2,8 @@
 
 Direct GitHub-host child invocation is disabled because the host cannot enforce
 this repository's parent allowlist, depth, and per-goal counters. This module is
-the deterministic boundary used by tests and by any future approved adapter.
+the deterministic boundary used by tests and by the optional broker-owned live
+adapter.
 """
 
 from __future__ import annotations
@@ -341,12 +342,36 @@ class DelegationOutcome:
 
 
 class AdvisoryWorker(Protocol):
-    """Future approved worker adapter."""
+    """Approved optional worker adapter."""
 
     def __call__(
         self, envelope: AdvisoryEnvelope, dispatcher: AdvisoryDispatcher
     ) -> AdvisoryReport:
         """Run one sanitized task and return untrusted output."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryBudgetReservation:
+    """Atomic goal-budget reservation and its resulting counters."""
+
+    allowed: bool
+    research_attempts: int
+    review_attempts: int
+
+
+class AdvisoryBudget(Protocol):
+    """Durable backend for one operator goal's advisory attempt limits."""
+
+    def reserve(
+        self,
+        goal_id: str,
+        role: AdvisoryRole,
+        *,
+        max_research_tasks: int,
+        max_plan_reviews: int,
+    ) -> AdvisoryBudgetReservation:
+        """Atomically reserve one attempt without invoking a worker."""
         ...
 
 
@@ -361,10 +386,12 @@ class AdvisoryBroker:
         inventory: AgentInventory,
         repository: RepositoryFixture,
         recorders: BoundaryRecorders | None = None,
+        budget: AdvisoryBudget | None = None,
     ) -> None:
         self._inventory = inventory
         self._repository = repository
         self._recorders = recorders or BoundaryRecorders()
+        self._budget = budget
 
     @property
     def protected_state(self) -> BoundarySnapshot:
@@ -390,7 +417,13 @@ class AdvisoryBroker:
             raise AdvisoryDispatchDenied(f"direct host invocation is disabled: {name}")
         return profile
 
-    def start_session(self, parent_name: str, task_id: str) -> AdvisorySession:
+    def start_session(
+        self,
+        parent_name: str,
+        task_id: str,
+        *,
+        goal_id: str | None = None,
+    ) -> AdvisorySession:
         """Create one selected-parent delegation budget."""
 
         if parent_name != self._inventory.parent.name:
@@ -399,7 +432,14 @@ class AdvisoryBroker:
             )
         if not task_id.strip() or len(task_id) > 256:
             raise AdvisoryPayloadRejected("task_id must contain 1-256 characters")
-        return AdvisorySession(self, task_id)
+        selected_goal = task_id if goal_id is None else goal_id
+        if (
+            not selected_goal.strip()
+            or selected_goal != selected_goal.strip()
+            or len(selected_goal) > 256
+        ):
+            raise AdvisoryPayloadRejected("goal_id must contain 1-256 characters")
+        return AdvisorySession(self, task_id, selected_goal)
 
     def recheck_report(self, report: AdvisoryReport) -> VerifiedAdvisoryEvidence:
         """Reject authority-bearing output and independently re-read citations."""
@@ -424,9 +464,15 @@ class AdvisoryBroker:
 class AdvisorySession:
     """One operator-goal depth and call budget."""
 
-    def __init__(self, broker: AdvisoryBroker, task_id: str) -> None:
+    def __init__(
+        self,
+        broker: AdvisoryBroker,
+        task_id: str,
+        goal_id: str,
+    ) -> None:
         self._broker = broker
         self._task_id = task_id
+        self._goal_id = goal_id
         self._research_attempts = 0
         self._review_attempts = 0
 
@@ -463,7 +509,16 @@ class AdvisorySession:
             sanitized = sanitize_payload(payload)
         except AdvisoryPayloadRejected as error:
             return DelegationOutcome(DelegationStatus.DENIED, role, True, str(error))
-        if not self._reserve(role):
+        try:
+            reserved = self._reserve(role)
+        except (OSError, RuntimeError, ValueError):
+            return DelegationOutcome(
+                DelegationStatus.FALLBACK,
+                role,
+                True,
+                "advisory budget state is unavailable; keep work on the parent path",
+            )
+        if not reserved:
             return DelegationOutcome(
                 DelegationStatus.FALLBACK,
                 role,
@@ -483,12 +538,12 @@ class AdvisorySession:
         try:
             report = worker(envelope, dispatcher)
             _validate_report(report)
-        except (RuntimeError, TypeError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 - untrusted adapter boundary
             return DelegationOutcome(
                 DelegationStatus.FALLBACK,
                 role,
                 True,
-                f"advisory worker failed closed: {error}",
+                _content_minimized_worker_failure(error),
             )
         return DelegationOutcome(
             DelegationStatus.COMPLETED,
@@ -499,6 +554,16 @@ class AdvisorySession:
         )
 
     def _reserve(self, role: AdvisoryRole) -> bool:
+        if self._broker._budget is not None:
+            reservation = self._broker._budget.reserve(
+                self._goal_id,
+                role,
+                max_research_tasks=AdvisoryBroker.MAX_RESEARCH_TASKS,
+                max_plan_reviews=AdvisoryBroker.MAX_PLAN_REVIEWS,
+            )
+            self._research_attempts = reservation.research_attempts
+            self._review_attempts = reservation.review_attempts
+            return reservation.allowed
         if role is AdvisoryRole.RESEARCH:
             if self._research_attempts >= AdvisoryBroker.MAX_RESEARCH_TASKS:
                 return False
@@ -508,6 +573,25 @@ class AdvisorySession:
             return False
         self._review_attempts += 1
         return True
+
+
+def _content_minimized_worker_failure(error: BaseException) -> str:
+    """Classify adapter failures without reflecting provider or task content."""
+
+    name = type(error).__name__
+    if name == "CopilotSdkUnavailable":
+        return "optional Copilot SDK is unavailable; keep work on the parent path"
+    if name == "CopilotRepositoryChanged":
+        return (
+            "advisory repository state changed during delegation; use parent fallback"
+        )
+    if name == "CopilotRepositoryScanRejected":
+        return "advisory repository state could not be bound; use parent fallback"
+    if name == "CopilotScopeRejected":
+        return "advisory route scope failed closed; keep work on the parent path"
+    if name == "CopilotResponseRejected":
+        return "advisory worker output was rejected; keep work on the parent path"
+    return "advisory worker failed closed; keep work on the parent path"
 
 
 def validate_profile_inventory(root: Path) -> tuple[str, ...]:

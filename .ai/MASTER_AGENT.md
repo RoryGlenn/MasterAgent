@@ -79,13 +79,18 @@ they do not grant authority.
 - For bounded repository research or independent plan review, the selected
   parent SHOULD use the broker-owned Copilot SDK adapter when the optional
   `subagents` dependency is installed and the adapter is healthy. Invoke it only
-  through `scripts/advisory_subagent.py`; never select the checked-in child
-  profiles through GitHub's generic `agent` tool or another host mechanism.
+  through `scripts/advisory_subagent.py` with one opaque `--goal-id` reused for
+  the complete operator goal and one or more minimum repository-relative
+  `--path` routes; never select the checked-in child profiles through GitHub's
+  generic `agent` tool or another host mechanism.
 - The broker-owned live adapter MUST preserve the existing advisory integration
-  harness: sanitized payload first, exact checked-in role and budget, exactly
-  one explicitly preselected SDK specialist, read-only tools only, ambient
-  config/skill/MCP discovery disabled, repository/profile/task state binding,
-  structured untrusted output, and independent parent citation re-validation.
+  harness: sanitized payload first; exact checked-in role; an authenticated
+  cross-process maximum of three research attempts and one review; exactly one
+  explicitly preselected SDK specialist; repository-owned route-scoped
+  read/search tools only; ambient config/skill/MCP discovery disabled; exact
+  task, profile, path inventory, HEAD, index, tracked, staged, and untracked-byte
+  binding; structured untrusted output; and independent scope-aware parent
+  citation re-validation.
 - If the optional SDK is unavailable, unauthenticated, incompatible, stale, a
   specialist call fails, or a budget is exhausted, complete the same work directly in the selected parent.
   Adapter failure is never a setup blocker and never authorizes another host

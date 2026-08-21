@@ -62,9 +62,10 @@ read connector  draft connector  mutation/send connector
 
 Direct GitHub-host advisory invocation is disabled because that surface cannot
 prove the selected-parent allowlist, depth-one routing, or per-goal counters.
-The repository-owned harness is deterministic integration-test and future-
-adapter infrastructure; it is not a second runtime or provider path. The parent
-continues directly whenever no approved adapter satisfies the full boundary.
+The repository-owned harness is the deterministic integration-test boundary
+and the control plane for the optional current Copilot SDK adapter; it is not a
+second runtime or provider path. The parent continues directly whenever that
+adapter is absent or cannot satisfy the full boundary.
 See [`advisory-subagents.md`](advisory-subagents.md).
 
 ## Principal components
@@ -78,11 +79,19 @@ nested child invocation.
 
 `src/master_agent/advisory.py` loads those exact profiles for a deterministic
 repository-owned boundary. A session is bound to the selected parent, depth is
-fixed at one, and counters admit at most three research attempts and one plan
-review. The broker rejects credential, approval, signing, target, recipient,
-connector, tenant, private-context, and `ChangePlan` fields before a future
-worker is invoked. The dispatcher derives its tools from the child profile and
-admits only bounded repository reads/searches. Reports remain untrusted,
+fixed at one, and `src/master_agent/advisory_budget.py` atomically admits at
+most three research attempts and one plan review for an authenticated goal
+across independent processes. The broker rejects credential, approval, signing,
+target, recipient, connector, tenant, private-context, and `ChangePlan` fields
+before a worker is invoked.
+
+The optional SDK worker binds the exact task, profile, normalized path/file
+inventory, HEAD, index, tracked and staged diffs, and bounded untracked file
+contents. It exposes only repository-owned route-scoped read/search tools; SDK
+filesystem built-ins and ambient config, skill, and MCP discovery remain
+disabled. Each specialist call has an isolated session. One client may be
+reused for same-process calls in one goal and is closed at the goal boundary.
+Reports remain untrusted,
 cannot carry targets, approvals, plans, connectors, or secret-like content, and
 become evidence only after the parent independently re-reads every citation.
 

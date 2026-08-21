@@ -132,13 +132,17 @@ The repository-owned advisory integration harness in
 `src/master_agent/advisory.py` loads the checked-in profiles, derives their
 read/search tool surface, rejects sensitive context and forbidden dispatches,
 enforces exact-parent/depth/call budgets, and re-checks every returned citation
-as untrusted data. It is deterministic test and future-adapter infrastructure,
-not a second runtime or provider path.
+as untrusted data. The optional current Copilot SDK adapter runs only through
+`scripts/advisory_subagent.py`, which adds an authenticated cross-process goal
+budget, a required minimum path route, repository-owned scoped read/search
+tools, and exact tracked/staged/untracked-content binding. It is not a second
+runtime or provider path.
 
-Until a supported host adapter can prove equivalent controls, complete the same work directly in this selected parent. Do not ask the operator to repeat the
-request and do not treat unavailable delegation as a setup blocker. Never call
-an advisory profile through another host mechanism, generic MCP server, direct
-API, or shell workaround.
+When the `subagents` extra is absent or this broker-owned path fails closed,
+complete the same work directly in this selected parent. Do not ask the
+operator to repeat the request and do not treat unavailable delegation as a
+setup blocker. Never call an advisory profile through another host mechanism,
+generic MCP server, direct API, or shell workaround.
 
 ## Behavioral specifications
 

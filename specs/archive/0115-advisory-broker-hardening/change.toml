@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0115-advisory-broker-hardening"
+title = "Harden advisory goal budgets, state binding, and route scope"
+status = "archived"
+github_issue = 115
+created = "2026-08-21"
+updated = "2026-08-21"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-ADVISORY-003"
+destination = "security/MA-ADVISORY-003.md"
+source = "current/MA-ADVISORY-003.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-ADVISORY-005"
+destination = "security/MA-ADVISORY-005.md"
+source = "current/MA-ADVISORY-005.md"

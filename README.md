@@ -161,7 +161,7 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including parent ownership, depth and call budgets, context sanitization, read-only tool policy, state binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, the parent will complete the same work directly; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
+The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional current broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including an authenticated cross-process goal budget, context sanitization, required minimum path scope, repository-owned scoped read/search tools, exact tracked/staged/untracked-content binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, complete the same work directly in the parent; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
 
 For every non-trivial repository change, the selected parent also applies the
 [Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
@@ -203,6 +203,24 @@ python -m pip install -e '.[subagents]'
 
 The base installation remains usable without that extra; unavailable specialist
 delegation falls back to the selected MasterAgent parent.
+
+The selected parent invokes the adapter with one opaque goal ID reused across
+all attempts for that operator goal and at least one repository-relative path:
+
+```bash
+.venv/bin/python scripts/advisory_subagent.py research \
+  --goal-id 550e8400-e29b-41d4-a716-446655440000 \
+  --task "Trace the advisory budget implementation" \
+  --path src/master_agent/advisory.py \
+  --path src/master_agent/advisory_budget.py
+```
+
+The runner creates ignored private state under `.master-agent/advisory/` by
+default. The same goal ID shares at most three research attempts and one plan
+review across retries, concurrent commands, and process restarts. A path must
+name an existing tracked or non-ignored untracked file or directory and must be
+narrower than the repository root. Unsafe state, scope, SDK, result, or
+repository races return a content-minimized parent fallback.
 
 The core package deliberately omits the local Office and draft renderers. If
 you need `demo` or `draft-package`, add the optional extra to the same virtual

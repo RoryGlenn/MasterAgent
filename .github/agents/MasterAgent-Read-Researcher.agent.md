@@ -45,5 +45,7 @@ facts separated from inference, uncertainty, and a suggested parent next step.
 The parent independently re-reads every citation and rejects target, approval,
 plan, connector, credential, or secret-bearing output.
 
-The profile is not an active Copilot child today. If no future adapter satisfies
-the repository-owned boundary, MasterAgent completes the same work directly.
+The profile is never directly active through GitHub's host child mechanism. The
+optional current Copilot SDK adapter may instantiate this contract only through
+the repository-owned broker after durable budget reservation and technical path
+binding. If that path is unavailable or fails closed, MasterAgent completes the same work directly.
