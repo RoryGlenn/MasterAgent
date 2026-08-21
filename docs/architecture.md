@@ -209,6 +209,23 @@ boundary: it accepts only a separately reviewed, dependency-free pure capsule.
 A plugin with dependencies still needs a sealed complete dependency filesystem
 before it can become executable.
 
+### Ephemeral direct read sessions
+
+`run --direct-read` is a separate execution type for a direct-user plan made of
+read-only actions against exactly one built-in typed provider. It performs the
+same catalog, governance, policy, source-of-truth, credential, connector
+identity/scope, endpoint, response-budget, prompt-injection, and independent
+re-read validation required for typed reads, but holds its binding and report in
+memory. It does not construct the applied runtime's audit, idempotency,
+artifact, approval, result-publication, plugin, or capsule state.
+
+The direct executor validates the whole plan before provider setup, uses a
+`ReadOnlyConnector` only, and shares one HTTP budget across each read and its
+verification. It rejects workflow or persisted execution context, multiple
+providers, effects, non-direct authority, and approval-required actions. This
+keeps the convenient path structurally unable to become an effect bypass; the
+orchestrator below remains the only execution owner for provider effects.
+
 ### Orchestrator
 
 The orchestrator:

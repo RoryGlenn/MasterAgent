@@ -13,7 +13,13 @@ from typing import Any
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
-from master_agent.models import AgentAction, DataClassification, RiskLevel
+from master_agent.models import (
+    AgentAction,
+    AuthoritySource,
+    ChangePlan,
+    DataClassification,
+    RiskLevel,
+)
 
 
 class EnvironmentKind(StrEnum):
@@ -272,6 +278,45 @@ class GovernanceProfile:
             ApprovalTier.SINGLE: 1,
             ApprovalTier.DUAL: 2,
         }[rule.approval_tier]
+
+    def allows_direct_read_session(self, plan: ChangePlan) -> tuple[bool, str]:
+        """Return whether this profile permits a stateless direct read session.
+
+        A direct read session is deliberately narrower than normal applied
+        execution: it is limited to one directly requested, read-only provider
+        and owns no approval, runtime-path, artifact, or durable audit state.
+        An organization must opt in through its governance profile rather than
+        inheriting this route merely by using read-only capability rules.
+        """
+
+        configured = self.metadata.get("allow_ephemeral_direct_reads", False)
+        if not isinstance(configured, bool):
+            return False, "allow_ephemeral_direct_reads must be a boolean"
+        if not configured:
+            return False, "governance disables direct read sessions"
+        if plan.execution_context is not None:
+            return False, "direct read sessions must not use an execution context"
+        if plan.workflow_id is not None or plan.workflow_fingerprint is not None:
+            return False, "direct read sessions cannot execute a registered workflow"
+        if plan.compensate_on_failure:
+            return False, "direct read sessions cannot request compensation"
+        systems = {action.target.system for action in plan.actions}
+        if len(systems) != 1:
+            return False, "direct read sessions require exactly one provider"
+        for action in plan.actions:
+            if action.risk is not RiskLevel.READ_ONLY:
+                return False, "direct read sessions permit read-only actions only"
+            if action.authority_source is not AuthoritySource.DIRECT_USER:
+                return (
+                    False,
+                    "direct read sessions require direct-user authority",
+                )
+            if action.requires_approval:
+                return (
+                    False,
+                    "direct read sessions cannot carry approval-required actions",
+                )
+        return True, "governance permits an ephemeral direct read session"
 
     def coverage_report(self, catalog: CapabilityCatalog) -> dict[str, Any]:
         """Return capability coverage and configuration errors."""

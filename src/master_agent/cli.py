@@ -44,9 +44,15 @@ from master_agent.connectors.factory import (
 from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.mock import MockConnector
+from master_agent.connectors.read_only import ReadOnlyConnector
 from master_agent.credentials import (
     CredentialStoreSnapshot,
     canonical_credential_store_path,
+)
+from master_agent.direct_read import (
+    DirectReadReport,
+    DirectReadSession,
+    preflight_direct_read_plan,
 )
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.discovery import DiscoveryStatus, discover_integrations
@@ -59,6 +65,7 @@ from master_agent.errors import (
 from master_agent.execution_context import (
     build_execution_context,
     build_runtime_execution_binding,
+    capture_connector_executions,
     capture_runtime_execution_paths,
     enforce_execution_context,
 )
@@ -151,6 +158,7 @@ _CONNECT_CONFIGURATION_BY_SYSTEM = {
     "onenote": "microsoft",
 }
 _PLACEHOLDER_PROVIDER_URLS = frozenset({"https://example.atlassian.net"})
+_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS = 8 * 1024
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -221,6 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run(
                 plan_path=args.plan,
                 apply=args.apply,
+                direct_read=args.direct_read,
                 approval_paths=args.approval,
                 approval_authorities=args.approval_authorities,
                 database=args.database,
@@ -293,6 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 governance_path=args.governance,
                 credentials_file=args.credentials_file,
                 probe=args.probe,
+                require_ready=args.require_ready,
                 systems=_parse_systems(args.systems),
                 output=args.output,
             )
@@ -528,6 +538,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("plan", type=Path)
     run.add_argument("--apply", action="store_true")
     run.add_argument(
+        "--direct-read",
+        action="store_true",
+        help=(
+            "run one direct-user, single-provider typed read-only plan in memory; "
+            "never writes an audit, artifact, or result file"
+        ),
+    )
+    run.add_argument(
         "--connector-mode",
         choices=("mock", "live"),
         default="mock",
@@ -683,6 +701,14 @@ def _build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--governance", type=Path, default=None)
     discover.add_argument("--credentials-file", type=Path)
     discover.add_argument("--probe", action="store_true")
+    discover.add_argument(
+        "--require-ready",
+        action="store_true",
+        help=(
+            "return nonzero when an enabled selected connector lacks required "
+            "configuration or credentials"
+        ),
+    )
     discover.add_argument("--systems")
     discover.add_argument("--output", type=Path)
 
@@ -1191,6 +1217,7 @@ def _run(
     *,
     plan_path: Path,
     apply: bool,
+    direct_read: bool = False,
     approval_paths: list[Path],
     approval_authorities: Path | None,
     database: Path,
@@ -1215,6 +1242,33 @@ def _run(
     connector_urls: Sequence[str] = (),
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
+
+    if direct_read:
+        return _run_direct_read(
+            plan_path=plan_path,
+            apply=apply,
+            approval_paths=approval_paths,
+            approval_authorities=approval_authorities,
+            database=database,
+            integrations_path=integrations_path,
+            result_json=result_json,
+            retention_path=retention_path,
+            evidence_type=evidence_type,
+            identities_path=identities_path,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            workspace_root=workspace_root,
+            draft_output_dir=draft_output_dir,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            plugin_names=plugin_names,
+            plugin_lock_path=plugin_lock_path,
+            credentials_file=credentials_file,
+            credential_mappings=credential_mappings,
+            connector_urls=connector_urls,
+        )
 
     if apply and plugin_names:
         raise ConfigurationError(
@@ -1617,6 +1671,196 @@ def _run(
                 "can resume-approval without rebuilding this run"
             )
         return 0 if report.successful else 2
+
+
+def _run_direct_read(
+    *,
+    plan_path: Path,
+    apply: bool,
+    approval_paths: Sequence[Path],
+    approval_authorities: Path | None,
+    database: Path,
+    integrations_path: Path | None,
+    result_json: Path | None,
+    retention_path: Path | None,
+    evidence_type: str,
+    identities_path: Path | None,
+    include_writes: bool,
+    include_communications: bool,
+    workspace_root: Path | None,
+    draft_output_dir: Path,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    plugin_names: Sequence[str],
+    plugin_lock_path: Path | None,
+    credentials_file: Path | None,
+    credential_mappings: Sequence[str],
+    connector_urls: Sequence[str],
+) -> int:
+    """Run one stateless typed provider-read session.
+
+    This intentionally sits outside the approval-bound ``--apply`` route.  It
+    constructs one selected live read connector only after an entirely local
+    plan preflight, retains no audit/idempotency/result state, and prints a
+    bounded terminal representation of independently verified content.
+    """
+
+    _validate_direct_read_options(
+        apply=apply,
+        approval_paths=approval_paths,
+        approval_authorities=approval_authorities,
+        database=database,
+        result_json=result_json,
+        retention_path=retention_path,
+        evidence_type=evidence_type,
+        identities_path=identities_path,
+        include_writes=include_writes,
+        include_communications=include_communications,
+        workspace_root=workspace_root,
+        draft_output_dir=draft_output_dir,
+        plugin_names=plugin_names,
+        plugin_lock_path=plugin_lock_path,
+    )
+    plan = _load_plan(plan_path)
+    capabilities_source = resolve_config_source(capabilities_path, "capabilities.toml")
+    governance_source = resolve_config_source(governance_path, "governance.toml")
+    policy_source = resolve_config_source(policy_path, "policy.toml")
+    sources_source = resolve_config_source(
+        sources_of_truth_path,
+        "sources_of_truth.toml",
+    )
+    catalog = CapabilityCatalog.from_toml(capabilities_source)
+    governance = GovernanceProfile.from_toml(governance_source)
+    policy = PolicyEngine(PolicyConfig.from_toml(policy_source))
+    sources = SourceOfTruthRegistry.from_toml(sources_source)
+
+    # No credentials, principal-attestation calls, or connector construction
+    # occur before this shape and policy preflight succeeds.
+    provider = preflight_direct_read_plan(
+        plan=plan,
+        catalog=catalog,
+        governance=governance,
+        policy=policy,
+        sources=sources,
+    )
+    if provider not in _CONNECT_CONFIGURATION_BY_SYSTEM:
+        raise ConfigurationError(
+            "direct read sessions require one built-in typed provider: " + provider
+        )
+    systems = {provider}
+    configurations = _configuration_names_for_systems(systems)
+    integrations = IntegrationConfig.from_toml(
+        resolve_config_source(integrations_path, "integrations.toml")
+    )
+    integrations = _with_connector_url_overrides(
+        integrations,
+        connector_urls,
+        selected_configurations=configurations,
+    )
+    credential_store = _load_credential_store(
+        credentials_file,
+        integrations=integrations,
+        governance=governance,
+        connector_mode="live",
+        credential_mappings=credential_mappings,
+        systems=systems,
+    )
+    compatibility = _atlassian_credential_compatibility(
+        integrations,
+        configurations=configurations,
+    )
+    execution_environ = _credential_environment(
+        credential_store,
+        os.environ,
+        compatible_names=compatibility,
+    )
+    captured = capture_connector_executions(
+        integrations,
+        environ=execution_environ,
+        systems=systems,
+    )
+    binding_system = _CONNECT_CONFIGURATION_BY_SYSTEM[provider]
+    bindings = [
+        item.binding for item in captured if item.binding.system == binding_system
+    ]
+    if len(bindings) != 1:
+        raise ConfigurationError(
+            "direct read sessions require exactly one enabled connector binding for "
+            + provider
+        )
+
+    with ExitStack() as runtime_resources:
+        registry = build_live_registry(
+            integrations,
+            environ=execution_environ,
+            systems=systems,
+            include_writes=False,
+            include_communications=False,
+        )
+        connector = registry.resolve(provider, plan.actions[0].capability)
+        if not isinstance(connector, ReadOnlyConnector):
+            raise ConfigurationError(
+                "direct read sessions require a typed ReadOnlyConnector"
+            )
+        for selected in registry.connectors():
+            if isinstance(selected, ClosableConnector):
+                runtime_resources.callback(selected.close)
+        report = DirectReadSession(
+            catalog=catalog,
+            governance=governance,
+            policy=policy,
+            sources=sources,
+            connector=connector,
+            execution_binding=bindings[0],
+        ).execute(plan)
+
+    _print_direct_read_report(report)
+    return 0 if report.successful else 2
+
+
+def _validate_direct_read_options(
+    *,
+    apply: bool,
+    approval_paths: Sequence[Path],
+    approval_authorities: Path | None,
+    database: Path,
+    result_json: Path | None,
+    retention_path: Path | None,
+    evidence_type: str,
+    identities_path: Path | None,
+    include_writes: bool,
+    include_communications: bool,
+    workspace_root: Path | None,
+    draft_output_dir: Path,
+    plugin_names: Sequence[str],
+    plugin_lock_path: Path | None,
+) -> None:
+    """Reject effect-bound and persistence-oriented options in direct mode."""
+
+    if apply:
+        raise ValueError("--direct-read cannot be combined with --apply")
+    if approval_paths or approval_authorities is not None:
+        raise ValueError(
+            "--direct-read does not accept approval artifacts or authorities"
+        )
+    if include_writes or include_communications:
+        raise ValueError("--direct-read cannot enable writes or communications")
+    if result_json is not None:
+        raise ValueError("--direct-read never persists a result; omit --result-json")
+    if retention_path is not None or evidence_type != "run-result/full":
+        raise ValueError("--direct-read does not accept retention or evidence options")
+    if identities_path is not None:
+        raise ValueError("--direct-read does not use an identity-map configuration")
+    if workspace_root is not None:
+        raise ValueError("--direct-read does not use a workspace root")
+    if database != Path(".master-agent/audit.sqlite3"):
+        raise ValueError("--direct-read never opens an audit database")
+    if draft_output_dir != Path(".master-agent/drafts"):
+        raise ValueError("--direct-read never creates draft artifacts")
+    if plugin_names or plugin_lock_path is not None:
+        raise ValueError("--direct-read cannot load connector plugins")
 
 
 def _plugins(*, output: Path | None) -> int:
@@ -2177,6 +2421,7 @@ def _discover(
     governance_path: Path | None,
     credentials_file: Path | None,
     probe: bool,
+    require_ready: bool,
     systems: set[str] | None,
     output: Path | None,
 ) -> int:
@@ -2233,7 +2478,14 @@ def _discover(
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
-    unavailable = {DiscoveryStatus.MISSING_ENVIRONMENT, DiscoveryStatus.FAILED}
+    # Discovery is primarily an onboarding/reporting command.  Missing
+    # credentials are expected before a provider is connected and should not
+    # make a normal inventory command look broken.  CI/readiness checks can
+    # request the former strict exit semantics explicitly; live probes remain
+    # strict because a requested network operation did not complete.
+    unavailable = {DiscoveryStatus.FAILED}
+    if require_ready or probe:
+        unavailable.add(DiscoveryStatus.MISSING_ENVIRONMENT)
     return 0 if all(record.status not in unavailable for record in records) else 2
 
 
@@ -3455,6 +3707,36 @@ def _print_report(report: RunReport, *, mode_label: str | None = None) -> None:
         capability = _terminal_field(item.capability, max_characters=240)
         message = _terminal_field(item.message)
         print(f"{state:<20} {item.action_id!s:<36} {capability} — {message}")
+    print(f"successful: {report.successful}")
+
+
+def _print_direct_read_report(report: DirectReadReport) -> None:
+    """Render verified direct-read data without durable result publication.
+
+    Provider content is untrusted.  JSON escaping and terminal rendering keep
+    control characters inert, while the per-action cap prevents a direct read
+    from flooding an interactive terminal.  The session itself still retains
+    the complete result only in process memory until this rendering finishes.
+    """
+
+    print("mode: direct-read")
+    print(f"provider: {_terminal_field(report.provider, max_characters=80)}")
+    print(f"plan fingerprint: {report.plan_fingerprint}")
+    for action in report.actions:
+        capability = _terminal_field(action.capability, max_characters=240)
+        message = _terminal_field(action.message)
+        print(f"verified {action.action_id!s:<36} {capability} — {message}")
+        payload = json.dumps(
+            action.payload.to_dict(),
+            ensure_ascii=True,
+            sort_keys=True,
+            default=str,
+        )
+        rendered = render_terminal_text(
+            payload,
+            max_characters=_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS,
+        )
+        print(f"  result: {rendered}")
     print(f"successful: {report.successful}")
 
 

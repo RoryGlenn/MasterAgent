@@ -10,6 +10,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from master_agent.cli import (
@@ -19,12 +20,49 @@ from master_agent.cli import (
     _parse_credential_mappings,
     main,
 )
+from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
 from master_agent.errors import ConfigurationError
+from master_agent.models import (
+    AgentAction,
+    AuthoritySource,
+    ChangePlan,
+    ConnectorExecutionBinding,
+    DataClassification,
+    ResourceRef,
+    RiskLevel,
+)
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.registry import ConnectorRegistry
 from tests.fakes import ScriptedTransport
 from tests.helpers import private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _DirectReadGitHubConnector(ReadOnlyConnector):
+    """Small typed live-shaped connector for CLI direct-read coverage."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            system="github",
+            capabilities=frozenset({"github.repository.list"}),
+        )
+        self._config = SimpleNamespace(
+            auth=SimpleNamespace(mode="bearer"),
+            config_identity="a" * 64,
+            base_url="https://api.github.com",
+            max_pages=4,
+            max_response_bytes=4096,
+            ca_bundle=None,
+            ca_bundle_sha256=None,
+        )
+
+    def _fetch(self, action: AgentAction) -> RetrievedPayload:
+        del action
+        return RetrievedPayload(
+            data={"repositories": [{"full_name": "example/project"}]},
+            connector_reference="https://api.github.com/user/repos",
+        )
 
 
 class CliTests(unittest.TestCase):
@@ -174,8 +212,118 @@ class CliTests(unittest.TestCase):
             self.assertFalse((root / "audit.sqlite3").exists())
             self.assertFalse((root / "result.json").exists())
 
-    def test_discovery_returns_nonzero_for_enabled_missing_environment(self) -> None:
-        """Enabled but unusable connectors should fail readiness checks."""
+    def test_direct_read_runs_one_typed_provider_without_persistent_state(
+        self,
+    ) -> None:
+        """Direct reads use a verified in-memory connector, not apply runtime state."""
+
+        action = AgentAction(
+            capability="github.repository.list",
+            target=ResourceRef("github", "repository_collection", "me"),
+            parameters={"limit": 1, "visibility": "all"},
+            risk=RiskLevel.READ_ONLY,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="direct-read-cli",
+            justification="List repositories visible to the requesting user.",
+            data_classification=DataClassification.INTERNAL,
+        )
+        plan = ChangePlan(
+            goal="List the repositories visible to me.",
+            actions=(action,),
+            created_by="direct-user",
+        )
+        binding = ConnectorExecutionBinding(
+            system="github",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://api.github.com",
+            resolved_origin="https://api.github.com",
+            authentication_mode="bearer",
+            credential_identity="github:user:42",
+        )
+        registry = ConnectorRegistry()
+        registry.register(_DirectReadGitHubConnector())
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(plan.to_dict(), default=str),
+                encoding="utf-8",
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            original = Path.cwd()
+            try:
+                os.chdir(root)
+                with (
+                    patch(
+                        "master_agent.cli.capture_connector_executions",
+                        return_value=(SimpleNamespace(binding=binding),),
+                    ) as capture,
+                    patch(
+                        "master_agent.cli.build_live_registry",
+                        return_value=registry,
+                    ),
+                    redirect_stdout(stdout),
+                    redirect_stderr(stderr),
+                ):
+                    status = main(["run", str(plan_path), "--direct-read"])
+            finally:
+                os.chdir(original)
+
+            self.assertEqual(status, 0, stderr.getvalue())
+            self.assertIn("mode: direct-read", stdout.getvalue())
+            self.assertIn("provider: github", stdout.getvalue())
+            self.assertIn("example/project", stdout.getvalue())
+            self.assertNotIn("audit.sqlite3", stdout.getvalue())
+            self.assertFalse((root / ".master-agent").exists())
+            capture.assert_called_once()
+
+    def test_direct_read_rejects_effects_before_connector_capture(self) -> None:
+        action = AgentAction(
+            capability="github.issue.create",
+            target=ResourceRef("github", "issue", "new"),
+            parameters={
+                "owner": "example",
+                "repository": "project",
+                "title": "should not run",
+            },
+            risk=RiskLevel.REVERSIBLE_WRITE,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=True,
+            idempotency_key="direct-read-effect",
+            justification="Test direct-read rejection.",
+        )
+        plan = ChangePlan(
+            goal="Do not create an issue.",
+            actions=(action,),
+            created_by="direct-user",
+        )
+
+        with private_temporary_directory() as directory:
+            plan_path = Path(directory) / "plan.json"
+            plan_path.write_text(
+                json.dumps(plan.to_dict(), default=str),
+                encoding="utf-8",
+            )
+            stderr = StringIO()
+            with (
+                patch("master_agent.cli.capture_connector_executions") as capture,
+                redirect_stdout(StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = main(["run", str(plan_path), "--direct-read"])
+
+        self.assertEqual(status, 1)
+        self.assertIn("read-only", stderr.getvalue())
+        capture.assert_not_called()
+
+    def test_discovery_reports_missing_environment_without_failing_onboarding(
+        self,
+    ) -> None:
+        """Normal discovery inventories setup gaps without a readiness failure."""
 
         with private_temporary_directory() as directory:
             root = Path(directory)
@@ -204,9 +352,25 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
                         "jira",
                     ]
                 )
-            self.assertEqual(status, 2, stderr.getvalue())
+            self.assertEqual(status, 0, stderr.getvalue())
             self.assertIn("missing_environment", stdout.getvalue())
             self.assertNotIn("secret", stdout.getvalue().lower())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "discover",
+                        "--integrations",
+                        str(config),
+                        "--systems",
+                        "jira",
+                        "--require-ready",
+                    ]
+                )
+            self.assertEqual(status, 2, stderr.getvalue())
+            self.assertIn("missing_environment", stdout.getvalue())
 
     def test_readiness_accepts_implemented_github_principal_adapter(self) -> None:
         with private_temporary_directory() as directory:
@@ -294,7 +458,7 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                     status = main(["discover"])
             finally:
                 os.chdir(original)
-            self.assertEqual(status, 2, stderr.getvalue())
+            self.assertEqual(status, 0, stderr.getvalue())
             self.assertIn("missing_environment", stdout.getvalue())
             self.assertIn("jira", stdout.getvalue())
 

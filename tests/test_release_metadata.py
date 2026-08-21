@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -111,6 +112,23 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             self.assertEqual(checks, [])
             self.assertTrue(any("license is denied" in error for error in errors))
+
+    def test_core_install_keeps_draft_rendering_dependencies_optional(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        project = pyproject["project"]
+
+        self.assertEqual(project["dependencies"], [])
+        self.assertEqual(
+            project["optional-dependencies"]["drafts"],
+            [
+                "Pillow==12.3.0",
+                "XlsxWriter==3.2.9",
+                "lxml==6.1.1",
+                "python-pptx==1.0.2",
+                "typing_extensions==4.16.0",
+            ],
+        )
 
     def test_runtime_directory_is_rejected_even_when_contents_are_ignored(self) -> None:
         with TemporaryDirectory() as directory:
@@ -436,7 +454,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(
             errors,
             [
-                "v1 demonstration PowerPoint validation requires the python-pptx dependency"
+                "v1 demonstration PowerPoint validation requires the optional drafts extra"
             ],
         )
 

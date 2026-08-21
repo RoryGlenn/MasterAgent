@@ -204,6 +204,14 @@ python -m pip install -e '.[subagents]'
 The base installation remains usable without that extra; unavailable specialist
 delegation falls back to the selected MasterAgent parent.
 
+The core package deliberately omits the local Office and draft renderers. If
+you need `demo` or `draft-package`, add the optional extra to the same virtual
+environment:
+
+```bash
+.venv/bin/python -m pip install -e '.[drafts]'
+```
+
 ### From a wheel
 
 **Machine: Ubuntu 24.04 or macOS development computer**
@@ -223,8 +231,14 @@ directory is never an implicit configuration source.
 
 ## Quick safe demonstration
 
-Run a complete local review-package workflow without credentials or provider
-writes:
+Install the optional draft-rendering extra before running the local
+review-package workflow:
+
+```bash
+.venv/bin/python -m pip install -e '.[drafts]'
+```
+
+Then run the credential-free demonstration:
 
 ```bash
 master-agent demo
@@ -253,6 +267,11 @@ Inspect available connectors without activating them:
 master-agent discover --integrations config/integrations.toml
 ```
 
+Missing credentials or optional provider configuration are shown as setup
+information and do not make ordinary discovery fail. Use `--require-ready`
+when a script or deployment check must return nonzero until the selected
+connectors are ready.
+
 Probe or connect only the systems needed for the requested operation:
 
 ```bash
@@ -273,6 +292,25 @@ master-agent connect \
 
 Reuse the exact `--connector-url` during `bind-context` and `run --apply` so the
 destination remains approval-bound.
+
+### Direct, verified provider reads
+
+For a plan that was created for a direct user request and contains only
+read-only actions for one built-in provider, use the explicit direct-read mode:
+
+```bash
+master-agent run direct-read-plan.json \
+  --direct-read \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+This mode builds one live typed read connector in memory, checks the plan and
+connector binding, and independently re-reads the provider result. It prints a
+bounded terminal result and does not create an audit database, runtime
+manifest, draft artifact, or result file. The plan must have direct-user
+authority, one provider, and no approval-required action; plugin, capsule,
+write, send, administrative, and scheduled work is rejected. Provider effects
+still use the bound `run --apply` workflow below.
 
 ### Anonymous public repository reads
 

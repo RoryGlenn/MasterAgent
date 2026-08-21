@@ -116,6 +116,9 @@ handling, and independent verification.
 - The repository license, exact runtime dependency closure,
   dependency-license admission policy, CycloneDX 1.5 SBOM, and
   `THIRD_PARTY_NOTICES.md` agree.
+- The core wheel installs without the optional Office and draft-rendering
+  dependencies; the separately declared `drafts` extra supplies the complete
+  reviewed renderer closure used by the demonstration and draft-package checks.
 - Installed distribution versions and license metadata are rechecked; unknown
   or denied licenses fail closed.
 - Raw entry-point plugins, dependent capsules, provider capsules, side-effect

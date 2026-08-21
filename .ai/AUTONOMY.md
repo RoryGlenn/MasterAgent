@@ -179,6 +179,23 @@ other connector's configured Atlassian account pair. An explicit credential
 for the selected connector wins, the related connector stays inactive, and the
 fixed provider probe decides whether the account actually has access.
 
+For a direct user request that already has a plan containing only read-only
+actions for one built-in provider, use the explicit stateless route instead of
+building an applied runtime manifest:
+
+```bash
+.venv/bin/master-agent run DIRECT_READ_PLAN.json \
+  --direct-read \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+This route constructs one typed live read connector in memory, validates the
+plan and connector binding, and independently verifies the result before
+printing it. It creates no audit, artifact, approval, or result-file state. It
+is never a shortcut for a write, send, administrative action, deletion, merge,
+plugin/capsule operation, or scheduled work; those operations stay on the
+bound `run --apply` route.
+
 When the operator supplies a Jira or Confluence Cloud URL, pass it directly as
 `--connector-url SYSTEM=URL`. The runtime normalizes a page or UI URL to its
 validated `atlassian.net` tenant origin without editing persistent

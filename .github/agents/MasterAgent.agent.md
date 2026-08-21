@@ -80,6 +80,12 @@ operator prompt in each chat.
   gates, communication gates, and recurring execution disabled at rest. A
   directly requested provider operation selects only its minimum connector and
   fixed probes for that goal; do not ask for a second confirmation.
+- For a direct-user plan with one built-in provider and only typed read actions,
+  use `master-agent run PLAN --direct-read`. It keeps the read binding and
+  verified result in memory rather than creating applied-run state, but retains
+  catalog, governance, policy, source, and connector validation. Never use it
+  for a provider effect; writes, sends, administration, deletion, merge,
+  plugins, capsules, and recurring work remain on the bound `run --apply` path.
 - If the runtime has no declared and implemented capability for an in-scope,
   safe operation, treat that capability gap as implementation work: add its
   typed contract, tests, and documentation, then continue the original goal.
