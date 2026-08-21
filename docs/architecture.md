@@ -11,12 +11,10 @@ Authenticated user
                  │
                  ▼
      user-selected MasterAgent profile
-       ┌─────────┴──────────┐
-       ▼                    ▼
- direct handling     optional advisory sub-agents
-       │            research / plan review only
-       └─────────┬──────────┘
-                 │ re-check untrusted advice
+                 │
+                 ▼
+ direct parent handling / repository-owned advisory harness
+                 │ fail closed; no direct GitHub-host child invocation
                  ▼
        parent or registered workflow
                  │
@@ -62,31 +60,35 @@ read connector  draft connector  mutation/send connector
  compensation          audit/evidence
 ```
 
-The advisory branch is part of the GitHub Copilot host, not the Python runtime.
-It cannot grant authority or create a second connector path. The selected parent
-uses no more than three depth-one research tasks and one plan review, re-checks
-their output as untrusted data, and constructs the final typed plan itself.
-Simple requests bypass the branch. If the host surface cannot invoke a reviewed
-specialist, the parent continues directly. See
-[`advisory-subagents.md`](advisory-subagents.md).
+Direct GitHub-host advisory invocation is disabled because that surface cannot
+prove the selected-parent allowlist, depth-one routing, or per-goal counters.
+The repository-owned harness is deterministic integration-test and future-
+adapter infrastructure; it is not a second runtime or provider path. The parent
+continues directly whenever no approved adapter satisfies the full boundary.
+See [`advisory-subagents.md`](advisory-subagents.md).
 
 ## Principal components
 
 ### Advisory sub-agents
 
-`MasterAgent-Read-Researcher.agent.md` can read/search the repository and may
-execute only bounded diagnostics or typed read-only `master-agent` commands.
-It cannot edit or recursively delegate. `MasterAgent-Plan-Reviewer.agent.md`
-has only read/search tools and cannot execute, edit, approve, or rewrite a plan.
-Both profiles are non-user-invocable and available for model invocation by the
-parent.
+The selected `MasterAgent.agent.md` profile omits the `agent` tool. Both child
+profiles are non-user- and non-model-invocable and contain only `read` and
+`search`. This fail-closed host configuration prevents unsupported direct or
+nested child invocation.
 
-Their profiles and tool allowlists are defense in depth, not an authorization
-boundary. The parent treats every returned claim as untrusted, supplies no raw
-credential or approval material, and remains responsible for target selection
-and `ChangePlan` construction. Policy, authenticated approval, connector
-execution, provider verification, compensation, retention, and audit remain in
-the deterministic runtime below.
+`src/master_agent/advisory.py` loads those exact profiles for a deterministic
+repository-owned boundary. A session is bound to the selected parent, depth is
+fixed at one, and counters admit at most three research attempts and one plan
+review. The broker rejects credential, approval, signing, target, recipient,
+connector, tenant, private-context, and `ChangePlan` fields before a future
+worker is invoked. The dispatcher derives its tools from the child profile and
+admits only bounded repository reads/searches. Reports remain untrusted,
+cannot carry targets, approvals, plans, connectors, or secret-like content, and
+become evidence only after the parent independently re-reads every citation.
+
+If an adapter is missing or fails, the broker returns an explicit parent fallback. The deterministic policy, approval, credential, connector,
+verification, compensation, retention, and audit runtime remains the only
+provider-effect path.
 
 ### Domain models
 
@@ -206,6 +208,23 @@ loaded during apply. The capsule worker does not change that raw entry-point
 boundary: it accepts only a separately reviewed, dependency-free pure capsule.
 A plugin with dependencies still needs a sealed complete dependency filesystem
 before it can become executable.
+
+### Ephemeral direct read sessions
+
+`run --direct-read` is a separate execution type for a direct-user plan made of
+read-only actions against exactly one built-in typed provider. It performs the
+same catalog, governance, policy, source-of-truth, credential, connector
+identity/scope, endpoint, response-budget, prompt-injection, and independent
+re-read validation required for typed reads, but holds its binding and report in
+memory. It does not construct the applied runtime's audit, idempotency,
+artifact, approval, result-publication, plugin, or capsule state.
+
+The direct executor validates the whole plan before provider setup, uses a
+`ReadOnlyConnector` only, and shares one HTTP budget across each read and its
+verification. It rejects workflow or persisted execution context, multiple
+providers, effects, non-direct authority, and approval-required actions. This
+keeps the convenient path structurally unable to become an effect bypass; the
+orchestrator below remains the only execution owner for provider effects.
 
 ### Orchestrator
 

@@ -27,10 +27,11 @@ prompt in each MasterAgent chat.
   python3 scripts/bootstrap_agent.py
   ```
 
-The script is idempotent. It reuses a valid repository-local `.venv`, installs
-only when the local runtime is absent or its project metadata changed, and runs
-the offline `master-agent readiness` check. Depending on the Copilot client and
-its terminal policy, the operator may need to approve this one command.
+The script is idempotent. It refreshes a bootstrap-managed local runtime when
+its project metadata changes. A usable pre-existing repository-local `.venv`
+with no bootstrap marker is reused only for the offline readiness check: it is
+not rewritten, marked as trusted, or granted provider, credential, or
+effect-path authority.
 
 ## Bounded setup
 
@@ -56,6 +57,10 @@ Read connectors are available but inactive during setup. Setup never supplies
 credentials, activates a connector, enables mutation or communication gates,
 changes permissions outside `.venv`, accesses a workplace provider, grants
 approval, sends content, or performs an enterprise mutation.
+
+The bounded setup installs the lightweight core. A task that needs local
+PowerPoint or draft rendering may install the declared `.[drafts]` extra later;
+that extra is not required for readiness or direct provider reads.
 
 ## Response contract
 

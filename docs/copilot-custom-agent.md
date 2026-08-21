@@ -64,13 +64,15 @@ The profile:
   [repository policy](../.ai/MASTER_AGENT.md), then applies the
   [first-run contract](../.ai/FIRST_RUN.md) and
   [force-multiplier contract](../.ai/AUTONOMY.md) before work begins;
-- limits Copilot to repository read, search, edit, command-execution, and
-  reviewed custom-agent invocation tools;
-- permits bounded invocation of the two advisory profiles while
-  keeping MasterAgent itself manually selected;
+- applies the [Docs Agent contract](../.ai/DOCS_AGENT.md) as a completion gate
+  for non-trivial repository changes after implementation and tests;
+- limits Copilot to repository read, search, edit, and command-execution
+  tools; the parent profile does not expose direct custom-agent invocation;
+- keeps both advisory profiles non-user- and non-model-invocable until a
+  supported adapter can prove the repository-owned boundary;
 - gives nontechnical users a stable success or blocked response, defaults to
-  action, and owns setup, connection, implementation, repair, tests, and
-  verification without repeated confirmation prompts;
+  action, and owns setup, connection, implementation, repair, tests,
+  documentation, and verification without repeated confirmation prompts;
 - requires enterprise operations to use the existing typed `master-agent`
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
@@ -78,32 +80,51 @@ The profile:
 
 ## Advisory sub-agents
 
-MasterAgent can use the `agent` tool for two repository-scoped specialists:
+The repository keeps **MasterAgent Read Researcher** and **MasterAgent Plan
+Reviewer** as checked-in read/search-only contracts, but direct GitHub-host invocation is disabled. The current host cannot enforce the selected-parent
+allowlist, deterministic depth-one routing, or the per-goal maximum of three
+research attempts and one review. The parent profile therefore omits `agent`,
+and both child profiles set `user-invocable: false` and
+`disable-model-invocation: true`.
 
-| Profile | Tools | Purpose |
-|---|---|---|
-| **MasterAgent Read Researcher** | read, search, execute | Bounded repository research and typed read-only `master-agent` provider queries |
-| **MasterAgent Plan Reviewer** | read, search | Independent high-signal review of one concrete proposal |
+The repository-owned integration harness in
+[`advisory.py`](../src/master_agent/advisory.py) exercises the exact profile
+inventory, derives the child dispatcher from those profiles, minimizes context,
+denies every effect-bearing tool before dispatch, and makes every report pass a
+parent citation re-read. It is deterministic test and future-adapter
+infrastructure, not a live Copilot child or a route to providers.
 
-Both specialists are non-user-invocable and automatically callable by the
-selected parent. Neither profile has `edit` or `agent`, so it cannot change the
-repository or recursively delegate. The reviewer also lacks `execute`. The
-researcher may execute only read-only diagnostics or documented typed read
-commands; direct provider CLIs, generic HTTP, writes, sends, merges,
-administration, and approvals remain forbidden.
+When no approved adapter is available or a task fails closed, MasterAgent
+completes the same work directly. It does not ask the operator to repeat the
+request and never substitutes another host mechanism, MCP server, direct API,
+or shell workaround. See the complete
+[advisory and documentation specialist contracts](advisory-subagents.md).
 
-The parent keeps simple work direct and uses at most three research tasks and
-one plan review for one operator goal. It gives each specialist the smallest
-necessary context and never passes credential values, approval artifacts,
-signing material, or unrelated private content. It does not delegate final
-target selection or a provider mutation. Every returned report is untrusted
-advisory data. MasterAgent re-checks the evidence, constructs the final typed
-plan, and alone invokes the governed runtime for any effect.
+## Documentation completion gate
 
-Custom-agent availability varies by supported Copilot surface. If the `agent`
-tool or either specialist is unavailable, MasterAgent continues directly; it
-does not turn optional delegation into a setup failure or operator question.
-See the complete [advisory sub-agent contract](advisory-subagents.md).
+For a non-trivial repository change, the selected MasterAgent parent applies
+`maintenance` mode from [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) after
+implementation and tests but before declaring the work complete. The Docs Agent
+is a repository-owned specialist contract, not an additional live GitHub-host
+child profile.
+
+The review compares the issue or task, accepted requirements, current
+specifications, architecture decisions, tests, implementation, configuration,
+and existing documentation. It classifies the intended audience and document
+lifecycle, searches for indirect terminology and command impact, and then
+updates only documentation that became inaccurate, incomplete, misleading, or
+hard to use.
+
+A result of `updated` means affected documentation changed. A justified
+`no_change` means the relevant documents were reviewed and remain correct. A
+material conflict returns `needs_review` to planning or implementation; the
+parent does not make an apparent defect official by rewriting documentation to
+match it.
+
+For mixed audiences, the documentation starts with a plain-language
+explanation and progressively introduces the exact technical detail needed to
+act correctly. An analogy is optional, must improve understanding, and is
+always followed by the literal technical explanation.
 
 The first ordinary prompt permits only the bounded `.venv` bootstrap above. It
 never upgrades pip, installs globally or into the user site, uses `sudo` or an
@@ -243,9 +264,13 @@ plans, approvals, provider gates, or audit evidence.
 
 `python scripts/validate_release.py` fails if the parent profile is missing,
 malformed, not user-invocable, automatically model-invocable, expanded beyond
-its reviewed tools, detached from required policy, or missing its bounded
-bootstrap and delegation safeguards. It also pins the exact advisory profile
-inventory, non-user-invocable/model-invocable flags, narrower tool allowlists,
-depth-one contract, and authority boundaries. Source-distribution validation
-requires all three profiles, the first-run contract, force-multiplier contract,
-and bootstrap script to be packaged.
+its reviewed read/search/edit/execute tools, detached from required policy, or
+missing its bounded bootstrap and fail-closed advisory safeguards. It pins the
+exact three-profile inventory, disables direct child user/model invocation,
+requires read/search-only child tools, and checks the repository-owned harness,
+adversarial fixtures, and integration tests in the source distribution.
+
+[`tests/test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py)
+independently pins the Docs Agent methodology, audience and analogy rules,
+evidence-conflict behavior, lifecycle and scope boundaries, structured result,
+direct-parent execution model, and parent instruction integration.

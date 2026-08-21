@@ -35,7 +35,8 @@ software**:
 
 ```text
 Development plane
-GitHub issue → behavioral change specification → code/tests → verification
+GitHub issue → behavioral change specification → code/tests
+             → Docs Agent maintenance → verification
              → archive → maintained current requirements
 
 Runtime plane
@@ -48,6 +49,8 @@ User/workflow request → ChangePlan → policy/governance → approval
 - [`specs/current/`](specs/current/) records **required current behavior**.
 - [`specs/changes/`](specs/changes/) records active behavioral deltas, design,
   and implementation tasks.
+- [`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md) defines the evidence-aware
+  documentation completion gate for non-trivial repository changes.
 - Tests provide executable evidence.
 - A runtime `ChangePlan` binds exact provider effects and approvals.
 
@@ -71,6 +74,8 @@ unsafe surfaces remain deliberately non-routable.
 | Approved reversible writes | Narrow Jira, Confluence, Bitbucket, and GitHub operations implemented; unsafe or non-atomic mutations remain disabled |
 | External communication | Exact-approved Outlook sends and Teams messages/replies implemented behind separate gates |
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
+| Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
+| Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
 | Capability capsule promotion | Signed test/local promotion for dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
 
@@ -156,11 +161,14 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-For complex work, the selected parent may ask **MasterAgent Read Researcher**
-for bounded evidence gathering and **MasterAgent Plan Reviewer** for one
-independent review. Their output is untrusted advisory data; neither receives
-execution or approval authority. Simple work stays direct. See the
-[advisory sub-agent contract](docs/advisory-subagents.md).
+The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including parent ownership, depth and call budgets, context sanitization, read-only tool policy, state binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, the parent will complete the same work directly; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
+
+For every non-trivial repository change, the selected parent also applies the
+[Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
+before completion. It updates affected authoritative documentation or records a
+justified `no_change`; a material requirement, test, implementation, or
+documentation conflict returns `needs_review` rather than being documented as
+intent. This is direct parent work, not a live GitHub-host child-agent path.
 
 A missing safe repository capability is implementation work, not a reason to
 stop with “the connector is read-only.” MasterAgent adds the smallest complete
@@ -186,6 +194,24 @@ python -m pip install -e .
 master-agent readiness
 ```
 
+To enable the optional broker-owned Researcher and Plan Reviewer adapter in a
+development checkout, install the separate subagent extra:
+
+```bash
+python -m pip install -e '.[subagents]'
+```
+
+The base installation remains usable without that extra; unavailable specialist
+delegation falls back to the selected MasterAgent parent.
+
+The core package deliberately omits the local Office and draft renderers. If
+you need `demo` or `draft-package`, add the optional extra to the same virtual
+environment:
+
+```bash
+.venv/bin/python -m pip install -e '.[drafts]'
+```
+
 ### From a wheel
 
 **Machine: Ubuntu 24.04 or macOS development computer**
@@ -205,8 +231,14 @@ directory is never an implicit configuration source.
 
 ## Quick safe demonstration
 
-Run a complete local review-package workflow without credentials or provider
-writes:
+Install the optional draft-rendering extra before running the local
+review-package workflow:
+
+```bash
+.venv/bin/python -m pip install -e '.[drafts]'
+```
+
+Then run the credential-free demonstration:
 
 ```bash
 master-agent demo
@@ -235,6 +267,11 @@ Inspect available connectors without activating them:
 master-agent discover --integrations config/integrations.toml
 ```
 
+Missing credentials or optional provider configuration are shown as setup
+information and do not make ordinary discovery fail. Use `--require-ready`
+when a script or deployment check must return nonzero until the selected
+connectors are ready.
+
 Probe or connect only the systems needed for the requested operation:
 
 ```bash
@@ -255,6 +292,25 @@ master-agent connect \
 
 Reuse the exact `--connector-url` during `bind-context` and `run --apply` so the
 destination remains approval-bound.
+
+### Direct, verified provider reads
+
+For a plan that was created for a direct user request and contains only
+read-only actions for one built-in provider, use the explicit direct-read mode:
+
+```bash
+master-agent run direct-read-plan.json \
+  --direct-read \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+This mode builds one live typed read connector in memory, checks the plan and
+connector binding, and independently re-reads the provider result. It prints a
+bounded terminal result and does not create an audit database, runtime
+manifest, draft artifact, or result file. The plan must have direct-user
+authority, one provider, and no approval-required action; plugin, capsule,
+write, send, administrative, and scheduled work is rejected. Provider effects
+still use the bound `run --apply` workflow below.
 
 ### Anonymous public repository reads
 
@@ -329,6 +385,12 @@ python scripts/specs.py status
 python scripts/specs.py archive <change-id>
 ```
 
+After implementation and relevant tests, apply the Docs Agent maintenance
+contract to the final change before declaring it complete. Continue after
+`updated` or a justified `no_change`; route `needs_review` back to planning or
+implementation, then run final specification and release validation before
+archival.
+
 Use the workflow for capabilities, approvals, policy, governance, connectors,
 workflows, verification, compensation, retention, audit, and cross-component
 contracts. Skip it for formatting, typo fixes, minor documentation corrections,
@@ -371,7 +433,7 @@ creating another runtime planner or authorization layer. See
 ### Agents and extensibility
 
 - [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
-- [Advisory sub-agent contract](docs/advisory-subagents.md)
+- [Advisory sub-agent and Docs Agent contracts](docs/advisory-subagents.md)
 - [Capability capsule promotion](docs/capability-capsules.md)
 - [Plugin development](docs/plugin-development.md)
 
@@ -380,6 +442,7 @@ creating another runtime planner or authorization layer. See
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
 - [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Live connector contracts](docs/live-connectors.md)
+- [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)
 - [Phase 2 read-only context](docs/phase-2-read-only.md)
 - [Phase 2B communication context](docs/phase-2b-communication-context.md)
 - [Phase 2C authentication and readiness](docs/phase-2c-authentication.md)

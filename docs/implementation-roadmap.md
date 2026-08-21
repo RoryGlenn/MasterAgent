@@ -3,10 +3,11 @@
 ## Overall status
 
 The v1 governed core, provider contracts, bounded advisory profiles, capability
-capsule path, and native behavioral specification lifecycle are implemented.
-Release-hardening gates keep incomplete local-Git mutation, non-manifest
-workflow execution, recurring execution, destructive retention maintenance,
-raw plugin execution, and unsafe provider mutations non-routable.
+capsule path, native behavioral specification lifecycle, and audience-aware
+documentation completion gate are implemented. Release-hardening gates keep
+incomplete local-Git mutation, non-manifest workflow execution, recurring
+execution, destructive retention maintenance, raw plugin execution, and unsafe
+provider mutations non-routable.
 
 | Area | Software status | Operational status |
 |---|---|---|
@@ -19,7 +20,8 @@ raw plugin execution, and unsafe provider mutations non-routable.
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
 | 6 — recurring autonomy | Registration and status only | Execution disabled pending exact target, configuration, source, and runtime binding |
-| Advisory sub-agents | Complete | Optional host-level read research and plan review; parent and deterministic runtime retain authority |
+| Advisory sub-agents | Checked-in contracts, deterministic broker, and optional live Copilot SDK worker complete | Direct GitHub-host invocation is disabled; the selected parent may use the broker-owned read-only adapter and falls back to direct work when unavailable |
+| Documentation completion gate | Complete | The selected parent applies the repository-owned Docs Agent contract directly; no live host child profile is implied |
 | Capability promotion | Complete for dependency-free pure test/local capsules | Provider, side-effect, dependent, raw-plugin, and production capsules remain fail closed |
 | Behavioral specifications | Complete | Native current/change/archive model, validation, archival, templates, CI integration, and self-hosted pilot shipped; current requirements grow organically |
 
@@ -103,14 +105,45 @@ verification.
 
 ### Advisory sub-agent boundary
 
-- the parent may use no more than three depth-one research tasks and one plan
-  review for one operator goal;
+- direct GitHub-host child invocation remains disabled; the generic host
+  `agent` tool and automatic child-model invocation stay outside the reviewed
+  path;
+- the repository broker permits no more than three depth-one research tasks and
+  one plan review for one operator goal;
+- an optional broker-owned Copilot SDK worker may execute one explicitly
+  preselected read-only Researcher or Plan Reviewer session after payload
+  sanitization;
+- live specialist sessions disable ambient config, skill, and MCP discovery,
+  enforce a repository-root read-only tool boundary, and bind results to the
+  exact task, profile, and repository state;
 - specialists cannot edit, approve, execute provider effects, or recursively
   delegate;
-- all specialist output is untrusted advisory data;
+- all specialist output is untrusted advisory data and cited files are reread by
+  the selected parent;
+- the selected parent performs equivalent work directly when delegation is
+  unavailable or rejected;
 - the parent owns final target selection and typed plan construction; and
 - the deterministic runtime remains the only connector, approval, and audit
   path.
+
+### Documentation-completion boundary
+
+- [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) is the single authoritative
+  specialist contract;
+- `maintenance`, `authoring`, and `audit` modes classify reader goals, audience,
+  document purpose, and lifecycle before editing;
+- non-trivial repository changes receive a maintenance review after
+  implementation and tests but before completion;
+- mixed-audience documentation starts with plain language and progressively
+  introduces the exact technical detail needed to act correctly;
+- implementation, tests, requirements, decisions, configuration, and existing
+  documentation are compared rather than treating code as automatic intent;
+- `updated` and justified `no_change` results permit completion, while a material
+  conflict returns `needs_review` to planning or implementation;
+- current-state, historical, planned, and generated documentation keep distinct
+  lifecycle rules; and
+- the selected parent applies the contract directly without adding a misleading
+  live GitHub-host child profile.
 
 ### Capability-promotion boundary
 

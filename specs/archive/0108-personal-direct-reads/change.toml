@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0108-personal-direct-reads"
+title = "Practical personal installation and direct provider reads"
+status = "archived"
+github_issue = 108
+created = "2026-08-20"
+updated = "2026-08-21"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DIRECT-READ-001"
+destination = "runtime/MA-DIRECT-READ-001.md"
+source = "current/MA-DIRECT-READ-001.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-DIRECT-READ-002"
+destination = "runtime/MA-DIRECT-READ-002.md"
+source = "current/MA-DIRECT-READ-002.md"

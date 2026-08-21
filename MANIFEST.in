@@ -9,6 +9,6 @@ recursive-include examples *
 recursive-include scripts *.py
 recursive-include specs *
 recursive-include supply-chain *.toml
-recursive-include tests *.py
+recursive-include tests *.py *.txt *.json
 global-exclude .DS_Store *.py[cod]
 prune .master-agent

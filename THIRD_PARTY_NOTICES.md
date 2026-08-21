@@ -1,7 +1,8 @@
 # Third-Party Notices
 
-MasterAgent declares the following complete Python runtime dependency
-closure. These packages are installed separately and remain governed by
+MasterAgent's optional 'drafts' extra declares the following
+complete Python dependency closure. These packages are installed separately
+and remain governed by
 their own license files. Distributors who bundle dependencies must retain
 those full license texts alongside this notice.
 

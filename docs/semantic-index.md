@@ -7,8 +7,24 @@ it contains links and search vocabulary, not source excerpts, embeddings, or
 repository content sent to an external service.
 
 This file is navigation data, not authority. The execution boundary remains
-[`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), and retrieved or generated
-content remains untrusted.
+[`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), the documentation completion
+boundary is [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md), and retrieved or
+generated content remains untrusted.
+
+## Development documentation path
+
+For a non-trivial repository change, the issue and current specifications guide
+implementation and executable tests. The selected MasterAgent parent then
+applies the Docs Agent's `maintenance` mode to the final change before final
+specification and release validation. It updates affected authoritative
+documentation, records a justified `no_change`, or returns a material conflict
+as `needs_review` rather than documenting an apparent defect as intent.
+
+The Docs Agent is a repository-owned contract, not a live GitHub-host child
+profile. Its direct-parent integration is protected by
+[`test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py), explained
+in [`advisory-subagents.md`](advisory-subagents.md), and incorporated into the
+[development specification workflow](development-specifications.md).
 
 ## Runtime path
 
@@ -64,7 +80,7 @@ registry, policy, and orchestrator path above.
 | Change approval, risk, governance, or prohibition behavior | [`policy.py`](../src/master_agent/policy.py), [`governance.py`](../src/master_agent/governance.py), [`approvals.py`](../src/master_agent/approvals.py) | [`test_policy.py`](../tests/test_policy.py), [`test_capability_governance.py`](../tests/test_capability_governance.py), [`threat-model.md`](threat-model.md) |
 | Change the private approval request, signing handoff, or exact-run resume flow | [`approval_handoff.py`](../src/master_agent/approval_handoff.py), [`cli.py`](../src/master_agent/cli.py) | [`test_approval_handoff.py`](../tests/test_approval_handoff.py), [`cli-reference.md`](cli-reference.md), [`operations.md`](operations.md) |
 | Bind an approved plan to runtime state and prevent path, identity, credential, or configuration substitution | [`execution_context.py`](../src/master_agent/execution_context.py), [`config_sources.py`](../src/master_agent/config_sources.py), [`directory_safety.py`](../src/master_agent/directory_safety.py), [`trust_store.py`](../src/master_agent/trust_store.py) | [`test_execution_context.py`](../tests/test_execution_context.py), [`test_config_sources.py`](../tests/test_config_sources.py), [`test_directory_safety.py`](../tests/test_directory_safety.py) |
-| Load provider configuration, connect ephemerally, or diagnose deployment readiness | [`cli.py`](../src/master_agent/cli.py), [`config.py`](../src/master_agent/config.py), [`readiness.py`](../src/master_agent/readiness.py), [`discovery.py`](../src/master_agent/discovery.py) | [`test_cli.py`](../tests/test_cli.py), [`test_config.py`](../tests/test_config.py), [`test_config_and_discovery.py`](../tests/test_config_and_discovery.py), [`test_discovery.py`](../tests/test_discovery.py), [`configuration.md`](configuration.md) |
+| Load provider configuration, make a stateless direct read, connect ephemerally, or diagnose deployment readiness | [`cli.py`](../src/master_agent/cli.py), [`direct_read.py`](../src/master_agent/direct_read.py), [`config.py`](../src/master_agent/config.py), [`readiness.py`](../src/master_agent/readiness.py), [`discovery.py`](../src/master_agent/discovery.py) | [`test_cli.py`](../tests/test_cli.py), [`test_direct_read.py`](../tests/test_direct_read.py), [`test_config.py`](../tests/test_config.py), [`test_config_and_discovery.py`](../tests/test_config_and_discovery.py), [`test_discovery.py`](../tests/test_discovery.py), [`configuration.md`](configuration.md), [`cli-reference.md`](cli-reference.md) |
 | Resolve canonical or provider-keyed credentials and Microsoft OAuth | [`auth.py`](../src/master_agent/auth.py), [`credentials.py`](../src/master_agent/credentials.py), [`oauth.py`](../src/master_agent/oauth.py), [`oauth_config.py`](../src/master_agent/oauth_config.py) | [`test_credentials.py`](../tests/test_credentials.py), [`test_oauth_flows.py`](../tests/test_oauth_flows.py), [`test_oauth_readiness.py`](../tests/test_oauth_readiness.py), [`phase-2c-authentication.md`](phase-2c-authentication.md) |
 | Register or select connectors | [`registry.py`](../src/master_agent/registry.py), [`connectors/factory.py`](../src/master_agent/connectors/factory.py), [`connectors/base.py`](../src/master_agent/connectors/base.py) | [`test_registry.py`](../tests/test_registry.py), [`test_registry_capabilities.py`](../tests/test_registry_capabilities.py), [`test_factory_gates.py`](../tests/test_factory_gates.py) |
 | Add bounded provider HTTP behavior | [`http.py`](../src/master_agent/http.py), [`connectors/utils.py`](../src/master_agent/connectors/utils.py), [`connectors/microsoft_graph.py`](../src/master_agent/connectors/microsoft_graph.py) | [`test_http.py`](../tests/test_http.py), [`test_http_lifecycle_budget.py`](../tests/test_http_lifecycle_budget.py), [`live-connectors.md`](live-connectors.md) |
@@ -78,7 +94,8 @@ registry, policy, and orchestrator path above.
 | Add a recurring workflow or change occurrence claims | [`recurring.py`](../src/master_agent/recurring.py), [`config/recurring.toml`](../config/recurring.toml) | [`test_recurring.py`](../tests/test_recurring.py), [`phase-6-autonomy.md`](phase-6-autonomy.md) |
 | Add connector-plugin metadata or isolation | [`plugins.py`](../src/master_agent/plugins.py), [`docs/plugin-development.md`](plugin-development.md) | [`test_plugins.py`](../tests/test_plugins.py), [`test_cli_plugin_boundary.py`](../tests/test_cli_plugin_boundary.py) |
 | Add or change a CLI command | [`cli.py`](../src/master_agent/cli.py), [`__main__.py`](../src/master_agent/__main__.py) | [`test_cli.py`](../tests/test_cli.py), [`test_cli_v1.py`](../tests/test_cli_v1.py), [`test_cli_phase_completion.py`](../tests/test_cli_phase_completion.py), [`cli-reference.md`](cli-reference.md) |
-| Change the GitHub Copilot parent or advisory profiles, first-run setup, force-multiplier autonomy/stop conditions, delegation limits, response contract, or tool boundary | [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md), [`MasterAgent-Read-Researcher.agent.md`](../.github/agents/MasterAgent-Read-Researcher.agent.md), [`MasterAgent-Plan-Reviewer.agent.md`](../.github/agents/MasterAgent-Plan-Reviewer.agent.md), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md), [`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md), [`bootstrap_agent.py`](../scripts/bootstrap_agent.py) | [`test_agent_bootstrap.py`](../tests/test_agent_bootstrap.py), [`test_agent_profiles.py`](../tests/test_agent_profiles.py), [`test_release_metadata.py`](../tests/test_release_metadata.py), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`advisory-subagents.md`](advisory-subagents.md), [`release-validation.md`](release-validation.md) |
+| Change documentation audience, lifecycle, evidence-conflict, scope, or completion-gate behavior | [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md) | [`test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py), [`advisory-subagents.md`](advisory-subagents.md), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`development-specifications.md`](development-specifications.md) |
+| Change the GitHub Copilot parent or advisory profiles, first-run setup, force-multiplier autonomy/stop conditions, delegation limits, response contract, or tool boundary | [`MasterAgent.agent.md`](../.github/agents/MasterAgent.agent.md), [`MasterAgent-Read-Researcher.agent.md`](../.github/agents/MasterAgent-Read-Researcher.agent.md), [`MasterAgent-Plan-Reviewer.agent.md`](../.github/agents/MasterAgent-Plan-Reviewer.agent.md), [`advisory.py`](../src/master_agent/advisory.py), [`AGENTS.md`](../AGENTS.md), [`.ai/MASTER_AGENT.md`](../.ai/MASTER_AGENT.md), [`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md), [`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md), [`bootstrap_agent.py`](../scripts/bootstrap_agent.py) | [`test_agent_bootstrap.py`](../tests/test_agent_bootstrap.py), [`test_agent_profiles.py`](../tests/test_agent_profiles.py), [`test_advisory_integration.py`](../tests/test_advisory_integration.py), [`test_release_metadata.py`](../tests/test_release_metadata.py), [`copilot-custom-agent.md`](copilot-custom-agent.md), [`advisory-subagents.md`](advisory-subagents.md), [`release-validation.md`](release-validation.md) |
 | Change release assertions or source-tree hygiene | [`scripts/validate_release.py`](../scripts/validate_release.py), [`pyproject.toml`](../pyproject.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`test_packaged_defaults.py`](../tests/test_packaged_defaults.py), [`release-validation.md`](release-validation.md) |
 | Change runtime dependencies, licenses, lock, SBOM, or notices | [`generate_sbom.py`](../scripts/generate_sbom.py), [`runtime-dependencies.toml`](../supply-chain/runtime-dependencies.toml), [`config/dependency-licenses.toml`](../config/dependency-licenses.toml) | [`test_release_metadata.py`](../tests/test_release_metadata.py), [`release-validation.md`](release-validation.md), [`capability-capsules.md`](capability-capsules.md) |
 
@@ -159,11 +176,14 @@ The configuration files have distinct responsibilities:
 Run the checks from the project root:
 
 ```bash
+python3 -m unittest discover -s tests -p 'test_docs_agent_contract.py' -v
 python3 -m unittest discover -s tests -v
+python3 scripts/specs.py validate
 python3 scripts/validate_release.py
 ```
 
-Update this index when a module takes ownership of a concept, a connector or
-workflow is added, or a security invariant moves. Prefer intent-oriented links
-over exhaustive symbol lists; source search remains the right tool for exact
-call sites and line-level references.
+Update this index when a module or repository contract takes ownership of a
+concept, a connector or workflow is added, a documentation completion rule
+moves, or a security invariant changes. Prefer intent-oriented links over
+exhaustive symbol lists; source search remains the right tool for exact call
+sites and line-level references.

@@ -6,6 +6,13 @@ Prepare a complete cross-system change package without changing any provider or 
 
 ## Command
 
+Install the optional local draft-rendering dependencies before running a draft
+workflow. The core package does not include them:
+
+```bash
+python -m pip install 'master-agent[drafts]'
+```
+
 ```bash
 master-agent demo
 ```

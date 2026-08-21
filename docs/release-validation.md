@@ -34,7 +34,8 @@ handling, and independent verification.
   deltas, incomplete tasks or evidence, unsafe archival, transaction rollback,
   and historical snapshot drift.
 - The completed self-hosted pilot proves the full issue → change specification
-  → implementation/tests → current requirement → archive lifecycle.
+  → implementation/tests → Docs Agent maintenance review → final validation →
+  current requirement → archive lifecycle.
 - Validation keeps specifications in the development plane. They cannot grant
   a capability, satisfy approval, alter a runtime `ChangePlan`, resolve
   credentials, authorize provider execution, or enter runtime audit authority.
@@ -74,15 +75,32 @@ handling, and independent verification.
   explicit no-local-change mode, provider-neutral connection flow,
   capability-gap ownership, late operator-question rule, and resumable
   approval handoff.
-- The exact advisory-agent inventory contains one non-user-invocable read
-  researcher and one non-user-invocable plan reviewer.
-- Both advisory profiles have narrower tool allowlists, cannot recursively
-  delegate, and return untrusted advisory data rather than authority.
-- All three profiles, the first-run and autonomy contracts, and the bootstrap
-  script are present in the source distribution.
+- The exact advisory-agent inventory contains one selected parent and two
+  read/search-only child contracts. Direct child user/model invocation and the
+  parent's `agent` tool are disabled.
+- The repository-owned integration harness enforces exact-parent routing,
+  depth one, three-research/one-review counters, context minimization,
+  profile-derived dispatch, untrusted-output validation, and parent citation
+  re-read.
+- Adversarial fixtures prove no filesystem, environment, network, provider,
+  credential, approval, audit, target, recipient, connector, tenant, or
+  `ChangePlan` authority crosses the advisory boundary.
+- All profiles, harness code, fixtures, tests, first-run and autonomy contracts,
+  and the bootstrap script are present in the source distribution.
 - The actionable capability-gap contract is pinned: a safe missing repository
   path must be implemented, tested, documented, and followed by a return to the
   original goal rather than a hypothetical checklist.
+- [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md) remains the single authoritative
+  documentation specialist contract. No additional live GitHub-host profile is
+  permitted by the reviewed inventory.
+- [`tests/test_docs_agent_contract.py`](../tests/test_docs_agent_contract.py)
+  pins maintenance, authoring, and audit modes; audience and analogy rules;
+  evidence-conflict and lifecycle behavior; default edit scope; `updated`,
+  `no_change`, and `needs_review` results; and direct-parent integration across
+  the durable instruction files.
+- Documentation workflow guides must preserve the post-implementation
+  completion gate and must not imply that direct host child invocation is
+  operational.
 
 ### Capability capsules and supply chain
 
@@ -98,6 +116,9 @@ handling, and independent verification.
 - The repository license, exact runtime dependency closure,
   dependency-license admission policy, CycloneDX 1.5 SBOM, and
   `THIRD_PARTY_NOTICES.md` agree.
+- The core wheel installs without the optional Office and draft-rendering
+  dependencies; the separately declared `drafts` extra supplies the complete
+  reviewed renderer closure used by the demonstration and draft-package checks.
 - Installed distribution versions and license metadata are rechecked; unknown
   or denied licenses fail closed.
 - Raw entry-point plugins, dependent capsules, provider capsules, side-effect
@@ -122,8 +143,8 @@ handling, and independent verification.
   builder's umask.
 - CI installs and tests from owner-private virtual environments rather than a
   hosted runner's shared site-packages.
-- The source archive includes workflow definitions and the tests that validate
-  them.
+- The source archive includes workflow definitions, `.ai/DOCS_AGENT.md`, and
+  the tests that validate them.
 
 ### Optional live sandbox validation
 

@@ -17,6 +17,12 @@
         }
       ],
       "name": "python-pptx",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/python-pptx@1.0.2",
       "type": "library",
       "version": "1.0.2"
@@ -37,6 +43,12 @@
         }
       ],
       "name": "Pillow",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/pillow@12.3.0",
       "type": "library",
       "version": "12.3.0"
@@ -57,6 +69,12 @@
         }
       ],
       "name": "XlsxWriter",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/xlsxwriter@3.2.9",
       "type": "library",
       "version": "3.2.9"
@@ -77,6 +95,12 @@
         }
       ],
       "name": "lxml",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/lxml@6.1.1",
       "type": "library",
       "version": "6.1.1"
@@ -97,6 +121,12 @@
         }
       ],
       "name": "typing_extensions",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/typing-extensions@4.16.0",
       "type": "library",
       "version": "4.16.0"
@@ -104,13 +134,7 @@
   ],
   "dependencies": [
     {
-      "dependsOn": [
-        "pkg:pypi/pillow@12.3.0",
-        "pkg:pypi/xlsxwriter@3.2.9",
-        "pkg:pypi/lxml@6.1.1",
-        "pkg:pypi/python-pptx@1.0.2",
-        "pkg:pypi/typing-extensions@4.16.0"
-      ],
+      "dependsOn": [],
       "ref": "pkg:pypi/master-agent@1.0.0"
     },
     {
@@ -150,6 +174,12 @@
         }
       ],
       "name": "master-agent",
+      "properties": [
+        {
+          "name": "master-agent:optional-extra",
+          "value": "drafts"
+        }
+      ],
       "purl": "pkg:pypi/master-agent@1.0.0",
       "type": "application",
       "version": "1.0.0"

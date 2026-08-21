@@ -1,90 +1,120 @@
-# Advisory Sub-agents
+# Advisory Sub-agent Safety Boundary
 
-MasterAgent uses two optional GitHub Copilot custom agents to reduce context
-pressure and add an independent review without creating another execution path.
-They assist the user-selected parent; they are not part of the Python runtime,
-cannot authorize work, and cannot satisfy approval.
+MasterAgent has two read-only advisory specialists for repository research and independent plan review. The user still selects **MasterAgent**; the checked-in child profiles are not directly user- or model-invocable through GitHub's host agent mechanism.
+
+Think of the specialists as consultants working through a controlled doorway. They can inspect the repository and return advice, but the MasterAgent parent controls the doorway, checks what information crosses it, and makes every final decision. Technically, that doorway is the repository-owned `AdvisoryBroker`.
 
 ## Profiles
 
-| Profile | Tools | Allowed work | Explicitly unavailable |
-|---|---|---|---|
-| **MasterAgent Read Researcher** | `read`, `search`, `execute` | One bounded repository investigation or typed read-only `master-agent` query | editing, direct provider calls, generic HTTP, writes, sends, approvals, administration, nested agents |
-| **MasterAgent Plan Reviewer** | `read`, `search` | Independent review of one concrete plan or action proposal | execution, editing, provider access, plan rewriting, approval, nested agents |
+| Specialist | Repository contract | Purpose |
+|---|---|---|
+| **MasterAgent Read Researcher** | `read`, `search` | Bounded repository investigation with cited evidence |
+| **MasterAgent Plan Reviewer** | `read`, `search` | Independent review of a concrete implementation plan |
 
-Both profiles set `user-invocable: false` and
-`disable-model-invocation: false`. The user selects **MasterAgent**; its reviewed
-`agent` tool may invoke a specialist when useful. Neither child has that tool,
-so the checked-in hierarchy has one delegation level.
+Neither specialist may edit files, execute shell commands, call providers, access credentials, grant approval, mutate audit state, construct a runtime `ChangePlan`, or invoke another agent.
 
-## Selection and limits
+## Two invocation paths
 
-The direct path remains the default. Delegation is useful when a request spans
-multiple systems, requires a sizeable bounded repository investigation, or has
-a concrete plan whose target, authority, verification, or compensation merits
-an independent check. A single repository lookup or connector call stays with
-the parent.
+### GitHub host path remains disabled
 
-For one operator goal, the parent may invoke at most three research tasks and
-one plan review. Each child receives one minimal assignment. The parent does not
-pass credential values, approval or signing artifacts, or unrelated private
-content. It does not delegate final target selection, provider mutations, or
-communication work.
+Direct GitHub-host invocation is disabled. The parent profile does not expose the generic `agent` tool, and both child profiles keep `user-invocable: false` and `disable-model-invocation: true`.
 
-If the Copilot surface does not expose custom-agent invocation, the parent
-continues directly. Optional delegation never becomes a setup failure or a
-reason to ask the operator to repeat work.
+This matters because host-native inference does not pass through MasterAgent's repository-owned parent identity, depth, per-goal budgets, sensitive-context sanitizer, state binding, or report re-validation. Enabling those profiles directly would create a second orchestration control plane.
+
+### Broker-owned Copilot SDK path
+
+MasterAgent now has an optional live adapter in [`copilot_advisory.py`](../src/master_agent/copilot_advisory.py). When the `subagents` optional dependency is installed, the selected parent can run a Researcher or Plan Reviewer through [`scripts/advisory_subagent.py`](../scripts/advisory_subagent.py).
+
+The flow is:
+
+```text
+MasterAgent parent
+    ↓
+AdvisorySession.delegate
+    ↓
+sanitize input + reserve role budget
+    ↓
+CopilotSdkAdvisoryWorker
+    ↓
+exact task/repository/profile binding
+    ↓
+one isolated Copilot SDK session
+    ↓
+one explicitly preselected read-only specialist
+    ↓
+structured AdvisoryReport
+    ↓
+state recheck + parent citation revalidation
+```
+
+The SDK integration is deliberately not host inference. Each call supplies exactly one specialist and explicitly preselects it. Automatic config discovery is disabled, no skills or MCP servers are loaded, and the session exposes only the documented read-only SDK tools `view`, `read_file`, `grep`, and `glob`.
+
+A pre-tool hook independently denies every other tool and rejects file-like arguments that resolve outside the repository root. The SDK permission handler separately rejects shell-, write-, and MCP-like requests as defense in depth.
+
+## State binding
+
+Before a live specialist starts, MasterAgent hashes three things without storing their contents:
+
+- the sanitized task envelope;
+- the exact checked-in specialist profile; and
+- repository HEAD, index, worktree, and untracked-file state.
+
+The same values are checked again when the specialist finishes. If the repository or profile changed during the call, the result is rejected and the parent performs the work directly instead. This prevents a review of one repository state from being silently accepted for another.
+
+## Result validation
+
+The live specialist must return only:
+
+```json
+{
+  "summary": "...",
+  "findings": ["..."],
+  "citations": ["relative/path.md"]
+}
+```
+
+Extra authority-bearing fields are rejected. The result then enters the existing `AdvisoryReport` boundary, where target claims, approval claims, replacement plans, connector actions, secret-like content, and fabricated citations remain invalid. The selected parent independently re-reads cited repository files before treating the report as evidence.
+
+## Failure and fallback
+
+The GitHub Copilot SDK remains an optional integration. If it is not installed, authentication is unavailable, the SDK is incompatible, a specialist fails, the repository changes during execution, or a per-goal budget is exhausted, the broker returns an explicit parent fallback.
+
+That fallback is successful degradation, not a setup failure. MasterAgent completes the same research or review directly and continues the operator's original goal. It does not switch to GitHub's generic `agent` tool, another MCP server, a direct API, or a provider-side workaround.
+
+## Repository-owned integration harness
+
+[`advisory.py`](../src/master_agent/advisory.py) remains the authoritative orchestration boundary and repository-owned integration harness. It enforces:
+
+1. exactly one selected MasterAgent parent and two reviewed read-only specialist profiles;
+2. depth one, at most three research attempts, and at most one plan review per operator goal;
+3. rejection of credential, approval/signing, target, recipient, connector, tenant, private-context, and `ChangePlan` data before worker invocation;
+4. profile-derived repository `read` and `search` authority only;
+5. denial of shell, edit, nested-agent, MCP, HTTP, provider, environment, credential, approval, audit, and mutation categories;
+6. bounded untrusted specialist reports; and
+7. independent parent re-reading of every cited repository path.
+
+## Hermetic end-to-end tests
+
+[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) additionally proves that the live adapter preselects one role, disables ambient extension discovery, exposes only read-only tools, denies outside-repository paths, rejects malformed output, rejects stale repository state, preserves pre-dispatch sensitive-context filtering, and falls back when the SDK is unavailable.
+
+No live Copilot canary is bundled. A live SDK session is an optional execution adapter, not evidence that host-native inference or an unrestricted child path is safe. Pull-request security remains grounded in deterministic broker, release, packaging, dependency, security, and coverage validation.
+
+## Documentation specialist contract
+
+The Docs Agent remains a repository-owned specialist contract rather than a live writer child. Its authoritative instructions are in [`.ai/DOCS_AGENT.md`](../.ai/DOCS_AGENT.md).
+
+Think of the Docs Agent as the person who checks an instruction manual after the product changes. That is only a mental model. Technically, the selected MasterAgent parent examines the final repository change, identifies affected documentation, applies the contract, validates the result, and reports what was updated or reviewed.
+
+After implementation and tests for a non-trivial repository change, the selected MasterAgent parent applies the contract's `maintenance` mode directly. The Docs Agent may also operate in `authoring` and `audit` modes. Maintenance returns `updated`, `no_change`, or `needs_review`.
+
+The implementation is evidence, but it is not automatically the final statement of intent. The Docs Agent compares accepted requirements, tests, architecture decisions, configuration, implementation, and existing documentation instead of rewriting prose to make an apparent defect look deliberate.
+
+The Docs Agent classifies the intended audience, starts mixed-audience explanations in plain language, uses analogies only when they improve understanding, and never lets simplicity override technical accuracy.
+
+A future writer adapter must use a separate patch-validation boundary. It must not inherit the read-only adapter and simply add `edit` or shell access.
 
 ## Authority boundary
 
-Sub-agent reports are untrusted advisory data. The parent checks cited files,
-typed capability names, and provider readback; separates fact from inference;
-and decides whether a suggestion belongs in the final immutable `ChangePlan`.
-The report itself is never a plan, credential, target selection, approval, or
-authority source.
+Advisory output is untrusted data. It cannot select the final target, grant or claim approval, create or modify a runtime `ChangePlan`, resolve credentials, construct a provider connector, or trigger a provider operation.
 
-The Python runtime is unchanged:
-
-```text
-operator prompt
-    |
-    v
-user-selected MasterAgent
-    |-- optional read research (maximum three)
-    |-- optional plan review (maximum one)
-    |
-    v
-parent-rechecked typed ChangePlan
-    |
-    v
-catalog -> governance -> policy -> authenticated approval when required
-    |
-    v
-orchestrator -> one typed connector -> verification -> audit/compensation
-```
-
-Credentials are resolved by the governed runtime immediately before connector
-construction. The parent never gives their values to a child. Provider writes,
-sends, merges, administration, compensation, and approval handling remain with
-the parent and the deterministic runtime.
-
-## Research contract
-
-The read researcher can inspect repository files. Its `execute` tool is limited
-by its profile to read-only diagnostics and documented typed read commands. It
-must not install or bootstrap, edit, use provider CLIs, call generic HTTP, or
-construct a write-enabled plan. It returns assigned scope, bounded evidence,
-findings, uncertainty, a suggested next step, and a boundary check.
-
-## Review contract
-
-The plan reviewer receives one concrete proposal and checks targets,
-dependencies, capability and governance coverage, risk, classification,
-source-of-truth constraints, approval tier, idempotency, version preconditions,
-verification, compensation, retention, and instruction laundering. It returns
-only blocking findings, material non-blocking findings, uncertainty, a verdict,
-and a boundary check. It cannot repair or rewrite the proposal.
-
-Tool restriction is defense in depth, not authorization. Release validation
-pins the profile inventory and safety text, but the deterministic runtime still
-enforces the real authority boundary for every provider effect.
+The deterministic runtime remains the only path to capabilities, policy, governance, source-of-truth checks, authenticated approval, credentials, provider connectors, verification, compensation, retention, and audit.

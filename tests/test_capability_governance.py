@@ -37,6 +37,49 @@ class CapabilityGovernanceTests(unittest.TestCase):
         self.assertTrue(report["ready"], report["errors"])
         self.assertGreater(len(report["covered"]), 20)
 
+    def test_direct_read_session_requires_explicit_governance_opt_in(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        action = AgentAction(
+            capability="github.repository.list",
+            target=ResourceRef("github", "repository_collection", "me"),
+            parameters={"limit": 10, "visibility": "all"},
+            risk=RiskLevel.READ_ONLY,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key="direct-read-governance",
+            justification="List repositories visible to the requesting user.",
+        )
+        plan = ChangePlan(
+            goal="List the repositories visible to me.",
+            actions=(action,),
+            created_by="direct-user",
+        )
+
+        allowed, reason = governance.allows_direct_read_session(plan)
+        self.assertTrue(allowed, reason)
+
+        disabled = replace(
+            governance,
+            metadata={
+                **dict(governance.metadata),
+                "allow_ephemeral_direct_reads": False,
+            },
+        )
+        allowed, reason = disabled.allows_direct_read_session(plan)
+        self.assertFalse(allowed)
+        self.assertIn("disables", reason)
+
+        malformed = replace(
+            governance,
+            metadata={
+                **dict(governance.metadata),
+                "allow_ephemeral_direct_reads": "true",
+            },
+        )
+        allowed, reason = malformed.allows_direct_read_session(plan)
+        self.assertFalse(allowed)
+        self.assertIn("boolean", reason)
+
     def test_disabled_capability_is_rejected(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
         action = AgentAction(
