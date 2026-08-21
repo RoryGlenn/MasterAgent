@@ -199,7 +199,7 @@ class AdvisoryRunnerMutationTests(unittest.TestCase):
         """The live worker cannot return across an untracked-content mutation."""
 
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
+            base = Path(directory).resolve()
             repository = base / "repository"
             state = base / "state"
             repository.mkdir()

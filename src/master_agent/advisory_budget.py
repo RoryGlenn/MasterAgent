@@ -18,7 +18,7 @@ from master_agent.advisory import (
     AdvisoryBudgetReservation,
     AdvisoryRole,
 )
-from master_agent.directory_safety import PinnedDirectory
+from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 
@@ -27,6 +27,7 @@ _KEY_NAME = ".budget.hmac-key"
 _KEY_BYTES = 32
 _MAX_GOAL_RECORDS = 4096
 _GOAL_ID_BYTES = 256
+_MAX_STATE_DIRECTORY_DEPTH = 64
 _SCHEMA_COLUMNS = (
     "goal_digest",
     "repository_digest",
@@ -52,17 +53,7 @@ class AdvisoryBudgetStore:
         self._repository_digest = _repository_identity(repository_root)
         selected = Path(os.path.abspath(os.fspath(state_directory.expanduser())))
         try:
-            selected.mkdir(parents=True, exist_ok=True, mode=0o700)
-            state_stat = selected.lstat()
-            if (
-                not stat.S_ISDIR(state_stat.st_mode)
-                or state_stat.st_uid != os.getuid()
-                or stat.S_IMODE(state_stat.st_mode) & 0o077
-            ):
-                raise ConfigurationError(
-                    "advisory budget directory must be current-user-owned mode 0700"
-                )
-            with PinnedDirectory.open(selected) as pinned:
+            with _create_and_pin_private_directory(selected) as pinned:
                 self._key = _load_or_create_key(pinned)
                 self._database = PinnedSQLiteDatabase(
                     Path(_DATABASE_NAME),
@@ -288,6 +279,78 @@ def _repository_identity(root: Path) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+def _create_and_pin_private_directory(path: Path) -> PinnedDirectory:
+    """Create a private directory through a no-follow descriptor chain."""
+
+    if not path.is_absolute() or path == Path(path.anchor):
+        raise ConfigurationError("advisory budget directory path is invalid")
+    components = path.parts[1:]
+    if not components or len(components) > _MAX_STATE_DIRECTORY_DEPTH:
+        raise ConfigurationError("advisory budget directory path is too deep")
+    descriptor = os.open(
+        os.sep,
+        os.O_RDONLY | _directory_flag() | _no_follow_flag(),
+    )
+    try:
+        for component in components:
+            created = False
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | _directory_flag() | _no_follow_flag(),
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                    created = True
+                except FileExistsError:
+                    pass
+                child = os.open(
+                    component,
+                    os.O_RDONLY | _directory_flag() | _no_follow_flag(),
+                    dir_fd=descriptor,
+                )
+            try:
+                if created:
+                    os.fchmod(child, 0o700)
+                    os.fsync(child)
+                identity = DirectoryIdentity.from_stat(os.fstat(child))
+                public = os.stat(
+                    component,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                if not identity.matches(public):
+                    raise ConfigurationError(
+                        "advisory budget directory path changed during creation"
+                    )
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+        final_stat = os.fstat(descriptor)
+        expected = DirectoryIdentity.from_stat(final_stat)
+        if (
+            not stat.S_ISDIR(final_stat.st_mode)
+            or final_stat.st_uid != os.getuid()
+            or stat.S_IMODE(final_stat.st_mode) != 0o700
+        ):
+            raise ConfigurationError(
+                "advisory budget directory must be current-user-owned mode 0700"
+            )
+    finally:
+        os.close(descriptor)
+
+    pinned = PinnedDirectory.open(path, expected_identity=expected)
+    if pinned.path != path:
+        pinned.close()
+        raise ConfigurationError("advisory budget directory traverses a symlink")
+    return pinned
+
+
 def _load_or_create_key(directory: PinnedDirectory) -> bytes:
     parent_descriptor = directory.duplicate_fd()
     descriptor: int | None = None
@@ -405,5 +468,14 @@ def _no_follow_flag() -> int:
     if not isinstance(value, int):
         raise AdvisoryBudgetStateError(
             "this platform cannot safely open the advisory budget key"
+        )
+    return value
+
+
+def _directory_flag() -> int:
+    value = getattr(os, "O_DIRECTORY", None)
+    if not isinstance(value, int):
+        raise AdvisoryBudgetStateError(
+            "this platform cannot safely open the advisory budget directory"
         )
     return value

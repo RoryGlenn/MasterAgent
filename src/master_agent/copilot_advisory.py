@@ -1361,7 +1361,11 @@ class CopilotSdkAdvisoryWorker:
         finally:
             try:
                 if session is not None:
-                    await session.disconnect()
+                    try:
+                        await session.disconnect()
+                    except BaseException:
+                        failed = True
+                        raise
             finally:
                 if failed:
                     await self._stop_client()

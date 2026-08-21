@@ -60,8 +60,9 @@ class _Response:
 
 
 class _FakeSession:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, *, disconnect_error: bool = False) -> None:
         self._content = content
+        self._disconnect_error = disconnect_error
         self.prompts: list[str] = []
         self.disconnected = False
 
@@ -71,12 +72,15 @@ class _FakeSession:
 
     async def disconnect(self) -> None:
         self.disconnected = True
+        if self._disconnect_error:
+            raise RuntimeError("session disconnect failed")
 
 
 class _FakeClient:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, *, disconnect_error: bool = False) -> None:
         self._content = content
-        self.session = _FakeSession(content)
+        self._disconnect_error = disconnect_error
+        self.session = _FakeSession(content, disconnect_error=disconnect_error)
         self.sessions: list[_FakeSession] = []
         self.started = False
         self.stopped = False
@@ -94,7 +98,10 @@ class _FakeClient:
 
     async def create_session(self, **kwargs: object) -> _FakeSession:
         self.session_kwargs = kwargs
-        self.session = _FakeSession(self._content)
+        self.session = _FakeSession(
+            self._content,
+            disconnect_error=self._disconnect_error,
+        )
         self.sessions.append(self.session)
         return self.session
 
@@ -285,6 +292,39 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         self.assertIsNot(client.sessions[0], client.sessions[1])
         self.assertTrue(all(session.disconnected for session in client.sessions))
         self.assertEqual(client.stop_count, 1)
+
+    def test_disconnect_failure_discards_reusable_client(self) -> None:
+        """A session cleanup failure cannot leak its client into the next call."""
+
+        content = '{"summary":"Found evidence","findings":[],"citations":[]}'
+        failed_client = _FakeClient(content, disconnect_error=True)
+        healthy_client = _FakeClient(content)
+        clients = iter((failed_client, healthy_client))
+        worker = CopilotSdkAdvisoryWorker(
+            self.root,
+            reuse_client=True,
+            client_factory=lambda root: next(clients),
+            state_reader=lambda root: "same",
+        )
+        session = self.broker.start_session("MasterAgent", "disconnect-goal")
+        with patch.dict(sys.modules, self.modules):
+            failed = session.delegate(
+                AdvisoryRole.RESEARCH,
+                {"task": "first", "paths": ["README.md"]},
+                worker=worker,
+            )
+            completed = session.delegate(
+                AdvisoryRole.RESEARCH,
+                {"task": "second", "paths": ["README.md"]},
+                worker=worker,
+            )
+        worker.close()
+
+        self.assertEqual(failed.status, DelegationStatus.FALLBACK)
+        self.assertEqual(completed.status, DelegationStatus.COMPLETED)
+        self.assertEqual(failed_client.stop_count, 1)
+        self.assertEqual(healthy_client.start_count, 1)
+        self.assertEqual(healthy_client.stop_count, 1)
 
     def test_pre_tool_hook_denies_writes_shell_and_outside_paths(self) -> None:
         """A second SDK hook gate blocks widened or escaping tool requests."""

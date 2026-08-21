@@ -29,7 +29,7 @@ class AdvisoryBudgetStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(__file__).resolve().parents[1]
         self.temporary = tempfile.TemporaryDirectory()
-        self.state = Path(self.temporary.name) / "state"
+        self.state = Path(self.temporary.name).resolve() / "state"
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -167,6 +167,27 @@ class AdvisoryBudgetStoreTests(unittest.TestCase):
         os.chmod(self.state, 0o755)
         with self.assertRaises(AdvisoryBudgetStateError):
             AdvisoryBudgetStore(self.state, self.root)
+
+    def test_symlinked_state_ancestor_is_rejected_without_writes(self) -> None:
+        """A repository symlink cannot redirect private budget-state creation."""
+
+        base = Path(self.temporary.name).resolve()
+        repository = base / "repository"
+        outside = base / "outside"
+        repository.mkdir()
+        outside.mkdir(mode=0o700)
+        (repository / ".master-agent").symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+
+        with self.assertRaises(AdvisoryBudgetStateError):
+            AdvisoryBudgetStore(
+                repository / ".master-agent/advisory",
+                repository,
+            )
+
+        self.assertEqual(tuple(outside.iterdir()), ())
 
     def test_budget_failure_keeps_worker_on_parent_path(self) -> None:
         """An authenticated-state failure produces fallback before worker startup."""

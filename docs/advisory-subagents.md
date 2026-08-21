@@ -70,7 +70,9 @@ is mode `0700`; its random HMAC key and race-safe SQLite generations are mode
 `0600`. A row stores only the SHA-256 goal identifier, repository identity
 digest, two counters, and an authentication tag. The repository's pinned SQLite
 layer serializes independent processes, so failures and retries cannot reset or
-race past three research attempts and one plan review.
+race past three research attempts and one plan review. Directory creation walks
+a no-follow descriptor chain, so a symlinked state ancestor is rejected before
+any key or database file is created.
 
 The selected parent owns goal identity: it creates one opaque ID and reuses it
 for the complete operator goal. A new ID means a new goal; changing IDs to evade
