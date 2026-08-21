@@ -53,9 +53,39 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
     """Prove one goal budget cannot be reset by real process boundaries."""
 
     def setUp(self) -> None:
-        self.root = Path(__file__).resolve().parents[1]
+        self.source = Path(__file__).resolve().parents[1]
         self.temporary = tempfile.TemporaryDirectory()
-        self.state = Path(self.temporary.name) / "state"
+        base = Path(self.temporary.name).resolve()
+        self.root = base / "repository"
+        profiles = self.root / ".github/agents"
+        profiles.mkdir(parents=True)
+        for name in (
+            "MasterAgent.agent.md",
+            "MasterAgent-Read-Researcher.agent.md",
+            "MasterAgent-Plan-Reviewer.agent.md",
+        ):
+            shutil.copy2(self.source / ".github/agents" / name, profiles / name)
+        shutil.copy2(self.source / "README.md", self.root / "README.md")
+        docs = self.root / "docs"
+        docs.mkdir()
+        shutil.copy2(
+            self.source / "docs/advisory-subagents.md",
+            docs / "advisory-subagents.md",
+        )
+        subprocess.run(("git", "init", "-q"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "config", "user.email", "test@example.invalid"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "MasterAgent Test"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(("git", "add", "."), cwd=self.root, check=True)
+        subprocess.run(("git", "commit", "-qm", "fixture"), cwd=self.root, check=True)
+        self.state = base / "state"
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -77,7 +107,7 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
         research = [
             subprocess.run(
                 self._command("research", "restart-goal"),
-                cwd=self.root,
+                cwd=self.source,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -88,7 +118,7 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
         review = [
             subprocess.run(
                 self._command("plan-review", "restart-goal"),
-                cwd=self.root,
+                cwd=self.source,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -110,7 +140,7 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
         processes = [
             subprocess.Popen(
                 self._command("research", "concurrent-goal"),
-                cwd=self.root,
+                cwd=self.source,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

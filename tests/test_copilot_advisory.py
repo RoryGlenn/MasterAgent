@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -102,7 +103,37 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
     """Prove live SDK wiring cannot bypass the existing advisory broker."""
 
     def setUp(self) -> None:
-        self.root = Path(__file__).resolve().parents[1]
+        source = Path(__file__).resolve().parents[1]
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        profiles = self.root / ".github/agents"
+        profiles.mkdir(parents=True)
+        for name in (
+            "MasterAgent.agent.md",
+            "MasterAgent-Read-Researcher.agent.md",
+            "MasterAgent-Plan-Reviewer.agent.md",
+        ):
+            shutil.copy2(source / ".github/agents" / name, profiles / name)
+        shutil.copy2(source / "README.md", self.root / "README.md")
+        docs = self.root / "docs"
+        docs.mkdir()
+        shutil.copy2(
+            source / "docs/advisory-subagents.md",
+            docs / "advisory-subagents.md",
+        )
+        subprocess.run(("git", "init", "-q"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "config", "user.email", "test@example.invalid"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "MasterAgent Test"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(("git", "add", "."), cwd=self.root, check=True)
+        subprocess.run(("git", "commit", "-qm", "fixture"), cwd=self.root, check=True)
         self.inventory = load_agent_inventory(self.root)
         self.repository = RepositoryFixture(
             {
@@ -120,6 +151,9 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         copilot.Tool = _FakeTool  # type: ignore[attr-defined]
         copilot.ToolResult = _FakeToolResult  # type: ignore[attr-defined]
         self.modules = {"copilot": copilot, "copilot.rpc": rpc}
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
 
     def _delegate(
         self,
