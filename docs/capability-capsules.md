@@ -183,8 +183,9 @@ Validation runs without provider credentials and includes denial probes for
 host files, ambient secrets, IPv4, IPv6, localhost, subprocesses, and private
 object introspection. Native Windows promotion additionally requires those
 operations to fail inside the actual AppContainer. A network probe accepts
-only native access-denied or unavailable-family/network results; connection
-refusal or reachability fails validation. The signed worker identity
+only native access-denied, unavailable-family/network, or listener-backed
+timeout/drop results; connection refusal or reachability fails validation. The
+signed worker identity
 binds the backend, worker, interpreter, process boundary, projected runtime,
 and DACL policy; Linux also binds the trusted bubblewrap executable. That
 identity is rechecked for each connector action, so source, helper, runtime, or

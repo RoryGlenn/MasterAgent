@@ -216,7 +216,7 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         ):
             _copy_runtime_directory(source, self.root / "destination")
 
-    def test_network_probes_require_native_access_denied_code(self) -> None:
+    def test_network_probes_wait_for_final_os_result(self) -> None:
         source = _network_probe_source("127.0.0.1", family=2)
         compile(source, "<network-probe>", "exec")
         self.assertIn("10013", source)
@@ -226,6 +226,15 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         self.assertIn("select.select", source)
         self.assertIn("SO_ERROR", source)
         self.assertIn("UNEXPECTED_{code}", source)
+
+    def test_listener_backed_probe_accepts_timeout_drop_but_not_refusal(self) -> None:
+        source = _network_probe_source(
+            "::1", family=23, port=54321, listener_backed=True
+        )
+        compile(source, "<network-probe>", "exec")
+        self.assertIn("10060", source.splitlines()[1])
+        self.assertNotIn("10061", source)
+        self.assertIn("54321", source)
 
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")

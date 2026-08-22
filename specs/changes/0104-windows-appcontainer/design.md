@@ -54,7 +54,8 @@ capsules remain blocked.
 ## Security
 
 - the AppContainer has no capability SIDs and therefore no IPv4, IPv6, or
-  localhost network capability;
+  localhost network capability; loopback probes target live host listeners so
+  an AppContainer timeout/drop proves filtering rather than an absent service;
 - the environment is allowlisted and contains no ambient credentials;
 - the runtime projection is read/execute-only for the AppContainer, and only a
   fresh work directory is writable;

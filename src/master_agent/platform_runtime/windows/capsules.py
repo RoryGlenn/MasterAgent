@@ -7,6 +7,7 @@ import hashlib
 import os
 import secrets
 import shutil
+import socket
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -536,6 +537,12 @@ class CtypesWindowsAppContainerApi:
             secret_path,
             _private_sddl(owner_sid=owner_sid),
         )
+        ipv4_listener = _loopback_listener("127.0.0.1", family=socket.AF_INET)
+        try:
+            ipv6_listener = _loopback_listener("::1", family=socket.AF_INET6)
+        except BaseException:
+            ipv4_listener.close()
+            raise
         probes = (
             (
                 "os_host_file",
@@ -557,8 +564,24 @@ class CtypesWindowsAppContainerApi:
                 ),
             ),
             ("os_network_ipv4", _network_probe_source("1.1.1.1", family=2)),
-            ("os_network_ipv6", _network_probe_source("::1", family=23)),
-            ("os_network_localhost", _network_probe_source("127.0.0.1", family=2)),
+            (
+                "os_network_ipv6",
+                _network_probe_source(
+                    "::1",
+                    family=23,
+                    port=int(ipv6_listener.getsockname()[1]),
+                    listener_backed=True,
+                ),
+            ),
+            (
+                "os_network_localhost",
+                _network_probe_source(
+                    "127.0.0.1",
+                    family=2,
+                    port=int(ipv4_listener.getsockname()[1]),
+                    listener_backed=True,
+                ),
+            ),
             (
                 "os_subprocess",
                 (
@@ -589,6 +612,8 @@ class CtypesWindowsAppContainerApi:
                     )
                 results.append(MappingProxyType({"name": name, "status": "denied"}))
         finally:
+            ipv6_listener.close()
+            ipv4_listener.close()
             secret_path.unlink(missing_ok=True)
         return tuple(results)
 
@@ -955,15 +980,24 @@ def _private_sddl(*, owner_sid: str) -> str:
     )
 
 
-def _network_probe_source(host: str, *, family: int) -> str:
+def _network_probe_source(
+    host: str,
+    *,
+    family: int,
+    port: int = 9,
+    listener_backed: bool = False,
+) -> str:
+    denied_codes: tuple[int, ...] = (10013, 10047, 10049, 10050, 10051)
+    if listener_backed:
+        denied_codes += (10060,)
     return (
         "import select,socket\n"
-        "denied={10013,10047,10049,10050,10051}\n"
+        f"denied={denied_codes!r}\n"
         "pending={10035,10036,10037}\n"
         "try:\n"
         f" s=socket.socket({family},socket.SOCK_STREAM)\n"
         " s.settimeout(1)\n"
-        f" code=s.connect_ex(({host!r},9))\n"
+        f" code=s.connect_ex(({host!r},{port}))\n"
         " if code in pending:\n"
         "  _,writable,exceptional=select.select([], [s], [s], 1)\n"
         "  code=(s.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR) "
@@ -973,6 +1007,22 @@ def _network_probe_source(host: str, *, family: int) -> str:
         " code=int(error.winerror or error.errno or 0)\n"
         "print('DENIED' if code in denied else f'UNEXPECTED_{code}')\n"
     )
+
+
+def _loopback_listener(host: str, *, family: socket.AddressFamily) -> socket.socket:
+    listener: socket.socket | None = None
+    try:
+        listener = socket.socket(family, socket.SOCK_STREAM)
+        listener.bind((host, 0))
+        listener.listen(1)
+    except OSError as error:
+        if listener is not None:
+            listener.close()
+        raise ProcessSupervisionError(
+            "appcontainer_network_probe_listener_failed"
+        ) from error
+    assert listener is not None
+    return listener
 
 
 def _file_attributes(kernel: Any, path: Path) -> int:
