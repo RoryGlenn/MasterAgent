@@ -1552,6 +1552,45 @@ auth_mode = "none"
             )
         self.assertEqual(transport.requests, [])
 
+        with private_temporary_directory() as directory:
+            integrations = Path(directory) / "integrations.toml"
+            integrations.write_text(
+                """
+[connectors.jira]
+enabled = false
+deployment = "cloud"
+base_url = "https://company.atlassian.net"
+base_url_env = "MASTER_AGENT_JIRA_BASE_URL"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "MASTER_AGENT_JIRA_BASE_URL": "https://example.atlassian.net",
+                        "MASTER_AGENT_JIRA_TOKEN": "placeholder-token-canary",
+                    },
+                    clear=True,
+                ),
+                self.assertRaisesRegex(
+                    ConfigurationError,
+                    "placeholder provider URL",
+                ),
+            ):
+                _connect(
+                    integrations_path=integrations,
+                    governance_path=None,
+                    credentials_file=None,
+                    systems={"jira"},
+                    output=None,
+                    transport=transport,
+                )
+        self.assertEqual(transport.requests, [])
+
     def test_connect_never_uses_a_credential_file_as_its_output(self) -> None:
         token = "provider-github-token-canary"
         transport = ScriptedTransport()

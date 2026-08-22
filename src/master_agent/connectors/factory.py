@@ -32,6 +32,7 @@ from master_agent.connectors.github_write import (
     GitHubAdminConnector,
     GitHubWriteConnector,
 )
+from master_agent.connectors.identity import IdentityMapConnector
 from master_agent.connectors.jira import JiraConnector
 from master_agent.connectors.jira_write import JiraWriteConnector
 from master_agent.connectors.microsoft import (
@@ -65,6 +66,137 @@ _READ_SYSTEMS = frozenset(
         "onenote",
     }
 )
+
+_BUILTIN_CONNECTOR_TYPES = (
+    JiraConnector,
+    ConfluenceConnector,
+    BitbucketConnector,
+    GitHubConnector,
+    MicrosoftIdentityConnector,
+    SharePointConnector,
+    OutlookConnector,
+    TeamsConnector,
+    OneNoteReadConnector,
+    JiraWriteConnector,
+    ConfluenceWriteConnector,
+    BitbucketWriteConnector,
+    GitHubWriteConnector,
+    GitHubAdminConnector,
+    SharePointWriteConnector,
+    OutlookSendConnector,
+    TeamsSendConnector,
+    JiraDraftConnector,
+    ConfluenceDraftConnector,
+    OutlookDraftConnector,
+    TeamsDraftConnector,
+    PowerPointDraftConnector,
+    RepositoryDraftConnector,
+    IdentityMapConnector,
+)
+
+
+def installed_builtin_capabilities() -> frozenset[str]:
+    """Return the pure, state-free capability set routed by this factory."""
+
+    capabilities = frozenset(
+        capability
+        for connector_type in _BUILTIN_CONNECTOR_TYPES
+        for capability in connector_type._CAPABILITIES
+    )
+    # PowerPoint generation performs an optional in-process import. Keep it
+    # outside the employee/developer high-level admission set until that import
+    # is isolated from ambient project/CWD module shadowing.
+    return capabilities - PowerPointDraftConnector._CAPABILITIES
+
+
+def configured_builtin_capabilities(
+    config: IntegrationConfig,
+    *,
+    connector_mode: str,
+    include_writes: bool,
+    include_communications: bool,
+) -> frozenset[str]:
+    """Return capabilities the selected built-in factory can actually route."""
+
+    installed = installed_builtin_capabilities()
+    local_types = (
+        JiraDraftConnector,
+        ConfluenceDraftConnector,
+        OutlookDraftConnector,
+        TeamsDraftConnector,
+        PowerPointDraftConnector,
+        RepositoryDraftConnector,
+    )
+    capabilities = {
+        capability
+        for connector_type in local_types
+        for capability in connector_type._CAPABILITIES
+        if capability in installed
+    }
+    if connector_mode == "mock":
+        return frozenset(
+            capability
+            for capability in installed
+            if capability not in IdentityMapConnector._CAPABILITIES
+        )
+    if connector_mode != "live":
+        raise ConfigurationError("connector mode must be live or mock")
+
+    for name in sorted(config.connectors):
+        connector = config.connectors[name]
+        if not connector.enabled:
+            continue
+        if name == "jira":
+            capabilities.update(JiraConnector._CAPABILITIES)
+            if (
+                include_writes
+                and _feature_enabled(connector, "write_enabled")
+                and _feature_enabled(connector, "writes_enabled")
+            ):
+                capabilities.update(JiraWriteConnector._CAPABILITIES)
+        elif name == "confluence":
+            capabilities.update(ConfluenceConnector._CAPABILITIES)
+            if (
+                include_writes
+                and _feature_enabled(connector, "write_enabled")
+                and _feature_enabled(connector, "writes_enabled")
+            ):
+                capabilities.update(ConfluenceWriteConnector._CAPABILITIES)
+        elif name == "bitbucket":
+            capabilities.update(BitbucketConnector._CAPABILITIES)
+            if (
+                include_writes
+                and _feature_enabled(connector, "write_enabled")
+                and _feature_enabled(connector, "pull_request_writes_enabled")
+            ):
+                capabilities.update(BitbucketWriteConnector._CAPABILITIES)
+        elif name == "github":
+            capabilities.update(GitHubConnector._CAPABILITIES)
+            if include_writes and _feature_enabled(connector, "write_enabled"):
+                if _feature_enabled(connector, "writes_enabled"):
+                    capabilities.update(GitHubWriteConnector._CAPABILITIES)
+                if _feature_enabled(connector, "admin_enabled"):
+                    capabilities.update(GitHubAdminConnector._CAPABILITIES)
+        elif name == "microsoft":
+            capabilities.update(MicrosoftIdentityConnector._CAPABILITIES)
+            capabilities.update(SharePointConnector._CAPABILITIES)
+            capabilities.update(OutlookConnector._CAPABILITIES)
+            capabilities.update(TeamsConnector._CAPABILITIES)
+            if _feature_enabled(connector, "onenote_read_enabled"):
+                capabilities.update(OneNoteReadConnector._CAPABILITIES)
+            if (
+                include_writes
+                and _feature_enabled(connector, "write_enabled")
+                and _feature_enabled(connector, "sharepoint_writes_enabled")
+            ):
+                capabilities.update(SharePointWriteConnector._CAPABILITIES)
+            if include_communications and _feature_enabled(connector, "send_enabled"):
+                if _feature_enabled(connector, "outlook_send_enabled"):
+                    capabilities.update(OutlookSendConnector._CAPABILITIES)
+                if _feature_enabled(connector, "teams_send_enabled"):
+                    capabilities.update(TeamsSendConnector._CAPABILITIES)
+    capabilities.update(IdentityMapConnector._CAPABILITIES)
+    return frozenset(capabilities & installed)
 
 
 def build_live_connectors(
@@ -131,6 +263,7 @@ def build_live_connectors(
             systems=selected,
             require_trusted_principal=approved_execution_context is not None,
             principal_transport=transport,
+            approved_execution_context=approved_execution_context,
         )
     else:
         captured = tuple(captured_executions)
@@ -160,6 +293,7 @@ def build_live_connectors(
             if (
                 unresolved.enabled
                 and unresolved.system == "bitbucket"
+                and _connector_is_selected(unresolved.system, selected)
                 and _feature_enabled(unresolved, "write_enabled")
                 and _feature_enabled(unresolved, "branch_push_enabled")
             ):

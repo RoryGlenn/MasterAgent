@@ -139,6 +139,12 @@ jobs:
           cd "$RUNNER_TEMP"
           "$wheel_env/bin/master-agent" readiness \
             --output "$RUNNER_TEMP/readiness.json"
+          export HOME="$RUNNER_TEMP/master-agent-wheel-home"
+          mkdir -m 0700 "$HOME"
+          "$wheel_env/bin/master-agent" setup --non-interactive
+          "$wheel_env/bin/master-agent" doctor \
+            --require-level install \
+            --output "$RUNNER_TEMP/doctor.json"
       - name: Test extracted source distribution
         run: |
           set -euo pipefail

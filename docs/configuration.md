@@ -9,6 +9,12 @@ Each CLI configuration option resolves in this order:
 
 The current working directory is never an implicit configuration authority.
 
+Profile-aware commands resolve an explicit `--profile` first and otherwise use
+the dedicated private path under `~/.master-agent/MasterAgent/`. `setup` uses
+the packaged safe profile when the selected installed path does not yet exist;
+an existing selected profile is validated in place. It never discovers a
+profile from the current directory.
+
 Packaged defaults make every supported read connector available. A connector is
 resolved only when selected for an operation, so availability alone neither
 requires credentials nor opens a provider connection. Mutation, administration,
@@ -18,6 +24,7 @@ send, and recurring-schedule gates remain disabled.
 
 | File | Responsibility |
 |---|---|
+| `organization-profile.toml` | user mode, private state root, normal configuration locations, connector/write/send gates, and installed capability allowlist |
 | `capabilities.toml` | public typed capability surface and exact read-result contracts |
 | `governance.toml` | organization owners, environments, classifications, approval tiers, and model-context egress policy |
 | `policy.toml` | risk defaults and hard prohibitions |
@@ -29,6 +36,81 @@ send, and recurring-schedule gates remain disabled.
 | `dependency-licenses.toml` | admitted/denied SPDX identifiers and third-party notice requirements |
 | workflow TOML files | exact registered task inputs |
 | `recurring.toml` | disabled schedules and workflow allowlists |
+
+## Organization profile
+
+The organization profile is the normal user-workflow entry point. It removes
+repeated path and gate flags, but it is not permission: every listed action
+must still be installed in `capabilities.toml` and pass governance, policy,
+source-of-truth, provider, credential, approval, verification, compensation,
+retention, and audit checks.
+
+The packaged `local-default` profile is `employee`/`live`, keeps writes and
+communications off, and lists only anonymous public repository reads and
+reviewed local-generation capabilities. Its empty `[configuration]` table uses
+the wheel-packaged safe defaults. Install it and the minimum private state with:
+
+```bash
+master-agent setup --non-interactive
+```
+
+The default installed path is
+`~/.master-agent/MasterAgent/organization-profile.toml`. Its `state_root = "."`
+resolves relative to that installed profile, so setup creates only the private
+product directory and its `runs/` child. It creates no plan, workspace, audit
+database, artifact, result, credential, provider connection, or approval. An
+existing identical profile is reusable; a conflicting or unsafe destination
+fails closed instead of being overwritten.
+
+The schema is exact:
+
+| Key | Contract |
+|---|---|
+| `schema` | must be `master-agent/organization-profile@1` |
+| `organization` | bounded non-secret organization/profile label |
+| `mode` | `employee` or `developer` |
+| `state_root` | absolute path or path relative to the profile file; user-owned private state boundary |
+| `connector_mode` | `live` for real typed connectors or `mock` for explicit developer testing; employee provider capabilities cannot use mock |
+| `writes_enabled` | profile-level reversible-write gate; still subordinate to all runtime gates |
+| `communications_enabled` | separate profile-level send gate; still subordinate to exact approval and provider gates |
+| `capabilities` | unique bounded dotted names forming the installed capability allowlist |
+| `[configuration]` | optional reviewed paths keyed by the supported names below |
+
+`[configuration]` accepts only `approval_authorities`, `capabilities`,
+`communication_context`, `draft_package`, `governance`, `identities`,
+`integrations`, `oauth`, `policy`, `recurring`, `retention`,
+`sources_of_truth`, and `weekly_status`. Paths may be absolute or relative to
+the organization-profile file. A deployed profile should use reviewed absolute
+paths so relocating the profile cannot silently select a different file. The
+configuration directory and files must be owned by the MasterAgent service
+account and must not be group- or other-writable; a mode-`0700` directory with
+mode-`0600` files is the recommended deployment shape:
+
+```toml
+schema = "master-agent/organization-profile@1"
+organization = "example-organization"
+mode = "employee"
+state_root = "/var/lib/master-agent/employee"
+connector_mode = "live"
+writes_enabled = false
+communications_enabled = false
+capabilities = ["github.repository.read"]
+
+[configuration]
+integrations = "/var/lib/master-agent/private-config/integrations.toml"
+capabilities = "/var/lib/master-agent/private-config/capabilities.toml"
+governance = "/var/lib/master-agent/private-config/governance.toml"
+policy = "/var/lib/master-agent/private-config/policy.toml"
+sources_of_truth = "/var/lib/master-agent/private-config/sources_of_truth.toml"
+approval_authorities = "/var/lib/master-agent/private-config/approval-authorities.toml"
+```
+
+The profile contains paths and gates, never credential or signing-secret
+values. Employee mode rejects a missing or unlisted capability before it loads
+plugins, constructs connectors, resolves credentials, or creates runtime
+state. Developer mode does not widen provider authority; generated effect code
+remains quarantined until independent review, tests, specification archival,
+signing, deployment, and normal runtime admission.
 
 ## Retention and expiry
 
@@ -105,14 +187,16 @@ Exact-plan binding records a flow-enforced or provider-verified non-secret
 credential identity, not the token or password. Basic usernames and Entra
 client-credential tenant/client IDs are derived from their configured
 environment variables. GitHub bearer tokens are verified by GitHub at bind and
-apply time and resolve to `github:user:<numeric-id>`. Secrets may rotate without
-changing the binding when the verified principal remains the same. Other opaque
-bearer, delegated, token-file, and application-environment tokens cannot prove
-their principal to this runtime. Both `bind-context --connector-mode live` and
-live `run --apply` reject those flows even if configuration supplies a claimed
-identity label. Another provider-verified principal or trusted credential-broker
-attestation adapter is required before those flows can be used for applied
-execution.
+apply time and resolve to `github:user:<numeric-id>`. Microsoft delegated
+environment and restricted-token-file flows are verified through Microsoft
+Graph and bind the provider-returned user ID. Secrets may rotate without
+changing the binding when the verified principal remains the same. Other
+opaque bearer, delegated, token-file, and application-environment tokens cannot
+prove their principal to this runtime. Both `bind-context --connector-mode
+live` and live `run --apply` reject those flows even if configuration supplies
+a claimed identity label. Another provider-verified principal or trusted
+credential-broker attestation adapter is required before those flows can be
+used for applied execution.
 
 ## License and SBOM policy
 
@@ -317,9 +401,15 @@ record, approval artifact, draft artifact, or result file. Effects—including
 writes, sends, administration, deletion, merge, and recurring work—must use
 the normal bound `run --apply` path and retain its approval and state checks.
 
-## Atlassian deployment type
+## Provider deployment type
 
-Select `cloud` or `data_center` independently for Jira, Confluence, and Bitbucket. Cloud and Data Center endpoints and payloads are implemented by separate connector branches rather than pretending the APIs are identical.
+Select `cloud` or `data_center` independently for Jira, Confluence, and
+Bitbucket. Cloud and Data Center endpoints and payloads are implemented by
+separate connector branches rather than pretending the APIs are identical.
+GitHub and Microsoft operating/runtime connectors are Cloud-only. Microsoft
+Graph targets are additionally restricted to the supported fixed cloud origin;
+an arbitrary or Data Center origin is rejected before credential resolution or
+any bearer request.
 
 ## GitHub Cloud
 

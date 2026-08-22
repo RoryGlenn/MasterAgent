@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import ssl
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,23 @@ def capture_ca_bundle(path: Path) -> CaBundleSnapshot:
     except OSError as error:
         raise ConfigurationError(
             "connector CA bundle could not be captured safely"
+        ) from error
+
+
+def create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
+    """Create TLS trust from immutable captured certificate data."""
+
+    if ca_bundle_data is None:
+        return ssl.create_default_context()
+    try:
+        try:
+            certificate_data: str | bytes = ca_bundle_data.decode("ascii")
+        except UnicodeDecodeError:
+            certificate_data = ca_bundle_data
+        return ssl.create_default_context(cadata=certificate_data)
+    except (ValueError, ssl.SSLError) as error:
+        raise ConfigurationError(
+            "connector CA bundle is not valid certificate data"
         ) from error
 
 

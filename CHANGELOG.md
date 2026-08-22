@@ -1,5 +1,13 @@
 # Changelog
 
+- Add progressive employee and trusted developer operating modes, strict
+  organization profiles, capability-scoped `doctor` results, safe local
+  `setup`, stable employee-facing error categories, and one `execute` front
+  door over the existing stateless-read and exact-plan applied runtime.
+  Employee mode cannot scaffold or promote code; developer-generated effects
+  remain quarantined through review, tests, specification archival, signing,
+  deployment, and normal runtime admission.
+
 - Generate the compact semantic router and hub-and-spoke agent topology from one
   exact ownership manifest. Release validation now rejects unmapped or stale
   modules, tests, requirements, configurations, CLI commands, capabilities,

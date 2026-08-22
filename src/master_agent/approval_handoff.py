@@ -53,6 +53,7 @@ class ApprovalRunInvocation:
     credentials_file: str | None
     credential_mappings: tuple[str, ...]
     connector_urls: tuple[str, ...]
+    organization_profile: str | None = None
 
     def __post_init__(self) -> None:
         if self.connector_mode not in {"mock", "live"}:
@@ -82,6 +83,7 @@ class ApprovalRunInvocation:
             ("sources_of_truth", self.sources_of_truth),
             ("plugin_lock", self.plugin_lock),
             ("credentials_file", self.credentials_file),
+            ("organization_profile", self.organization_profile),
         ):
             if optional_value is not None:
                 _validate_absolute_path(optional_value, name)
@@ -126,6 +128,7 @@ class ApprovalRunInvocation:
         credentials_file: Path | None,
         credential_mappings: Sequence[str],
         connector_urls: Sequence[str],
+        organization_profile: Path | None = None,
     ) -> Self:
         """Capture path spellings independently of the caller's future CWD."""
 
@@ -155,6 +158,7 @@ class ApprovalRunInvocation:
             credentials_file=_canonical_optional_path(credentials_file),
             credential_mappings=tuple(credential_mappings),
             connector_urls=tuple(connector_urls),
+            organization_profile=_canonical_optional_path(organization_profile),
         )
 
     def with_approvals(self, paths: Sequence[Path]) -> Self:
@@ -170,7 +174,7 @@ class ApprovalRunInvocation:
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible, secret-free invocation."""
 
-        return {
+        payload: dict[str, object] = {
             "plan_path": self.plan_path,
             "approval_paths": list(self.approval_paths),
             "approval_authorities": self.approval_authorities,
@@ -195,6 +199,12 @@ class ApprovalRunInvocation:
             "credential_mappings": list(self.credential_mappings),
             "connector_urls": list(self.connector_urls),
         }
+        # Keep schema-1 requests produced before organization profiles byte- and
+        # fingerprint-compatible. Profile-aware requests add the field only
+        # when the high-level workflow actually bound one.
+        if self.organization_profile is not None:
+            payload["organization_profile"] = self.organization_profile
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
@@ -226,6 +236,7 @@ class ApprovalRunInvocation:
                 "credentials_file",
                 "credential_mappings",
                 "connector_urls",
+                "organization_profile",
             },
             "approval request run",
         )
@@ -253,6 +264,7 @@ class ApprovalRunInvocation:
             credentials_file=_optional_string(data, "credentials_file"),
             credential_mappings=_string_tuple(data, "credential_mappings"),
             connector_urls=_string_tuple(data, "connector_urls"),
+            organization_profile=_optional_string(data, "organization_profile"),
         )
 
 
@@ -564,7 +576,10 @@ def _read_restricted_bytes(directory: PinnedDirectory, name: str) -> bytes:
     try:
         descriptor = os.open(
             name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
             dir_fd=directory.fileno(),
         )
     except OSError as error:

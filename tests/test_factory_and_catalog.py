@@ -29,7 +29,11 @@ from master_agent.connectors.drafts import (
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
-from master_agent.connectors.factory import build_live_connectors
+from master_agent.connectors.factory import (
+    build_live_connectors,
+    configured_builtin_capabilities,
+    installed_builtin_capabilities,
+)
 from master_agent.connectors.git_remote import GitBranchPushConnector
 from master_agent.connectors.git_workspace import GitWorkspaceConnector
 from master_agent.connectors.github import GitHubConnector
@@ -55,6 +59,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ConnectorFactoryTests(unittest.TestCase):
     """Verify the CLI flag, provider gate, and capability gate all apply."""
+
+    def test_state_free_capability_inventory_matches_high_level_factory_gates(
+        self,
+    ) -> None:
+        config = IntegrationConfig.from_toml(ROOT / "config/integrations.toml")
+
+        installed = installed_builtin_capabilities()
+        live = configured_builtin_capabilities(
+            config,
+            connector_mode="live",
+            include_writes=True,
+            include_communications=True,
+        )
+        mock = configured_builtin_capabilities(
+            config,
+            connector_mode="mock",
+            include_writes=True,
+            include_communications=True,
+        )
+
+        self.assertIn("github.public_repository.list", live)
+        self.assertNotIn("github.issue.create", live)
+        self.assertIn("github.issue.create", mock)
+        self.assertIn("identity.person.list", live)
+        self.assertNotIn("identity.person.list", mock)
+        self.assertNotIn("powerpoint.presentation.generate", installed)
+        self.assertNotIn("powerpoint.presentation.generate", live)
+        self.assertNotIn("powerpoint.presentation.generate", mock)
 
     def test_mutation_connectors_require_all_explicit_gates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -143,6 +175,70 @@ class ConnectorFactoryTests(unittest.TestCase):
                     workspace_root=root,
                     artifact_root=root,
                 )
+
+    def test_unselected_bitbucket_git_gate_does_not_poison_github(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+
+[connectors.bitbucket]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.bitbucket.org/2.0"
+auth_mode = "none"
+write_enabled = true
+branch_push_enabled = true
+""".strip(),
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+
+            connectors = build_live_connectors(
+                config,
+                environ={},
+                systems={"github"},
+                include_writes=True,
+            )
+
+        self.assertEqual(
+            {type(connector) for connector in connectors},
+            {GitHubConnector},
+        )
+
+    def test_microsoft_data_center_is_rejected_before_bearer_use(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.microsoft]
+enabled = true
+deployment = "data_center"
+base_url = "https://attacker.example.test/v1.0"
+auth_mode = "oauth_delegated"
+secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
+oauth_flow = "environment"
+identity_mode = "delegated"
+""".strip(),
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+            transport = ScriptedTransport()
+
+            with self.assertRaisesRegex(ConfigurationError, "Microsoft Graph Cloud"):
+                build_live_connectors(
+                    config,
+                    environ={"MASTER_AGENT_GRAPH_ACCESS_TOKEN": "secret-graph-token"},
+                    systems={"teams"},
+                    transport=transport,
+                )
+
+        self.assertEqual(transport.requests, [])
 
     def test_sharepoint_write_requires_artifact_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

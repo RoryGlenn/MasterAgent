@@ -95,15 +95,45 @@ def capture_connector_executions(
     require_trusted_principal: bool = True,
     include_resolved_credentials: bool = True,
     principal_transport: HttpTransport | None = None,
+    approved_execution_context: ExecutionContext | None = None,
 ) -> tuple[CapturedConnectorExecution, ...]:
     """Capture selected enabled destinations and trusted principals."""
 
     source = dict(environ if environ is not None else os.environ)
+    approved_connectors: dict[str, ConnectorExecutionBinding] | None = None
+    if approved_execution_context is not None:
+        if (
+            not integrations.source_sha256
+            or integrations.source_sha256
+            != approved_execution_context.integrations_sha256
+        ):
+            raise ConfigurationError(
+                "captured integrations bundle differs from the approved "
+                "execution context"
+            )
+        approved_connectors = {
+            item.system: item for item in approved_execution_context.connectors
+        }
+        selected_systems = {
+            config.system
+            for config in integrations.connectors.values()
+            if config.enabled and _connector_is_selected(config.system, systems)
+        }
+        if selected_systems != set(approved_connectors):
+            raise ConfigurationError(
+                "captured connector set differs from the approved execution context"
+            )
     captured: list[CapturedConnectorExecution] = []
     for config in integrations.connectors.values():
         if not config.enabled or not _connector_is_selected(config.system, systems):
             continue
         target = config.capture_execution_target(source)
+        if approved_connectors is not None:
+            _verify_approved_connector_target(
+                config,
+                target,
+                approved_connectors[config.system],
+            )
         ca_bundle = target.ca_bundle
         needs_resolved = include_resolved_credentials or (
             require_trusted_principal
@@ -156,6 +186,41 @@ def capture_connector_executions(
     return tuple(sorted(captured, key=lambda item: item.binding.system))
 
 
+def _verify_approved_connector_target(
+    config: ConnectorConfig,
+    target: ResolvedExecutionTarget,
+    approved: ConnectorExecutionBinding,
+) -> None:
+    """Reject destination or trust drift before any credential is resolved."""
+
+    observed_origin = _origin(target.base_url, system=config.system)
+    ca_bundle = target.ca_bundle
+    comparisons = (
+        ("deployment", str(config.deployment), approved.deployment),
+        ("config identity", target.config_identity, approved.config_identity_sha256),
+        ("base URL", target.base_url, approved.resolved_base_url),
+        ("origin", observed_origin, approved.resolved_origin),
+        (
+            "CA path",
+            str(ca_bundle.path) if ca_bundle is not None else None,
+            approved.ca_bundle_path,
+        ),
+        (
+            "CA digest",
+            ca_bundle.sha256 if ca_bundle is not None else None,
+            approved.ca_bundle_sha256,
+        ),
+    )
+    for detail, observed, expected in comparisons:
+        if observed != expected:
+            raise ConfigurationError(
+                "applied execution context differs from the approved plan: "
+                "connector origin or CA identity; "
+                f"captured connector {config.system} {detail} differs from the "
+                "approved execution context"
+            )
+
+
 def build_execution_context(
     integrations: IntegrationConfig,
     *,
@@ -166,6 +231,7 @@ def build_execution_context(
     systems: set[str] | None = None,
     principal_transport: HttpTransport | None = None,
     capsule_bindings: Sequence[CapabilityCapsuleExecutionBinding] = (),
+    approved_execution_context: ExecutionContext | None = None,
 ) -> ExecutionContext:
     """Resolve a secret-free snapshot suitable for plan approval binding."""
 
@@ -182,6 +248,7 @@ def build_execution_context(
                 systems=systems,
                 principal_transport=principal_transport,
                 include_resolved_credentials=False,
+                approved_execution_context=approved_execution_context,
             )
         )
         if include_connectors

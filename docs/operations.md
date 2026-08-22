@@ -1,6 +1,50 @@
 # Operations Guide
 
-## Normal run lifecycle
+## Employee workflow
+
+The organization profile is the normal employee entry point. It selects one
+reviewed mode, configuration locations, a dedicated private state root, and an
+exact installed-capability allowlist. It never contains credentials, approval
+secrets, or provider content and does not grant authority by itself.
+
+1. Run `master-agent setup` once for the selected profile. This prepares only
+   owner-private local paths and does not contact a provider.
+2. Run `master-agent doctor`. Treat `install_ready`, `read_ready`,
+   `draft_ready`, `effect_ready`, and `enterprise_ready` as separate answers; a
+   missing optional account does not mean the local installation is broken.
+3. Run `master-agent execute PLAN`. The command keeps an eligible read
+   stateless or provisions a fresh private run boundary for draft/effect work.
+4. If policy requires approval, inspect the returned request. A trusted
+   operator supplies the authenticated artifact; resume with `master-agent
+   execute --resume REQUEST --approval ARTIFACT`.
+5. Review the verified result. High-impact work retains the same exact-plan
+   approval, idempotency, recovery, and disabled-at-rest controls as the
+   low-level runtime.
+
+The high-level command is orchestration convenience, not a second execution
+engine. It still uses typed plans and connectors, selected-provider-only
+credential resolution, catalog and governance checks, policy, exact runtime
+binding, independent verification, compensation or reconciliation, and
+secret-free audit.
+
+Employee failures are categorized for a useful next action:
+
+- `unsupported_capability`: the requested action is not an installed, reviewed
+  capability on this profile;
+- `missing_organization_setup`: a required reviewed profile or configuration
+  location is absent;
+- `missing_user_authentication`: the selected provider needs a user credential
+  that is not available;
+- `blocked_policy`: catalog, governance, policy, source-of-truth, approval, or
+  an effect gate denied the request; and
+- `runtime_defect`: installed code or local runtime state failed unexpectedly.
+
+Do not repair `unsupported_capability` from employee mode. Capability work
+belongs in a separate trusted developer change. Generated effects stay
+quarantined until independent review, tests, specification archival, signing,
+deployment, and normal runtime admission complete.
+
+## Low-level run lifecycle
 
 1. Generate or receive a plan.
 2. For live execution, bind the trusted integrations bundle, resolved

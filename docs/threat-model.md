@@ -11,6 +11,7 @@
 - canonical source integrity;
 - audit/evidence integrity;
 - approved provider-data destination, model tenancy, and classification;
+- organization-profile mode, capability allowlist, and configuration binding;
 - capability capsule signing authorities, immutable artifacts, and receipts;
 - recurring workflow scope.
 
@@ -27,6 +28,8 @@
 - organization model-context configuration is trusted deployment policy;
   provider content cannot select its own classification, destination, tenancy,
   fields, handling, audit, or DLP requirements;
+- the organization profile is reviewed workflow input, not capability,
+  credential, approval, signing, or code-promotion authority;
 - local artifact/workspace roots are explicit security boundaries.
 
 The operating-system service account, installed Master Agent runtime, and
@@ -133,6 +136,33 @@ Controls:
   credential, approval, audit, or plan state; and
 - the deterministic policy, approval, connector, verification, compensation,
   retention, and audit runtime remains the only provider-effect path.
+
+### Organization-profile widening or mode confusion
+
+A modified profile may list an unreviewed capability, redirect trusted
+configuration, select developer mode, or change between review and approval
+resume in an attempt to widen employee authority.
+
+Controls:
+
+- bounded exact-schema parsing rejects unknown fields, modes, malformed or
+  duplicate capability names, and unsafe paths;
+- pre-runtime validation rejects catalog-missing or profile-unlisted
+  capabilities, while employee risk checks and the existing effect gates keep
+  high-impact work disabled, before connector, credential, audit, artifact,
+  plugin, capsule, or provider access;
+- setup and doctor are offline and cannot create credentials, approvals, audit
+  sinks, provider connections, or code-promotion state;
+- every effect-bearing execution binds both the exact canonical profile path
+  and its bytes, then revalidates both with the captured plan and invocation
+  during approval resume, so an identical profile substituted at another path
+  is rejected;
+- developer mode does not add runtime capabilities, and generated effect code
+  remains quarantined through independent review, tests, specification
+  archival, signing, deployment, and normal admission; and
+- capability, governance, policy, source-of-truth, provider, credential,
+  approval, verification, idempotency, compensation, and audit gates remain
+  independently mandatory after profile admission.
 
 ### Excessive permissions
 

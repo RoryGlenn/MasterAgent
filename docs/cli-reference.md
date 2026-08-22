@@ -11,9 +11,15 @@ creates the final name with mode `0600`, refuses symlinks and every existing
 destination, verifies the opened identity, writes and reads back the exact
 bytes, and fsyncs both the file and directory. Use a fresh output filename for
 each invocation; commands never create the parent or overwrite prior output.
+The dedicated `setup` and `execute` paths may provision their documented
+profile-owned private state through the same no-follow ownership and permission
+checks; this does not relax publication rules for other output paths.
 
 | Command | Purpose | Side-effect boundary |
 |---|---|---|
+| `setup` | Install or validate the private organization profile and minimum local state | Creates only the dedicated owner-private profile/state paths; performs no provider request and enables no effect |
+| `doctor` | Report capability-scoped installation, read, draft, effect, and enterprise readiness | Offline and content-free; optional credentials are level-specific gaps, not installation failures |
+| `execute` | Run an unbound plan or resume its exact approval request through one governed front door | Reads stay stateless when eligible; effects use the existing bound runtime and cannot run without all normal gates and authenticated approval |
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |
 | `sample-plan` | Write a synthetic weekly-status plan | Writes only the selected local JSON output |
 | `inspect` | Validate and display a plan and fingerprint | Read-only local inspection |
@@ -45,6 +51,89 @@ each invocation; commands never create the parent or overwrite prior output.
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
 | `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only; displayed excerpts are terminal-safe and bounded while raw input is not printed |
 | `audit-verify` | Verify an existing SQLite audit hash chain | Read-only verification; missing or malformed state is rejected without creation |
+
+## Progressive operating modes
+
+`master-agent setup` installs or validates a strict organization profile in a
+dedicated user-private location. Interactive setup explains the selected
+employee or developer mode before writing. Use `--non-interactive` for a
+deterministic unattended setup. The command creates no provider credential,
+approval artifact, audit database, provider connection, or write authority.
+`--profile PATH` selects the installed profile location. If that exact reviewed
+file already exists, setup validates it and provisions its private state; if it
+does not exist, setup installs the packaged `local-default` profile there.
+Without the option, setup uses the dedicated current-user location. No path is
+inferred from the current directory.
+
+`master-agent doctor` reports five independent booleans:
+
+- `install_ready` — the local package and platform are usable; organization or
+  account setup is reported at the later levels;
+- `read_ready` — at least one profile-allowed typed read has its required
+  selected-provider setup;
+- `draft_ready` — at least one profile-selected local-generation capability has
+  its installed implementation and local prerequisites;
+- `effect_ready` — the reviewed configuration and runtime controls needed for
+  a profile-allowed effect are present; and
+- `enterprise_ready` — all required organization-owned production adapters and
+  controls are present.
+
+The report is capability scoped. An unused connector, disabled capability, or
+missing optional credential is an actionable read/effect gap and does not make
+the installation broken. Diagnostics use stable error categories:
+`unsupported_capability`, `missing_organization_setup`,
+`missing_user_authentication`, `blocked_policy`, and `runtime_defect`.
+Messages contain no credential value or provider body.
+
+The report is also content-free: it confirms only that a delegated token-file
+reference is configured and nonblank; it does not inspect, open, or parse the
+path or file. A token-file capability therefore reports
+`missing_user_authentication` until execution-time verification. An eligible
+`execute` request may still proceed to the restricted token-file reader, which
+validates the file identity, permissions, structure, expiry, and scopes before
+provider access. Provider capabilities locally validate their effective
+endpoint, placeholder/origin/deployment constraints, and captured CA
+certificate bytes before credentials or run allocation. Missing or invalid
+integration configuration affects only the provider capabilities that use it:
+local drafts remain independently ready, and a local-only `execute` plan does
+not load an integrations file.
+
+`doctor --profile PATH` inspects an explicit installed profile; otherwise it
+uses the dedicated current-user profile. `--require-level
+install|read|draft|effect|enterprise` makes automation return nonzero unless
+that one level is ready. `--output PATH` writes the same content-free report
+through the restricted create-only JSON publisher.
+
+`master-agent execute PLAN` loads an unbound typed plan, checks every action
+against the profile allowlist, and selects the existing runtime by risk:
+
+- an eligible direct-user read uses the in-memory direct-read route;
+- local generation and effects get a fresh owner-private run boundary;
+- effects are bound, inspected, policy checked, applied, independently
+  verified, and audited by the existing orchestrator; and
+- an approval-required effect returns one private exact-plan request rather
+  than accepting conversational approval.
+
+Resume only the captured request and supply its authenticated approval:
+
+```bash
+master-agent execute \
+  --resume /absolute/state/runs/<opaque>/artifacts/approval-request-<fingerprints>.json \
+  --approval /absolute/state/approvals/approval-rory.json
+```
+
+Resume revalidates the profile, request, plan, configuration snapshots,
+provider selection, credential mapping, paths, gates, and approval. It does not
+accept replacements for those captured inputs. Existing `readiness`, `run
+--direct-read`, `bind-context`, `inspect`, `run --apply`, and
+`resume-approval` commands remain the exact low-level interface for automation
+and debugging.
+
+Employee mode admits only installed, reviewed capabilities on the profile's
+allowlist. It cannot scaffold or promote code. Developer mode does not expand
+runtime authority: explicitly generated effect code remains quarantined until
+independent review, tests, specification archival, signing, deployment, and
+ordinary catalog/governance admission complete.
 
 Connector-aware `readiness`, `discover`, `bind-context`, direct-read `run`,
 and applied `run` commands accept

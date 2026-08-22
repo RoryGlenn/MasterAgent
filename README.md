@@ -71,6 +71,7 @@ unsafe surfaces remain deliberately non-routable.
 | Area | Current status |
 |---|---|
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
+| Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -261,6 +262,57 @@ master-agent plugins
 Explicit CLI paths override packaged safe defaults. The current working
 directory is never an implicit configuration source.
 
+Prepare the default private employee profile and check what this installation
+can actually do:
+
+```bash
+master-agent setup --non-interactive
+master-agent doctor
+```
+
+Neither command contacts a workplace provider. Missing credentials for an
+optional provider are reported under that provider's read or effect level; they
+do not make `install_ready` false.
+
+## Progressive employee workflow
+
+Most people should use the organization profile and the high-level `execute`
+command. The profile supplies reviewed configuration locations and the exact
+installed capabilities employees may request, so those paths and flags do not
+need to be repeated for every plan.
+
+```bash
+master-agent setup --non-interactive
+master-agent doctor
+master-agent execute change-plan.json
+```
+
+`doctor` reports independent `install_ready`, `read_ready`, `draft_ready`,
+`effect_ready`, and `enterprise_ready` levels. A healthy local installation can
+therefore be ready even when no workplace account is connected, effects are
+disabled, or the external controls required for an enterprise deployment are
+absent.
+
+`execute` is one front door over the existing deterministic runtime. An allowed
+single-provider read stays in memory and creates no audit, artifact, or
+approval state. Draft and effect work receives only the required private local
+state. When policy requires approval, the command returns one exact-plan
+request; after a trusted operator supplies its authenticated artifact, resume
+through the same command:
+
+```bash
+master-agent execute \
+  --resume /absolute/state/runs/<opaque>/artifacts/approval-request-<fingerprints>.json \
+  --approval /absolute/state/approvals/approval-rory.json
+```
+
+Employee mode can use only the installed capability allowlist. It does not
+write or promote missing capability code. Trusted developer mode can support
+explicit repository scaffolding, but generated effect code remains quarantined
+until review, tests, specification archival, signing, deployment, and normal
+runtime admission complete. Neither mode supplies credentials or approval, and
+high-impact capabilities remain disabled at rest.
+
 ## Quick safe demonstration
 
 Install the optional draft-rendering extra before running the local
@@ -282,6 +334,15 @@ PowerPoint, and patch artifacts, writes an integrity manifest, and verifies the
 audit chain. Nothing is published, sent, committed, or uploaded.
 
 ## Readiness, discovery, and connection
+
+For an employee-facing, capability-scoped answer, start with:
+
+```bash
+master-agent doctor
+```
+
+The older `readiness` command remains the detailed configuration and deployment
+diagnostic used by automation and maintainers.
 
 Configuration-only readiness performs no network requests:
 
@@ -384,7 +445,9 @@ classifies the result as `internal` and applies the same boundary.
 
 A provider effect is prepared as an immutable plan, bound to the exact runtime
 configuration, inspected, and then executed only after its required approval
-and gates are present.
+and gates are present. `master-agent execute PLAN` performs these stages for an
+ordinary user. The commands below remain the low-level automation and debugging
+interface.
 
 ```bash
 master-agent bind-context change-plan.json \
@@ -458,6 +521,7 @@ creating another runtime planner or authorization layer. See
 
 | File | Purpose |
 |---|---|
+| `config/organization-profile.toml` | Employee/developer mode, reviewed configuration locations, enabled capability allowlist, and default private state root |
 | `config/capabilities.toml` | Executable capability contracts plus exact versioned read-result schemas, resource fields, and fixed metadata |
 | `config/governance.toml` | Owners, environments, classifications, approval tiers, and model-context destination, tenancy, handling, audit, and DLP rules |
 | `config/policy.toml` | Runtime risk policy and hard prohibitions |
