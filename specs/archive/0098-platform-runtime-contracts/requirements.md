@@ -16,9 +16,11 @@ when an equivalent secure backend is unavailable.
 
 `capsule_isolation` availability MUST mean executable OS worker containment,
 not owner/group trust for worker artifacts. Linux MAY advertise the certified
-bubblewrap implementation. macOS MUST report this contract unavailable until a
-native isolation backend is implemented; owner-private group validation MUST
-remain under `secure_filesystem`. A test-only subprocess selected with
+bubblewrap implementation only after selecting a trusted executable and MUST
+otherwise report this contract unavailable. macOS MUST report this contract
+unavailable until a native isolation backend is implemented; owner-private
+group validation MUST remain under `secure_filesystem`. A test-only subprocess
+selected with
 `require_os_sandbox=False` MUST NOT advertise production isolation.
 
 On Windows, `master_agent`, `master_agent.cli`, command help and version,

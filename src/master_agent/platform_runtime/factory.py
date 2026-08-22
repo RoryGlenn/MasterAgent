@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from functools import cache
+from functools import lru_cache
 
 from master_agent.platform_runtime.contracts import (
     CapsuleIsolationBackend,
@@ -17,12 +17,16 @@ from master_agent.platform_runtime.contracts import (
 )
 
 
-def get_platform_runtime(platform: str | None = None) -> PlatformRuntime:
+def get_platform_runtime(
+    platform: str | None = None,
+    *,
+    capsule_executable: str | None = None,
+) -> PlatformRuntime:
     """Return one immutable runtime selected from an explicit platform name."""
 
     selected = sys.platform if platform is None else platform
     identity = _normalize_platform(selected)
-    return _runtime_for_identity(*identity)
+    return _runtime_for_identity(*identity, capsule_executable)
 
 
 def platform_runtime_status(platform: str | None = None) -> PlatformRuntimeStatus:
@@ -78,10 +82,15 @@ def get_process_supervision_backend(
 
 def get_capsule_isolation_backend(
     platform: str | None = None,
+    *,
+    executable: str | None = None,
 ) -> CapsuleIsolationBackend:
     """Return the selected capability-capsule isolation backend."""
 
-    return get_platform_runtime(platform).require_capsule_isolation()
+    return get_platform_runtime(
+        platform,
+        capsule_executable=executable,
+    ).require_capsule_isolation()
 
 
 def _normalize_platform(value: str) -> tuple[str, str, bool]:
@@ -99,11 +108,12 @@ def _normalize_platform(value: str) -> tuple[str, str, bool]:
     return "unsupported", "unsupported", False
 
 
-@cache
+@lru_cache(maxsize=32)
 def _runtime_for_identity(
     platform: str,
     backend: str,
     posix: bool,
+    capsule_executable: str | None,
 ) -> PlatformRuntime:
     """Load only the selected native backend and cache its immutable result."""
 
@@ -118,7 +128,11 @@ def _runtime_for_identity(
                 backend=backend,
                 reason=f"native {platform} platform backend is unavailable",
             )
-        return build_posix_runtime(platform=platform, backend=backend)
+        return build_posix_runtime(
+            platform=platform,
+            backend=backend,
+            capsule_executable=capsule_executable,
+        )
     if platform == "windows":
         return _unavailable_runtime(
             platform=platform,

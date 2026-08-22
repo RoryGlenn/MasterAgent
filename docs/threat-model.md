@@ -183,8 +183,9 @@ Controls:
   `capsule_isolation` report independent stable availability and secret-free
   reasons;
 - capsule isolation means executable OS containment: Linux selects the
-  bubblewrap backend, while macOS reports the contract unavailable rather than
-  treating owner-private group membership as a sandbox;
+  bubblewrap backend only when a trusted executable is available and otherwise
+  reports the contract unavailable; macOS reports the contract unavailable
+  rather than treating owner-private group membership as a sandbox;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,

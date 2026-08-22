@@ -303,8 +303,9 @@ selected backend and the `secure_filesystem`, `cross_process_locking`,
 implemented, the dependent readiness level stays false with `runtime_defect`
 and execution stops instead of using a weaker compatibility path.
 On POSIX hosts, capsule isolation is also reported precisely: Linux selects
-the bubblewrap implementation, while macOS reports that contract unavailable
-until a native executable-containment backend exists.
+the bubblewrap implementation only when a trusted executable is available and
+otherwise reports the contract unavailable; macOS reports it unavailable until
+a native executable-containment backend exists.
 Reading an existing or explicitly selected organization profile is a protected
 filesystem operation. Before the native Windows secure-filesystem backend
 exists, `doctor` reports the absent-profile setup state but rejects a present

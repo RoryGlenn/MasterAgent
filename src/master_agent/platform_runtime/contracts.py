@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, cast, runtime_checkable
 
@@ -124,6 +125,10 @@ class TrustedGitBackend(PlatformBackend, Protocol):
 @runtime_checkable
 class CapsuleIsolationBackend(PlatformBackend, Protocol):
     """Native OS containment for executable capability-capsule workers."""
+
+    @property
+    def executable(self) -> Path:
+        """Return the validated native containment executable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,7 +273,10 @@ class PlatformRuntime:
     def require_capsule_isolation(self) -> CapsuleIsolationBackend:
         """Return the capsule-isolation backend or fail closed."""
 
-        return self.require_contract(PlatformContract.CAPSULE_ISOLATION)
+        return cast(
+            CapsuleIsolationBackend,
+            self.require_contract(PlatformContract.CAPSULE_ISOLATION),
+        )
 
     def _services(self) -> Mapping[PlatformContract, PlatformBackend | None]:
         return MappingProxyType(

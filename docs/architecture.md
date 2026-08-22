@@ -137,9 +137,10 @@ unavailable error; it never substitutes a compatibility shim, another platform,
 or a weaker implementation. That failure occurs before protected state,
 credentials, connector construction, provider access, or effects. Existing
 POSIX implementations retain their established ownership, no-follow, locking,
-atomicity, process, and Git behavior. Linux retains bubblewrap capsule
-isolation; macOS capsule execution fails closed instead of treating account-
-private artifact checks as executable isolation.
+atomicity, process, and Git behavior. Linux reports bubblewrap capsule
+isolation only after selecting a trusted executable and otherwise fails closed;
+macOS capsule execution also fails closed instead of treating account-private
+artifact checks as executable isolation.
 
 Windows therefore has a deliberately split status. Package import, command
 help/version, deployment readiness, and the absent-profile install diagnosis

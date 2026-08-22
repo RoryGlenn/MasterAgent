@@ -13,7 +13,8 @@ from master_agent.platform_runtime.posix.atomic import (
     PosixAtomicPublicationRecoveryBackend,
 )
 from master_agent.platform_runtime.posix.capsules import (
-    LinuxBubblewrapCapsuleIsolationBackend,
+    LINUX_BUBBLEWRAP_UNAVAILABLE_REASON,
+    select_linux_bubblewrap_backend,
 )
 from master_agent.platform_runtime.posix.filesystem import (
     PosixSecureFilesystemBackend,
@@ -27,7 +28,12 @@ from master_agent.platform_runtime.posix.process import (
 )
 
 
-def build_posix_runtime(*, platform: str, backend: str) -> PlatformRuntime:
+def build_posix_runtime(
+    *,
+    platform: str,
+    backend: str,
+    capsule_executable: str | None = None,
+) -> PlatformRuntime:
     """Return the immutable native POSIX runtime for Linux or macOS."""
 
     filesystem = PosixSecureFilesystemBackend()
@@ -35,7 +41,14 @@ def build_posix_runtime(*, platform: str, backend: str) -> PlatformRuntime:
     atomic = PosixAtomicPublicationRecoveryBackend()
     process = PosixProcessSupervisionBackend()
     git = PosixTrustedGitBackend()
-    capsules = LinuxBubblewrapCapsuleIsolationBackend() if platform == "linux" else None
+    capsules = (
+        select_linux_bubblewrap_backend(
+            filesystem=filesystem,
+            executable=capsule_executable,
+        )
+        if platform == "linux"
+        else None
+    )
     services: tuple[tuple[PlatformContract, PlatformBackend | None], ...] = (
         (PlatformContract.SECURE_FILESYSTEM, filesystem),
         (PlatformContract.CROSS_PROCESS_LOCKING, locking),
@@ -47,12 +60,18 @@ def build_posix_runtime(*, platform: str, backend: str) -> PlatformRuntime:
     statuses: list[PlatformContractStatus] = []
     for contract, service in services:
         if service is None:
+            reason = (
+                LINUX_BUBBLEWRAP_UNAVAILABLE_REASON
+                if platform == "linux"
+                and contract is PlatformContract.CAPSULE_ISOLATION
+                else f"native {platform} {contract} backend is not implemented"
+            )
             statuses.append(
                 PlatformContractStatus(
                     contract=contract,
                     available=False,
                     backend=backend,
-                    reason=(f"native {platform} {contract} backend is not implemented"),
+                    reason=reason,
                 )
             )
         else:

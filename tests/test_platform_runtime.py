@@ -1657,7 +1657,22 @@ class PlatformRuntimeTests(unittest.TestCase):
         )
 
     def test_posix_runtime_exposes_truthful_linux_and_macos_identities(self) -> None:
-        runtime = get_platform_runtime("linux")
+        from master_agent.platform_runtime.factory import _runtime_for_identity
+        from master_agent.platform_runtime.posix.capsules import (
+            LinuxBubblewrapCapsuleIsolationBackend,
+        )
+
+        selected_bubblewrap = LinuxBubblewrapCapsuleIsolationBackend(
+            executable=Path("/trusted/bwrap")
+        )
+        _runtime_for_identity.cache_clear()
+        self.addCleanup(_runtime_for_identity.cache_clear)
+        with patch(
+            "master_agent.platform_runtime.posix.runtime."
+            "select_linux_bubblewrap_backend",
+            return_value=selected_bubblewrap,
+        ):
+            runtime = get_platform_runtime("linux")
 
         self.assertEqual(runtime.status.platform, "linux")
         self.assertEqual(runtime.status.backend, "posix-linux")
@@ -1712,6 +1727,96 @@ class PlatformRuntimeTests(unittest.TestCase):
         ):
             macos.require_capsule_isolation()
 
+    def test_linux_capsule_status_requires_a_trusted_bubblewrap_executable(
+        self,
+    ) -> None:
+        from master_agent.platform_runtime import get_capsule_isolation_backend
+        from master_agent.platform_runtime.factory import _runtime_for_identity
+
+        reason = (
+            "native linux capsule_isolation backend is unavailable: "
+            "trusted bubblewrap executable is unavailable"
+        )
+        self.addCleanup(_runtime_for_identity.cache_clear)
+        with patch(
+            "master_agent.platform_runtime.posix.capsules.shutil.which",
+            return_value=None,
+        ):
+            _runtime_for_identity.cache_clear()
+            missing = get_platform_runtime("linux")
+
+        missing_status = missing.status.contract_status(
+            PlatformContract.CAPSULE_ISOLATION
+        )
+        self.assertFalse(missing_status.available)
+        self.assertEqual(missing_status.backend, "posix-linux")
+        self.assertEqual(missing_status.reason, reason)
+        with self.assertRaisesRegex(PlatformCapabilityUnavailable, f"^{reason}$"):
+            missing.require_capsule_isolation()
+
+        with TemporaryDirectory() as raw:
+            executable = Path(raw) / "bwrap"
+            executable.write_bytes(b"trusted test executable")
+            executable.chmod(0o700)
+            with patch(
+                "master_agent.platform_runtime.posix.capsules.shutil.which"
+            ) as explicit_discovery:
+                explicit = get_capsule_isolation_backend(
+                    "linux",
+                    executable=str(executable),
+                )
+
+            self.assertEqual(explicit.executable, executable.resolve())
+            explicit_discovery.assert_not_called()
+            with patch(
+                "master_agent.platform_runtime.posix.capsules.shutil.which",
+                return_value=str(executable),
+            ):
+                _runtime_for_identity.cache_clear()
+                available = get_platform_runtime("linux")
+
+            available_status = available.status.contract_status(
+                PlatformContract.CAPSULE_ISOLATION
+            )
+            self.assertTrue(available_status.available)
+            self.assertEqual(available_status.backend, "linux-bubblewrap")
+            self.assertEqual(
+                available.require_capsule_isolation().executable,
+                executable.resolve(),
+            )
+
+            executable.chmod(0o702)
+            with patch(
+                "master_agent.platform_runtime.posix.capsules.shutil.which",
+                return_value=str(executable),
+            ):
+                _runtime_for_identity.cache_clear()
+                unsafe = get_platform_runtime("linux")
+
+            unsafe_status = unsafe.status.contract_status(
+                PlatformContract.CAPSULE_ISOLATION
+            )
+            self.assertFalse(unsafe_status.available)
+            self.assertEqual(unsafe_status.reason, reason)
+
+        for explicit_path in ("", "/missing/explicit/bwrap"):
+            with (
+                self.subTest(explicit_path=explicit_path),
+                patch(
+                    "master_agent.platform_runtime.posix.capsules.shutil.which"
+                ) as invalid_discovery,
+                self.assertRaisesRegex(
+                    PlatformCapabilityUnavailable,
+                    f"^{reason}$",
+                ),
+            ):
+                get_capsule_isolation_backend(
+                    "linux",
+                    executable=explicit_path,
+                )
+
+            invalid_discovery.assert_not_called()
+
     def test_capsule_worker_selects_only_real_or_explicit_isolation(self) -> None:
         from master_agent.capsule_runtime import CapsuleWorker
 
@@ -1722,8 +1827,12 @@ class PlatformRuntimeTests(unittest.TestCase):
             with (
                 self.subTest(platform="macos", arguments=arguments),
                 patch("master_agent.platform_runtime.factory.sys.platform", "darwin"),
-                patch("master_agent.capsule_runtime.shutil.which") as discovery,
-                patch("master_agent.capsule_runtime.Path") as path_constructor,
+                patch(
+                    "master_agent.platform_runtime.posix.capsules.shutil.which"
+                ) as discovery,
+                patch(
+                    "master_agent.platform_runtime.posix.capsules.Path"
+                ) as path_constructor,
                 self.assertRaisesRegex(
                     PlatformCapabilityUnavailable,
                     "^native macos capsule_isolation backend is not implemented$",
@@ -1736,7 +1845,9 @@ class PlatformRuntimeTests(unittest.TestCase):
 
         with (
             patch("master_agent.platform_runtime.factory.sys.platform", "darwin"),
-            patch("master_agent.capsule_runtime.shutil.which") as discovery,
+            patch(
+                "master_agent.platform_runtime.posix.capsules.shutil.which"
+            ) as discovery,
             patch("master_agent.capsule_runtime._validate_worker_artifact"),
         ):
             test_worker = CapsuleWorker(require_os_sandbox=False)
@@ -1745,25 +1856,27 @@ class PlatformRuntimeTests(unittest.TestCase):
         self.assertFalse(test_worker.production_isolated)
         discovery.assert_not_called()
 
-        resolved_bubblewrap = Mock(spec=Path)
-        path_constructor = Mock(return_value=resolved_bubblewrap)
-        resolved_bubblewrap.resolve.return_value = resolved_bubblewrap
-        with (
-            patch("master_agent.platform_runtime.factory.sys.platform", "linux"),
-            patch("master_agent.capsule_runtime.shutil.which") as discovery,
-            patch("master_agent.capsule_runtime.Path", path_constructor),
-            patch("master_agent.capsule_runtime._validate_worker_artifact"),
-        ):
-            isolated_worker = CapsuleWorker(
-                require_os_sandbox=False,
-                bubblewrap="/trusted/bwrap",
-            )
-            production_isolated = isolated_worker.production_isolated
+        with TemporaryDirectory() as raw:
+            explicit_bubblewrap = Path(raw) / "bwrap"
+            explicit_bubblewrap.write_bytes(b"trusted test executable")
+            explicit_bubblewrap.chmod(0o700)
+            with (
+                patch("master_agent.platform_runtime.factory.sys.platform", "linux"),
+                patch(
+                    "master_agent.platform_runtime.posix.capsules.shutil.which"
+                ) as discovery,
+                patch("master_agent.capsule_runtime._validate_worker_artifact"),
+            ):
+                isolated_worker = CapsuleWorker(
+                    require_os_sandbox=False,
+                    bubblewrap=str(explicit_bubblewrap),
+                )
+                production_isolated = isolated_worker.production_isolated
 
         self.assertEqual(isolated_worker.backend, "linux-bubblewrap")
         self.assertTrue(production_isolated)
         discovery.assert_not_called()
-        self.assertEqual(path_constructor.call_args_list[0].args, ("/trusted/bwrap",))
+        self.assertEqual(isolated_worker._bubblewrap, explicit_bubblewrap.resolve())
 
     def test_deployment_readiness_reports_macos_capsule_isolation_unavailable(
         self,
@@ -1798,6 +1911,47 @@ class PlatformRuntimeTests(unittest.TestCase):
         self.assertEqual(
             capsule_status.reason,
             "native macos capsule_isolation backend is not implemented",
+        )
+
+    def test_deployment_readiness_reports_missing_linux_bubblewrap(self) -> None:
+        from master_agent.capabilities import CapabilityCatalog
+        from master_agent.config import IntegrationConfig
+        from master_agent.governance import GovernanceProfile
+        from master_agent.platform_runtime.factory import _runtime_for_identity
+        from master_agent.readiness import assess_readiness
+
+        self.addCleanup(_runtime_for_identity.cache_clear)
+        with patch(
+            "master_agent.platform_runtime.posix.capsules.shutil.which",
+            return_value=None,
+        ):
+            _runtime_for_identity.cache_clear()
+            linux = platform_runtime_status("linux")
+        with patch(
+            "master_agent.readiness.platform_runtime_status",
+            return_value=linux,
+        ):
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(
+                    ROOT / "config" / "capabilities.toml"
+                ),
+                governance=GovernanceProfile.from_toml(
+                    ROOT / "config" / "governance.toml"
+                ),
+                integrations=IntegrationConfig.from_toml(
+                    ROOT / "config" / "integrations.toml"
+                ),
+                environ={},
+            )
+
+        capsule_status = report.platform_runtime.contract_status(
+            PlatformContract.CAPSULE_ISOLATION
+        )
+        self.assertFalse(capsule_status.available)
+        self.assertEqual(
+            capsule_status.reason,
+            "native linux capsule_isolation backend is unavailable: "
+            "trusted bubblewrap executable is unavailable",
         )
 
     def test_windows_contracts_are_inspectable_and_fail_closed(self) -> None:

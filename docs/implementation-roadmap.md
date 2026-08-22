@@ -73,8 +73,9 @@ absent.
 - no compatibility shim or weaker cross-platform fallback can satisfy a secure
   contract; and
 - existing POSIX filesystem, locking, atomic-state, process, and Git semantics
-  remain covered; Linux capsule isolation identifies bubblewrap and macOS
-  reports that independent contract unavailable; every native Windows route
+  remain covered; Linux capsule isolation identifies a selected trusted
+  bubblewrap executable or reports that independent contract unavailable, as
+  does macOS; every native Windows route
   stays planned until its own implementation and evidence are complete.
 
 ### Phase 1 — governed runtime

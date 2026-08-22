@@ -20,7 +20,9 @@ retention, process, Git, and capsule paths continue only when their exact
 secure backend is available. Eligible stateless reads need no state contract.
 Existing POSIX filesystem, locking, atomic-state, process, and Git
 implementations remain selected and retain their current semantics. Linux
-selects its bubblewrap worker-isolation implementation. macOS reports capsule
+selects its bubblewrap worker-isolation implementation only when a trusted
+executable is available. Linux otherwise reports capsule isolation unavailable,
+and macOS reports capsule
 isolation unavailable: account/group artifact trust remains part of the secure-
 filesystem backend and cannot satisfy executable OS containment.
 
@@ -56,7 +58,8 @@ secret-free report.
 
 Supported POSIX systems select the existing non-isolation implementations and
 preserve their current security and user-visible behavior. The Linux capsule
-worker retains bubblewrap isolation; the macOS worker continues to fail closed,
+worker retains bubblewrap isolation when its trusted executable is available
+and otherwise fails closed; the macOS worker continues to fail closed,
 now through the truthful unavailable contract instead of a later generic
 bubblewrap error. `require_os_sandbox=False` remains a deterministic test-only
 subprocess route and never reports production isolation. Existing JSON reports
