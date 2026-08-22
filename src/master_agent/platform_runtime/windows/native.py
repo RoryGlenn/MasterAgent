@@ -771,10 +771,7 @@ class NativeWindowsApi:
         if not encoded or len(encoded) > 0xFFFC:
             raise WindowsPathSecurityError("Windows replacement name is too long")
         file_name_offset = _FILE_RENAME_INFO_EX.FileName.offset
-        size = max(
-            ctypes.sizeof(_FILE_RENAME_INFO_EX),
-            file_name_offset + len(encoded),
-        )
+        size = ctypes.sizeof(_FILE_RENAME_INFO_EX) + len(encoded)
         buffer = ctypes.create_string_buffer(size)
         information = ctypes.cast(
             buffer,

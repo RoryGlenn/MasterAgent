@@ -781,7 +781,8 @@ assert 'msvcrt' not in sys.modules
                     3,
                     0x5678,
                     0,
-                    ctypes.sizeof(windows_native._FILE_RENAME_INFO_EX),
+                    ctypes.sizeof(windows_native._FILE_RENAME_INFO_EX)
+                    + len("x".encode("utf-16-le")),
                     "x".encode("utf-16-le"),
                 )
             ],
