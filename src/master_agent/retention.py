@@ -2490,13 +2490,10 @@ def _preflight_prune_transaction_at(
             )
         )
         if not has_staged_source:
-            for name in entries:
-                metadata = os.stat(
-                    name,
-                    dir_fd=transaction_descriptor,
-                    follow_symlinks=False,
+            if not entries <= {_RETENTION_PRUNE_MARKER_NAME}:
+                raise ConfigurationError(
+                    "prune transaction contains unexpected entries"
                 )
-                _restricted_file_identity(metadata, name)
             if _RETENTION_PRUNE_MARKER_NAME not in entries:
                 return
             try:
@@ -2675,6 +2672,10 @@ def _recover_prune_transaction_at(
             )
         )
         if not has_staged_source:
+            if not entries <= {_RETENTION_PRUNE_MARKER_NAME}:
+                raise ConfigurationError(
+                    "prune transaction contains unexpected entries"
+                )
             completed_paths: tuple[tuple[str, ...], tuple[str, ...]] | None = None
             if _RETENTION_PRUNE_MARKER_NAME in entries:
                 try:

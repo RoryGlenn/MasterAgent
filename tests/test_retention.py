@@ -1485,6 +1485,41 @@ persistence = "explicit_content"
             self.assertFalse(evidence.exists())
             self.assertFalse(sidecar.exists())
 
+    def test_prune_refuses_unknown_stage_free_transaction_entry(self) -> None:
+        config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+        created = datetime(2026, 8, 13, tzinfo=UTC)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence, sidecar = write_retained_text(
+                root / "result.txt",
+                "expired",
+                evidence_type="run-result/test",
+                config=config,
+                now=created,
+            )
+            stage = root / retention._RETENTION_PRUNE_STAGE_NAME
+            stage.mkdir(mode=0o700)
+            transaction = stage / "txn-unknown"
+            transaction.mkdir(mode=0o700)
+            unrelated = transaction / "unrelated"
+            unrelated.write_text("do not delete\n", encoding="utf-8")
+            unrelated.chmod(0o600)
+
+            result = purge_expired_evidence(
+                root,
+                now=created + timedelta(hours=25),
+                dry_run=False,
+            )
+
+            self.assertTrue(result.errors)
+            self.assertTrue(
+                any("recovery preflight failed" in error for error in result.errors)
+            )
+            self.assertEqual(result.removed_files, ())
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "do not delete\n")
+            self.assertTrue(evidence.exists())
+            self.assertTrue(sidecar.exists())
+
     def test_prune_rolls_back_malformed_marker_only_transaction_before_deletion(
         self,
     ) -> None:
