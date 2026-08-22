@@ -158,6 +158,10 @@ class WindowsTrustedGitBackend:
         self._home = Path(self._state.name).absolute()
         self._executable_pin: PinnedWindowsPath | None = None
         try:
+            self._disabled_file = self._home / "disabled"
+            self._disabled_file.touch(exist_ok=False)
+            self._empty_hooks = self._home / "hooks"
+            self._empty_hooks.mkdir()
             self._executable_pin = self._select_executable(
                 executable=executable,
                 discovery=discovery or RegistryWindowsGitDiscovery(),
@@ -407,9 +411,9 @@ class WindowsTrustedGitBackend:
         git_directory: Path,
     ) -> tuple[str, ...]:
         values = (
-            ("core.hooksPath", "NUL"),
-            ("core.attributesFile", "NUL"),
-            ("core.excludesFile", "NUL"),
+            ("core.hooksPath", str(self._empty_hooks)),
+            ("core.attributesFile", str(self._disabled_file)),
+            ("core.excludesFile", str(self._disabled_file)),
             ("core.fsmonitor", "false"),
             ("core.untrackedCache", "false"),
             ("core.autocrlf", "false"),
@@ -448,24 +452,24 @@ class WindowsTrustedGitBackend:
         return {
             "GCM_INTERACTIVE": "Never",
             "GIT_ALLOW_PROTOCOL": "",
-            "GIT_ASKPASS": "NUL",
+            "GIT_ASKPASS": str(self._disabled_file),
             "GIT_ATTR_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "NUL",
+            "GIT_CONFIG_GLOBAL": str(self._disabled_file),
             "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_SYSTEM": "NUL",
-            "GIT_EDITOR": "NUL",
+            "GIT_CONFIG_SYSTEM": str(self._disabled_file),
+            "GIT_EDITOR": str(self._disabled_file),
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_PAGER": "NUL",
+            "GIT_PAGER": str(self._disabled_file),
             "GIT_PROTOCOL_FROM_USER": "0",
-            "GIT_SEQUENCE_EDITOR": "NUL",
+            "GIT_SEQUENCE_EDITOR": str(self._disabled_file),
             "GIT_TERMINAL_PROMPT": "0",
             "HOME": str(self._home),
             "LANG": "C",
             "LC_ALL": "C",
             "NO_COLOR": "1",
-            "SSH_ASKPASS": "NUL",
+            "SSH_ASKPASS": str(self._disabled_file),
             "XDG_CONFIG_HOME": str(self._home),
         }
 

@@ -224,6 +224,8 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
         self.assertNotIn("MASTER_AGENT_AMBIENT_GIT_SECRET", actual["environment"])
         self.assertEqual(actual["environment"]["GIT_TERMINAL_PROMPT"], "0")
         self.assertEqual(actual["environment"]["GCM_INTERACTIVE"], "Never")
+        self.assertNotIn("NUL", actual["environment"].values())
+        self.assertTrue(Path(actual["environment"]["GIT_CONFIG_GLOBAL"]).is_file())
 
     def test_prohibited_configuration_stops_before_requested_command(self) -> None:
         process = _FakeProcess([_result(b"include.path\x00")])
