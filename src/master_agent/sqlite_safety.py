@@ -17,8 +17,11 @@ from threading import RLock
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.platform_runtime import (
+    AtomicPublicationRecoveryBackend,
+    AtomicStateIdentity,
     LockMode,
     PlatformContract,
+    get_atomic_publication_recovery_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     require_persistent_state_platform,
@@ -105,7 +108,7 @@ class _LedgerGeneration:
     state: _LedgerState
 
 
-class PinnedSQLiteDatabase:
+class _PosixPinnedSQLiteDatabase:
     """SQLite state serialized through a pinned directory and stable lock.
 
     SQLite's standard Python API can open only pathnames, not an already
@@ -126,7 +129,6 @@ class PinnedSQLiteDatabase:
         *,
         parent_directory: PinnedDirectory | None = None,
     ) -> None:
-        require_persistent_state_platform()
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
         )
@@ -591,11 +593,189 @@ class PinnedSQLiteDatabase:
             os.close(descriptor)
 
 
-@contextmanager
-def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
-    """Open an existing stable generation without creating or modifying it."""
+class _WindowsPinnedSQLiteDatabase:
+    """Serialize in-memory SQLite generations through the Windows state backend."""
 
-    require_persistent_state_platform()
+    def __init__(
+        self,
+        path: Path,
+        *,
+        atomic: AtomicPublicationRecoveryBackend,
+        parent_directory: PinnedDirectory | None,
+    ) -> None:
+        self._parent_pin = (
+            parent_directory.duplicate() if parent_directory is not None else None
+        )
+        try:
+            from master_agent.platform_runtime.windows.filesystem import (
+                validate_windows_drive_path,
+            )
+
+            if self._parent_pin is None:
+                self._path = Path(validate_windows_drive_path(path).canonical)
+            elif path.parent == Path():
+                self._path = Path(
+                    str(self._parent_pin.path).rstrip("\\") + "\\" + path.name
+                )
+            else:
+                selected = validate_windows_drive_path(path)
+                parent = validate_windows_drive_path(self._parent_pin.path)
+                if (
+                    selected.components[:-1] != parent.components
+                    or selected.drive != parent.drive
+                ):
+                    raise ConfigurationError(
+                        "SQLite state database must be an immediate child of its "
+                        "pinned parent"
+                    )
+                self._path = Path(selected.canonical)
+            self._atomic = atomic
+            self._lock = RLock()
+            self._active_context = False
+            self._closed = False
+            self._created = False
+            self._cleanup_identity: AtomicStateIdentity | None = None
+            with atomic.open_transaction(
+                self._path,
+                max_bytes=_MAX_LEDGER_BYTES,
+                create=True,
+            ) as transaction:
+                if transaction.identity is None:
+                    identity = transaction.publish_bytes(b"", expected=None)
+                    self._created = True
+                    self._cleanup_identity = identity
+                else:
+                    content = transaction.read_bytes()
+                    if content is None:
+                        raise ConfigurationError(
+                            "SQLite state database disappeared during initialization"
+                        )
+                    validation = _memory_connection(content)
+                    _close_sqlite_connection(validation)
+        except BaseException:
+            if self._parent_pin is not None:
+                self._parent_pin.close()
+            raise
+
+    @property
+    def created(self) -> bool:
+        return self._created
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("SQLite state database is closed")
+            if self._active_context:
+                raise RuntimeError("nested SQLite state database contexts are unsafe")
+            self._active_context = True
+            connection: sqlite3.Connection | None = None
+            try:
+                with self._atomic.open_transaction(
+                    self._path,
+                    max_bytes=_MAX_LEDGER_BYTES,
+                    create=False,
+                ) as transaction:
+                    content = transaction.read_bytes()
+                    if content is None or transaction.identity is None:
+                        raise ConfigurationError("SQLite state database does not exist")
+                    generation = transaction.identity
+                    connection = _memory_connection(content)
+                    try:
+                        yield connection
+                    except BaseException as error:
+                        try:
+                            connection.rollback()
+                        except BaseException as rollback_error:  # noqa: BLE001
+                            error.add_note(
+                                "SQLite rollback failed; the state transaction was "
+                                f"abandoned ({type(rollback_error).__name__})"
+                            )
+                        raise
+                    connection.commit()
+                    updated = _serialize_connection(connection)
+                    if _digest(updated) != generation.content_sha256:
+                        published = transaction.publish_bytes(
+                            updated,
+                            expected=generation,
+                        )
+                        if self._cleanup_identity is not None:
+                            self._cleanup_identity = published
+            finally:
+                if connection is not None:
+                    _close_sqlite_connection(connection)
+                self._active_context = False
+
+    def close(self, *, remove_created: bool = False) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            try:
+                if (
+                    remove_created
+                    and self._created
+                    and self._cleanup_identity is not None
+                ):
+                    try:
+                        with self._atomic.open_transaction(
+                            self._path,
+                            max_bytes=_MAX_LEDGER_BYTES,
+                            create=False,
+                        ) as transaction:
+                            if transaction.identity == self._cleanup_identity:
+                                transaction.remove(expected=self._cleanup_identity)
+                    except (ConfigurationError, OSError):
+                        pass
+            finally:
+                self._closed = True
+                if self._parent_pin is not None:
+                    self._parent_pin.close()
+
+
+class PinnedSQLiteDatabase:
+    """Select the certified native SQLite generation implementation."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        require_persistent_state_platform()
+        atomic = get_atomic_publication_recovery_backend()
+        if atomic.backend_id == "windows-handle-atomic-state":
+            self._implementation: (
+                _PosixPinnedSQLiteDatabase | _WindowsPinnedSQLiteDatabase
+            ) = _WindowsPinnedSQLiteDatabase(
+                path,
+                atomic=atomic,
+                parent_directory=parent_directory,
+            )
+        else:
+            self._implementation = _PosixPinnedSQLiteDatabase(
+                path,
+                parent_directory=parent_directory,
+            )
+
+    @property
+    def created(self) -> bool:
+        return self._implementation.created
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        with self._implementation.connect() as connection:
+            yield connection
+
+    def close(self, *, remove_created: bool = False) -> None:
+        self._implementation.close(remove_created=remove_created)
+
+
+@contextmanager
+def _posix_readonly_snapshot_connection(
+    path: Path,
+) -> Iterator[sqlite3.Connection]:
+    """Open an existing stable POSIX generation without modifying it."""
+
     absolute = Path(os.path.abspath(os.fspath(path)))
     parent = absolute.parent
     parent_descriptor = _open_trusted_parent(parent, create=False)
@@ -685,11 +865,51 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
         os.close(parent_descriptor)
 
 
+@contextmanager
+def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Open an existing stable native generation without modifying it."""
+
+    require_persistent_state_platform()
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id != "windows-handle-atomic-state":
+        with _posix_readonly_snapshot_connection(path) as connection:
+            yield connection
+        return
+    with atomic.open_transaction(
+        path,
+        max_bytes=_MAX_LEDGER_BYTES,
+        create=False,
+    ) as transaction:
+        content = transaction.read_bytes()
+        if content is None:
+            raise ConfigurationError("SQLite state database does not exist")
+        connection = _memory_connection(content)
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            yield connection
+        finally:
+            _close_sqlite_connection(connection)
+
+
 def path_entry_exists(path: Path) -> bool:
     """Return whether a directory entry exists, including a broken symlink."""
 
     require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        filesystem = get_secure_filesystem_backend()
+        if not isinstance(filesystem, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        try:
+            with filesystem.pin_file(path, require_private=True):
+                return True
+        except FileNotFoundError:
+            return False
     try:
         path.lstat()
     except FileNotFoundError:

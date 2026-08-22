@@ -35,8 +35,10 @@ from master_agent.models import (
     freeze_json_mapping,
 )
 from master_agent.platform_runtime import (
+    AtomicPublicationRecoveryBackend,
     LockMode,
     PlatformContract,
+    get_atomic_publication_recovery_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     require_platform_contract,
@@ -1023,13 +1025,105 @@ def _require_capsule_store_platform() -> None:
     require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
 
 
+class _WindowsCapsuleLock:
+    """Hold one capsule-wide native lock and its validated directory handle."""
+
+    def __init__(
+        self,
+        *,
+        atomic: AtomicPublicationRecoveryBackend,
+        filesystem: object,
+        capsule_path: Path,
+        create_lock: bool,
+    ) -> None:
+        self._atomic = atomic
+        self._filesystem = filesystem
+        self._capsule_path = capsule_path
+        self._create_lock = create_lock
+        self._transaction: Any | None = None
+        self._directory: PinnedWindowsPath | None = None
+
+    def __enter__(self) -> PinnedWindowsPath:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        if not isinstance(self._filesystem, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        transaction = self._atomic.open_transaction(
+            self._capsule_path / ".master-agent-capsule-store",
+            max_bytes=0,
+            create=self._create_lock,
+        )
+        transaction.__enter__()
+        try:
+            directory = self._filesystem.pin_directory(
+                self._capsule_path,
+                require_private=True,
+            )
+            directory.validate()
+        except BaseException:
+            transaction.__exit__(None, None, None)
+            raise
+        self._transaction = transaction
+        self._directory = directory
+        return directory
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: object,
+    ) -> None:
+        if self._directory is not None:
+            self._directory.close()
+            self._directory = None
+        if self._transaction is not None:
+            self._transaction.__exit__(exception_type, exception, traceback)
+            self._transaction = None
+
+
 class CapsuleStore:
     """Owner-private append-only capsule artifacts and signed state chains."""
 
     def __init__(self, root: Path) -> None:
         _require_capsule_store_platform()
-        self._root_anchor = _private_root(root)
-        self.root = self._root_anchor.path
+        atomic = get_atomic_publication_recovery_backend()
+        self._atomic: AtomicPublicationRecoveryBackend | None = None
+        self._windows_root: PinnedWindowsPath | None = None
+        self._root_anchor: PinnedDirectory | None = None
+        if atomic.backend_id == "windows-handle-atomic-state":
+            from master_agent.platform_runtime.windows.filesystem import (
+                WindowsSecureFilesystemBackend,
+            )
+
+            filesystem = get_secure_filesystem_backend()
+            if not isinstance(filesystem, WindowsSecureFilesystemBackend):
+                raise ConfigurationError(
+                    "native Windows secure filesystem is unavailable"
+                )
+            from master_agent.platform_runtime.windows.filesystem import (
+                validate_windows_drive_path,
+            )
+
+            try:
+                selected = Path(
+                    validate_windows_drive_path(root.expanduser()).canonical
+                )
+            except (TypeError, ValueError) as error:
+                raise ConfigurationError(
+                    "capsule store root must be absolute"
+                ) from error
+            atomic.ensure_private_directory(selected)
+            self._windows_root = filesystem.pin_directory(
+                selected,
+                require_private=True,
+            )
+            self._atomic = atomic
+            self.root = self._windows_root.path
+        else:
+            self._root_anchor = _private_root(root)
+            self.root = self._root_anchor.path
 
     def install(
         self,
@@ -1048,6 +1142,14 @@ class CapsuleStore:
         identity = self._capsule_name(
             manifest.spec.capability_id, manifest.spec.version
         )
+        if self._atomic is not None:
+            return self._install_windows(
+                identity,
+                bundle,
+                manifest,
+                trust=trust,
+            )
+        assert self._root_anchor is not None
         root_descriptor = self._root_anchor.duplicate_fd()
         try:
             try:
@@ -1099,6 +1201,8 @@ class CapsuleStore:
 
         _require_capsule_store_platform()
         trust.verify(manifest)
+        if self._atomic is not None:
+            return self._append_manifest_windows(manifest, trust=trust)
         descriptor = self._open_capsule(
             manifest.spec.capability_id, manifest.spec.version
         )
@@ -1132,6 +1236,13 @@ class CapsuleStore:
         """Re-read and authenticate the fixed artifact set without following links."""
 
         _require_capsule_store_platform()
+        if self._atomic is not None:
+            with self._locked_windows_capsule(
+                capability_id,
+                version,
+                create_lock=False,
+            ) as directory:
+                return CapsuleBundle._from_windows_directory(directory)
         descriptor = self._open_capsule(capability_id, version)
         try:
             get_cross_process_locking_backend().acquire(
@@ -1152,6 +1263,18 @@ class CapsuleStore:
         """Load and authenticate a complete bounded promotion chain."""
 
         _require_capsule_store_platform()
+        if self._atomic is not None:
+            with self._locked_windows_capsule(
+                capability_id,
+                version,
+                create_lock=False,
+            ) as directory:
+                return self._windows_manifests_at(
+                    directory,
+                    capability_id,
+                    version,
+                    trust=trust,
+                )
         descriptor = self._open_capsule(capability_id, version)
         try:
             get_cross_process_locking_backend().acquire(
@@ -1179,6 +1302,25 @@ class CapsuleStore:
 
         _require_capsule_store_platform()
         _validate_sha256(manifest_sha256, "requested capsule manifest")
+        if self._atomic is not None:
+            with self._locked_windows_capsule(
+                capability_id,
+                version,
+                create_lock=False,
+            ) as directory:
+                manifests = self._windows_manifests_at(
+                    directory,
+                    capability_id,
+                    version,
+                    trust=trust,
+                )
+                if not manifests:
+                    raise ConfigurationError("capability capsule is not installed")
+                current = manifests[-1]
+                self._require_enabled_manifest(current, manifest_sha256)
+                bundle = CapsuleBundle._from_windows_directory(directory)
+                _verify_bundle_identity(bundle, current)
+                return current, bundle
         descriptor = self._open_capsule(capability_id, version)
         try:
             get_cross_process_locking_backend().acquire(
@@ -1194,16 +1336,7 @@ class CapsuleStore:
             if not manifests:
                 raise ConfigurationError("capability capsule is not installed")
             current = manifests[-1]
-            if current.state in {CapsuleState.DEPRECATED, CapsuleState.REVOKED}:
-                raise ConfigurationError(f"capability capsule is {current.state}")
-            if current.state is not CapsuleState.ENABLED:
-                raise ConfigurationError(
-                    "capability capsule is not promoted and enabled"
-                )
-            if current.manifest_sha256 != manifest_sha256:
-                raise ConfigurationError(
-                    "requested capsule digest is not the enabled version"
-                )
+            self._require_enabled_manifest(current, manifest_sha256)
             bundle = CapsuleBundle._from_descriptor(descriptor)
             _verify_bundle_identity(bundle, current)
             return current, bundle
@@ -1211,6 +1344,8 @@ class CapsuleStore:
             os.close(descriptor)
 
     def _open_capsule(self, capability_id: str, version: str) -> int:
+        if self._root_anchor is None:
+            raise ConfigurationError("POSIX capsule store is unavailable")
         root_descriptor = self._root_anchor.duplicate_fd()
         try:
             return _open_private_directory_at(
@@ -1308,6 +1443,235 @@ class CapsuleStore:
 
     def _capsule_directory(self, capability_id: str, version: str) -> Path:
         return self.root / self._capsule_name(capability_id, version)
+
+    def _install_windows(
+        self,
+        identity: str,
+        bundle: CapsuleBundle,
+        manifest: CapsuleManifest,
+        *,
+        trust: CapsuleTrustStore,
+    ) -> Path:
+        """Install one capsule through protected native directories and files."""
+
+        from master_agent.platform_runtime.windows.filesystem import WindowsObjectKind
+
+        atomic = self._require_windows_atomic()
+        root = self._require_windows_root()
+        with atomic.open_transaction(
+            self.root / ".master-agent-capsule-root",
+            max_bytes=0,
+            create=True,
+        ):
+            root.validate()
+            try:
+                existing = root.pin_child(
+                    identity,
+                    kind=WindowsObjectKind.DIRECTORY,
+                    require_private=True,
+                )
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                existing.close()
+                raise ConfigurationError(
+                    "capability capsule version is already installed"
+                )
+            with root.create_private_directory(identity) as created:
+                created.validate()
+            root.flush_directory()
+        capsule_path = self.root / identity
+        with self._locked_windows_capsule_path(
+            capsule_path,
+            create_lock=True,
+        ) as directory:
+            artifacts = {
+                "capsule.json": _canonical_json(bundle.spec.to_dict()),
+                "program.py": bundle.source,
+                "dependencies.lock.json": _canonical_json(bundle.dependency_lock),
+                "sbom.cdx.json": _canonical_json(bundle.sbom),
+                "tests.json": _canonical_json(bundle.test_suite),
+                "verification.json": _canonical_json(bundle.verification_contract),
+                "compensation.json": _canonical_json(bundle.compensation_contract),
+                "THIRD_PARTY_NOTICES.md": bundle.third_party_notices.encode("utf-8"),
+            }
+            for name, payload in artifacts.items():
+                self._write_windows_private(capsule_path / name, payload)
+            filename = self._append_manifest_windows_at(
+                directory,
+                capsule_path,
+                manifest,
+                trust=trust,
+                existing=(),
+            )
+        return capsule_path / filename
+
+    def _append_manifest_windows(
+        self,
+        manifest: CapsuleManifest,
+        *,
+        trust: CapsuleTrustStore,
+    ) -> Path:
+        capsule_path = self._capsule_directory(
+            manifest.spec.capability_id,
+            manifest.spec.version,
+        )
+        with self._locked_windows_capsule_path(
+            capsule_path,
+            create_lock=False,
+        ) as directory:
+            bundle = CapsuleBundle._from_windows_directory(directory)
+            _verify_bundle_identity(bundle, manifest)
+            existing = self._windows_manifests_at(
+                directory,
+                manifest.spec.capability_id,
+                manifest.spec.version,
+                trust=trust,
+            )
+            filename = self._append_manifest_windows_at(
+                directory,
+                capsule_path,
+                manifest,
+                trust=trust,
+                existing=existing,
+            )
+        return capsule_path / filename
+
+    def _windows_manifests_at(
+        self,
+        directory: PinnedWindowsPath,
+        capability_id: str,
+        version: str,
+        *,
+        trust: CapsuleTrustStore,
+    ) -> tuple[CapsuleManifest, ...]:
+        names = tuple(
+            name
+            for name in directory.list_children()
+            if name.endswith(".manifest.json")
+        )
+        if len(names) > _MAX_MANIFESTS:
+            raise ConfigurationError("capsule promotion chain exceeds 16 states")
+        manifests: list[CapsuleManifest] = []
+        for name in names:
+            manifest = CapsuleManifest.from_dict(
+                _decode_json(_read_windows_regular(directory, name))
+            )
+            trust.verify(manifest)
+            if name != self._manifest_filename(manifest):
+                raise ConfigurationError("capsule manifest filename digest drifted")
+            if (
+                manifest.spec.capability_id != capability_id
+                or manifest.spec.version != version
+            ):
+                raise ConfigurationError("capsule manifest identity drifted")
+            if manifests:
+                previous = manifests[-1]
+                if (
+                    manifest.sequence != previous.sequence + 1
+                    or manifest.previous_manifest_sha256 != previous.manifest_sha256
+                    or manifest.state not in _ALLOWED_TRANSITIONS[previous.state]
+                ):
+                    raise ConfigurationError("capsule promotion chain is invalid")
+            elif manifest.sequence != 0:
+                raise ConfigurationError("capsule promotion chain starts after zero")
+            manifests.append(manifest)
+        return tuple(manifests)
+
+    def _append_manifest_windows_at(
+        self,
+        directory: PinnedWindowsPath,
+        capsule_path: Path,
+        manifest: CapsuleManifest,
+        *,
+        trust: CapsuleTrustStore,
+        existing: Sequence[CapsuleManifest],
+    ) -> str:
+        trust.verify(manifest)
+        if existing:
+            current = existing[-1]
+            if (
+                manifest.sequence != current.sequence + 1
+                or manifest.previous_manifest_sha256 != current.manifest_sha256
+                or manifest.state not in _ALLOWED_TRANSITIONS[current.state]
+            ):
+                raise ConfigurationError("capsule promotion chain is not contiguous")
+        elif manifest.sequence != 0:
+            raise ConfigurationError(
+                "capsule promotion chain is missing its first state"
+            )
+        filename = self._manifest_filename(manifest)
+        if filename in directory.list_children():
+            raise ConfigurationError("capsule manifest already exists")
+        self._write_windows_private(
+            capsule_path / filename,
+            _canonical_json(manifest.to_dict()),
+        )
+        directory.validate()
+        return filename
+
+    def _write_windows_private(self, path: Path, payload: bytes) -> None:
+        if len(payload) > _MAX_BUNDLE_FILE_BYTES:
+            raise ConfigurationError("capsule artifact exceeds its safety limit")
+        atomic = self._require_windows_atomic()
+        with atomic.open_transaction(
+            path,
+            max_bytes=_MAX_BUNDLE_FILE_BYTES,
+            create=True,
+        ) as transaction:
+            if transaction.identity is not None:
+                raise ConfigurationError("capsule artifact already exists")
+            transaction.publish_bytes(payload, expected=None)
+
+    def _locked_windows_capsule(
+        self,
+        capability_id: str,
+        version: str,
+        *,
+        create_lock: bool,
+    ) -> _WindowsCapsuleLock:
+        return self._locked_windows_capsule_path(
+            self._capsule_directory(capability_id, version),
+            create_lock=create_lock,
+        )
+
+    def _locked_windows_capsule_path(
+        self,
+        capsule_path: Path,
+        *,
+        create_lock: bool,
+    ) -> _WindowsCapsuleLock:
+        return _WindowsCapsuleLock(
+            atomic=self._require_windows_atomic(),
+            filesystem=get_secure_filesystem_backend(),
+            capsule_path=capsule_path,
+            create_lock=create_lock,
+        )
+
+    def _require_windows_atomic(self) -> AtomicPublicationRecoveryBackend:
+        if self._atomic is None:
+            raise ConfigurationError("native Windows atomic state is unavailable")
+        return self._atomic
+
+    def _require_windows_root(self) -> PinnedWindowsPath:
+        if self._windows_root is None:
+            raise ConfigurationError("native Windows capsule root is unavailable")
+        self._windows_root.validate()
+        return self._windows_root
+
+    @staticmethod
+    def _require_enabled_manifest(
+        current: CapsuleManifest,
+        manifest_sha256: str,
+    ) -> None:
+        if current.state in {CapsuleState.DEPRECATED, CapsuleState.REVOKED}:
+            raise ConfigurationError(f"capability capsule is {current.state}")
+        if current.state is not CapsuleState.ENABLED:
+            raise ConfigurationError("capability capsule is not promoted and enabled")
+        if current.manifest_sha256 != manifest_sha256:
+            raise ConfigurationError(
+                "requested capsule digest is not the enabled version"
+            )
 
 
 def validate_dependency_metadata(

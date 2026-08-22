@@ -1,5 +1,13 @@
 """Native Windows platform primitives that are independently certified."""
 
+from master_agent.platform_runtime.windows.atomic import (
+    MAX_WINDOWS_ATOMIC_STATE_BYTES,
+    WINDOWS_ATOMIC_BACKEND_ID,
+    WindowsAtomicPublicationRecoveryBackend,
+    WindowsAtomicStateIndeterminate,
+    WindowsAtomicStateTransaction,
+    probe_windows_atomic_backend,
+)
 from master_agent.platform_runtime.windows.filesystem import (
     BUILTIN_ADMINISTRATORS_SID,
     FILE_ATTRIBUTE_OFFLINE,
@@ -63,10 +71,12 @@ __all__ = [
     "FILE_ATTRIBUTE_UNPINNED",
     "LOCAL_SYSTEM_SID",
     "MAX_PINNED_READ_BYTES",
+    "MAX_WINDOWS_ATOMIC_STATE_BYTES",
     "OWNER_RIGHTS_SID",
     "TRUSTED_INSTALLER_SID",
     "UNSAFE_WINDOWS_FILE_ATTRIBUTES",
     "WINDOWS_ANCESTOR_CHILD_CREATE_MASK",
+    "WINDOWS_ATOMIC_BACKEND_ID",
     "WINDOWS_DANGEROUS_WRITE_MASK",
     "WINDOWS_FILESYSTEM_BACKEND_ID",
     "WINDOWS_LOCKING_BACKEND_ID",
@@ -78,6 +88,9 @@ __all__ = [
     "PinnedWindowsPath",
     "ValidatedWindowsPath",
     "WindowsAccessAllowedAce",
+    "WindowsAtomicPublicationRecoveryBackend",
+    "WindowsAtomicStateIndeterminate",
+    "WindowsAtomicStateTransaction",
     "WindowsCrossProcessLockingBackend",
     "WindowsDacl",
     "WindowsDaclEvaluation",
@@ -93,6 +106,7 @@ __all__ = [
     "canonicalize_windows_sid",
     "evaluate_windows_dacl",
     "parse_windows_ace_header",
+    "probe_windows_atomic_backend",
     "probe_windows_filesystem_backend",
     "probe_windows_locking_backend",
     "validate_windows_drive_path",

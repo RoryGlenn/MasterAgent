@@ -23,11 +23,12 @@ handling, and independent verification.
   examples are validated against the current source.
 - A hosted Windows 11 ARM isolated installed-package job imports
   `master_agent`, `master_agent.cli`, and `master_agent.readiness`; runs the
-  native retained-handle/ACL and `LockFileEx` tests through a fresh local
-  standard-user account; asserts the workstation build and non-administrator
-  token without skipping; exercises `--help`, `--version`, deployment
-  `readiness`, and `doctor --require-level install`; validates the partial
-  platform report; and proves unavailable stateful readiness fails closed.
+  native retained-handle/ACL, `LockFileEx`, and atomic-state tests through a
+  fresh local standard-user account; asserts the workstation build and
+  non-administrator token without skipping; exercises `--help`, `--version`,
+  deployment `readiness`, restricted readiness output, and
+  `doctor --require-level install`; validates SQLite and retention lifecycles;
+  and proves unrelated unavailable contracts still fail closed.
 
 ### Behavioral specifications
 
@@ -66,9 +67,11 @@ handling, and independent verification.
   reports that contract unavailable; macOS also reports it unavailable rather
   than
   treating owner/group artifact trust as executable containment. Native
-  Windows reports retained-handle filesystem/ACL and `LockFileEx` available,
-  proves exclusive protected create/write/revalidation/cleanup, keeps the other
-  four contracts unavailable, and receives focused native adversarial coverage.
+  Windows reports retained-handle filesystem/ACL, `LockFileEx`, and
+  `windows-handle-atomic-state` available; proves protected exclusive
+  create/write/replacement/removal, first-ledger staging, old/new recovery,
+  directory durability, SQLite lifecycle, and post-publication identity/DACL
+  validation; and keeps process, Git, and capsule isolation unavailable.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
@@ -104,8 +107,10 @@ handling, and independent verification.
   overlap names, digest mismatch, depth and entry limits, transaction fan-out,
   cross-device staging, descriptor substitution, cancellation, source-parent
   fsync failure, crash-stricter internal file modes, pending nested-root
-  transactions, and concurrent nested publication. Windows retention preview,
-  apply, and orphan repair remain capability-gated.
+  transactions, and concurrent nested publication. Windows tests separately
+  prove retained-handle publication, bounded preview/apply/repair, fail-closed
+  malformed-tree handling, exact pair and quarantine identity checks, and
+  interruption recovery through a content-free native intent.
 - Release validation keeps the CLI, operations, configuration, architecture,
   threat model, roadmap, communication-context guide, semantic index, and
   current changelog entry synchronized with that expiration boundary.
@@ -129,9 +134,9 @@ handling, and independent verification.
   changed paths, affected route contracts, and any unmapped path.
 - The topology is hub-and-spoke: the parent sees the complete registry;
   specialists see only their own profile and selected route. The common
-  platform-runtime and Windows-filesystem routes are released; the other six
-  native Windows routes remain distinctly planned until separately implemented
-  and certified.
+  platform-runtime, Windows-filesystem, and Windows atomic-state routes are
+  released; the other five native Windows routes remain distinctly planned
+  until separately implemented and certified.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay

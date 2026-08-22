@@ -90,11 +90,14 @@ provider authentication, effect approval, or production certification.
 Inspect the additive `platform_runtime` object as a separate prerequisite: it
 names every selected backend and unavailable secure contract. Native Windows
 selects retained-handle filesystem/ACL validation and `LockFileEx`, so trusted
-configuration diagnosis can read approved local paths. A focused Windows 11
-ARM job exercises that boundary through a non-administrator local account.
-`setup` and stateful deployment remain blocked until atomic publication and
-their other exact contracts are available. Do not treat those focused tests as
-full enterprise or release-host certification.
+configuration diagnosis can read approved local paths. It also selects the
+native handle-relative atomic-state backend, so `setup`, restricted output,
+SQLite state, retention, token/configuration publication, and local artifact
+stores no longer use POSIX fallbacks. A focused Windows 11 ARM job exercises
+that boundary through a non-administrator local account. Process supervision,
+trusted Git, capsule isolation, Credential Manager/DPAPI, and full hosted
+certification remain separate gates. Do not treat focused tests as full
+enterprise or release-host certification.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:

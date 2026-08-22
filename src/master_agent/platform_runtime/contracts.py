@@ -12,8 +12,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Protocol, cast, runtime_checkable
+from types import MappingProxyType, TracebackType
+from typing import Any, Protocol, Self, cast, runtime_checkable
 
 from master_agent.errors import ConfigurationError
 
@@ -38,6 +38,63 @@ class LockMode(StrEnum):
 
     SHARED = "shared"
     EXCLUSIVE = "exclusive"
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicStateIdentity:
+    """Exact native object and content identity for one protected generation."""
+
+    object_identity: PlatformObjectIdentity
+    content_sha256: str
+    size: int
+
+    def __post_init__(self) -> None:
+        if self.object_identity.kind is not FilesystemObjectKind.FILE:
+            raise ValueError("atomic state identity must describe a file")
+        if not _lower_hex(self.content_sha256, minimum=64, maximum=64):
+            raise ValueError("atomic state content digest is invalid")
+        if isinstance(self.size, bool) or not isinstance(self.size, int):
+            raise TypeError("atomic state size must be an integer")
+        if self.size < 0:
+            raise ValueError("atomic state size is invalid")
+
+
+@runtime_checkable
+class AtomicStateTransaction(Protocol):
+    """One serialized protected-file transaction held across caller work."""
+
+    @property
+    def path(self) -> Path:
+        """Return the validated display path for the selected state file."""
+
+    @property
+    def identity(self) -> AtomicStateIdentity | None:
+        """Return the current recovered identity, or ``None`` when absent."""
+
+    def read_bytes(self) -> bytes | None:
+        """Return bounded current bytes after recovery and revalidation."""
+
+    def publish_bytes(
+        self,
+        payload: bytes,
+        *,
+        expected: AtomicStateIdentity | None,
+    ) -> AtomicStateIdentity:
+        """Publish one exact replacement or create-only generation."""
+
+    def remove(self, *, expected: AtomicStateIdentity) -> bool:
+        """Remove only the exact current generation."""
+
+    def __enter__(self) -> Self:
+        """Acquire and return this transaction."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Release the transaction and all retained native resources."""
 
 
 class FilesystemObjectKind(StrEnum):
@@ -324,12 +381,19 @@ class CrossProcessLockingBackend(PlatformBackend, Protocol):
 
 @runtime_checkable
 class AtomicPublicationRecoveryBackend(PlatformBackend, Protocol):
-    """Identity for atomic publication and crash-recovery semantics.
+    """Bounded native publication and deterministic recovery semantics."""
 
-    The existing POSIX implementation remains in its established callers for
-    issue #98.  Later platform work can extend this protocol without treating
-    a generic rename as a safe fallback.
-    """
+    def ensure_private_directory(self, path: Path) -> Path:
+        """Create or validate one account-private native state directory."""
+
+    def open_transaction(
+        self,
+        path: Path,
+        *,
+        max_bytes: int,
+        create: bool,
+    ) -> AtomicStateTransaction:
+        """Return an unentered serialized transaction for one protected file."""
 
 
 @runtime_checkable
@@ -494,6 +558,16 @@ class PlatformRuntime:
         return cast(
             CrossProcessLockingBackend,
             self.require_contract(PlatformContract.CROSS_PROCESS_LOCKING),
+        )
+
+    def require_atomic_publication_recovery(
+        self,
+    ) -> AtomicPublicationRecoveryBackend:
+        """Return the atomic-publication backend or fail closed."""
+
+        return cast(
+            AtomicPublicationRecoveryBackend,
+            self.require_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY),
         )
 
     def require_process_supervision(self) -> ProcessSupervisionBackend:

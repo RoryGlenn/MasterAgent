@@ -26,7 +26,11 @@ from master_agent.models import (
     ResourceRef,
     VerificationResult,
 )
-from master_agent.platform_runtime import require_persistent_state_platform
+from master_agent.platform_runtime import (
+    AtomicStateIdentity,
+    get_atomic_publication_recovery_backend,
+    require_persistent_state_platform,
+)
 from master_agent.resource_limits import (
     MAX_LOCAL_ARTIFACT_BYTES,
     MAX_RUN_ARTIFACT_BYTES,
@@ -165,9 +169,13 @@ class _LocalDraftConnector:
         """Read generated artifact metadata by resource identifier."""
 
         self._output_directory.validate()
+        if self._output_directory.object_identity.platform == "windows":
+            names = self._output_directory.list_children()
+        else:
+            names = tuple(os.listdir(self._output_directory.fileno()))
         matches = sorted(
             name
-            for name in os.listdir(self._output_directory.fileno())
+            for name in names
             if fnmatch.fnmatchcase(
                 name,
                 f"{_safe_name(resource.resource_id)}.*",
@@ -894,6 +902,13 @@ def _write_bundle(
         raise ConnectorError(
             "generated artifact bundle exceeds the capability output quota"
         )
+    if directory.object_identity.platform == "windows":
+        return _write_windows_bundle(
+            directory,
+            files,
+            artifact_budget=artifact_budget,
+            total_bytes=total_bytes,
+        )
     descriptor = directory.fileno()
     artifact_budget.reserve(total_bytes)
     owned: list[tuple[str, tuple[int, int, int, int, int], GeneratedArtifact]] = []
@@ -916,6 +931,67 @@ def _write_bundle(
             os.fsync(descriptor)
         except OSError:
             pass
+        artifact_budget.release(total_bytes)
+        raise
+
+
+def _write_windows_bundle(
+    directory: PinnedDirectory,
+    files: Sequence[tuple[Path, bytes | memoryview, str]],
+    *,
+    artifact_budget: ArtifactBudget,
+    total_bytes: int,
+) -> tuple[GeneratedArtifact, ...]:
+    """Create-only artifact bundle through Windows atomic transactions."""
+
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id != "windows-handle-atomic-state":
+        raise ConnectorError("native Windows atomic state is unavailable")
+    artifact_budget.reserve(total_bytes)
+    owned: list[tuple[Path, AtomicStateIdentity, GeneratedArtifact]] = []
+    try:
+        for path, raw_payload, media_type in files:
+            _pinned_name(directory, path)
+            payload = bytes(raw_payload)
+            try:
+                with atomic.open_transaction(
+                    path,
+                    max_bytes=MAX_LOCAL_ARTIFACT_BYTES,
+                    create=True,
+                ) as transaction:
+                    if transaction.identity is not None:
+                        raise ConnectorError(
+                            "generated artifact already exists; use a fresh output "
+                            "name or directory"
+                        )
+                    identity = transaction.publish_bytes(payload, expected=None)
+            except ConnectorError:
+                raise
+            except (ConfigurationError, OSError) as error:
+                raise ConnectorError(
+                    "generated artifact destination changed"
+                ) from error
+            artifact = GeneratedArtifact(
+                path=path,
+                sha256=hashlib.sha256(payload).hexdigest(),
+                media_type=media_type,
+                size=len(payload),
+            )
+            owned.append((path, identity, artifact))
+        directory.validate()
+        return tuple(item[2] for item in owned)
+    except BaseException:
+        for path, identity, _artifact in reversed(owned):
+            try:
+                with atomic.open_transaction(
+                    path,
+                    max_bytes=MAX_LOCAL_ARTIFACT_BYTES,
+                    create=False,
+                ) as transaction:
+                    if transaction.identity == identity:
+                        transaction.remove(expected=identity)
+            except (ConfigurationError, OSError):
+                pass
         artifact_budget.release(total_bytes)
         raise
 
@@ -1043,6 +1119,16 @@ def _inspect_artifact(
     """Stream a bounded artifact digest without retaining a second full copy."""
 
     name = _pinned_name(directory, path)
+    if directory.object_identity.platform == "windows":
+        try:
+            _selected, payload, _identity = directory.read_child_bytes(
+                name,
+                max_bytes=max_bytes,
+                require_private=True,
+            )
+        except (ConfigurationError, OSError) as error:
+            raise ConnectorError("generated artifact destination changed") from error
+        return hashlib.sha256(payload).hexdigest(), len(payload)
     descriptor = directory.fileno()
     try:
         file_descriptor = os.open(
@@ -1084,7 +1170,19 @@ def _inspect_artifact(
 
 
 def _pinned_name(directory: PinnedDirectory, path: Path) -> str:
-    if path.parent != directory.path or path.name in {"", ".", ".."}:
+    same_parent = Path(os.path.realpath(path.parent)) == directory.path
+    if directory.object_identity.platform == "windows":
+        from master_agent.platform_runtime.windows.filesystem import (
+            validate_windows_drive_path,
+        )
+
+        try:
+            supplied = validate_windows_drive_path(path.parent).canonical
+            pinned = validate_windows_drive_path(directory.path).canonical
+            same_parent = supplied == pinned
+        except (ConfigurationError, TypeError, ValueError):
+            same_parent = False
+    if not same_parent or path.name in {"", ".", ".."}:
         raise ConnectorError("generated artifact escaped the output root")
     try:
         directory.validate()

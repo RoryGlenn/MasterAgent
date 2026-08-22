@@ -6,20 +6,21 @@ The v1 governed core, provider contracts, bounded advisory profiles, capability
 capsule path, native behavioral specification lifecycle, and audience-aware
 documentation completion gate are implemented. A common platform-runtime
 contract now keeps imports and configuration diagnostics platform neutral. The
-native Windows filesystem/ACL and locking tranche is implemented while the
-remaining Windows security backends stay separately planned. Release-hardening gates keep
+native Windows filesystem/ACL, locking, and atomic local-state tranche is
+implemented while the remaining Windows security backends stay separately
+planned. Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
-execution, native Windows retention preview/apply/repair, raw plugin execution, and
+execution, raw plugin execution, and
 unsafe provider mutations non-routable.
 
 | Area | Software status | Operational status |
 |---|---|---|
 | Progressive user workflow | Complete | Install a reviewed organization profile; local installation, selected reads, governed effects, and enterprise deployment report independent readiness |
-| Platform runtime | Common contract and native Windows filesystem/locking complete; existing POSIX behavior preserved; remaining Windows backends planned | Windows supports trusted bounded reads and locks; setup and stateful operations remain unavailable until atomic publication and every route-specific contract exist |
+| Platform runtime | Common contract and native Windows filesystem, locking, and atomic state complete; existing POSIX behavior preserved; remaining Windows backends planned | Windows supports trusted reads, setup, SQLite and protected file persistence, retention, and local artifact stores; route-specific process, Git, capsule isolation, credential-broker, and certification gates remain |
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
-| 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX; native Windows retention preview/apply/repair gated | Contract-tested; authenticated deployment requires approved applications and credentials |
+| 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX and native Windows | Contract-tested; authenticated deployment requires approved applications and credentials |
 | 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | Provider-data model-context boundary | Complete | Replace development destination/tenancy/classification rules and supply any required external audit or DLP adapters |
 | Protected credentialed integration evidence | Repository workflow and static contract complete | Configure least-privilege credentials, tenant consent, stable fixtures, dedicated communication targets, and run the approved manual matrix |
@@ -76,9 +77,9 @@ absent.
 - existing POSIX filesystem, locking, atomic-state, process, and Git semantics
   remain covered; Linux capsule isolation identifies a selected trusted
   bubblewrap executable or reports that independent contract unavailable, as
-  does macOS; Windows filesystem/locking has native evidence, while each
-  remaining Windows route stays planned until its own implementation and
-  evidence are complete.
+  does macOS; Windows filesystem, locking, and atomic state have native
+  evidence, while each remaining Windows route stays planned until its own
+  implementation and evidence are complete.
 
 ### Phase 1 — governed runtime
 
@@ -101,7 +102,8 @@ absent.
 - normalized evidence, citations, and retention are implemented;
 - expired retained-evidence pairs can be previewed and explicitly deleted on
   POSIX through one bounded descriptor plan, locked rescan, and recoverable
-  pair transaction;
+  pair transaction, or on Windows through retained handles, exact identities,
+  a tree lock, and a content-free recovery intent;
 - live provider probes are explicit rather than automatic;
 - every direct, applied, probe, and repository-shortcut provider read is
   classified and authorized before access, rebound before return, exact-schema
@@ -229,10 +231,10 @@ absent.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- native Windows atomic state and retention, including
-  preview/apply/orphan repair, plus credential brokers, process supervision,
-  Git isolation, capsule isolation, organization trust-profile integration,
-  and hosted certification behind the released filesystem/locking boundary;
+- native Windows Credential Manager/DPAPI brokers, process supervision, Git
+  isolation, capsule isolation, organization trust-profile integration, and
+  hosted certification behind the released filesystem/locking/atomic-state
+  boundary;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
 - production credential-broker and external receipt/audit adapters;

@@ -372,6 +372,9 @@ class _WindowsFilesystemApi(Protocol):
         *,
         directory: bool,
         readable: bool,
+        writable: bool = False,
+        replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int: ...
 
     def close_handle(self, handle: int) -> None: ...
@@ -402,9 +405,28 @@ class _WindowsFilesystemApi(Protocol):
         security_descriptor_sddl: str,
     ) -> int: ...
 
+    def create_private_directory(
+        self,
+        parent_handle: int,
+        name: str,
+        *,
+        security_descriptor_sddl: str,
+    ) -> int: ...
+
     def write_file(self, handle: int, payload: bytes) -> int: ...
 
     def flush_file(self, handle: int) -> None: ...
+
+    def flush_directory(self, handle: int) -> None: ...
+
+    def replace_file(
+        self,
+        source_handle: int,
+        parent_handle: int,
+        destination_name: str,
+        *,
+        replace_existing: bool,
+    ) -> None: ...
 
     def set_delete_on_close(self, handle: int, *, enabled: bool) -> None: ...
 
@@ -789,6 +811,15 @@ class PinnedWindowsPath:
         return self._is_directory
 
     @property
+    def size(self) -> int:
+        """Return the revalidated target size captured from its native handle."""
+
+        with self._lock:
+            self._require_open()
+            snapshots = self._revalidate_locked()
+            return snapshots[-1].size
+
+    @property
     def closed(self) -> bool:
         """Return whether the complete handle chain has been released."""
 
@@ -879,6 +910,7 @@ class PinnedWindowsPath:
         *,
         kind: WindowsObjectKind | str,
         require_private: bool = True,
+        _replacement_handoff: bool = False,
     ) -> PinnedWindowsPath:
         """Pin one exact immediate child while retaining duplicated ancestors."""
 
@@ -886,6 +918,8 @@ class PinnedWindowsPath:
         selected_kind = _coerce_object_kind(kind)
         if not isinstance(require_private, bool):
             raise TypeError("Windows path privacy requirement must be a boolean")
+        if not isinstance(_replacement_handoff, bool):
+            raise TypeError("Windows replacement handoff flag must be a boolean")
         with self._lock:
             self._require_open()
             if not self._is_directory:
@@ -909,6 +943,16 @@ class PinnedWindowsPath:
                         child_path.canonical,
                         directory=selected_kind is WindowsObjectKind.DIRECTORY,
                         readable=selected_kind is WindowsObjectKind.FILE,
+                        writable=(
+                            selected_kind is WindowsObjectKind.DIRECTORY
+                            and require_private
+                        ),
+                        replacement_handoff=_replacement_handoff,
+                        deletable=(
+                            selected_kind is WindowsObjectKind.FILE
+                            and require_private
+                            and not _replacement_handoff
+                        ),
                     ),
                 )
                 duplicated.append(child)
@@ -1075,6 +1119,107 @@ class PinnedWindowsPath:
                     ) from cleanup_error
                 raise
 
+    def create_private_directory(
+        self,
+        relative: str | os.PathLike[str],
+    ) -> PinnedWindowsPath:
+        """Exclusively create and retain one protected immediate directory."""
+
+        child_name = _validate_relative_child(relative)
+        with self._lock:
+            self._require_open()
+            if not self._is_directory:
+                raise NotADirectoryError("pinned Windows path is not a directory")
+            if not self._require_private:
+                raise WindowsPathSecurityError(
+                    "private Windows directory creation requires a private parent pin"
+                )
+            self._revalidate_locked()
+            _require_component_absent(
+                self._api,
+                child_name,
+                self._api.directory_names(self._path.canonical),
+            )
+            self._revalidate_locked()
+            child_path = validate_windows_drive_path(
+                self._path.canonical.rstrip("\\") + "\\" + child_name
+            )
+            duplicated: list[WindowsHandle] = []
+            child: WindowsHandle | None = None
+            try:
+                duplicated = [handle.duplicate() for handle in self._handles]
+                sddl = build_protected_windows_sddl(
+                    owner_sid=self._api.current_user_sid(),
+                    trusted_sids=self._trusted_sids,
+                )
+                child = WindowsHandle(
+                    self._api,
+                    self._api.create_private_directory(
+                        duplicated[-1].value,
+                        child_name,
+                        security_descriptor_sddl=sddl,
+                    ),
+                )
+                duplicated.append(child)
+                acl_policies = (WindowsDaclPolicy.ANCESTOR,) * (len(duplicated) - 1) + (
+                    WindowsDaclPolicy.TARGET_PRIVATE,
+                )
+                identities: list[WindowsObjectIdentity] = []
+                sizes: list[int] = []
+                for index, handle in enumerate(duplicated):
+                    policy = acl_policies[index]
+                    snapshot, identity = _admit_open_handle(
+                        self._api,
+                        handle,
+                        expected_path=child_path.prefixes()[index],
+                        expected_directory=True,
+                        expected_volume=self._identities[0].volume_serial_number,
+                        trusted_sids=self._trusted_sids,
+                        policy=policy,
+                        trust_policy_sha256=windows_trust_policy_sha256(
+                            self._trusted_sids,
+                            policy=policy,
+                        ),
+                    )
+                    identities.append(identity)
+                    sizes.append(snapshot.size)
+                if not self._api.file_security(child.value).dacl_protected:
+                    raise WindowsPathSecurityError(
+                        "created Windows directory DACL is not protected"
+                    )
+                result = PinnedWindowsPath(
+                    api=self._api,
+                    path=child_path,
+                    handles=tuple(duplicated),
+                    identities=tuple(identities),
+                    sizes=tuple(sizes),
+                    trusted_sids=self._trusted_sids,
+                    is_directory=True,
+                    require_private=True,
+                    acl_policies=acl_policies,
+                )
+                result.validate()
+                self._revalidate_locked()
+                return result
+            except BaseException:
+                cleanup_error: OSError | None = None
+                if child is not None and not child.closed:
+                    try:
+                        self._api.set_delete_on_close(child.value, enabled=True)
+                    except OSError as exc:
+                        cleanup_error = exc
+                for handle in reversed(duplicated):
+                    try:
+                        handle.close()
+                    except OSError as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+                if cleanup_error is not None:
+                    raise WindowsPathSecurityError(
+                        "created Windows directory cleanup failed"
+                    ) from cleanup_error
+                raise
+
     def publish_private_file(
         self,
         relative: str | os.PathLike[str],
@@ -1130,6 +1275,31 @@ class PinnedWindowsPath:
                     "pinned Windows file changed during the bounded read"
                 )
             return bytes(payload)
+
+    def flush_directory(self) -> None:
+        """Flush an exact retained private directory and revalidate it."""
+
+        with self._lock:
+            self._require_open()
+            if not self._is_directory:
+                raise NotADirectoryError("pinned Windows path is not a directory")
+            self._revalidate_locked()
+            self._api.flush_directory(self._handles[-1].value)
+            self._revalidate_locked()
+
+    def delete_exact(self) -> None:
+        """Mark this exact retained object for removal and release its handles."""
+
+        with self._lock:
+            self._require_open()
+            self._revalidate_locked()
+            if self._is_directory and self.list_children():
+                raise WindowsPathSecurityError(
+                    "nonempty Windows directory cannot be removed"
+                )
+            self._api.set_delete_on_close(self._handles[-1].value, enabled=True)
+            self._revalidate_locked()
+        self.close()
 
     def close(self) -> None:
         """Release the target and retained ancestors in reverse order."""
@@ -1210,6 +1380,7 @@ class CreatedWindowsFile:
         "_closed",
         "_lock",
         "_max_bytes",
+        "_namespace_moved",
         "_pin",
         "_published",
         "_write_sha256",
@@ -1226,6 +1397,7 @@ class CreatedWindowsFile:
         self._write_sha256: str | None = None
         self._write_size: int | None = None
         self._published = False
+        self._namespace_moved = False
         self._closed = False
 
     @property
@@ -1253,6 +1425,13 @@ class CreatedWindowsFile:
 
         with self._lock:
             return self._published
+
+    @property
+    def namespace_moved(self) -> bool:
+        """Return whether the prepared handle replaced a public destination."""
+
+        with self._lock:
+            return self._namespace_moved
 
     def validate(self) -> None:
         """Revalidate the complete retained chain and creation identity."""
@@ -1329,7 +1508,8 @@ class CreatedWindowsFile:
                     raise WindowsPathSecurityError(
                         "created Windows file changed before publication"
                     )
-                self._pin._api.flush_file(self._pin._handles[-1].value)
+                if not self._namespace_moved:
+                    self._pin._api.flush_file(self._pin._handles[-1].value)
                 self._pin.validate()
                 identity = self._pin.identity
                 self._pin.close()
@@ -1337,11 +1517,147 @@ class CreatedWindowsFile:
                 self._closed = True
                 return identity
 
+    def replace_into(
+        self,
+        parent: PinnedWindowsPath,
+        relative: str | os.PathLike[str],
+        *,
+        expected_identity: WindowsObjectIdentity | None,
+    ) -> WindowsObjectIdentity:
+        """Atomically bind this prepared handle to one exact sibling name."""
+
+        child_name = _validate_relative_child(relative)
+        if expected_identity is not None and not isinstance(
+            expected_identity,
+            WindowsObjectIdentity,
+        ):
+            raise TypeError("expected Windows replacement identity is invalid")
+        with self._lock, parent._lock:
+            self._require_open()
+            if self._namespace_moved:
+                raise WindowsPathSecurityError(
+                    "created Windows file has already moved in the namespace"
+                )
+            if self._write_size is None or self._write_sha256 is None:
+                raise WindowsPathSecurityError(
+                    "created Windows file cannot replace before a verified write"
+                )
+            if not parent.is_directory:
+                raise NotADirectoryError("replacement parent is not a directory")
+            parent._revalidate_locked()
+            self._pin.validate()
+            if not _same_windows_object_binding(
+                self._pin._identities[-2],
+                parent.identity,
+            ) or self._pin._path.canonical.rsplit("\\", 1)[0] != (
+                parent._path.canonical.rstrip("\\")
+            ):
+                raise WindowsPathSecurityError(
+                    "prepared Windows file is not a child of the replacement parent"
+                )
+            observed: PinnedWindowsPath | None = None
+            replaced: PinnedWindowsPath | None = None
+            handoff: PinnedWindowsPath | None = None
+            published: PinnedWindowsPath | None = None
+            try:
+                if expected_identity is None:
+                    _require_component_absent(
+                        parent._api,
+                        child_name,
+                        parent._api.directory_names(parent._path.canonical),
+                    )
+                else:
+                    observed = parent.pin_child(
+                        child_name,
+                        kind=WindowsObjectKind.FILE,
+                        require_private=True,
+                    )
+                    if observed.identity != expected_identity:
+                        raise WindowsPathSecurityError(
+                            "Windows replacement destination identity changed"
+                        )
+                    observed.validate()
+                    replaced = parent.pin_child(
+                        child_name,
+                        kind=WindowsObjectKind.FILE,
+                        require_private=True,
+                        _replacement_handoff=True,
+                    )
+                    replaced.validate()
+                    if replaced.identity != observed.identity:
+                        raise WindowsPathSecurityError(
+                            "Windows replacement destination identity changed"
+                        )
+                    observed.close()
+                    observed = None
+                parent._revalidate_locked()
+                self._pin.validate()
+                parent._api.replace_file(
+                    self._pin._handles[-1].value,
+                    parent._handles[-1].value,
+                    child_name,
+                    replace_existing=expected_identity is not None,
+                )
+                self._namespace_moved = True
+                self._pin._path = validate_windows_drive_path(
+                    parent._path.canonical.rstrip("\\") + "\\" + child_name
+                )
+                self._pin.validate()
+                parent._api.flush_file(self._pin._handles[-1].value)
+                parent.flush_directory()
+                expected_published_identity = self._pin.identity
+                handoff = parent.pin_child(
+                    child_name,
+                    kind=WindowsObjectKind.FILE,
+                    require_private=True,
+                    _replacement_handoff=True,
+                )
+                handoff.validate()
+                if handoff.identity != expected_published_identity:
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination identity is indeterminate"
+                    )
+                self._pin.close()
+                published = parent.pin_child(
+                    child_name,
+                    kind=WindowsObjectKind.FILE,
+                    require_private=True,
+                )
+                published.validate()
+                if published.identity != expected_published_identity:
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination identity is indeterminate"
+                    )
+                payload = published.read_bytes(self._max_bytes)
+                if (
+                    len(payload) != self._write_size
+                    or hashlib.sha256(payload).hexdigest() != self._write_sha256
+                ):
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination content is indeterminate"
+                    )
+                self._pin = published
+                published = None
+                return self._pin.identity
+            finally:
+                if published is not None:
+                    published.close()
+                if handoff is not None:
+                    handoff.close()
+                if replaced is not None:
+                    replaced.close()
+                if observed is not None:
+                    observed.close()
+
     def cleanup(self) -> None:
         """Delete only the still-identical just-created file by its live handle."""
 
         with self._lock:
             self._require_open()
+            if self._namespace_moved:
+                raise WindowsPathSecurityError(
+                    "moved Windows file requires explicit recovery"
+                )
             try:
                 self._pin.validate()
                 self._pin._api.set_delete_on_close(
@@ -1359,6 +1675,10 @@ class CreatedWindowsFile:
 
         with self._lock:
             if self._closed:
+                return
+            if self._namespace_moved:
+                self._pin.close()
+                self._closed = True
                 return
             self.cleanup()
 
@@ -1587,7 +1907,16 @@ class WindowsSecureFilesystemBackend:
             )
             root_handle = WindowsHandle(
                 api,
-                api.open_path(selected.root, directory=True, readable=False),
+                api.open_path(
+                    selected.root,
+                    directory=True,
+                    readable=False,
+                    writable=(
+                        target_is_directory
+                        and require_private
+                        and not selected.components
+                    ),
+                ),
             )
             handles.append(root_handle)
             root_snapshot, root_identity = _admit_open_handle(
@@ -1644,6 +1973,9 @@ class WindowsSecureFilesystemBackend:
                         prefixes[index],
                         directory=expected_directory,
                         readable=is_target and not target_is_directory,
+                        writable=(
+                            is_target and target_is_directory and require_private
+                        ),
                     ),
                 )
                 handles.append(child)
@@ -1800,6 +2132,21 @@ def _require_component_absent(
 ) -> None:
     if any(api.compare_ordinal_ignore_case(name, component) == 0 for name in names):
         raise FileExistsError("Windows child file already exists")
+
+
+def _same_windows_object_binding(
+    left: WindowsObjectIdentity,
+    right: WindowsObjectIdentity,
+) -> bool:
+    """Compare one object/security binding independent of its policy role."""
+
+    return (
+        left.volume_serial_number == right.volume_serial_number
+        and left.file_id == right.file_id
+        and left.owner_sid == right.owner_sid
+        and left.dacl_sha256 == right.dacl_sha256
+        and left.kind is right.kind
+    )
 
 
 def _validate_bounded_file_size(max_bytes: int) -> None:

@@ -56,6 +56,16 @@ class _WindowsLockApi(Protocol):
 
     def release(self, descriptor: int) -> None: ...
 
+    def acquire_handle(
+        self,
+        handle: int,
+        *,
+        exclusive: bool,
+        blocking: bool,
+    ) -> int | None: ...
+
+    def release_handle(self, handle: int) -> None: ...
+
 
 class WindowsCrossProcessLockingBackend:
     """Shared/exclusive whole-file locks for Windows CRT descriptors."""
@@ -103,6 +113,43 @@ class WindowsCrossProcessLockingBackend:
 
         _validate_descriptor(descriptor)
         self._native_api().release(descriptor)
+
+    def acquire_handle(
+        self,
+        handle: int,
+        *,
+        mode: LockMode,
+        blocking: bool = True,
+    ) -> None:
+        """Acquire a whole-file lock on an already validated native handle."""
+
+        _validate_native_handle(handle)
+        if mode is LockMode.EXCLUSIVE:
+            exclusive = True
+        elif mode is LockMode.SHARED:
+            exclusive = False
+        else:
+            raise ValueError("cross-process lock mode is invalid")
+        if not isinstance(blocking, bool):
+            raise TypeError("cross-process lock blocking flag must be a boolean")
+        error = self._native_api().acquire_handle(
+            handle,
+            exclusive=exclusive,
+            blocking=blocking,
+        )
+        if error is not None:
+            if not blocking and error == _ERROR_LOCK_VIOLATION:
+                raise BlockingIOError(
+                    errno.EWOULDBLOCK,
+                    "cross-process lock is already held",
+                )
+            raise OSError(error, "LockFileEx failed")
+
+    def release_handle(self, handle: int) -> None:
+        """Release a whole-file lock from an already validated native handle."""
+
+        _validate_native_handle(handle)
+        self._native_api().release_handle(handle)
 
     def _native_api(self) -> _WindowsLockApi:
         with self._api_lock:
@@ -173,6 +220,21 @@ class _NativeWindowsLockApi:
         blocking: bool,
     ) -> int | None:
         handle = self._handle_for_descriptor(descriptor)
+        return self.acquire_handle(
+            handle,
+            exclusive=exclusive,
+            blocking=blocking,
+        )
+
+    def acquire_handle(
+        self,
+        handle: int,
+        *,
+        exclusive: bool,
+        blocking: bool,
+    ) -> int | None:
+        """Lock the complete range of one synchronous native file handle."""
+
         self._require_synchronous(handle)
         flags = _LOCKFILE_EXCLUSIVE_LOCK if exclusive else 0
         if not blocking:
@@ -192,6 +254,11 @@ class _NativeWindowsLockApi:
 
     def release(self, descriptor: int) -> None:
         handle = self._handle_for_descriptor(descriptor)
+        self.release_handle(handle)
+
+    def release_handle(self, handle: int) -> None:
+        """Unlock the complete range of one native file handle."""
+
         overlapped = _OVERLAPPED()
         if not self._kernel32.UnlockFileEx(
             ctypes.c_void_p(handle),
@@ -241,6 +308,13 @@ def _validate_descriptor(descriptor: int) -> None:
         raise TypeError("Windows CRT descriptor must be an integer")
     if descriptor < 0:
         raise ValueError("Windows CRT descriptor is invalid")
+
+
+def _validate_native_handle(handle: int) -> None:
+    if isinstance(handle, bool) or not isinstance(handle, int):
+        raise TypeError("Windows native handle must be an integer")
+    if handle <= 0:
+        raise ValueError("Windows native handle is invalid")
 
 
 def _last_error() -> int:

@@ -2,6 +2,8 @@
 
 from master_agent.platform_runtime.contracts import (
     AtomicPublicationRecoveryBackend,
+    AtomicStateIdentity,
+    AtomicStateTransaction,
     CapsuleIsolationBackend,
     CrossProcessLockingBackend,
     FilesystemObjectKind,
@@ -18,6 +20,7 @@ from master_agent.platform_runtime.contracts import (
     TrustedGitBackend,
 )
 from master_agent.platform_runtime.factory import (
+    get_atomic_publication_recovery_backend,
     get_capsule_isolation_backend,
     get_cross_process_locking_backend,
     get_platform_runtime,
@@ -30,6 +33,8 @@ from master_agent.platform_runtime.factory import (
 
 __all__ = [
     "AtomicPublicationRecoveryBackend",
+    "AtomicStateIdentity",
+    "AtomicStateTransaction",
     "CapsuleIsolationBackend",
     "CrossProcessLockingBackend",
     "FilesystemObjectKind",
@@ -44,6 +49,7 @@ __all__ = [
     "ProcessSupervisionBackend",
     "SecureFilesystemBackend",
     "TrustedGitBackend",
+    "get_atomic_publication_recovery_backend",
     "get_capsule_isolation_backend",
     "get_cross_process_locking_backend",
     "get_platform_runtime",

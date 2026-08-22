@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Final
 
 from master_agent.platform_runtime.contracts import (
+    AtomicPublicationRecoveryBackend,
     CapsuleIsolationBackend,
     CrossProcessLockingBackend,
     PlatformCapabilityUnavailable,
@@ -74,6 +75,14 @@ def get_cross_process_locking_backend(
     """Return the selected cross-process-locking backend."""
 
     return get_platform_runtime(platform).require_cross_process_locking()
+
+
+def get_atomic_publication_recovery_backend(
+    platform: str | None = None,
+) -> AtomicPublicationRecoveryBackend:
+    """Return the selected atomic-publication and recovery backend."""
+
+    return get_platform_runtime(platform).require_atomic_publication_recovery()
 
 
 def get_process_supervision_backend(

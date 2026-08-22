@@ -1,5 +1,20 @@
 # Changelog
 
+- Add native Windows atomic local-state and retention persistence. Protected
+  state now uses stable handle locks, explicit private DACLs, bounded
+  write/flush/readback, handle-relative replacement, an integrity-checked
+  old/new recovery ledger, destination identity/content/security verification,
+  and retained-directory durability. SQLite/audit and recurring state,
+  approvals and restricted output, configuration and OAuth token files,
+  advisory budgets, capsule/plugin stores, retained evidence, and local draft
+  packages select the native backend instead of POSIX fallbacks. Retention pair
+  deletion and quarantine publish a content-free exact-identity intent before
+  the first irreversible step so interrupted work completes deterministically.
+  Native standard-user CI exercises restricted readiness output plus atomic,
+  SQLite, and retention lifecycles; Credential Manager/DPAPI, Job Objects,
+  trusted Git, AppContainer isolation, and full certification remain separate
+  tranches.
+
 - Add the native Windows filesystem and locking tranche. On native Windows 11,
   `windows-native-partial` now binds trusted paths to retained Win32 handles,
   volume/file IDs, owner SIDs, DACL and trust-policy digests; performs bounded
@@ -11,9 +26,10 @@
   unrelated child creation on retained system roots while continuing to reject
   deletion, metadata, ACL, owner, generic-write, and target mutation authority.
   Approval bindings now carry a versioned POSIX or Windows object identity
-  without breaking existing POSIX payloads. Atomic
-  state, retention, process, Git, capsule isolation, organization trust-profile
-  integration, and full hosted certification remain separately gated.
+  without breaking existing POSIX payloads. Atomic state and retention were
+  subsequently released above; process, Git, capsule isolation, organization
+  trust-profile integration, and full hosted certification remain separately
+  gated.
 
 - Add deterministic cross-platform runtime contracts for secure filesystem,
   cross-process locking, atomic publication/recovery, process supervision,
@@ -26,7 +42,8 @@
   locking, atomic-state, process, and Git semantics remain unchanged; Linux
   reports bubblewrap capsule isolation only when a trusted executable is
   selected and otherwise reports that contract unavailable, as does macOS.
-  The Windows filesystem route is now released; the other six native Windows
+  The Windows filesystem route is released; the Windows atomic-state route was
+  subsequently released above, while the other five native Windows
   implementation/certification routes remain planned.
 
 - Harden credentialed connector evidence behind a manual-only, reviewed-
@@ -55,8 +72,8 @@
   selected route and local contract. Live advisory dispatch now requires one
   fully validated parent-selected route ID, binds its selected-only navigation
   slice into task and state identity, and excludes global policy, router data,
-  and peer profiles from child-readable scopes. Seven native Windows areas
-  remain distinctly planned until implementation and certification.
+  and peer profiles from child-readable scopes. Native Windows areas remain
+  distinctly routed until their own implementation and certification.
 
 - Enable descriptor-safe expiration deletion for retained evidence on POSIX.
   `evidence-prune` now derives preview and explicit apply from the same bounded,
@@ -69,8 +86,9 @@
   apply can repair crash-stricter owner-only internal modes. Orphan repair now
   takes the same descendant-parent locks and rescans before quarantine, so a
   partial child publication fails closed. Malformed, unsafe, truncated,
-  substituted, or concurrently changing trees fail closed; Windows retention
-  preview, apply, and orphan repair remain capability-gated.
+  substituted, or concurrently changing trees fail closed. Native Windows
+  retention was subsequently released with retained-handle identity and
+  recovery-intent semantics above.
 
 - Make the optional broker-owned Copilot SDK adapter enforce its documented
   controls at the real runner boundary: HMAC-authenticated cross-process goal

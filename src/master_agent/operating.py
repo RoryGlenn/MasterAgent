@@ -41,6 +41,8 @@ from master_agent.models import ChangePlan, RiskLevel
 from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
+    get_atomic_publication_recovery_backend,
+    get_secure_filesystem_backend,
     platform_runtime_status,
     require_persistent_state_platform,
 )
@@ -705,7 +707,16 @@ def install_organization_profile(
             "organization profile state_root must not occupy the profile file path"
         )
     _ensure_private_directory(target.parent)
-    destination_exists = os.path.lexists(target)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        with atomic.open_transaction(
+            target,
+            max_bytes=_MAX_PROFILE_BYTES,
+            create=True,
+        ) as transaction:
+            destination_exists = transaction.identity is not None
+    else:
+        destination_exists = os.path.lexists(target)
     if destination_exists:
         # Validate existing bytes before provisioning any paths selected by a
         # replacement profile. Identical setup remains idempotent.
@@ -735,6 +746,18 @@ def _validate_existing_profile_file(path: Path, expected: bytes) -> None:
     """Validate existing installed bytes without creating a raced destination."""
 
     parent = _ensure_private_directory(path.parent)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        with atomic.open_transaction(
+            path,
+            max_bytes=_MAX_PROFILE_BYTES,
+            create=True,
+        ) as transaction:
+            if transaction.read_bytes() != expected:
+                raise ConfigurationError(
+                    "organization profile destination already contains different bytes"
+                )
+        return
     descriptor = os.open(parent, _directory_flags())
     try:
         if _read_private_file(descriptor, path.name) != expected:
@@ -1541,6 +1564,20 @@ def _directory_flags() -> int:
 
 
 def _ensure_private_directory(path: Path) -> Path:
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        from master_agent.platform_runtime.windows.filesystem import (
+            validate_windows_drive_path,
+        )
+
+        selected_windows = validate_windows_drive_path(path)
+        if (
+            not selected_windows.components
+            or len(selected_windows.components) > _MAX_DIRECTORY_DEPTH
+        ):
+            raise ConfigurationError("private state directory path is invalid")
+        selected = Path(selected_windows.canonical)
+        return atomic.ensure_private_directory(selected)
     selected = _absolute_path(path)
     if selected == Path(selected.anchor):
         raise ConfigurationError("private state directory path is invalid")
@@ -1604,6 +1641,24 @@ def _create_private_child(parent: Path, name: str) -> Path:
     if not name or name in {".", ".."} or "/" in name or "\\" in name:
         raise ConfigurationError("private state child name is invalid")
     parent_path = _ensure_private_directory(parent)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        filesystem = get_secure_filesystem_backend()
+        if not isinstance(filesystem, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        with (
+            filesystem.pin_directory(
+                parent_path,
+                require_private=True,
+            ) as pinned_parent,
+            pinned_parent.create_private_directory(name) as created,
+        ):
+            pinned_parent.flush_directory()
+            return created.path
     descriptor = os.open(parent_path, _directory_flags())
     child = -1
     try:
@@ -1654,6 +1709,22 @@ def _same_directory(left: os.stat_result, right: os.stat_result) -> bool:
 
 def _install_private_file(path: Path, payload: bytes) -> bool:
     parent = _ensure_private_directory(path.parent)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        with atomic.open_transaction(
+            path,
+            max_bytes=_MAX_PROFILE_BYTES,
+            create=True,
+        ) as transaction:
+            existing = transaction.read_bytes()
+            if existing is not None:
+                if existing != payload:
+                    raise ConfigurationError(
+                        "organization profile destination already contains different bytes"
+                    )
+                return False
+            transaction.publish_bytes(payload, expected=None)
+            return True
     descriptor = os.open(parent, _directory_flags())
     file_descriptor = -1
     owned_identity: tuple[int, int, int] | None = None

@@ -24,10 +24,13 @@ from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.platform_runtime import (
     PlatformContract,
+    get_atomic_publication_recovery_backend,
     get_secure_filesystem_backend,
     require_persistent_state_platform,
     require_platform_contract,
 )
+
+_MAX_TOKEN_FILE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +416,39 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
 
     require_persistent_state_platform()
     selected = path.expanduser()
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        try:
+            from master_agent.platform_runtime.windows.filesystem import (
+                validate_windows_drive_path,
+            )
+
+            try:
+                windows_path = validate_windows_drive_path(selected)
+            except ConfigurationError:
+                if selected.is_absolute():
+                    raise
+                windows_path = validate_windows_drive_path(Path.cwd() / selected)
+            resolved = Path(windows_path.canonical)
+            windows_parent = type(windows_path)(
+                drive=windows_path.drive,
+                components=windows_path.components[:-1],
+            )
+            atomic.ensure_private_directory(Path(windows_parent.canonical))
+            with atomic.open_transaction(
+                resolved,
+                max_bytes=_MAX_TOKEN_FILE_BYTES,
+                create=True,
+            ) as transaction:
+                transaction.publish_bytes(
+                    _token_file_bytes(token),
+                    expected=transaction.identity,
+                )
+            return resolved
+        except (ConfigurationError, OSError) as error:
+            raise AuthenticationError(
+                "token file could not be written safely"
+            ) from error
     resolved = selected if selected.is_absolute() else Path.cwd() / selected
     resolved.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent = resolved.parent.resolve(strict=True)
@@ -464,14 +500,7 @@ def _write_token_at(
 ) -> Path:
     """Write one token using only operations relative to a pinned directory."""
 
-    payload = {
-        "access_token": token.value,
-        "expires_at": token.expires_at.isoformat(),
-        "scopes": list(token.scopes),
-        "token_type": token.token_type,
-        "source": token.source,
-    }
-    encoded = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    encoded = _token_file_bytes(token)
     temporary = f".{resolved.name}.{secrets.token_hex(16)}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -525,6 +554,22 @@ def _write_token_at(
             except FileNotFoundError:
                 pass
     return resolved
+
+
+def _token_file_bytes(token: AccessToken) -> bytes:
+    """Return the existing refresh-token-free bounded JSON document."""
+
+    payload = {
+        "access_token": token.value,
+        "expires_at": token.expires_at.isoformat(),
+        "scopes": list(token.scopes),
+        "token_type": token.token_type,
+        "source": token.source,
+    }
+    encoded = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(encoded) > _MAX_TOKEN_FILE_BYTES:
+        raise AuthenticationError("token file exceeds the 1 MiB limit")
+    return encoded
 
 
 def _validate_token_directory(
@@ -637,7 +682,7 @@ def _read_restricted_token_file(path: Path) -> str:
         try:
             _canonical, payload, _identity = backend.read_restricted_file(
                 resolved,
-                1024 * 1024,
+                _MAX_TOKEN_FILE_BYTES,
                 require_private=True,
             )
         except (ConfigurationError, OSError) as error:
@@ -687,8 +732,8 @@ def _read_restricted_token_file(path: Path) -> str:
                 raise AuthenticationError(
                     "token file permissions must not grant group or other access"
                 )
-        payload = os.read(descriptor, 1024 * 1024 + 1)
-        if len(payload) > 1024 * 1024:
+        payload = os.read(descriptor, _MAX_TOKEN_FILE_BYTES + 1)
+        if len(payload) > _MAX_TOKEN_FILE_BYTES:
             raise AuthenticationError("token file exceeds the 1 MiB limit")
         try:
             rendered = payload.decode("utf-8")

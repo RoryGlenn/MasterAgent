@@ -135,15 +135,17 @@ silently recalculate or shorten an existing record's expiration.
 `evidence-prune` therefore accepts an evidence root, not a retention
 configuration path. It validates the complete persisted sidecar and deletes a
 pair only when that recorded expiration is at or before the current time.
-Preview is the default. On POSIX, explicit `--apply` uses the pinned root,
-an exclusive selected-root retention lock, shared existing owner-controlled
-ancestor retention locks, the discovered evidence-parent publication locks, an
-exact descriptor rescan, and a bounded same-filesystem recoverable transaction.
-Retained writers expose and exclusively lock their exact parent before sharing
-existing ancestor retention locks, so publication under a nested parent cannot
-begin during ancestor maintenance. Windows retention preview, apply, and orphan
-repair remain gated pending equivalent native filesystem and atomic-state
-guarantees.
+Preview is the default. On POSIX, explicit `--apply` uses the pinned root, an
+exclusive selected-root retention lock, shared existing owner-controlled
+ancestor retention locks, the discovered evidence-parent publication locks,
+an exact descriptor rescan, and a bounded same-filesystem recoverable
+transaction. Retained writers expose and exclusively lock their exact parent
+before sharing existing ancestor retention locks, so publication under a
+nested parent cannot begin during ancestor maintenance. On Windows, preview
+and apply use retained handles, protected DACLs, the tree-wide native lock, and
+a bounded content-free intent that records exact pair or quarantine identities
+before mutation. Pending recovery blocks preview mutation and must be completed
+by apply.
 
 `evidence-repair --apply` uses the same selected-root and ancestor handshake,
 locks every discovered descendant record parent, and rescans before

@@ -43,7 +43,10 @@ _READ_CONTROL = 0x00020000
 _DELETE = 0x00010000
 _SYNCHRONIZE = 0x00100000
 _GENERIC_READ = 0x80000000
+_GENERIC_WRITE = 0x40000000
 _FILE_SHARE_READ = 0x00000001
+_FILE_SHARE_WRITE = 0x00000002
+_FILE_SHARE_DELETE = 0x00000004
 _OPEN_EXISTING = 3
 _FILE_FLAG_OPEN_NO_RECALL = 0x00100000
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
@@ -56,10 +59,16 @@ _FILE_ATTRIBUTE_NORMAL = 0x00000080
 
 _OBJ_CASE_INSENSITIVE = 0x00000040
 _FILE_CREATE = 2
+_FILE_DIRECTORY_FILE = 0x00000001
+_FILE_WRITE_THROUGH = 0x00000002
 _FILE_NON_DIRECTORY_FILE = 0x00000040
 _FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
 _STATUS_OBJECT_NAME_COLLISION = 0xC0000035
 _FILE_DISPOSITION_INFO_CLASS = 4
+_FILE_RENAME_INFORMATION_CLASS = 10
+_FILE_RENAME_INFORMATION_EX_CLASS = 65
+_FILE_RENAME_REPLACE_IF_EXISTS = 0x00000001
+_FILE_RENAME_POSIX_SEMANTICS = 0x00000002
 
 _FILE_BASIC_INFO_CLASS = 0
 _FILE_STANDARD_INFO_CLASS = 1
@@ -120,6 +129,17 @@ class _FILE_CASE_SENSITIVE_INFO(ctypes.Structure):
 
 class _FILE_DISPOSITION_INFO(ctypes.Structure):
     _fields_ = [("DeleteFile", ctypes.c_ubyte)]
+
+
+class _FILE_RENAME_INFO_EX(ctypes.Structure):
+    """ABI prefix for ``FILE_RENAME_INFO`` with a variable UTF-16 name."""
+
+    _fields_ = [
+        ("Flags", _DWORD),
+        ("RootDirectory", _HANDLE),
+        ("FileNameLength", _DWORD),
+        ("FileName", ctypes.c_uint16 * 1),
+    ]
 
 
 class _UNICODE_STRING(ctypes.Structure):
@@ -305,19 +325,32 @@ class NativeWindowsApi:
         *,
         directory: bool,
         readable: bool,
+        writable: bool = False,
+        replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int:
-        """Open a path without following its final reparse point or sharing delete."""
+        """Open a path without following its final reparse point."""
 
         selected = validate_windows_drive_path(path)
+        if not isinstance(replacement_handoff, bool):
+            raise TypeError("Windows replacement handoff flag must be a boolean")
+        if not isinstance(deletable, bool):
+            raise TypeError("Windows deletable-open flag must be a boolean")
         desired_access = (
             _GENERIC_READ if readable else _READ_CONTROL | _FILE_READ_ATTRIBUTES
         )
+        if writable:
+            desired_access |= _FILE_WRITE_DATA
+        if deletable:
+            desired_access |= _DELETE
         if directory:
             desired_access |= _FILE_TRAVERSE
         raw_handle = self._kernel32.CreateFileW(
             selected.extended,
             desired_access,
-            _FILE_SHARE_READ,
+            _FILE_SHARE_READ
+            | (_FILE_SHARE_WRITE if directory or replacement_handoff else 0)
+            | (_FILE_SHARE_DELETE if replacement_handoff else 0),
             None,
             _OPEN_EXISTING,
             _FILE_FLAG_BACKUP_SEMANTICS
@@ -574,8 +607,47 @@ class NativeWindowsApi:
     ) -> int:
         """Create one non-replacement regular file relative to a directory handle."""
 
+        return self._create_private_child(
+            parent_handle,
+            name,
+            security_descriptor_sddl=security_descriptor_sddl,
+            directory=False,
+        )
+
+    def create_private_directory(
+        self,
+        parent_handle: int,
+        name: str,
+        *,
+        security_descriptor_sddl: str,
+    ) -> int:
+        """Create one protected directory relative to a retained parent handle."""
+
+        return self._create_private_child(
+            parent_handle,
+            name,
+            security_descriptor_sddl=security_descriptor_sddl,
+            directory=True,
+        )
+
+    def _create_private_child(
+        self,
+        parent_handle: int,
+        name: str,
+        *,
+        security_descriptor_sddl: str,
+        directory: bool,
+    ) -> int:
+        """Create one exact protected child without resolving its parent by name.
+
+        Share access does not grant filesystem access; the explicit protected
+        DACL remains authoritative.  All three share modes are required so the
+        retained creation handle can survive publication while the backend
+        reopens the new name for identity, content, and security verification.
+        """
+
         if not name or "\\" in name or "/" in name or ":" in name or "\x00" in name:
-            raise WindowsPathSecurityError("Windows child file name is unsafe")
+            raise WindowsPathSecurityError("Windows child name is unsafe")
         descriptor = ctypes.c_void_p()
         descriptor_size = _DWORD()
         if not self._advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -623,10 +695,11 @@ class NativeWindowsApi:
                     ctypes.byref(attributes),
                     ctypes.byref(io_status),
                     None,
-                    _FILE_ATTRIBUTE_NORMAL,
-                    0,
+                    0 if directory else _FILE_ATTRIBUTE_NORMAL,
+                    _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
                     _FILE_CREATE,
-                    _FILE_NON_DIRECTORY_FILE
+                    (_FILE_DIRECTORY_FILE if directory else _FILE_NON_DIRECTORY_FILE)
+                    | _FILE_WRITE_THROUGH
                     | _FILE_SYNCHRONOUS_IO_NONALERT
                     | _FILE_FLAG_OPEN_REPARSE_POINT,
                     None,
@@ -640,7 +713,7 @@ class NativeWindowsApi:
             if status_code == _STATUS_OBJECT_NAME_COLLISION:
                 raise FileExistsError(
                     errno.EEXIST,
-                    "Windows child file already exists",
+                    "Windows child already exists",
                 )
             error = int(self._ntdll.RtlNtStatusToDosError(ctypes.c_long(status)))
             raise OSError(error, "NtCreateFile failed")
@@ -652,7 +725,7 @@ class NativeWindowsApi:
                 )
             if int(self._kernel32.GetFileType(created)) != _FILE_TYPE_DISK:
                 raise WindowsPathSecurityError(
-                    "created Windows object is not a disk file"
+                    "created Windows object is not a disk filesystem object"
                 )
             if not self._kernel32.SetHandleInformation(
                 created,
@@ -674,9 +747,97 @@ class NativeWindowsApi:
                     cleanup_error = exc
             if cleanup_error is not None:
                 raise WindowsPathSecurityError(
-                    "created Windows file cleanup failed"
+                    "created Windows child cleanup failed"
                 ) from cleanup_error
             raise
+
+    def replace_file(
+        self,
+        source_handle: int,
+        parent_handle: int,
+        destination_name: str,
+        *,
+        replace_existing: bool,
+    ) -> None:
+        """Replace one child using the source and destination-parent handles.
+
+        Windows 11 ``FileRenameInfoEx`` POSIX semantics keep an already-open
+        validated destination handle usable while atomically rebinding its
+        public name to the prepared source handle. Create-only publication
+        omits ``REPLACE_IF_EXISTS`` so a raced destination fails atomically.
+        """
+
+        if not isinstance(replace_existing, bool):
+            raise TypeError("Windows replacement mode must be a boolean")
+        if (
+            not destination_name
+            or "\\" in destination_name
+            or "/" in destination_name
+            or ":" in destination_name
+            or "\x00" in destination_name
+        ):
+            raise WindowsPathSecurityError("Windows replacement name is unsafe")
+        encoded = destination_name.encode("utf-16-le", errors="strict")
+        if not encoded or len(encoded) > 0xFFFC:
+            raise WindowsPathSecurityError("Windows replacement name is too long")
+        file_name_offset = _FILE_RENAME_INFO_EX.FileName.offset
+        size = ctypes.sizeof(_FILE_RENAME_INFO_EX) + len(encoded)
+        buffer = ctypes.create_string_buffer(size)
+        information = ctypes.cast(
+            buffer,
+            ctypes.POINTER(_FILE_RENAME_INFO_EX),
+        ).contents
+        information.Flags = (
+            _FILE_RENAME_POSIX_SEMANTICS | _FILE_RENAME_REPLACE_IF_EXISTS
+            if replace_existing
+            else 0
+        )
+        information.RootDirectory = _HANDLE(parent_handle)
+        information.FileNameLength = len(encoded)
+        ctypes.memmove(
+            ctypes.addressof(buffer) + file_name_offset, encoded, len(encoded)
+        )
+        # NtSetInformationFile accepts the native FILE_INFORMATION_CLASS
+        # values.  FILE_RENAME_POSIX_SEMANTICS is defined only for replacement,
+        # while the base class preserves create-only collision semantics.
+        information_class = (
+            _FILE_RENAME_INFORMATION_EX_CLASS
+            if replace_existing
+            else _FILE_RENAME_INFORMATION_CLASS
+        )
+        io_status = _IO_STATUS_BLOCK()
+        status = int(
+            self._ntdll.NtSetInformationFile(
+                _HANDLE(source_handle),
+                ctypes.byref(io_status),
+                buffer,
+                size,
+                information_class,
+            )
+        )
+        status_code = status & 0xFFFFFFFF
+        if status_code != 0:
+            if status_code == _STATUS_OBJECT_NAME_COLLISION:
+                raise FileExistsError(
+                    errno.EEXIST,
+                    "Windows replacement destination already exists",
+                )
+            error = int(self._ntdll.RtlNtStatusToDosError(ctypes.c_long(status)))
+            raise OSError(error, "NtSetInformationFile failed")
+
+    def flush_directory(self, handle: int) -> None:
+        """Synchronously flush one retained directory file object."""
+
+        io_status = _IO_STATUS_BLOCK()
+        status = int(
+            self._ntdll.NtFlushBuffersFile(
+                _HANDLE(handle),
+                ctypes.byref(io_status),
+            )
+        )
+        if status & 0xFFFFFFFF:
+            error = int(self._ntdll.RtlNtStatusToDosError(ctypes.c_long(status)))
+            raise OSError(error, "NtFlushBuffersFile failed")
 
     def write_file(self, handle: int, payload: bytes) -> int:
         """Write at most one caller-bounded chunk at the current file offset."""
@@ -1027,6 +1188,19 @@ class NativeWindowsApi:
             _DWORD,
         ]
         self._ntdll.NtCreateFile.restype = ctypes.c_long
+        self._ntdll.NtFlushBuffersFile.argtypes = [
+            _HANDLE,
+            ctypes.POINTER(_IO_STATUS_BLOCK),
+        ]
+        self._ntdll.NtFlushBuffersFile.restype = ctypes.c_long
+        self._ntdll.NtSetInformationFile.argtypes = [
+            _HANDLE,
+            ctypes.POINTER(_IO_STATUS_BLOCK),
+            ctypes.c_void_p,
+            _DWORD,
+            _DWORD,
+        ]
+        self._ntdll.NtSetInformationFile.restype = ctypes.c_long
         self._ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
         self._ntdll.RtlNtStatusToDosError.restype = _DWORD
 

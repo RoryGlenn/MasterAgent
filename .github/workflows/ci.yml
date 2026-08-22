@@ -196,7 +196,7 @@ jobs:
               -Credential $credential `
               -WorkingDirectory $env:GITHUB_WORKSPACE `
               -ScriptBlock {
-                param($Python, $Workspace, $TemporaryRoot)
+                param($Python, $Cli, $Workspace, $TemporaryRoot)
                 $ErrorActionPreference = "Stop"
                 $env:TEMP = $TemporaryRoot
                 $env:TMP = $TemporaryRoot
@@ -216,9 +216,15 @@ jobs:
                 if ($LASTEXITCODE -ne 0) {
                   throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
                 }
+                $readinessPath = Join-Path $TemporaryRoot "readiness.json"
+                & $Cli readiness --output $readinessPath | Out-Host
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $readinessPath)) {
+                  throw "native Windows restricted publication smoke failed"
+                }
               } `
               -ArgumentList @(
                 $env:MASTER_AGENT_WINDOWS_PYTHON,
+                $env:MASTER_AGENT_WINDOWS_CLI,
                 $env:GITHUB_WORKSPACE,
                 $testRoot
               )
@@ -270,7 +276,6 @@ jobs:
           }
 
           $unavailableContracts = @(
-            "atomic_publication_recovery",
             "process_supervision",
             "trusted_git",
             "capsule_isolation"
@@ -284,6 +289,9 @@ jobs:
             }
             if ($report -notmatch 'cross_process_locking: available \(windows-lockfileex\)') {
               throw "platform runtime did not report native Windows locking"
+            }
+            if ($report -notmatch 'atomic_publication_recovery: available \(windows-handle-atomic-state\)') {
+              throw "platform runtime did not report native Windows atomic state"
             }
             foreach ($contractName in $unavailableContracts) {
               if ($report -notmatch "$contractName`: unavailable \(windows-native-partial\)") {
