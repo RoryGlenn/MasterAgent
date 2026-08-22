@@ -204,14 +204,7 @@ jobs:
                 ) {
                   throw "native Windows tests received an administrator token"
                 }
-                $runner = (
-                  'import sys, unittest; '
-                  + 'suite = unittest.defaultTestLoader.loadTestsFromName('
-                  + '"tests.test_windows_platform_runtime"); '
-                  + 'result = unittest.TextTestRunner('
-                  + 'stream=sys.stdout, verbosity=2).run(suite); '
-                  + 'raise SystemExit(0 if result.wasSuccessful() else 1)'
-                )
+                $runner = 'import sys, unittest; suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_windows_platform_runtime"); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
                 & $Python -c $runner
                 if ($LASTEXITCODE -ne 0) {
                   throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
