@@ -85,7 +85,7 @@ class _AtomicFilesystemApi:
         self._delete_on_close: set[int] = set()
         self.created_sddl: list[str] = []
         self.flushes: list[str] = []
-        self.open_modes: list[tuple[str, bool]] = []
+        self.open_modes: list[tuple[str, bool, bool]] = []
         self.fail_replace_before: str | None = None
         self.fail_flush_once: str | None = None
         self.race_destination_before_replace: tuple[str, bytes] | None = None
@@ -109,9 +109,10 @@ class _AtomicFilesystemApi:
         readable: bool,
         writable: bool = False,
         replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int:
         del readable, writable
-        self.open_modes.append((path, replacement_handoff))
+        self.open_modes.append((path, replacement_handoff, deletable))
         selected = self._objects[self._lookup(path)]
         if selected.is_directory != directory:
             if selected.is_directory:
@@ -452,13 +453,14 @@ class WindowsAtomicStateTests(unittest.TestCase):
         self.assertTrue(all("D:P" in value for value in api.created_sddl))
         self.assertTrue(api.flushes)
         handoffs = [
-            (index, path)
-            for index, (path, enabled) in enumerate(api.open_modes)
+            (index, path, deletable)
+            for index, (path, enabled, deletable) in enumerate(api.open_modes)
             if enabled
         ]
         self.assertTrue(handoffs)
-        for index, path in handoffs:
-            self.assertIn((path, False), api.open_modes[index + 1 :])
+        for index, path, deletable in handoffs:
+            self.assertFalse(deletable)
+            self.assertIn((path, False, True), api.open_modes[index + 1 :])
 
     def test_first_ledger_is_staged_before_its_public_name_exists(self) -> None:
         api, backend = _backend()

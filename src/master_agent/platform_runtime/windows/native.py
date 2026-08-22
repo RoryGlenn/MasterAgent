@@ -327,17 +327,22 @@ class NativeWindowsApi:
         readable: bool,
         writable: bool = False,
         replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int:
         """Open a path without following its final reparse point."""
 
         selected = validate_windows_drive_path(path)
         if not isinstance(replacement_handoff, bool):
             raise TypeError("Windows replacement handoff flag must be a boolean")
+        if not isinstance(deletable, bool):
+            raise TypeError("Windows deletable-open flag must be a boolean")
         desired_access = (
             _GENERIC_READ if readable else _READ_CONTROL | _FILE_READ_ATTRIBUTES
         )
         if writable:
             desired_access |= _FILE_WRITE_DATA
+        if deletable:
+            desired_access |= _DELETE
         if directory:
             desired_access |= _FILE_TRAVERSE
         raw_handle = self._kernel32.CreateFileW(

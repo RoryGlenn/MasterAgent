@@ -374,6 +374,7 @@ class _WindowsFilesystemApi(Protocol):
         readable: bool,
         writable: bool = False,
         replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int: ...
 
     def close_handle(self, handle: int) -> None: ...
@@ -947,6 +948,11 @@ class PinnedWindowsPath:
                             and require_private
                         ),
                         replacement_handoff=_replacement_handoff,
+                        deletable=(
+                            selected_kind is WindowsObjectKind.FILE
+                            and require_private
+                            and not _replacement_handoff
+                        ),
                     ),
                 )
                 duplicated.append(child)

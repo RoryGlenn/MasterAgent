@@ -165,9 +165,12 @@ class _FakeFilesystemApi:
         readable: bool,
         writable: bool = False,
         replacement_handoff: bool = False,
+        deletable: bool = False,
     ) -> int:
         if not isinstance(replacement_handoff, bool):
             raise TypeError("replacement_handoff must be a boolean")
+        if not isinstance(deletable, bool):
+            raise TypeError("deletable must be a boolean")
         known = path in self.directories or path in self.content
         if not known:
             raise FileNotFoundError(path)
@@ -740,6 +743,18 @@ assert 'msvcrt' not in sys.modules
             ),
             0x1234,
         )
+        self.assertEqual(share_access[-1], 0x00000001)
+
+        self.assertEqual(
+            api.open_path(
+                r"C:\Secure\state.json",
+                directory=False,
+                readable=True,
+                deletable=True,
+            ),
+            0x1234,
+        )
+        self.assertNotEqual(desired_access[-1] & windows_native._DELETE, 0)
         self.assertEqual(share_access[-1], 0x00000001)
 
     def test_native_directory_flush_uses_the_retained_file_object(self) -> None:
