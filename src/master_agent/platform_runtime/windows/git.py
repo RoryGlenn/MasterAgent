@@ -316,9 +316,9 @@ class WindowsTrustedGitBackend:
             )
             config_result = self._run_process(
                 executable=executable_pin.path,
-                cwd=repository_pin.path,
+                cwd=self._home,
                 arguments=(
-                    *prefix,
+                    "--no-pager",
                     "config",
                     "--file",
                     str(config_pin.path),

@@ -25,8 +25,15 @@ from master_agent.platform_runtime.windows import (
     build_windows_runtime,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 _SECRET = "ambient-windows-git-secret-canary"
+
+
+def _fixture_path(value: str) -> Path:
+    """Return one absolute fixture path on POSIX and native Windows."""
+
+    if sys.platform == "win32":
+        return Path("C:" + value.replace("/", "\\"))
+    return Path(value)
 
 
 def _identity(kind: WindowsObjectKind) -> WindowsObjectIdentity:
@@ -134,26 +141,30 @@ def _result(
 class WindowsTrustedGitContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.executable = _FakePin(
-            Path("/trusted/Git/cmd/git.exe"),
+            _fixture_path("/trusted/Git/cmd/git.exe"),
             directory=False,
             payload=b"MZ trusted executable",
         )
         config = _FakePin(
-            Path("/repo/.git/config"),
+            _fixture_path("/repo/.git/config"),
             directory=False,
             payload=b"[core]\nrepositoryformatversion = 0\n",
         )
-        head = _FakePin(Path("/repo/.git/HEAD"), directory=False, payload=b"ref")
-        index = _FakePin(Path("/repo/.git/index"), directory=False, payload=b"index")
-        info = _FakePin(Path("/repo/.git/objects/info"), directory=True)
+        head = _FakePin(
+            _fixture_path("/repo/.git/HEAD"), directory=False, payload=b"ref"
+        )
+        index = _FakePin(
+            _fixture_path("/repo/.git/index"), directory=False, payload=b"index"
+        )
+        info = _FakePin(_fixture_path("/repo/.git/objects/info"), directory=True)
         objects = _FakePin(
-            Path("/repo/.git/objects"),
+            _fixture_path("/repo/.git/objects"),
             directory=True,
             children={"info": info},
         )
-        refs = _FakePin(Path("/repo/.git/refs"), directory=True)
+        refs = _FakePin(_fixture_path("/repo/.git/refs"), directory=True)
         self.git = _FakePin(
-            Path("/repo/.git"),
+            _fixture_path("/repo/.git"),
             directory=True,
             children={
                 "config": config,
@@ -164,7 +175,7 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
             },
         )
         self.repository = _FakePin(
-            Path("/repo"),
+            _fixture_path("/repo"),
             directory=True,
             children={".git": self.git},
         )
@@ -254,7 +265,7 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
 
     def test_lock_contention_stops_before_process_launch(self) -> None:
         self.git._children["INDEX.LOCK"] = _FakePin(
-            Path("/repo/.git/INDEX.LOCK"),
+            _fixture_path("/repo/.git/INDEX.LOCK"),
             directory=False,
         )
         process = _FakeProcess([])
@@ -299,13 +310,17 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
             (
                 "commondir",
                 self.git,
-                _FakePin(Path("/repo/.git/commondir"), directory=False, payload=b".."),
+                _FakePin(
+                    _fixture_path("/repo/.git/commondir"),
+                    directory=False,
+                    payload=b"..",
+                ),
             ),
             (
                 "alternates",
                 self.git._children["objects"]._children["info"],
                 _FakePin(
-                    Path("/repo/.git/objects/info/alternates"),
+                    _fixture_path("/repo/.git/objects/info/alternates"),
                     directory=False,
                     payload=b"C:\\outside\\objects",
                 ),
@@ -392,52 +407,47 @@ class NativeWindowsTrustedGitTests(unittest.TestCase):
         self.assertTrue(status.available, status.reason)
         self.assertEqual(status.backend, WINDOWS_GIT_BACKEND_ID)
         self.backend = runtime.require_trusted_git()
+        self.addCleanup(self.backend.close)
 
     def test_repository_status_diff_and_object_reads(self) -> None:
-        head = self.backend.read(
-            ROOT,
-            ("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"),
-            timeout_seconds=20,
-            max_output_bytes=4096,
-        )
-        status = self.backend.read(
-            ROOT,
-            ("status", "--porcelain=v1", "-z"),
-            timeout_seconds=20,
-            max_output_bytes=4 * 1024 * 1024,
-        )
-        diff = self.backend.read(
-            ROOT,
-            ("diff", "--binary"),
-            timeout_seconds=20,
-            max_output_bytes=4 * 1024 * 1024,
-        )
+        with tempfile.TemporaryDirectory(prefix="git native reads ") as raw:
+            repository = Path(raw).resolve()
+            self._initialize_repository(repository, "native.txt")
+            head = self.backend.read(
+                repository,
+                ("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"),
+                timeout_seconds=20,
+                max_output_bytes=4096,
+            )
+            revision = head.decode("ascii").strip()
+            status = self.backend.read(
+                repository,
+                ("status", "--porcelain=v1", "-z"),
+                timeout_seconds=20,
+                max_output_bytes=4 * 1024 * 1024,
+            )
+            diff = self.backend.read(
+                repository,
+                ("diff", "--binary"),
+                timeout_seconds=20,
+                max_output_bytes=4 * 1024 * 1024,
+            )
+            commit = self.backend.read(
+                repository,
+                ("cat-file", "commit", revision),
+                timeout_seconds=20,
+                max_output_bytes=4096,
+            )
 
-        self.assertRegex(head.decode("ascii").strip(), r"^[0-9a-f]{40,64}$")
-        self.assertIsInstance(status, bytes)
-        self.assertIsInstance(diff, bytes)
+            self.assertRegex(revision, r"^[0-9a-f]{40,64}$")
+            self.assertIsInstance(status, bytes)
+            self.assertIsInstance(diff, bytes)
+            self.assertIn(b"tree ", commit)
 
     def test_spaces_unicode_and_index_contention(self) -> None:
         with tempfile.TemporaryDirectory(prefix="git space unicode é ") as raw:
             repository = Path(raw).resolve()
-            subprocess.run(("git", "init", "--quiet"), cwd=repository, check=True)
-            subprocess.run(
-                ("git", "config", "user.name", "MasterAgent Test"),
-                cwd=repository,
-                check=True,
-            )
-            subprocess.run(
-                ("git", "config", "user.email", "test@example.invalid"),
-                cwd=repository,
-                check=True,
-            )
-            (repository / "unicode-é.txt").write_text("line\n", encoding="utf-8")
-            subprocess.run(("git", "add", "."), cwd=repository, check=True)
-            subprocess.run(
-                ("git", "commit", "--quiet", "-m", "fixture"),
-                cwd=repository,
-                check=True,
-            )
+            self._initialize_repository(repository, "unicode-é.txt")
             output = self.backend.read(
                 repository,
                 ("ls-files", "-z"),
@@ -454,6 +464,27 @@ class NativeWindowsTrustedGitTests(unittest.TestCase):
                     timeout_seconds=20,
                     max_output_bytes=4096,
                 )
+
+    @staticmethod
+    def _initialize_repository(repository: Path, filename: str) -> None:
+        subprocess.run(("git", "init", "--quiet"), cwd=repository, check=True)
+        subprocess.run(
+            ("git", "config", "user.name", "MasterAgent Test"),
+            cwd=repository,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.email", "test@example.invalid"),
+            cwd=repository,
+            check=True,
+        )
+        (repository / filename).write_text("line\n", encoding="utf-8")
+        subprocess.run(("git", "add", "."), cwd=repository, check=True)
+        subprocess.run(
+            ("git", "commit", "--quiet", "-m", "fixture"),
+            cwd=repository,
+            check=True,
+        )
 
 
 if __name__ == "__main__":
