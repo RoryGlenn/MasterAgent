@@ -1550,6 +1550,7 @@ class CreatedWindowsFile:
                     "prepared Windows file is not a child of the replacement parent"
                 )
             observed: PinnedWindowsPath | None = None
+            replaced: PinnedWindowsPath | None = None
             handoff: PinnedWindowsPath | None = None
             published: PinnedWindowsPath | None = None
             try:
@@ -1570,6 +1571,19 @@ class CreatedWindowsFile:
                             "Windows replacement destination identity changed"
                         )
                     observed.validate()
+                    replaced = parent.pin_child(
+                        child_name,
+                        kind=WindowsObjectKind.FILE,
+                        require_private=True,
+                        _replacement_handoff=True,
+                    )
+                    replaced.validate()
+                    if replaced.identity != observed.identity:
+                        raise WindowsPathSecurityError(
+                            "Windows replacement destination identity changed"
+                        )
+                    observed.close()
+                    observed = None
                 parent._revalidate_locked()
                 self._pin.validate()
                 parent._api.replace_file(
@@ -1624,6 +1638,8 @@ class CreatedWindowsFile:
                     published.close()
                 if handoff is not None:
                     handoff.close()
+                if replaced is not None:
+                    replaced.close()
                 if observed is not None:
                     observed.close()
 
