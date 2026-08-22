@@ -97,6 +97,7 @@ REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
         "windows.credentials",
         "windows.process_supervision",
         "windows.git_isolation",
+        "windows.capsule_isolation",
     }
 )
 REQUIRED_AGENT_PROFILES: Final = {
@@ -1343,6 +1344,9 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
             "src/master_agent/platform_runtime/windows/process.py"
         ),
         "windows.git_isolation": "src/master_agent/platform_runtime/windows/git.py",
+        "windows.capsule_isolation": (
+            "src/master_agent/platform_runtime/windows/capsules.py"
+        ),
     }
     shipped_owner_ids: list[str] = []
     for capability, implementation_path in shipped_platform_contracts.items():

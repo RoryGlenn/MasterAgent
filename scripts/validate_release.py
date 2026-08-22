@@ -360,7 +360,7 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     ),
     Path("docs/implementation-roadmap.md"): (
         "Complete on POSIX and native Windows",
-        "native Windows filesystem/ACL, locking, and atomic local-state tranche",
+        "native Windows filesystem/ACL, locking, atomic local-state",
     ),
     Path("docs/operations.md"): (
         "repeat the apply command under the same root",
@@ -678,6 +678,8 @@ def validate_archive(path: Path) -> ValidationReport:
             "master_agent/capsule_worker.py",
             "master_agent/platform_runtime/posix/capsule_worker.py",
             "master_agent/platform_runtime/windows/atomic.py",
+            "master_agent/platform_runtime/windows/capsules.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
             "master_agent/defaults/capabilities.toml",
             "master_agent/defaults/dependency-licenses.toml",
         )
@@ -728,6 +730,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/tests/test_capsule_broker_and_routing.py",
             "/tests/test_release_metadata.py",
             "/tests/test_windows_atomic_state.py",
+            "/tests/test_windows_capsules.py",
             "/tests/test_live_connector_workflow.py",
             "/tests/test_semantic_router.py",
             "/tests/test_advisory_integration.py",
@@ -736,11 +739,14 @@ def validate_archive(path: Path) -> ValidationReport:
             "/specs/current/security/MA-ADVISORY-001.md",
             "/specs/current/development/MA-ROUTER-001.md",
             "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CAPSULES-001.md",
             "/src/master_agent/__init__.py",
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
+            "/src/master_agent/platform_runtime/windows/capsules.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
         )
         source_members = tuple(PurePosixPath(name) for name in names)
         source_roots = {
@@ -1960,6 +1966,7 @@ def _validate_archive_runtime_mode(
     worker_suffixes = (
         "master_agent/capsule_worker.py",
         "master_agent/platform_runtime/posix/capsule_worker.py",
+        "master_agent/platform_runtime/windows/capsule_worker.py",
     )
     if not name.endswith(worker_suffixes):
         return

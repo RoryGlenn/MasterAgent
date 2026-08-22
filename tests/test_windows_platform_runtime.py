@@ -39,6 +39,7 @@ from master_agent.platform_runtime.windows import (
     TRUSTED_INSTALLER_SID,
     WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
     WINDOWS_ATOMIC_BACKEND_ID,
+    WINDOWS_CAPSULE_BACKEND_ID,
     WINDOWS_CREDENTIAL_STORAGE_BACKEND_ID,
     WINDOWS_DANGEROUS_WRITE_MASK,
     WINDOWS_GIT_BACKEND_ID,
@@ -1128,6 +1129,11 @@ assert 'msvcrt' not in sys.modules
             ) as process_probe,
             patch(
                 "master_agent.platform_runtime.windows.runtime."
+                "probe_windows_capsule_backend",
+                return_value=SimpleNamespace(backend_id=WINDOWS_CAPSULE_BACKEND_ID),
+            ) as capsule_probe,
+            patch(
+                "master_agent.platform_runtime.windows.runtime."
                 "probe_windows_git_backend",
                 return_value=SimpleNamespace(backend_id=WINDOWS_GIT_BACKEND_ID),
             ) as git_probe,
@@ -1138,6 +1144,7 @@ assert 'msvcrt' not in sys.modules
         atomic_probe.assert_called_once()
         credential_probe.assert_called_once()
         process_probe.assert_called_once()
+        capsule_probe.assert_called_once()
         git_probe.assert_called_once()
         self.assertEqual(runtime.status.backend, WINDOWS_RUNTIME_BACKEND_ID)
         self.assertTrue(runtime.supports(PlatformContract.SECURE_FILESYSTEM))
@@ -1166,12 +1173,9 @@ assert 'msvcrt' not in sys.modules
         capsule_status = runtime.status.contract_status(
             PlatformContract.CAPSULE_ISOLATION
         )
-        self.assertFalse(capsule_status.available)
-        self.assertEqual(capsule_status.backend, WINDOWS_RUNTIME_BACKEND_ID)
-        self.assertEqual(
-            capsule_status.reason,
-            "native windows capsule_isolation backend is not implemented",
-        )
+        self.assertTrue(capsule_status.available)
+        self.assertEqual(capsule_status.backend, WINDOWS_CAPSULE_BACKEND_ID)
+        self.assertIsNone(capsule_status.reason)
 
 
 class WindowsPinnedPathTests(unittest.TestCase):

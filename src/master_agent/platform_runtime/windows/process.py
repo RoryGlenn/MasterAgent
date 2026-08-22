@@ -26,6 +26,7 @@ _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _STARTF_USESTDHANDLES = 0x00000100
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020005
 _HANDLE_FLAG_INHERIT = 0x00000001
 _GENERIC_READ = 0x80000000
 _FILE_SHARE_READ = 0x00000001
@@ -98,6 +99,15 @@ class _ProcessInformation(ctypes.Structure):
         ("thread", wintypes.HANDLE),
         ("process_id", wintypes.DWORD),
         ("thread_id", wintypes.DWORD),
+    )
+
+
+class _SecurityCapabilities(ctypes.Structure):
+    _fields_ = (
+        ("app_container_sid", ctypes.c_void_p),
+        ("capabilities", ctypes.c_void_p),
+        ("capability_count", wintypes.DWORD),
+        ("reserved", wintypes.DWORD),
     )
 
 
@@ -369,6 +379,14 @@ class CtypesWindowsProcessApi:
             ctypes.c_void_p,
         )
         kernel.ReadFile.restype = wintypes.BOOL
+        kernel.WriteFile.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        )
+        kernel.WriteFile.restype = wintypes.BOOL
         kernel.GetWindowsDirectoryW.argtypes = (wintypes.LPWSTR, wintypes.UINT)
         kernel.GetWindowsDirectoryW.restype = wintypes.UINT
         kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
@@ -410,6 +428,79 @@ class CtypesWindowsProcessApi:
         max_processes: int,
         max_output_bytes: int,
     ) -> ProcessExecutionResult:
+        """Launch a normal supervised process with a null input stream."""
+
+        return self._run(
+            executable=executable,
+            arguments=arguments,
+            cwd=cwd,
+            environment=environment,
+            inherited_handles=inherited_handles,
+            input_payload=None,
+            appcontainer_sid=None,
+            timeout_seconds=timeout_seconds,
+            cpu_seconds=cpu_seconds,
+            memory_bytes=memory_bytes,
+            max_processes=max_processes,
+            max_output_bytes=max_output_bytes,
+        )
+
+    def run_appcontainer(
+        self,
+        *,
+        executable: Path,
+        arguments: tuple[str, ...],
+        cwd: Path,
+        environment: Mapping[str, str],
+        input_payload: bytes,
+        appcontainer_sid: int,
+        timeout_seconds: float,
+        cpu_seconds: int,
+        memory_bytes: int,
+        max_processes: int,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
+        """Launch one zero-capability AppContainer with protocol-only handles."""
+
+        if not isinstance(input_payload, bytes) or len(input_payload) > 2 * 1024 * 1024:
+            raise ProcessSupervisionError("input_payload_invalid")
+        if (
+            isinstance(appcontainer_sid, bool)
+            or not isinstance(appcontainer_sid, int)
+            or appcontainer_sid <= 0
+        ):
+            raise ProcessSupervisionError("appcontainer_sid_invalid")
+        return self._run(
+            executable=executable,
+            arguments=arguments,
+            cwd=cwd,
+            environment=environment,
+            inherited_handles=(),
+            input_payload=input_payload,
+            appcontainer_sid=appcontainer_sid,
+            timeout_seconds=timeout_seconds,
+            cpu_seconds=cpu_seconds,
+            memory_bytes=memory_bytes,
+            max_processes=max_processes,
+            max_output_bytes=max_output_bytes,
+        )
+
+    def _run(
+        self,
+        *,
+        executable: Path,
+        arguments: tuple[str, ...],
+        cwd: Path,
+        environment: Mapping[str, str],
+        inherited_handles: tuple[int, ...],
+        input_payload: bytes | None,
+        appcontainer_sid: int | None,
+        timeout_seconds: float,
+        cpu_seconds: int,
+        memory_bytes: int,
+        max_processes: int,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
         """Launch suspended, bind the Job Object, resume, drain, and terminate."""
 
         if not executable.is_file() or not cwd.is_dir():
@@ -419,7 +510,12 @@ class CtypesWindowsProcessApi:
             memory_bytes=memory_bytes,
             max_processes=max_processes,
         )
-        stdin = self._open_null_input()
+        stdin_write: wintypes.HANDLE | None = None
+        stdin: Any
+        if input_payload is None:
+            stdin = self._open_null_input()
+        else:
+            stdin, stdin_write = self._create_input_pipe()
         stdout_read, stdout_write = self._create_pipe()
         stderr_read, stderr_write = self._create_pipe()
         stdout_write_owned: Any = stdout_write
@@ -429,6 +525,8 @@ class CtypesWindowsProcessApi:
         process_created = False
         process_finished = False
         readers_started = False
+        writer_started = False
+        input_failed = threading.Event()
         try:
             child_handles = (
                 _handle_value(stdin),
@@ -442,6 +540,7 @@ class CtypesWindowsProcessApi:
                 stdout=stdout_write_owned,
                 stderr=stderr_write_owned,
                 inherited_handles=child_handles,
+                appcontainer_sid=appcontainer_sid,
             )
             command_line = ctypes.create_unicode_buffer(
                 _windows_command_line((os.fspath(executable), *arguments))
@@ -479,6 +578,8 @@ class CtypesWindowsProcessApi:
                 raise ProcessSupervisionError("resume_failed")
             self._close(process_info.thread)
             process_info.thread = None
+            self._close(stdin)
+            stdin = None
             self._close(stdout_write_owned)
             stdout_write_owned = None
             self._close(stderr_write_owned)
@@ -497,6 +598,16 @@ class CtypesWindowsProcessApi:
             stdout_thread.start()
             stderr_thread.start()
             readers_started = True
+            input_thread: threading.Thread | None = None
+            if stdin_write is not None and input_payload is not None:
+                input_thread = threading.Thread(
+                    target=self._write_pipe,
+                    args=(stdin_write, input_payload, input_failed),
+                    daemon=True,
+                )
+                input_thread.start()
+                writer_started = True
+                stdin_write = None
             wait = int(
                 self._kernel.WaitForSingleObject(
                     process_info.process,
@@ -519,6 +630,10 @@ class CtypesWindowsProcessApi:
             stderr_thread.join(timeout=30)
             if stdout_thread.is_alive() or stderr_thread.is_alive():
                 raise ProcessSupervisionError("pipe_drain_failed")
+            if input_thread is not None:
+                input_thread.join(timeout=30)
+                if input_thread.is_alive() or input_failed.is_set():
+                    raise ProcessSupervisionError("pipe_write_failed")
             if timed_out:
                 return budget.result(reason=ProcessExitReason.TIMED_OUT, exit_code=None)
             exit_code = wintypes.DWORD(_STILL_ACTIVE)
@@ -548,6 +663,7 @@ class CtypesWindowsProcessApi:
             read_handles = () if readers_started else (stdout_read, stderr_read)
             for handle in (
                 stdin,
+                None if writer_started else stdin_write,
                 stdout_write_owned,
                 stderr_write_owned,
                 *read_handles,
@@ -609,6 +725,24 @@ class CtypesWindowsProcessApi:
             raise ProcessSupervisionError("pipe_configuration_failed")
         return read, write
 
+    def _create_input_pipe(self) -> tuple[wintypes.HANDLE, wintypes.HANDLE]:
+        attributes = _SecurityAttributes(
+            length=ctypes.sizeof(_SecurityAttributes),
+            security_descriptor=None,
+            inherit_handle=True,
+        )
+        read = wintypes.HANDLE()
+        write = wintypes.HANDLE()
+        if not self._kernel.CreatePipe(
+            ctypes.byref(read), ctypes.byref(write), ctypes.byref(attributes), 0
+        ):
+            raise ProcessSupervisionError("stdin_creation_failed")
+        if not self._kernel.SetHandleInformation(write, _HANDLE_FLAG_INHERIT, 0):
+            self._close(read)
+            self._close(write)
+            raise ProcessSupervisionError("stdin_configuration_failed")
+        return read, write
+
     def _open_null_input(self) -> wintypes.HANDLE:
         attributes = _SecurityAttributes(
             length=ctypes.sizeof(_SecurityAttributes),
@@ -635,14 +769,18 @@ class CtypesWindowsProcessApi:
         stdout: wintypes.HANDLE,
         stderr: wintypes.HANDLE,
         inherited_handles: tuple[int, ...],
+        appcontainer_sid: int | None,
     ) -> tuple[_StartupInfoExW, Any, Any]:
+        attribute_count = 2 if appcontainer_sid is not None else 1
         size = ctypes.c_size_t()
-        self._kernel.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+        self._kernel.InitializeProcThreadAttributeList(
+            None, attribute_count, 0, ctypes.byref(size)
+        )
         if _last_error() != _ERROR_INSUFFICIENT_BUFFER or size.value == 0:
             raise ProcessSupervisionError("handle_list_size_failed")
         storage = ctypes.create_string_buffer(size.value)
         if not self._kernel.InitializeProcThreadAttributeList(
-            storage, 1, 0, ctypes.byref(size)
+            storage, attribute_count, 0, ctypes.byref(size)
         ):
             raise ProcessSupervisionError("handle_list_initialization_failed")
         handle_array = (wintypes.HANDLE * len(inherited_handles))(*inherited_handles)
@@ -657,6 +795,27 @@ class CtypesWindowsProcessApi:
         ):
             self._kernel.DeleteProcThreadAttributeList(storage)
             raise ProcessSupervisionError("handle_list_configuration_failed")
+        security_capabilities: _SecurityCapabilities | None = None
+        if appcontainer_sid is not None:
+            security_capabilities = _SecurityCapabilities(
+                app_container_sid=ctypes.c_void_p(appcontainer_sid),
+                capabilities=None,
+                capability_count=0,
+                reserved=0,
+            )
+            if not self._kernel.UpdateProcThreadAttribute(
+                storage,
+                0,
+                _PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                ctypes.byref(security_capabilities),
+                ctypes.sizeof(security_capabilities),
+                None,
+                None,
+            ):
+                self._kernel.DeleteProcThreadAttributeList(storage)
+                raise ProcessSupervisionError(
+                    "appcontainer_attribute_configuration_failed"
+                )
         startup = _StartupInfoExW()
         startup.startup_info.cb = ctypes.sizeof(_StartupInfoExW)
         startup.startup_info.flags = _STARTF_USESTDHANDLES
@@ -664,7 +823,7 @@ class CtypesWindowsProcessApi:
         startup.startup_info.stdout = stdout
         startup.startup_info.stderr = stderr
         startup.attribute_list = ctypes.cast(storage, ctypes.c_void_p)
-        return startup, storage, handle_array
+        return startup, storage, (handle_array, security_capabilities)
 
     def _validate_inheritable_handles(self, handles: tuple[int, ...]) -> None:
         for handle in handles:
@@ -694,6 +853,36 @@ class CtypesWindowsProcessApi:
                 if read.value == 0:
                     return
                 budget.add(buffer.raw[: read.value], stdout=stdout)
+        finally:
+            self._close(handle)
+
+    def _write_pipe(
+        self,
+        handle: wintypes.HANDLE,
+        payload: bytes,
+        failed: threading.Event,
+    ) -> None:
+        try:
+            offset = 0
+            while offset < len(payload):
+                selected = payload[offset : offset + 64 * 1024]
+                buffer = ctypes.create_string_buffer(selected)
+                written = wintypes.DWORD()
+                if not self._kernel.WriteFile(
+                    handle,
+                    buffer,
+                    len(selected),
+                    ctypes.byref(written),
+                    None,
+                ):
+                    if _last_error() == _ERROR_BROKEN_PIPE:
+                        return
+                    failed.set()
+                    return
+                if written.value <= 0:
+                    failed.set()
+                    return
+                offset += int(written.value)
         finally:
             self._close(handle)
 
@@ -741,7 +930,7 @@ class _OutputBudget:
             )
 
 
-def probe_windows_process_backend() -> WindowsProcessApi:
+def probe_windows_process_backend() -> CtypesWindowsProcessApi:
     """Return a probed native process API without launching a child."""
 
     api = CtypesWindowsProcessApi()

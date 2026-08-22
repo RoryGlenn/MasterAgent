@@ -16,6 +16,10 @@ from master_agent.platform_runtime.windows.atomic import (
     WindowsAtomicPublicationRecoveryBackend,
     probe_windows_atomic_backend,
 )
+from master_agent.platform_runtime.windows.capsules import (
+    WINDOWS_CAPSULE_UNAVAILABLE_REASON,
+    probe_windows_capsule_backend,
+)
 from master_agent.platform_runtime.windows.credentials import (
     WindowsCredentialStorageBackend,
     probe_windows_credential_storage_backend,
@@ -62,6 +66,13 @@ def build_windows_runtime() -> PlatformRuntime:
     process_api = probe_windows_process_backend()
     process = WindowsProcessSupervisionBackend(api=process_api)
     try:
+        capsules = probe_windows_capsule_backend(
+            filesystem=filesystem,
+            process=process_api,
+        )
+    except PlatformCapabilityUnavailable:
+        capsules = None
+    try:
         git = probe_windows_git_backend(filesystem=filesystem, process=process)
     except PlatformCapabilityUnavailable:
         git = None
@@ -72,7 +83,7 @@ def build_windows_runtime() -> PlatformRuntime:
         (PlatformContract.CREDENTIAL_STORAGE, credentials),
         (PlatformContract.PROCESS_SUPERVISION, process),
         (PlatformContract.TRUSTED_GIT, git),
-        (PlatformContract.CAPSULE_ISOLATION, None),
+        (PlatformContract.CAPSULE_ISOLATION, capsules),
     )
     statuses = tuple(
         PlatformContractStatus(
@@ -89,7 +100,11 @@ def build_windows_runtime() -> PlatformRuntime:
                 else (
                     WINDOWS_GIT_UNAVAILABLE_REASON
                     if contract is PlatformContract.TRUSTED_GIT
-                    else f"native windows {contract} backend is not implemented"
+                    else (
+                        WINDOWS_CAPSULE_UNAVAILABLE_REASON
+                        if contract is PlatformContract.CAPSULE_ISOLATION
+                        else f"native windows {contract} backend is not implemented"
+                    )
                 )
             ),
         )
@@ -107,4 +122,5 @@ def build_windows_runtime() -> PlatformRuntime:
         credential_storage=credentials,
         process_supervision=process,
         trusted_git=git,
+        capsule_isolation=capsules,
     )

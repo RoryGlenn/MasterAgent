@@ -2034,9 +2034,19 @@ class PlatformRuntimeTests(unittest.TestCase):
                     bubblewrap=str(explicit_bubblewrap),
                 )
                 production_isolated = isolated_worker.production_isolated
+                identity_keys = tuple(isolated_worker.identity_components)
 
         self.assertEqual(isolated_worker.backend, "linux-bubblewrap")
         self.assertTrue(production_isolated)
+        self.assertEqual(
+            identity_keys,
+            (
+                "backend",
+                "worker_sha256",
+                "interpreter_sha256",
+                "sandbox_sha256",
+            ),
+        )
         discovery.assert_not_called()
         self.assertEqual(isolated_worker._bubblewrap, explicit_bubblewrap.resolve())
 

@@ -1,7 +1,7 @@
-"""Compatibility entrypoint for the POSIX capability-capsule worker.
+"""Compatibility entrypoint for the selected capability-capsule worker.
 
 Importing this platform-neutral module does not load ``resource``.  Capsule
-execution selects and validates the POSIX worker explicitly through the
+execution selects and validates the native worker explicitly through the
 platform runtime before this compatibility entrypoint can run.
 """
 
@@ -17,7 +17,7 @@ from master_agent.platform_runtime import (
 
 
 def main() -> int:
-    """Delegate to the selected POSIX worker only when explicitly executed."""
+    """Delegate to the selected native worker only when explicitly executed."""
 
     try:
         require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
@@ -26,9 +26,16 @@ def main() -> int:
     except PlatformCapabilityUnavailable as error:
         print(f"error: PlatformCapabilityUnavailable: {error}", file=sys.stderr)
         return 2
-    from master_agent.platform_runtime.posix.capsule_worker import main as posix_main
+    if sys.platform == "win32":
+        from master_agent.platform_runtime.windows.capsule_worker import (
+            main as worker_main,
+        )
+    else:
+        from master_agent.platform_runtime.posix.capsule_worker import (
+            main as worker_main,
+        )
 
-    return posix_main()
+    return worker_main()
 
 
 if __name__ == "__main__":

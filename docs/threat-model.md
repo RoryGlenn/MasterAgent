@@ -445,9 +445,11 @@ Controls:
 - no generic shell connector;
 - no routable local Git mutation or generic repository command surface;
 - raw CLI plugin execution remains disabled;
-- promoted pure capsules use an AST-restricted language in Linux bubblewrap
-  with no network, no ambient environment, no import/file/process authority,
-  and bounded resources; and
+- promoted pure capsules use an AST-restricted language in Linux bubblewrap or
+  a native Windows zero-capability AppContainer with no network, no ambient
+  environment, no undeclared host-file/process authority, and bounded
+  resources; Windows must return signed OS-level denial evidence for host-file,
+  IPv4, IPv6, localhost, ambient-secret, and child-process probes; and
 - provider destinations, credentials, side effects, and capsule dependencies
   are rejected before connector construction in the demonstrated runtime;
 - each credential lease binds the exact plan fingerprint, action ID, normalized
