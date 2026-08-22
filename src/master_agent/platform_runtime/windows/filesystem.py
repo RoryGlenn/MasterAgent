@@ -87,7 +87,17 @@ WINDOWS_DANGEROUS_WRITE_MASK = (
 
 LOCAL_SYSTEM_SID = "S-1-5-18"
 BUILTIN_ADMINISTRATORS_SID = "S-1-5-32-544"
+OWNER_RIGHTS_SID = "S-1-3-4"
 TRUSTED_INSTALLER_SID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+_CONTEXTUAL_SECURITY_SIDS = frozenset(
+    {
+        "S-1-3-0",  # CREATOR OWNER
+        "S-1-3-1",  # CREATOR GROUP
+        "S-1-3-2",  # CREATOR OWNER SERVER
+        "S-1-3-3",  # CREATOR GROUP SERVER
+        OWNER_RIGHTS_SID,
+    }
+)
 
 # On retained directories, these two object-specific rights permit creating an
 # unrelated child but cannot replace, rename, delete, or mutate the selected
@@ -418,6 +428,17 @@ def canonicalize_windows_sid(value: str) -> str:
     )
 
 
+def _canonicalize_trusted_principal_sids(values: Iterable[str]) -> tuple[str, ...]:
+    """Normalize configured principals and reject contextual SID aliases."""
+
+    normalized = tuple(canonicalize_windows_sid(item) for item in values)
+    if _CONTEXTUAL_SECURITY_SIDS.intersection(normalized):
+        raise ValueError(
+            "Windows contextual SID aliases cannot be configured as trusted principals"
+        )
+    return normalized
+
+
 def validate_windows_drive_path(path: str | os.PathLike[str]) -> ValidatedWindowsPath:
     """Reject alternate namespaces and return one strict absolute drive path."""
 
@@ -487,6 +508,11 @@ def evaluate_windows_dacl(
         trusted = frozenset(canonicalize_windows_sid(item) for item in trusted_sids)
     except (TypeError, ValueError):
         return WindowsDaclEvaluation(False, "Windows DACL contains an invalid SID")
+    if _CONTEXTUAL_SECURITY_SIDS.intersection(trusted):
+        return WindowsDaclEvaluation(
+            False,
+            "Windows trust policy treats a contextual SID as a standalone principal",
+        )
     if dacl.raw is None:
         return WindowsDaclEvaluation(False, "Windows DACL is NULL")
     if not dacl.valid:
@@ -495,6 +521,12 @@ def evaluate_windows_dacl(
         return WindowsDaclEvaluation(False, "Windows file owner SID is not trusted")
     for ace in dacl.allow_aces:
         if ace.flags & INHERIT_ONLY_ACE:
+            continue
+        # OWNER RIGHTS is a well-known alias for the already-validated object
+        # owner, not an independently authorized principal.  Windows and
+        # CPython use it to express private 0o700-style owner access.  Any
+        # owner change is still rejected above and during every revalidation.
+        if ace.sid == OWNER_RIGHTS_SID and owner in trusted:
             continue
         if ace.sid in trusted:
             continue
@@ -522,7 +554,7 @@ def windows_trust_policy_sha256(
     """Hash the exact SID set and ancestor/public/private admission mode."""
 
     selected_policy = _coerce_dacl_policy(policy)
-    normalized = tuple(sorted(canonicalize_windows_sid(item) for item in trusted_sids))
+    normalized = tuple(sorted(_canonicalize_trusted_principal_sids(trusted_sids)))
     payload = b"master-agent-windows-trust-v2\0"
     payload += selected_policy.value.encode("ascii") + b"\0"
     payload += b"\0".join(item.encode("ascii") for item in normalized)
@@ -600,7 +632,7 @@ def build_protected_windows_sddl(
     """Build the immutable protected full-control DACL used at file creation."""
 
     owner = canonicalize_windows_sid(owner_sid)
-    trusted = frozenset(canonicalize_windows_sid(item) for item in trusted_sids)
+    trusted = frozenset(_canonicalize_trusted_principal_sids(trusted_sids))
     if owner not in trusted:
         raise ValueError("Windows file owner SID must be part of the trust policy")
     ordered = (owner, *sorted(trusted - {owner}))
@@ -1361,9 +1393,10 @@ class WindowsSecureFilesystemBackend:
     ) -> None:
         if not isinstance(additional_trusted_sids, tuple):
             raise TypeError("additional trusted Windows SIDs must be a tuple")
-        self._additional_trusted_sids = tuple(
-            canonicalize_windows_sid(item) for item in additional_trusted_sids
+        normalized_additional_sids = _canonicalize_trusted_principal_sids(
+            additional_trusted_sids
         )
+        self._additional_trusted_sids = normalized_additional_sids
         self._injected_api = _api
         self._api_lock = threading.Lock()
         self._selected_api: _WindowsFilesystemApi | None = None

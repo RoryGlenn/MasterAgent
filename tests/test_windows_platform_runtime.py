@@ -33,6 +33,7 @@ from master_agent.platform_runtime.windows import (
     FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_ATTRIBUTE_UNPINNED,
     LOCAL_SYSTEM_SID,
+    OWNER_RIGHTS_SID,
     TRUSTED_INSTALLER_SID,
     WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
     WINDOWS_DANGEROUS_WRITE_MASK,
@@ -416,6 +417,66 @@ assert 'msvcrt' not in sys.modules
                 require_private=False,
             ).trusted
         )
+        owner_rights = WindowsDacl(
+            raw=b"owner-rights",
+            valid=True,
+            allow_aces=(
+                WindowsAccessAllowedAce(
+                    OWNER_RIGHTS_SID,
+                    WINDOWS_DANGEROUS_WRITE_MASK,
+                ),
+            ),
+        )
+        self.assertTrue(
+            evaluate_windows_dacl(
+                owner_sid=CURRENT_SID,
+                dacl=owner_rights,
+                trusted_sids=trusted_sids,
+                require_private=True,
+            ).trusted
+        )
+        untrusted_owner = evaluate_windows_dacl(
+            owner_sid=OTHER_SID,
+            dacl=owner_rights,
+            trusted_sids=trusted_sids,
+            require_private=True,
+        )
+        self.assertFalse(untrusted_owner.trusted)
+        self.assertEqual(
+            untrusted_owner.reason,
+            "Windows file owner SID is not trusted",
+        )
+        configured_alias = evaluate_windows_dacl(
+            owner_sid=CURRENT_SID,
+            dacl=owner_rights,
+            trusted_sids=(*trusted_sids, OWNER_RIGHTS_SID),
+            require_private=True,
+        )
+        self.assertFalse(configured_alias.trusted)
+        self.assertEqual(
+            configured_alias.reason,
+            "Windows trust policy treats a contextual SID as a standalone principal",
+        )
+        creator_owner = evaluate_windows_dacl(
+            owner_sid=CURRENT_SID,
+            dacl=WindowsDacl(
+                raw=b"creator-owner",
+                valid=True,
+                allow_aces=(
+                    WindowsAccessAllowedAce(
+                        "S-1-3-0",
+                        WINDOWS_DANGEROUS_WRITE_MASK,
+                    ),
+                ),
+            ),
+            trusted_sids=trusted_sids,
+            require_private=True,
+        )
+        self.assertFalse(creator_owner.trusted)
+        self.assertEqual(
+            creator_owner.reason,
+            "Windows DACL grants write-capable access to an untrusted SID",
+        )
         self.assertTrue(
             evaluate_windows_dacl(
                 owner_sid=CURRENT_SID,
@@ -745,6 +806,23 @@ assert 'msvcrt' not in sys.modules
                 owner_sid=CURRENT_SID,
                 trusted_sids=(LOCAL_SYSTEM_SID,),
             )
+        for contextual_sid in ("S-1-3-0", "S-1-3-1", "S-1-3-2", "S-1-3-3", "S-1-3-4"):
+            with (
+                self.subTest(contextual_sid=contextual_sid),
+                self.assertRaisesRegex(ValueError, "cannot be configured"),
+            ):
+                build_protected_windows_sddl(
+                    owner_sid=CURRENT_SID,
+                    trusted_sids=(CURRENT_SID, contextual_sid),
+                )
+            with (
+                self.subTest(contextual_sid=contextual_sid),
+                self.assertRaisesRegex(ValueError, "cannot be configured"),
+            ):
+                windows_trust_policy_sha256(
+                    (CURRENT_SID, contextual_sid),
+                    policy=WindowsDaclPolicy.TARGET_PRIVATE,
+                )
 
     def test_partial_runtime_status_is_complete_without_loading_native_state(
         self,
@@ -969,6 +1047,15 @@ class WindowsPinnedPathTests(unittest.TestCase):
             )
 
     def test_private_dacl_is_default_and_additional_sid_is_explicit(self) -> None:
+        for contextual_sid in ("S-1-3-0", "S-1-3-1", "S-1-3-2", "S-1-3-3", "S-1-3-4"):
+            with (
+                self.subTest(contextual_sid=contextual_sid),
+                self.assertRaisesRegex(ValueError, "cannot be configured"),
+            ):
+                WindowsSecureFilesystemBackend(
+                    additional_trusted_sids=(contextual_sid,),
+                )
+
         api = _FakeFilesystemApi()
         api.untrusted_paths.add(r"C:\Secure\note.txt")
         backend = WindowsSecureFilesystemBackend(_api=api)
@@ -1351,6 +1438,10 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                         target_handle.value
                     )
                 self.assertFalse(inherited_security.dacl_protected)
+                self.assertIn(
+                    OWNER_RIGHTS_SID,
+                    {ace.sid for ace in inherited_security.dacl.allow_aces},
+                )
                 with self.assertRaises(OSError):
                     path.unlink()
                 with pinned.duplicate() as duplicate:
