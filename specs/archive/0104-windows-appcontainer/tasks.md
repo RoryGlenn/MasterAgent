@@ -1,7 +1,7 @@
 # Tasks
 
-- [x] Define the Windows AppContainer requirement, platform delta, promotion
-  identity delta, and design.
+- [x] Define the Windows AppContainer requirement, including platform and
+  promotion-identity behavior, and its design.
 - [x] Extend the native isolation and worker-launch contracts without changing
   Linux behavior.
 - [x] Implement AppContainer profile, private runtime projection, DACL, handle,
@@ -12,6 +12,7 @@
   denial, quota, tamper, and fail-closed evidence.
 - [x] Update release validation, hosted CI, semantic routing, and current
   documentation.
-- [ ] Run focused/full tests, Ruff, mypy, specification, semantic, release,
+- [x] Run focused/full tests, Ruff, mypy, specification, semantic, release,
   installed-artifact, native Windows, and immutable-range security validation.
-- [ ] Apply the documentation completion gate and archive the verified change.
+- [x] Apply the documentation completion gate and prepare the verified change
+  for archival.
