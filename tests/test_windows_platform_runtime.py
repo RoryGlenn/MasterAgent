@@ -736,7 +736,7 @@ assert 'msvcrt' not in sys.modules
             api.flush_directory(0x1234)
         self.assertEqual(failure.exception.errno, 5)
 
-    def test_native_rename_uses_the_aligned_ex_structure(self) -> None:
+    def test_native_rename_uses_aligned_structures_and_exact_classes(self) -> None:
         observed: list[tuple[int, int, int, int, int, bytes]] = []
 
         def replace_file(
@@ -778,7 +778,7 @@ assert 'msvcrt' not in sys.modules
             [
                 (
                     0x1234,
-                    22,
+                    3,
                     0x5678,
                     0,
                     ctypes.sizeof(windows_native._FILE_RENAME_INFO_EX),
@@ -795,9 +795,13 @@ assert 'msvcrt' not in sys.modules
             replace_existing=True,
         )
         self.assertEqual(
-            observed[0][3],
-            windows_native._FILE_RENAME_POSIX_SEMANTICS
-            | windows_native._FILE_RENAME_REPLACE_IF_EXISTS,
+            observed[0][1:4],
+            (
+                22,
+                0x5678,
+                windows_native._FILE_RENAME_POSIX_SEMANTICS
+                | windows_native._FILE_RENAME_REPLACE_IF_EXISTS,
+            ),
         )
 
     def test_native_ordinal_comparison_uses_null_terminated_unicode_inputs(

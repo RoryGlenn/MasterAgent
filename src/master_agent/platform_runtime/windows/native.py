@@ -64,6 +64,7 @@ _FILE_WRITE_THROUGH = 0x00000002
 _FILE_NON_DIRECTORY_FILE = 0x00000040
 _FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
 _STATUS_OBJECT_NAME_COLLISION = 0xC0000035
+_FILE_RENAME_INFO_CLASS = 3
 _FILE_DISPOSITION_INFO_CLASS = 4
 _FILE_RENAME_INFO_EX_CLASS = 22
 _FILE_RENAME_REPLACE_IF_EXISTS = 0x00000001
@@ -789,9 +790,15 @@ class NativeWindowsApi:
         ctypes.memmove(
             ctypes.addressof(buffer) + file_name_offset, encoded, len(encoded)
         )
+        # FILE_RENAME_POSIX_SEMANTICS is defined only for replacement.  Keep
+        # create-only publication on the base class so a zero-flag rename is
+        # accepted consistently while still failing atomically on collision.
+        information_class = (
+            _FILE_RENAME_INFO_EX_CLASS if replace_existing else _FILE_RENAME_INFO_CLASS
+        )
         if not self._kernel32.SetFileInformationByHandle(
             _HANDLE(source_handle),
-            _FILE_RENAME_INFO_EX_CLASS,
+            information_class,
             buffer,
             size,
         ):
