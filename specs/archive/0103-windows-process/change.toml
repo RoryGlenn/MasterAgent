@@ -1,7 +1,7 @@
 schema = "master-agent/change@1"
 id = "0103-windows-process"
 title = "Native Windows Job Object process supervision"
-status = "implementing"
+status = "archived"
 github_issue = 103
 created = "2026-08-22"
 updated = "2026-08-22"

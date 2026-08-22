@@ -8,7 +8,7 @@
 - [x] Add portable contract tests and real standard-user Windows tests for
   environment, handles, timeout tree termination, resource limits, output, and
   failure behavior.
-- [ ] Update documentation, semantic ownership, and hosted Windows CI.
-- [ ] Run focused/full tests, Ruff, mypy, specification, semantic, release,
+- [x] Update documentation, semantic ownership, and hosted Windows CI.
+- [x] Run focused/full tests, Ruff, mypy, specification, semantic, release,
   installed-artifact, native Windows, and immutable-range security validation.
-- [ ] Apply the documentation completion gate and archive the verified change.
+- [x] Apply the documentation completion gate and archive the verified change.
