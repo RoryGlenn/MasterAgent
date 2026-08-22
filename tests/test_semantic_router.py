@@ -8,6 +8,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import zlib
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -15,12 +16,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.semantic_router import (
+    MANIFEST_PATH,
     REQUIRED_PLATFORM_CAPABILITIES,
     ManifestError,
     SemanticManifest,
     collect_inventory,
     generate_index,
     load_manifest,
+    load_manifest_at_revision,
     main,
     render_semantic_index,
     routing_metrics,
@@ -91,6 +94,135 @@ class SemanticRouterTests(unittest.TestCase):
             (self.root / manifest.generated_document).read_text(encoding="utf-8"),
             render_semantic_index(manifest),
         )
+
+    def test_bound_manifest_loads_from_exact_committed_revision(self) -> None:
+        """Live routing parses the immutable manifest from its bound commit."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+
+        manifest = load_manifest_at_revision(self.root, revision)
+
+        self.assertEqual(manifest, load_manifest(self.root))
+
+    def test_bound_manifest_supports_sha256_repositories(self) -> None:
+        """Content-address verification follows the repository object format."""
+
+        self._git("init", "--object-format=sha256", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "sha256 manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+
+        manifest = load_manifest_at_revision(self.root, revision)
+
+        self.assertEqual(len(revision), 64)
+        self.assertEqual(manifest, load_manifest(self.root))
+
+    def test_bound_manifest_rejects_valid_worktree_drift(self) -> None:
+        """A transient valid manifest cannot replace the committed authority."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+        self._rewrite(
+            ".ai/semantic-router.toml",
+            lambda value: value + "\n# transient valid manifest\n",
+        )
+
+        with self.assertRaisesRegex(ManifestError, "manifest to match bound HEAD"):
+            load_manifest_at_revision(self.root, revision)
+
+    def test_bound_manifest_rejects_staged_drift_hidden_from_worktree(self) -> None:
+        """A staged manifest cannot differ while the worktree looks committed."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+        manifest_path = self.root / ".ai/semantic-router.toml"
+        committed = manifest_path.read_bytes()
+        manifest_path.write_bytes(committed + b"\n# staged manifest drift\n")
+        self._git("add", ".ai/semantic-router.toml")
+        manifest_path.write_bytes(committed)
+
+        with self.assertRaisesRegex(ManifestError, "manifest to match bound HEAD"):
+            load_manifest_at_revision(self.root, revision)
+
+    def test_bound_manifest_rejects_unstaged_executable_mode_drift(self) -> None:
+        """Matching bytes cannot conceal a changed worktree executable bit."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+        manifest_path = self.root / ".ai/semantic-router.toml"
+        content = manifest_path.read_bytes()
+        manifest_path.unlink()
+        manifest_path.write_bytes(content)
+        manifest_path.chmod(0o755)
+
+        with self.assertRaisesRegex(ManifestError, "manifest to match bound HEAD"):
+            load_manifest_at_revision(self.root, revision)
+
+    def test_bound_manifest_rejects_physical_object_substitution(self) -> None:
+        """Commit paths are trusted only after object-address verification."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+        blob = self._git("rev-parse", f"HEAD:{MANIFEST_PATH}")
+        object_path = self.root / ".git" / "objects" / blob[:2] / blob[2:]
+        self.assertTrue(object_path.is_file())
+        malicious = b"version = 1\n"
+        object_path.chmod(0o600)
+        object_path.write_bytes(
+            zlib.compress(f"blob {len(malicious)}\0".encode("ascii") + malicious)
+        )
+
+        with self.assertRaisesRegex(ManifestError, "content-address verification"):
+            load_manifest_at_revision(self.root, revision)
+
+    def test_bound_manifest_rejects_physical_commit_substitution(self) -> None:
+        """A valid-looking commit under the wrong object ID is never authority."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", ".ai/semantic-router.toml")
+        self._git("commit", "-qm", "manifest fixture")
+        revision = self._git("rev-parse", "HEAD")
+        original = subprocess.run(
+            ("git", "cat-file", "commit", revision),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        object_path = self.root / ".git" / "objects" / revision[:2] / revision[2:]
+        self.assertTrue(object_path.is_file())
+        malicious = original + b"\nOBJECT_SUBSTITUTION_SENTINEL\n"
+        object_path.chmod(0o600)
+        object_path.write_bytes(
+            zlib.compress(f"commit {len(malicious)}\0".encode("ascii") + malicious)
+        )
+
+        with self.assertRaisesRegex(ManifestError, "content-address verification"):
+            load_manifest_at_revision(self.root, revision)
 
     def test_generated_document_is_pinned_to_semantic_index(self) -> None:
         manifest = load_manifest(self.root)

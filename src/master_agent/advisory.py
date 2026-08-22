@@ -27,6 +27,21 @@ EXPECTED_PROFILE_PATHS = frozenset(
 
 _PARENT_TOOLS = ("read", "search", "edit", "execute")
 _CHILD_TOOLS = ("read", "search")
+_PROFILE_CONTRACTS: dict[Path, tuple[str, tuple[str, ...], bool, bool]] = {
+    PARENT_PROFILE_PATH: ("MasterAgent", _PARENT_TOOLS, True, True),
+    RESEARCHER_PROFILE_PATH: (
+        "MasterAgent Read Researcher",
+        _CHILD_TOOLS,
+        False,
+        True,
+    ),
+    PLAN_REVIEWER_PROFILE_PATH: (
+        "MasterAgent Plan Reviewer",
+        _CHILD_TOOLS,
+        False,
+        True,
+    ),
+}
 _FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
 _SEMANTIC_ROUTE_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 _MAX_PROFILE_BYTES = 128 * 1024
@@ -740,28 +755,26 @@ def validate_profile_inventory(root: Path) -> tuple[str, ...]:
     if unexpected := sorted(observed - EXPECTED_PROFILE_PATHS):
         errors.append("unreviewed agent profiles: " + ", ".join(map(str, unexpected)))
 
-    expected: dict[Path, tuple[str, tuple[str, ...], bool, bool]] = {
-        PARENT_PROFILE_PATH: ("MasterAgent", _PARENT_TOOLS, True, True),
-        RESEARCHER_PROFILE_PATH: (
-            "MasterAgent Read Researcher",
-            _CHILD_TOOLS,
-            False,
-            True,
-        ),
-        PLAN_REVIEWER_PROFILE_PATH: (
-            "MasterAgent Plan Reviewer",
-            _CHILD_TOOLS,
-            False,
-            True,
-        ),
-    }
+    profiles: dict[Path, AgentProfile] = {}
     for relative in sorted(EXPECTED_PROFILE_PATHS):
         try:
             profile = _load_profile(root / relative, relative)
         except ProfileValidationError as error:
             errors.append(str(error))
             continue
-        name, tools, user_invocable, model_disabled = expected[relative]
+        profiles[relative] = profile
+    errors.extend(_profile_contract_errors(profiles))
+    return tuple(sorted(set(errors)))
+
+
+def _profile_contract_errors(
+    profiles: Mapping[Path, AgentProfile],
+) -> tuple[str, ...]:
+    """Return contract violations for already parsed exact profile content."""
+
+    errors: list[str] = []
+    for relative, profile in sorted(profiles.items()):
+        name, tools, user_invocable, model_disabled = _PROFILE_CONTRACTS[relative]
         if profile.name != name:
             errors.append(f"{relative} must be named {name!r}")
         if profile.tools != tools:
@@ -783,6 +796,38 @@ def validate_profile_inventory(root: Path) -> tuple[str, ...]:
                         f"{pattern.pattern}"
                     )
     return tuple(sorted(set(errors)))
+
+
+def load_agent_inventory_from_texts(
+    profile_texts: Mapping[Path, str],
+) -> AgentInventory:
+    """Validate and load one caller-supplied immutable profile inventory."""
+
+    observed = set(profile_texts)
+    errors: list[str] = []
+    if missing := sorted(EXPECTED_PROFILE_PATHS - observed):
+        errors.append("missing agent profiles: " + ", ".join(map(str, missing)))
+    if unexpected := sorted(observed - EXPECTED_PROFILE_PATHS):
+        errors.append("unreviewed agent profiles: " + ", ".join(map(str, unexpected)))
+    profiles: dict[Path, AgentProfile] = {}
+    if not errors:
+        for relative in sorted(EXPECTED_PROFILE_PATHS):
+            text = profile_texts[relative]
+            if not isinstance(text, str):
+                errors.append(f"{relative} content is invalid")
+                continue
+            try:
+                profiles[relative] = _parse_profile_text(text, relative)
+            except ProfileValidationError as error:
+                errors.append(str(error))
+    errors.extend(_profile_contract_errors(profiles))
+    if errors:
+        raise ProfileValidationError("; ".join(sorted(set(errors))))
+    return AgentInventory(
+        profiles[PARENT_PROFILE_PATH],
+        profiles[RESEARCHER_PROFILE_PATH],
+        profiles[PLAN_REVIEWER_PROFILE_PATH],
+    )
 
 
 def load_agent_inventory(root: Path) -> AgentInventory:
@@ -876,6 +921,14 @@ def _validate_report(report: AdvisoryReport) -> None:
 
 def _load_profile(path: Path, relative: Path) -> AgentProfile:
     text = _read_profile(path, relative)
+    return _parse_profile_text(text, relative)
+
+
+def _parse_profile_text(text: str, relative: Path) -> AgentProfile:
+    """Parse one bounded profile from a trusted caller-selected byte source."""
+
+    if "\x00" in text or len(text.encode("utf-8")) > _MAX_PROFILE_BYTES:
+        raise ProfileValidationError(f"{relative} exceeds the byte limit")
     lines = text.splitlines()
     if not lines or lines[0] != "---":
         raise ProfileValidationError(f"{relative} must start with frontmatter")

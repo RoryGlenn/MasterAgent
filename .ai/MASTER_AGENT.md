@@ -101,8 +101,9 @@ they do not grant authority.
   cross-process maximum of three research attempts and one review; exactly one
   explicitly preselected SDK specialist; repository-owned route-scoped
   read/search tools only; ambient config/skill/MCP discovery disabled; exact
-  task, profile, path inventory, HEAD, index, tracked, staged, and untracked-byte
-  binding; structured untrusted output; and independent scope-aware parent
+  task, immutable profile, path inventory, HEAD, raw index, tracked, staged, and
+  untracked-byte binding with content-addressed Git object verification and no
+  conversion or network path; structured untrusted output; and independent scope-aware parent
   citation re-validation.
 - The selected parent MUST resolve the semantic route before delegation. A
   child receives only its own fixed checked-in profile, the parent-provided
@@ -112,9 +113,13 @@ they do not grant authority.
   target selection, plan construction, and final evidence re-validation.
 - The live runner MUST fully validate the semantic manifest and exact route ID
   before worker construction. It binds the route ID and selected-only canonical
-  navigation slice into task and state digests; it never sends aliases, routing
-  fixtures, agent-registry entries, sibling metadata, the full manifest, or the
-  generated index to a child.
+  navigation slice into task and state digests. The manifest MUST be loaded from
+  the exact immutable HEAD revision captured inside the complete repository
+  binding; the exact profile inventory MUST be loaded from that same verified
+  revision; and their index and worktree bytes MUST match it. The worker's first
+  binding MUST match the same repository digest before SDK client creation. The
+  runner never sends aliases, routing fixtures, agent-registry entries, sibling
+  metadata, the full manifest, or the generated index to a child.
 - If the optional SDK is unavailable, unauthenticated, incompatible, stale, a
   specialist call fails, or a budget is exhausted, complete the same work directly in the selected parent.
   Adapter failure is never a setup blocker and never authorizes another host

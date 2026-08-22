@@ -115,13 +115,16 @@ handling, and independent verification.
   depth one, authenticated cross-process three-research/one-review counters,
   context minimization, profile-derived dispatch, a fully validated exact
   parent-selected `--route ROUTE_ID`, required path scope, repository-owned
-  scoped SDK tools, route/tracked/staged/untracked-content binding,
+  scoped SDK tools, content-address-verified immutable-HEAD route/profile and
+  raw tracked/staged/untracked-content binding,
   untrusted-output validation, and scope-aware parent citation re-read. Global
   policy, the full semantic manifest/index, and parent or sibling agent profiles
   are rejected from the child-readable path scope.
 - Real runner tests cover restart, independent and concurrent processes,
-  missing/unknown/duplicate route rejection, untracked-file mutation, scan
-  bounds, parent-only/ignored/out-of-scope paths, and content-minimized fallback.
+  missing/unknown/duplicate route rejection, transient manifest ABA swaps,
+  untracked-file mutation, scan bounds, clean-filter, replacement-ref,
+  worktree-redirect, lazy-fetch and physical-object-substitution attacks,
+  parent-only/ignored/out-of-scope paths, and content-minimized fallback.
 - Adversarial fixtures prove no filesystem, environment, network, provider,
   credential, approval, audit, target, recipient, connector, tenant, or
   `ChangePlan` authority crosses the advisory boundary.

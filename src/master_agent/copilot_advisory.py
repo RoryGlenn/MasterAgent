@@ -28,12 +28,14 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
 
 from master_agent.advisory import (
+    EXPECTED_PROFILE_PATHS,
     AdvisoryDispatcher,
     AdvisoryEnvelope,
     AdvisoryReport,
     AdvisoryRole,
+    AgentInventory,
     AgentProfile,
-    load_agent_inventory,
+    load_agent_inventory_from_texts,
 )
 
 _READ_ONLY_SDK_TOOLS = (
@@ -47,8 +49,14 @@ _MAX_CITATIONS = 64
 _MAX_ITEM_TEXT = 8 * 1024
 _MAX_SCOPE_PATHS = 64
 _MAX_GIT_HEAD_BYTES = 4096
-_MAX_GIT_STATUS_BYTES = 2 * 1024 * 1024
-_MAX_GIT_DIFF_BYTES = 8 * 1024 * 1024
+_MAX_GIT_INDEX_BYTES = 4 * 1024 * 1024
+_MAX_GIT_PROFILE_BYTES = 128 * 1024
+_MAX_GIT_COMMIT_BYTES = 2 * 1024 * 1024
+_MAX_GIT_TREE_BYTES = 4 * 1024 * 1024
+_MAX_GIT_TREE_ENTRIES = 50_000
+_MAX_TRACKED_FILES = 8192
+_MAX_TRACKED_FILE_BYTES = 8 * 1024 * 1024
+_MAX_TRACKED_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_UNTRACKED_LIST_BYTES = 2 * 1024 * 1024
 _MAX_UNTRACKED_FILES = 2048
 _MAX_UNTRACKED_PATH_BYTES = 4096
@@ -110,6 +118,14 @@ class AdvisoryStateBinding:
     profile_digest: str
     scope_digest: str
     route_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryRepositoryState:
+    """Stable repository digest and the exact commit contained in that state."""
+
+    digest: str
+    head_revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -882,21 +898,32 @@ def _sha256_text(value: str) -> str:
 def _run_git(root: Path, *arguments: str, max_bytes: int) -> bytes:
     command = (
         "git",
+        "--no-pager",
+        f"--work-tree={root}",
         "-c",
-        "core.quotepath=false",
+        f"core.hooksPath={os.devnull}",
         "-c",
         "core.fsmonitor=false",
         "-c",
-        "core.hooksPath=/dev/null",
+        "core.untrackedCache=false",
+        "-c",
+        f"core.attributesFile={os.devnull}",
+        "-c",
+        f"core.excludesFile={os.devnull}",
         "-c",
         "diff.external=",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.ext.allow=never",
         *arguments,
     )
     try:
         process = subprocess.Popen(
             command,
             cwd=root,
-            env=_git_environment(),
+            env=_git_environment(root),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
@@ -955,17 +982,254 @@ def _run_git(root: Path, *arguments: str, max_bytes: int) -> bytes:
     return bytes(output)
 
 
-def _git_environment() -> dict[str, str]:
+def _git_environment(root: Path) -> dict[str, str]:
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
-    environment["GIT_OPTIONAL_LOCKS"] = "0"
-    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment.update(
+        {
+            "GIT_ALLOW_PROTOCOL": "",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": str(root.parent),
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
+    )
     return environment
 
 
 def repository_state_digest(root: Path) -> str:
     """Return one stable bounded digest of complete Git and untracked state."""
+
+    return repository_state_binding(root).digest
+
+
+def load_agent_inventory_at_revision(root: Path, revision: str) -> AgentInventory:
+    """Load the exact validated agent profiles from one immutable commit."""
+
+    root = root.resolve(strict=True)
+    entries = _verified_tree_at_revision(
+        root,
+        revision,
+        (b".github", b"agents"),
+    )
+    expected = {path.name.encode("utf-8") for path in EXPECTED_PROFILE_PATHS}
+    observed = {name for name in entries if name.endswith(b".md")}
+    if observed != expected:
+        raise CopilotRepositoryScanRejected(
+            "immutable agent profile inventory is incomplete or unexpected"
+        )
+    texts: dict[Path, str] = {}
+    for relative in sorted(EXPECTED_PROFILE_PATHS):
+        name = relative.name.encode("utf-8")
+        mode, object_id = entries[name]
+        if mode not in {b"100644", b"100755"}:
+            raise CopilotRepositoryScanRejected(
+                "immutable agent profile is not a regular Git blob"
+            )
+        payload = _verified_git_object(
+            root,
+            "blob",
+            object_id,
+            max_bytes=_MAX_GIT_PROFILE_BYTES,
+        )
+        _require_index_and_worktree_blob(root, relative, mode, object_id, payload)
+        try:
+            texts[relative] = payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise CopilotRepositoryScanRejected(
+                "immutable agent profile is not valid UTF-8"
+            ) from error
+    return load_agent_inventory_from_texts(texts)
+
+
+def _verified_tree_at_revision(
+    root: Path,
+    revision: str,
+    components: tuple[bytes, ...],
+) -> dict[bytes, tuple[bytes, str]]:
+    """Resolve a tree path while verifying every content-addressed object."""
+
+    commit = _verified_git_object(
+        root,
+        "commit",
+        revision,
+        max_bytes=_MAX_GIT_COMMIT_BYTES,
+    )
+    first_line, separator, _rest = commit.partition(b"\n")
+    prefix = b"tree "
+    if not separator or not first_line.startswith(prefix):
+        raise CopilotRepositoryScanRejected(
+            "immutable commit has no canonical root tree"
+        )
+    tree_id = _validated_object_id(first_line[len(prefix) :], len(revision))
+    entries: dict[bytes, tuple[bytes, str]] = {}
+    for component in components:
+        entries = _verified_tree_entries(root, tree_id)
+        selected = entries.get(component)
+        if selected is None or selected[0] != b"40000":
+            raise CopilotRepositoryScanRejected(
+                "immutable agent profile tree is missing or unsafe"
+            )
+        tree_id = selected[1]
+    return _verified_tree_entries(root, tree_id)
+
+
+def _verified_tree_entries(
+    root: Path,
+    object_id: str,
+) -> dict[bytes, tuple[bytes, str]]:
+    """Parse one verified raw Git tree into unique byte-name entries."""
+
+    payload = _verified_git_object(
+        root,
+        "tree",
+        object_id,
+        max_bytes=_MAX_GIT_TREE_BYTES,
+    )
+    object_bytes = len(object_id) // 2
+    entries: dict[bytes, tuple[bytes, str]] = {}
+    cursor = 0
+    while cursor < len(payload):
+        space = payload.find(b" ", cursor)
+        nul = payload.find(b"\0", space + 1) if space >= 0 else -1
+        object_end = nul + 1 + object_bytes
+        if (
+            space <= cursor
+            or nul <= space + 1
+            or object_end > len(payload)
+            or len(entries) >= _MAX_GIT_TREE_ENTRIES
+        ):
+            raise CopilotRepositoryScanRejected("immutable Git tree is malformed")
+        mode = payload[cursor:space]
+        name = payload[space + 1 : nul]
+        raw_object_id = payload[nul + 1 : object_end]
+        if (
+            mode not in {b"40000", b"100644", b"100755", b"120000", b"160000"}
+            or not name
+            or b"/" in name
+            or name in {b".", b".."}
+            or name in entries
+        ):
+            raise CopilotRepositoryScanRejected("immutable Git tree is unsafe")
+        entries[name] = (mode, raw_object_id.hex())
+        cursor = object_end
+    return entries
+
+
+def _verified_git_object(
+    root: Path,
+    object_type: str,
+    object_id: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    """Read one Git object and recompute its requested content address."""
+
+    if not isinstance(object_id, str):
+        raise CopilotRepositoryScanRejected("immutable Git object ID is malformed")
+    try:
+        raw_object_id = object_id.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise CopilotRepositoryScanRejected(
+            "immutable Git object ID is malformed"
+        ) from error
+    _validated_object_id(raw_object_id)
+    if object_type not in {"blob", "commit", "tree"}:
+        raise CopilotRepositoryScanRejected("immutable Git object type is unsafe")
+    payload = _run_git(
+        root,
+        "cat-file",
+        object_type,
+        object_id,
+        max_bytes=max_bytes,
+    )
+    framed = f"{object_type} {len(payload)}\0".encode("ascii") + payload
+    if len(object_id) == 40:
+        observed = hashlib.sha1(framed, usedforsecurity=False).hexdigest()
+    else:
+        observed = hashlib.sha256(framed).hexdigest()
+    if observed != object_id:
+        raise CopilotRepositoryScanRejected(
+            "immutable Git object failed content-address verification"
+        )
+    return payload
+
+
+def _validated_object_id(raw: bytes, expected_length: int | None = None) -> str:
+    """Validate a raw SHA-1 or SHA-256 Git object identifier."""
+
+    if (
+        len(raw) not in (40, 64)
+        or (expected_length is not None and len(raw) != expected_length)
+        or any(byte not in b"0123456789abcdef" for byte in raw)
+    ):
+        raise CopilotRepositoryScanRejected("immutable Git object ID is malformed")
+    return raw.decode("ascii")
+
+
+def _require_index_and_worktree_blob(
+    root: Path,
+    relative: Path,
+    expected_mode: bytes,
+    expected_object_id: str,
+    expected_payload: bytes,
+) -> None:
+    """Require one immutable profile blob to match index and raw worktree bytes."""
+
+    raw = _run_git(
+        root,
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        f":(literal){relative.as_posix()}",
+        max_bytes=_MAX_GIT_PROFILE_BYTES,
+    )
+    expected_name = relative.as_posix().encode("utf-8")
+    record = raw[:-1] if raw.endswith(b"\0") else b""
+    metadata, separator, name = record.partition(b"\t")
+    fields = metadata.split(b" ")
+    if (
+        not raw.endswith(b"\0")
+        or raw.count(b"\0") != 1
+        or not separator
+        or name != expected_name
+        or len(fields) != 3
+        or fields[0] != expected_mode
+        or fields[1] != expected_object_id.encode("ascii")
+        or fields[2] != b"0"
+    ):
+        raise CopilotRepositoryScanRejected(
+            "agent profile index state differs from immutable HEAD"
+        )
+    try:
+        observed, payload = _inspect_stable_regular_file(
+            root,
+            root / relative,
+            read_limit=_MAX_GIT_PROFILE_BYTES,
+        )
+    except CopilotScopeRejected as error:
+        raise CopilotRepositoryScanRejected(
+            "agent profile worktree state is unsafe"
+        ) from error
+    expected_executable = expected_mode == b"100755"
+    if (
+        payload != expected_payload
+        or bool(stat.S_IMODE(observed.st_mode) & 0o111) != expected_executable
+    ):
+        raise CopilotRepositoryScanRejected(
+            "agent profile worktree state differs from immutable HEAD"
+        )
+
+
+def repository_state_binding(root: Path) -> AdvisoryRepositoryState:
+    """Return one stable repository digest with its bound immutable commit."""
 
     root = root.resolve()
     first = _repository_state_snapshot(root)
@@ -974,38 +1238,200 @@ def repository_state_digest(root: Path) -> str:
         raise CopilotRepositoryChanged(
             "repository changed while advisory state was being bound"
         )
-    return hashlib.sha256(first).hexdigest()
-
-
-def _repository_state_snapshot(root: Path) -> bytes:
-    material = bytearray()
-    commands = (
-        (("rev-parse", "HEAD"), _MAX_GIT_HEAD_BYTES),
-        (
-            ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
-            _MAX_GIT_STATUS_BYTES,
-        ),
-        (
-            ("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD"),
-            _MAX_GIT_DIFF_BYTES,
-        ),
-        (
-            (
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--binary",
-                "--cached",
-                "HEAD",
-            ),
-            _MAX_GIT_DIFF_BYTES,
-        ),
+    material, head_revision = first
+    return AdvisoryRepositoryState(
+        digest=hashlib.sha256(material).hexdigest(),
+        head_revision=head_revision,
     )
-    for arguments, max_bytes in commands:
-        output = _run_git(root, *arguments, max_bytes=max_bytes)
-        _extend_field(material, output)
+
+
+def _repository_state_snapshot(root: Path) -> tuple[bytes, str]:
+    """Capture commit, index, and raw filesystem state without Git conversion."""
+
+    material = bytearray()
+    head_output = _run_git(
+        root,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        "HEAD^{commit}",
+        max_bytes=_MAX_GIT_HEAD_BYTES,
+    )
+    head_revision = _parse_head_revision(head_output)
+    index_state = _run_git(
+        root,
+        "ls-files",
+        "--stage",
+        "-z",
+        max_bytes=_MAX_GIT_INDEX_BYTES,
+    )
+    _extend_field(material, head_revision.encode("ascii"))
+    _extend_field(material, index_state)
+    _extend_field(material, _tracked_worktree_state(root, index_state))
     _extend_field(material, _untracked_state(root))
+    return bytes(material), head_revision
+
+
+def _tracked_worktree_state(root: Path, index_state: bytes) -> bytes:
+    """Hash raw tracked-file bytes from a validated non-converting index list."""
+
+    if index_state and not index_state.endswith(b"\0"):
+        raise CopilotRepositoryScanRejected("repository index listing is incomplete")
+    records = index_state[:-1].split(b"\0") if index_state else []
+    if len(records) > _MAX_TRACKED_FILES:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository file count exceeds its limit"
+        )
+    observed: set[bytes] = set()
+    total_bytes = 0
+    material = bytearray()
+    for record in records:
+        metadata, separator, raw_name = record.partition(b"\t")
+        fields = metadata.split(b" ")
+        if (
+            not separator
+            or len(fields) != 3
+            or fields[0] not in {b"100644", b"100755"}
+            or len(fields[1]) not in (40, 64)
+            or any(byte not in b"0123456789abcdef" for byte in fields[1])
+            or fields[2] != b"0"
+            or not raw_name
+            or len(raw_name) > _MAX_UNTRACKED_PATH_BYTES
+            or raw_name in observed
+        ):
+            raise CopilotRepositoryScanRejected(
+                "repository index contains an unsupported or malformed entry"
+            )
+        observed.add(raw_name)
+        relative = Path(os.fsdecode(raw_name))
+        if relative.is_absolute() or any(
+            part in {"", ".", ".."} for part in relative.parts
+        ):
+            raise CopilotRepositoryScanRejected("tracked repository path is unsafe")
+        candidate = root.joinpath(*relative.parts)
+        file_state, byte_count = _tracked_file_state(root, candidate)
+        total_bytes += byte_count
+        if total_bytes > _MAX_TRACKED_TOTAL_BYTES:
+            raise CopilotRepositoryScanRejected(
+                "tracked repository content exceeds its total byte limit"
+            )
+        _extend_field(material, raw_name)
+        _extend_field(material, file_state)
     return bytes(material)
+
+
+def _tracked_file_state(root: Path, path: Path) -> tuple[bytes, int]:
+    """Return a stable raw-file fingerprint, or an explicit missing marker."""
+
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        _validate_missing_tracked_path(root, path)
+        return b"missing", 0
+    except OSError as error:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository file is unreadable"
+        ) from error
+    if not _is_single_link_regular(before):
+        raise CopilotRepositoryScanRejected(
+            "tracked repository entries must be single-link regular files"
+        )
+    if before.st_size > _MAX_TRACKED_FILE_BYTES:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository file exceeds its byte limit"
+        )
+    try:
+        descriptor = _open_repository_file(root, path)
+    except (OSError, CopilotScopeRejected) as error:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository file could not be opened safely"
+        ) from error
+    try:
+        opened = os.fstat(descriptor)
+        if not _same_file_snapshot(before, opened):
+            raise CopilotRepositoryChanged(
+                "tracked repository file changed before hashing"
+            )
+        payload = _read_descriptor(descriptor, _MAX_TRACKED_FILE_BYTES)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        public = path.lstat()
+    except OSError as error:
+        raise CopilotRepositoryChanged(
+            "tracked repository file changed after hashing"
+        ) from error
+    if not _same_file_snapshot(before, after) or not _same_file_snapshot(
+        before, public
+    ):
+        raise CopilotRepositoryChanged("tracked repository file changed while hashing")
+    state = bytearray(b"regular")
+    _extend_field(state, stat.S_IMODE(before.st_mode).to_bytes(4, "big"))
+    _extend_field(state, hashlib.sha256(payload).digest())
+    return bytes(state), len(payload)
+
+
+def _validate_missing_tracked_path(root: Path, path: Path) -> None:
+    """Accept a deletion only after a no-follow walk proves no symlink alias."""
+
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository path escapes its root"
+        ) from error
+    try:
+        parent = os.open(
+            root,
+            os.O_RDONLY | _directory_flag() | _no_follow_flag(),
+        )
+    except OSError as error:
+        raise CopilotRepositoryScanRejected(
+            "tracked repository root could not be opened safely"
+        ) from error
+    try:
+        for component in relative.parts[:-1]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | _directory_flag() | _no_follow_flag(),
+                    dir_fd=parent,
+                )
+            except FileNotFoundError:
+                return
+            except OSError as error:
+                raise CopilotRepositoryScanRejected(
+                    "missing tracked path traverses an unsafe component"
+                ) from error
+            os.close(parent)
+            parent = child
+        try:
+            os.stat(relative.parts[-1], dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            raise CopilotRepositoryScanRejected(
+                "missing tracked path could not be inspected safely"
+            ) from error
+        raise CopilotRepositoryChanged(
+            "tracked repository path appeared while its deletion was bound"
+        )
+    finally:
+        os.close(parent)
+
+
+def _parse_head_revision(raw: bytes) -> str:
+    """Validate the exact object ID returned by ``git rev-parse HEAD``."""
+
+    value = raw[:-1] if raw.endswith(b"\n") else raw
+    if len(value) not in (40, 64) or any(
+        byte not in b"0123456789abcdef" for byte in value
+    ):
+        raise CopilotRepositoryScanRejected(
+            "repository HEAD is not one exact immutable object ID"
+        )
+    return value.decode("ascii")
 
 
 def _untracked_state(root: Path) -> bytes:
@@ -1141,16 +1567,25 @@ def _binding(
     profile: AgentProfile,
     scope: AdvisoryPathScope,
     state_reader: StateReader,
+    expected_repository_digest: str,
 ) -> AdvisoryStateBinding:
     scope.validate()
+    repository_digest = state_reader(root)
+    if repository_digest != expected_repository_digest:
+        raise CopilotRepositoryChanged(
+            "semantic route authorization does not match repository state"
+        )
     return AdvisoryStateBinding(
         task_digest=_task_digest(envelope),
-        repository_digest=state_reader(root),
+        repository_digest=repository_digest,
         profile_digest=_profile_digest(profile),
         scope_digest=scope.digest,
         route_digest=_sha256_text(
             json.dumps(
-                envelope.semantic_route.to_payload(),
+                {
+                    "repository_digest": expected_repository_digest,
+                    "semantic_route": envelope.semantic_route.to_payload(),
+                },
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
@@ -1473,6 +1908,8 @@ class CopilotSdkAdvisoryWorker:
         model: str = "auto",
         client_factory: ClientFactory | None = None,
         state_reader: StateReader = repository_state_digest,
+        expected_repository_digest: str,
+        profile_inventory: AgentInventory,
     ) -> None:
         self._root = repository_root.resolve()
         self._scope = scope
@@ -1480,6 +1917,8 @@ class CopilotSdkAdvisoryWorker:
         self._model = model
         self._client_factory = client_factory or _default_client_factory
         self._state_reader = state_reader
+        self._expected_repository_digest = expected_repository_digest
+        self._profile_inventory = profile_inventory
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: _SdkClient | None = None
         self._closed = False
@@ -1493,8 +1932,7 @@ class CopilotSdkAdvisoryWorker:
             raise CopilotAdvisoryError("nested Copilot advisory delegation is denied")
         if dispatcher.allowed_tools != frozenset({"read", "search"}):
             raise CopilotAdvisoryError("advisory profile widened beyond read/search")
-        inventory = load_agent_inventory(self._root)
-        profile = inventory.child(envelope.role)
+        profile = self._profile_inventory.child(envelope.role)
         if profile.name != envelope.profile_name:
             raise CopilotAdvisoryError("advisory envelope/profile mismatch")
         scope = self._scope or _scope_from_envelope(self._root, envelope)
@@ -1504,6 +1942,7 @@ class CopilotSdkAdvisoryWorker:
             profile,
             scope,
             self._state_reader,
+            self._expected_repository_digest,
         )
         try:
             report = self._run_sync(envelope, profile, scope, before)
@@ -1513,6 +1952,7 @@ class CopilotSdkAdvisoryWorker:
                 profile,
                 scope,
                 self._state_reader,
+                self._expected_repository_digest,
             )
             if after != before:
                 raise CopilotRepositoryChanged(

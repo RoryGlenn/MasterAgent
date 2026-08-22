@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import errno
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,9 @@ MAX_STRING_LENGTH: Final = 4_096
 MAX_QUERY_LENGTH: Final = 2_048
 MAX_REVISION_LENGTH: Final = 256
 MAX_GIT_OUTPUT_BYTES: Final = 4 * 1024 * 1024
+MAX_GIT_COMMIT_BYTES: Final = 2 * 1024 * 1024
+MAX_GIT_TREE_BYTES: Final = 4 * 1024 * 1024
+MAX_GIT_TREE_ENTRIES: Final = 50_000
 MAX_CHANGED_PATHS: Final = MAX_WALK_ENTRIES
 GIT_TIMEOUT_SECONDS: Final = 15.0
 LIFECYCLES: Final = ("released", "implementing", "planned", "archived")
@@ -100,6 +104,7 @@ _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _PATH_PART = re.compile(r"^[A-Za-z0-9._-]+$")
 _TOKEN = re.compile(r"[a-z0-9]+")
 _REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}^~:+-]{0,255}$")
+_OBJECT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _IGNORED_DIRECTORY_NAMES: Final = {
     ".git",
     ".master-agent",
@@ -399,6 +404,17 @@ def _parse_routing_case(raw: object, index: int) -> RoutingCase:
 
 
 def _read_bounded_regular_file(path: Path, *, limit: int) -> bytes:
+    _mode, data = _read_bounded_regular_file_state(path, limit=limit)
+    return data
+
+
+def _read_bounded_regular_file_state(
+    path: Path,
+    *,
+    limit: int,
+) -> tuple[int, bytes]:
+    """Read one stable regular file and return its observed POSIX mode."""
+
     try:
         metadata = path.lstat()
     except OSError as exc:
@@ -417,13 +433,15 @@ def _read_bounded_regular_file(path: Path, *, limit: int) -> bytes:
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)
         current = path.lstat()
-        if not stat.S_ISREG(opened.st_mode):
+        if not stat.S_ISREG(opened.st_mode) or not _same_file_state(metadata, opened):
             raise ManifestError(f"not a regular file: {path}")
-        if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+        if not _same_file_state(opened, current):
             raise ManifestError(f"file identity changed while opening: {path}")
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = -1
             data = handle.read(limit + 1)
+            after = os.fstat(handle.fileno())
+        public = path.lstat()
     except OSError as exc:
         raise ManifestError(f"cannot read {path}: {exc}") from exc
     finally:
@@ -431,7 +449,24 @@ def _read_bounded_regular_file(path: Path, *, limit: int) -> bytes:
             os.close(descriptor)
     if len(data) > limit:
         raise ManifestError(f"file exceeds {limit} bytes: {path}")
-    return data
+    if not _same_file_state(opened, after) or not _same_file_state(opened, public):
+        raise ManifestError(f"file changed while reading: {path}")
+    return stat.S_IMODE(opened.st_mode), data
+
+
+def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two observations describe one unchanged regular file."""
+
+    return (
+        stat.S_ISREG(right.st_mode)
+        and left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and left.st_mode == right.st_mode
+        and left.st_nlink == right.st_nlink
+        and left.st_size == right.st_size
+        and left.st_mtime_ns == right.st_mtime_ns
+        and left.st_ctime_ns == right.st_ctime_ns
+    )
 
 
 def _safe_repository_file(root: Path, raw_path: str) -> Path:
@@ -481,7 +516,12 @@ def _safe_repository_file(root: Path, raw_path: str) -> Path:
     return candidate
 
 
-def load_manifest(root: Path, manifest_path: Path | None = None) -> SemanticManifest:
+def load_manifest(
+    root: Path,
+    manifest_path: Path | None = None,
+    *,
+    manifest_bytes: bytes | None = None,
+) -> SemanticManifest:
     """Load and strictly parse the semantic-router manifest.
 
     Parameters
@@ -490,6 +530,9 @@ def load_manifest(root: Path, manifest_path: Path | None = None) -> SemanticMani
         Repository root containing the manifest and referenced files.
     manifest_path:
         Optional manifest path. Relative paths are resolved below ``root``.
+    manifest_bytes:
+        Optional already-captured manifest bytes. This is reserved for callers
+        that bind parsing to an immutable repository object.
 
     Returns
     -------
@@ -503,17 +546,34 @@ def load_manifest(root: Path, manifest_path: Path | None = None) -> SemanticMani
     """
 
     trusted_root = root.resolve(strict=True)
-    selected = manifest_path or Path(MANIFEST_PATH)
-    if selected.is_absolute():
-        try:
-            relative = selected.relative_to(trusted_root)
-        except ValueError as exc:
-            raise ManifestError("manifest path escapes the repository") from exc
-        selected_raw = relative.as_posix()
+    if manifest_bytes is None:
+        selected = manifest_path or Path(MANIFEST_PATH)
+        if selected.is_absolute():
+            try:
+                relative = selected.relative_to(trusted_root)
+            except ValueError as exc:
+                raise ManifestError("manifest path escapes the repository") from exc
+            selected_raw = relative.as_posix()
+        else:
+            selected_raw = selected.as_posix()
+        manifest_file = _safe_repository_file(trusted_root, selected_raw)
+        raw_bytes = _read_bounded_regular_file(
+            manifest_file,
+            limit=MAX_MANIFEST_BYTES,
+        )
     else:
-        selected_raw = selected.as_posix()
-    manifest_file = _safe_repository_file(trusted_root, selected_raw)
-    raw_bytes = _read_bounded_regular_file(manifest_file, limit=MAX_MANIFEST_BYTES)
+        if manifest_path is not None:
+            raise ManifestError(
+                "manifest path and captured manifest bytes are mutually exclusive"
+            )
+        if not isinstance(manifest_bytes, bytes):
+            raise ManifestError("captured semantic-router manifest must be bytes")
+        if not manifest_bytes or len(manifest_bytes) > MAX_MANIFEST_BYTES:
+            raise ManifestError(
+                "captured semantic-router manifest must contain "
+                f"1-{MAX_MANIFEST_BYTES} bytes"
+            )
+        raw_bytes = manifest_bytes
     try:
         raw = tomllib.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
@@ -584,6 +644,184 @@ def load_manifest(root: Path, manifest_path: Path | None = None) -> SemanticMani
         ownership=_parse_ownership(root_table["ownership"]),
         routing_cases=cases,
     )
+
+
+def load_manifest_at_revision(root: Path, revision: str) -> SemanticManifest:
+    """Load the manifest from one immutable commit and reject worktree drift."""
+
+    trusted_root = root.resolve(strict=True)
+    if not isinstance(revision, str) or _OBJECT_ID.fullmatch(revision) is None:
+        raise ManifestError("bound manifest revision must be one exact object ID")
+    committed_mode, committed_id, committed = _verified_blob_at_revision(
+        trusted_root,
+        revision,
+        MANIFEST_PATH,
+        limit=MAX_MANIFEST_BYTES,
+    )
+    staged_mode, staged_id = _index_entry(trusted_root, MANIFEST_PATH)
+    manifest_file = _safe_repository_file(trusted_root, MANIFEST_PATH)
+    current_mode, current = _read_bounded_regular_file_state(
+        manifest_file,
+        limit=MAX_MANIFEST_BYTES,
+    )
+    current_git_mode = b"100755" if current_mode & 0o111 else b"100644"
+    if (
+        staged_mode != committed_mode
+        or staged_id != committed_id
+        or current_git_mode != committed_mode
+        or current != committed
+    ):
+        raise ManifestError(
+            "live advisory routing requires the semantic manifest to match bound HEAD"
+        )
+    return load_manifest(trusted_root, manifest_bytes=committed)
+
+
+def _verified_blob_at_revision(
+    root: Path,
+    revision: str,
+    path: str,
+    *,
+    limit: int,
+) -> tuple[bytes, str, bytes]:
+    """Resolve and verify every object from one commit to one regular blob."""
+
+    commit = _verified_git_object(
+        root,
+        "commit",
+        revision,
+        limit=MAX_GIT_COMMIT_BYTES,
+    )
+    first_line, separator, _rest = commit.partition(b"\n")
+    if not separator or not first_line.startswith(b"tree "):
+        raise ManifestError("bound commit has no canonical root tree")
+    tree_id = _validated_git_object_id(first_line.removeprefix(b"tree "), len(revision))
+    parts = tuple(part.encode("utf-8") for part in PurePosixPath(path).parts)
+    for index, component in enumerate(parts):
+        entries = _verified_git_tree_entries(root, tree_id)
+        selected = entries.get(component)
+        if selected is None:
+            raise ManifestError("bound manifest path is absent from immutable commit")
+        mode, selected_id = selected
+        if index == len(parts) - 1:
+            if mode not in {b"100644", b"100755"}:
+                raise ManifestError("bound manifest is not a regular Git blob")
+            return (
+                mode,
+                selected_id,
+                _verified_git_object(root, "blob", selected_id, limit=limit),
+            )
+        if mode != b"40000":
+            raise ManifestError("bound manifest path traverses a non-tree object")
+        tree_id = selected_id
+    raise ManifestError("bound manifest path is invalid")
+
+
+def _verified_git_tree_entries(
+    root: Path,
+    object_id: str,
+) -> dict[bytes, tuple[bytes, str]]:
+    """Parse one verified raw Git tree into unique byte-name entries."""
+
+    payload = _verified_git_object(
+        root,
+        "tree",
+        object_id,
+        limit=MAX_GIT_TREE_BYTES,
+    )
+    object_bytes = len(object_id) // 2
+    entries: dict[bytes, tuple[bytes, str]] = {}
+    cursor = 0
+    while cursor < len(payload):
+        space = payload.find(b" ", cursor)
+        nul = payload.find(b"\0", space + 1) if space >= 0 else -1
+        object_end = nul + 1 + object_bytes
+        if (
+            space <= cursor
+            or nul <= space + 1
+            or object_end > len(payload)
+            or len(entries) >= MAX_GIT_TREE_ENTRIES
+        ):
+            raise ManifestError("bound Git tree is malformed")
+        mode = payload[cursor:space]
+        name = payload[space + 1 : nul]
+        raw_object_id = payload[nul + 1 : object_end]
+        if (
+            mode not in {b"40000", b"100644", b"100755", b"120000", b"160000"}
+            or not name
+            or b"/" in name
+            or name in {b".", b".."}
+            or name in entries
+        ):
+            raise ManifestError("bound Git tree is unsafe")
+        entries[name] = (mode, raw_object_id.hex())
+        cursor = object_end
+    return entries
+
+
+def _verified_git_object(
+    root: Path,
+    object_type: str,
+    object_id: str,
+    *,
+    limit: int,
+) -> bytes:
+    """Read one Git object and recompute its requested content address."""
+
+    if not isinstance(object_id, str) or _OBJECT_ID.fullmatch(object_id) is None:
+        raise ManifestError("bound Git object ID is malformed")
+    if object_type not in {"blob", "commit", "tree"}:
+        raise ManifestError("bound Git object type is unsafe")
+    payload = _bounded_git_output(
+        root,
+        ("cat-file", object_type, object_id),
+        limit=limit,
+    )
+    framed = f"{object_type} {len(payload)}\0".encode("ascii") + payload
+    if len(object_id) == 40:
+        observed = hashlib.sha1(framed, usedforsecurity=False).hexdigest()
+    else:
+        observed = hashlib.sha256(framed).hexdigest()
+    if observed != object_id:
+        raise ManifestError("bound Git object failed content-address verification")
+    return payload
+
+
+def _validated_git_object_id(raw: bytes, expected_length: int) -> str:
+    """Validate one raw object ID extracted from a verified object."""
+
+    if (
+        len(raw) != expected_length
+        or len(raw) not in (40, 64)
+        or any(byte not in b"0123456789abcdef" for byte in raw)
+    ):
+        raise ManifestError("bound Git object ID is malformed")
+    return raw.decode("ascii")
+
+
+def _index_entry(root: Path, path: str) -> tuple[bytes, str]:
+    """Return one exact stage-zero index entry without reading its blob."""
+
+    raw = _bounded_git_output(
+        root,
+        ("ls-files", "--stage", "-z", "--", f":(literal){path}"),
+        limit=MAX_MANIFEST_BYTES,
+    )
+    record = raw[:-1] if raw.endswith(b"\0") else b""
+    metadata, separator, name = record.partition(b"\t")
+    fields = metadata.split(b" ")
+    if (
+        not raw.endswith(b"\0")
+        or raw.count(b"\0") != 1
+        or not separator
+        or name != path.encode("utf-8")
+        or len(fields) != 3
+        or fields[0] not in {b"100644", b"100755"}
+        or _OBJECT_ID.fullmatch(os.fsdecode(fields[1])) is None
+        or fields[2] != b"0"
+    ):
+        raise ManifestError("bound manifest index entry is missing or malformed")
+    return fields[0], fields[1].decode("ascii")
 
 
 def _bounded_file_inventory(
@@ -1191,6 +1429,12 @@ def select_route(manifest: SemanticManifest, query: str) -> RouteMatch:
 def _bounded_git_output(root: Path, arguments: Sequence[str], *, limit: int) -> bytes:
     """Run one fixed read-only Git query with bounded output and duration."""
 
+    try:
+        trusted_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise ManifestError(f"cannot resolve bounded Git root: {exc}") from exc
+    if not trusted_root.is_dir():
+        raise ManifestError("bounded Git root is not a directory")
     environment = {
         name: value for name, value in os.environ.items() if not name.startswith("GIT_")
     }
@@ -1198,6 +1442,7 @@ def _bounded_git_output(root: Path, arguments: Sequence[str], *, limit: int) -> 
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": str(trusted_root.parent),
             "GIT_ALLOW_PROTOCOL": "",
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
@@ -1210,6 +1455,7 @@ def _bounded_git_output(root: Path, arguments: Sequence[str], *, limit: int) -> 
     command = [
         "git",
         "--no-pager",
+        f"--work-tree={trusted_root}",
         "-c",
         f"core.hooksPath={os.devnull}",
         "-c",
@@ -1225,7 +1471,7 @@ def _bounded_git_output(root: Path, arguments: Sequence[str], *, limit: int) -> 
     try:
         process = subprocess.Popen(
             command,
-            cwd=root,
+            cwd=trusted_root,
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

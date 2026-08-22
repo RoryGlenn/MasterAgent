@@ -74,11 +74,15 @@ The repository-owned advisory integration harness in
 for tests and the optional current broker-owned Copilot SDK adapter. The live
 runner requires one opaque goal ID reused for the operator goal and at least one
 repository-relative path. It also requires exactly one
-`--route ROUTE_ID` already selected by the parent, fully validates that route
-before worker startup, and sends only its canonical navigation slice. It
+`--route ROUTE_ID` already selected by the parent, loads its manifest from the
+immutable HEAD revision inside the repository binding, loads the exact profile
+inventory from the same content-address-verified commit, rejects manifest or
+profile drift, fully validates that route before worker startup, and sends only its canonical
+navigation slice. It
 atomically reserves every attempt in private, authenticated cross-process state,
 technically confines repository-owned read/search tools to that route, binds
-the route plus tracked, staged, and untracked contents, and requires the parent
+the route plus raw tracked, staged, and untracked contents without Git content
+filters, replacement refs, lazy fetch, or transports, and requires the parent
 to re-read every citation through the same scope. It never grants provider,
 credential, approval, target-selection, plan, or audit authority.
 

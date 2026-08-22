@@ -6,15 +6,16 @@ import argparse
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from master_agent.advisory import (
     AdvisoryBroker,
     AdvisoryRole,
+    AgentInventory,
     DelegationStatus,
     RepositoryFixture,
     SemanticRouteSlice,
-    load_agent_inventory,
 )
 from master_agent.advisory_budget import (
     AdvisoryBudgetStateError,
@@ -22,9 +23,14 @@ from master_agent.advisory_budget import (
 )
 from master_agent.copilot_advisory import (
     AdvisoryPathScope,
+    AdvisoryRepositoryState,
+    CopilotRepositoryChanged,
+    CopilotRepositoryScanRejected,
     CopilotScopeRejected,
     CopilotSdkAdvisoryWorker,
+    load_agent_inventory_at_revision,
     read_scoped_text,
+    repository_state_binding,
 )
 
 if __package__:
@@ -33,6 +39,15 @@ else:
     import semantic_router as _semantic_router  # type: ignore[import-not-found,no-redef]
 
 _MAX_CITED_FILE_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundSemanticRoute:
+    """One validated route tied to the repository state that authorized it."""
+
+    route: SemanticRouteSlice
+    repository_state: AdvisoryRepositoryState
+    inventory: AgentInventory
 
 
 def _safe_citation_text(scope: AdvisoryPathScope, relative: str) -> str:
@@ -62,10 +77,18 @@ def run(
     root = root.resolve()
     selected_state = state_directory or root / ".master-agent/advisory"
     try:
-        semantic_route = _validated_semantic_route(root, route, paths)
+        bound_route = _validated_semantic_route(root, route, paths)
+        semantic_route = bound_route.route
         scope = AdvisoryPathScope.bind(root, paths)
-        inventory = load_agent_inventory(root)
-        task_id = _task_id(goal_id, role, task, scope, semantic_route)
+        inventory = bound_route.inventory
+        task_id = _task_id(
+            goal_id,
+            role,
+            task,
+            scope,
+            semantic_route,
+            bound_route.repository_state.digest,
+        )
         with AdvisoryBudgetStore(selected_state, root) as budget:
             broker = AdvisoryBroker(
                 inventory,
@@ -81,9 +104,21 @@ def run(
             outcome = session.delegate(
                 role,
                 {"task": task, "paths": list(scope.relative_paths)},
-                worker=CopilotSdkAdvisoryWorker(root, scope=scope),
+                worker=CopilotSdkAdvisoryWorker(
+                    root,
+                    scope=scope,
+                    expected_repository_digest=bound_route.repository_state.digest,
+                    profile_inventory=inventory,
+                ),
             )
-    except (AdvisoryBudgetStateError, CopilotScopeRejected, OSError, ValueError):
+    except (
+        AdvisoryBudgetStateError,
+        CopilotRepositoryChanged,
+        CopilotRepositoryScanRejected,
+        CopilotScopeRejected,
+        OSError,
+        ValueError,
+    ):
         return _print_fallback("advisory runner prerequisites failed closed")
 
     if outcome.status is not DelegationStatus.COMPLETED or outcome.report is None:
@@ -130,11 +165,13 @@ def _task_id(
     task: str,
     scope: AdvisoryPathScope,
     semantic_route: SemanticRouteSlice,
+    repository_digest: str,
 ) -> str:
     material = json.dumps(
         {
             "goal_id": goal_id,
             "role": role.value,
+            "repository_digest": repository_digest,
             "semantic_route": semantic_route.to_payload(),
             "scope_digest": scope.digest,
             "task": task,
@@ -150,14 +187,22 @@ def _validated_semantic_route(
     root: Path,
     route_id: str | None,
     requested_paths: Sequence[str],
-) -> SemanticRouteSlice:
-    """Load one exact route and reject paths outside its dependency closure."""
+) -> _BoundSemanticRoute:
+    """Load one exact route from one stable repository-state snapshot."""
 
     if not isinstance(route_id, str) or not route_id or route_id != route_id.strip():
         raise _semantic_router.ManifestError(
             "one exact parent-selected semantic route identifier is required"
         )
-    manifest = _semantic_router.load_manifest(root)
+    repository_state = repository_state_binding(root)
+    manifest = _semantic_router.load_manifest_at_revision(
+        root,
+        repository_state.head_revision,
+    )
+    inventory = load_agent_inventory_at_revision(
+        root,
+        repository_state.head_revision,
+    )
     errors = _semantic_router.validate_repository(root, manifest)
     if errors:
         raise _semantic_router.ManifestError("semantic router validation failed")
@@ -167,7 +212,7 @@ def _validated_semantic_route(
             "parent-selected semantic route is unknown"
         )
     _validate_requested_route_paths(manifest, selected.id, requested_paths)
-    return SemanticRouteSlice(
+    semantic_route = SemanticRouteSlice(
         route=selected.id,
         title=selected.title,
         lifecycle=selected.lifecycle,
@@ -179,6 +224,11 @@ def _validated_semantic_route(
         release_gates=selected.release_gates,
         dependencies=selected.dependencies,
     )
+    if repository_state_binding(root) != repository_state:
+        raise CopilotRepositoryChanged(
+            "repository changed while semantic route authorization was being bound"
+        )
+    return _BoundSemanticRoute(semantic_route, repository_state, inventory)
 
 
 def _validate_requested_route_paths(

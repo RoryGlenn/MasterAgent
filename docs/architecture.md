@@ -135,9 +135,12 @@ across independent processes. The broker rejects credential, approval, signing,
 target, recipient, connector, tenant, private-context, and `ChangePlan` fields
 before a worker is invoked.
 
-The optional SDK worker binds the exact task, profile, normalized path/file
-inventory, HEAD, index, tracked and staged diffs, and bounded untracked file
-contents. It exposes only repository-owned route-scoped read/search tools; SDK
+The optional SDK worker binds the exact task, immutable profile, normalized
+path/file inventory, HEAD, raw index entries, descriptor-read tracked bytes,
+and bounded untracked file contents. The runner rehashes every commit, tree, and
+prompt-bearing blob used for its manifest or profile inventory and disables Git
+content conversion, replacement refs, lazy fetch, and transports. It exposes
+only repository-owned route-scoped read/search tools; SDK
 filesystem built-ins and ambient config, skill, and MCP discovery remain
 disabled. Each specialist call has an isolated session. One client may be
 reused for same-process calls in one goal and is closed at the goal boundary.

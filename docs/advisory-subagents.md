@@ -49,6 +49,15 @@ then includes only that route's canonical navigation fields in the sanitized
 envelope. It never sends aliases, routing fixtures, the agent registry, sibling
 metadata, the full manifest, or the generated index.
 
+Route validation uses the exact immutable HEAD revision captured inside a
+complete repository-state binding. The runner parses the manifest from that
+commit, loads the exact profile inventory from verified commit/tree/blob
+objects, and refuses staged or unstaged manifest or profile drift. The resulting
+digest remains parent-owned and must match the worker's first state binding
+before any SDK client is created. A transient manifest swap or a change between
+route authorization and worker startup therefore falls back to the parent
+instead of using a stale route.
+
 Each path must be an exact tracked or non-ignored untracked regular file linked
 or owned by the selected route or its recursively declared dependencies.
 Directory and ancestor widening is rejected before scope binding, worker
@@ -62,7 +71,7 @@ The flow is:
 ```text
 MasterAgent parent
     ↓
-full manifest validation + exact parent-selected route binding
+verified immutable-HEAD manifest/profile validation + repository-state binding
     ↓
 private authenticated goal-budget reservation
     ↓
@@ -126,15 +135,28 @@ Before a live specialist starts, MasterAgent hashes five things without storing 
 - the exact selected route ID and canonical navigation slice;
 - the exact checked-in specialist profile;
 - the normalized technical path scope and eligible file inventory; and
-- repository HEAD, index, tracked worktree diff, staged diff, untracked paths,
-  and every non-ignored untracked regular file's content digest.
+- repository HEAD, raw stage-zero index entries, every tracked regular file's
+  presence, mode, and raw content digest, untracked paths, and every non-ignored
+  untracked regular file's content digest.
 
-Each repository digest requires two matching complete scans. Git output,
+The first complete state scan yields both a digest and the exact HEAD object ID
+inside that digest. The route and profile inventory are parsed from that
+immutable commit, while any worktree manifest or profile drift fails closed.
+Every commit, tree, and prompt-bearing blob is rehashed against its requested
+Git object ID before parsing. A second complete state scan must match,
+the worker requires that authorization digest to match its first scan, and the
+route digest covers both the selected route slice and repository digest. The
+repository digest itself remains outside the child prompt.
+
+Each repository digest requires two matching complete scans. Git discovery is
+pinned to the supplied worktree and cannot use content filters, replacement
+refs, lazy fetch, ambient config, or any transport protocol. Git output,
 untracked paths, file count, individual bytes, and total bytes have explicit
 limits. Files are opened no-follow and their descriptor/path identity, size,
 timestamps, and content are checked for races. Truncation, unreadable or special
-files, excess, a scan race, or any task/profile/route/repository change before
-completion rejects the result and returns the work to the parent.
+files, excess, an object-address mismatch, a scan race, or any
+task/profile/route/repository change before completion rejects the result and
+returns the work to the parent.
 
 ## Result validation
 
@@ -170,7 +192,7 @@ That fallback is successful degradation, not a setup failure. MasterAgent comple
 
 ## Hermetic end-to-end tests
 
-[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_advisory_budget.py`](../tests/test_advisory_budget.py) proves authenticated private state, restart persistence, consumed failure attempts, and tamper fallback. [`test_advisory_runner.py`](../tests/test_advisory_runner.py) starts independent and concurrent runner processes and mutates an already-untracked file during a live fake-SDK call. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) proves exact Git transitions, scan limits, route-scoped handlers, ignored-file exclusion, one-client/isolated-session reuse, role selection, ambient-discovery denial, malformed-output rejection, sensitive-context filtering, and optional-SDK fallback.
+[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_advisory_budget.py`](../tests/test_advisory_budget.py) proves authenticated private state, restart persistence, consumed failure attempts, and tamper fallback. [`test_advisory_runner.py`](../tests/test_advisory_runner.py) starts independent and concurrent runner processes and mutates an already-untracked file during a live fake-SDK call. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) proves exact Git transitions, scan limits, route-scoped handlers, ignored-file exclusion, immutable profile binding, clean-filter and replacement-ref denial, no lazy fetch, object-address verification, one-client/isolated-session reuse, role selection, ambient-discovery denial, malformed-output rejection, sensitive-context filtering, and optional-SDK fallback.
 
 No live Copilot canary is bundled. A live SDK session is an optional execution adapter, not evidence that host-native inference or an unrestricted child path is safe. Pull-request security remains grounded in deterministic broker, release, packaging, dependency, security, and coverage validation.
 

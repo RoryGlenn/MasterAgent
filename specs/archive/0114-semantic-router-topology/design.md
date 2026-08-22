@@ -20,10 +20,25 @@ The release validator calls the same implementation. The generated document is
 a compact route table and topology view; exact per-asset ownership remains in
 the manifest and is emitted only for a selected route.
 
-The optional advisory runner requires the parent to bind one validated stable
-route ID before worker invocation. Only that route slice enters the sanitized
-task envelope. The specialist's technical scope rejects the global policy,
-manifest, generated index, and every parent or sibling profile mechanically.
+The optional advisory runner requires the parent to capture one complete
+repository-state binding, parse the manifest from the exact immutable HEAD
+revision carried inside it, and reject staged or unstaged manifest drift. That
+digest is carried separately from the child-visible route slice and must match
+the worker's first state binding before SDK client creation. Only the route
+slice enters the sanitized task envelope. The exact profile inventory is also
+loaded from that immutable revision and passed unchanged to both broker and
+worker. State capture uses a verified commit ID, raw stage-zero index entries,
+and descriptor-safe hashes of tracked and non-ignored untracked worktree bytes;
+Git filters, replacement objects, worktree redirects, protocols, and lazy fetch
+are disabled. Every commit, tree, and prompt-bearing blob read from Git is
+rehashed against its requested object ID before parsing. The specialist's technical scope
+rejects the global policy, manifest, generated index, and every parent or
+sibling profile mechanically.
+
+Object-address verification follows the repository object format. SHA-256
+repositories receive SHA-256 binding. Legacy SHA-1 repositories receive the
+standard SHA-1 content-address check; this implementation does not claim Git's
+separate SHA1DC collision-detection property.
 
 ## Affected components
 
@@ -59,7 +74,13 @@ non-regular files, malformed types, duplicate identifiers, unknown lifecycle
 states, or unmapped assets. A planned route cannot claim released
 implementation. Agent topology must exactly match the checked-in profile
 inventory, children have depth zero and bounded tools, and sibling awareness is
-false. Generated content is deterministic and never treated as authority.
+false. Route authorization is parsed from the immutable commit captured by the
+repository binding, worktree manifest drift is rejected, and the worker's first
+state binding must share the same repository digest. The specialist inventory
+is parsed from that same verified commit rather than mutable worktree bytes.
+This closes transient ABA manifest or profile swaps, physical Git-object
+substitution, and the validation-to-worker race. Generated content is
+deterministic and never treated as authority.
 
 ## Rejected alternatives
 

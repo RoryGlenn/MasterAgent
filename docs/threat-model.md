@@ -114,8 +114,18 @@ Controls:
   before dispatch;
 - the optional SDK adapter exposes only repository-owned scoped read/search
   tools, excludes ignored/private/symlink paths, and binds the task, profile,
-  route inventory, HEAD, index, tracked/staged diffs, and bounded untracked file
-  contents before and after each isolated session;
+  route inventory, HEAD, raw index entries, descriptor-read tracked bytes, and
+  bounded untracked file contents before and after each isolated session;
+- semantic-route authorization is parsed from the immutable HEAD revision
+  carried by a complete repository-state binding, requires identical worktree
+  manifest and profile bytes, rehashes commit/tree/prompt-bearing blob objects,
+  disables content conversion, replacement refs, worktree redirection, lazy
+  fetch, and transport protocols, and requires the same digest before SDK client
+  creation;
+- object-address verification follows the repository object format: SHA-256
+  repositories receive SHA-256 binding, while legacy SHA-1 repositories use
+  standard SHA-1 content-address checks and do not claim Git's separate SHA1DC
+  collision-detection property;
 - repository and provider-content prompt injections remain inert test data;
 - child reports cannot select targets, claim approval, propose plans, return
   secret-like content, or become evidence without parent citation re-read;

@@ -48,6 +48,7 @@ planned Windows capabilities are implemented.
 ## Risks
 
 The principal risks are false ownership from permissive matching, stale links,
-lifecycle inflation, profile drift, ambiguous routing, and generated-document
-drift. Exact inventories, bounded parsing, lifecycle rules, fixture accuracy,
-and byte-for-byte generation checks fail closed in CI.
+lifecycle inflation, profile drift, ambiguous routing, generated-document
+drift, and physical substitution of a prompt-bearing Git object. Exact
+inventories, bounded parsing, content-address verification, lifecycle rules,
+fixture accuracy, and byte-for-byte generation checks fail closed in CI.

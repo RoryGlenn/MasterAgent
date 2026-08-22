@@ -24,11 +24,19 @@ and certification routes MUST remain planned until their own verified changes
 advance them. The generated compact router MUST be the first discovery hop
 after minimum global authority policy. Specialists MUST receive only their
 parent, scoped role, tool allowlist, input/output contract, and return path,
-without sibling prompt awareness. A brokered specialist call MUST bind exactly
-one validated parent-selected route before invoking a worker, and its readable
-scope MUST exclude the global policy, full manifest or generated index, and all
-parent or sibling profiles. The manifest and generated router MUST remain
-navigation data and MUST NOT grant runtime authority. A commit- or explicit
+without sibling prompt awareness. A brokered specialist call MUST derive
+exactly one validated parent-selected route and the exact specialist-profile
+inventory from the immutable HEAD revision captured inside a complete
+repository-state binding. That binding MUST use non-converting, non-networked
+Git discovery plus direct raw-file reads, MUST reject staged or unstaged
+manifest drift, and MUST require the same digest and immutable profile
+inventory at the worker before creating an SDK client. Every commit, tree, and
+prompt-bearing blob read during binding MUST be verified against its requested
+Git content address before parsing, and any mismatch MUST fail closed. Its
+readable scope MUST exclude the global policy, full
+manifest or generated index, and all parent or sibling profiles. The manifest
+and generated router MUST remain navigation data and MUST NOT grant runtime
+authority. A commit- or explicit
 two-dot range-only review request MUST first route to the semantic router,
 which MUST derive a bounded, deterministic, read-only Git changed-path
 inventory and return every affected exact semantic route plus any explicitly
@@ -67,6 +75,25 @@ specialist roles from becoming implicit authority.
 - GIVEN a brokered specialist call has one parent-selected route
 - WHEN the route is absent, unknown, duplicated, or its path scope includes the global routing corpus
 - THEN delegation fails before a worker is invoked
+
+### A route authorization cannot outlive its repository snapshot
+
+- GIVEN the parent validates one route and its exact readable paths
+- WHEN the manifest is transiently swapped or repository state changes before the worker's first binding
+- THEN delegation fails before an SDK client is created
+
+### Repository-owned Git configuration cannot execute before authorization
+
+- GIVEN a repository configures content filters, replacement objects, or a promisor remote
+- WHEN the parent binds a route and specialist profile
+- THEN binding reads the raw index and worktree without executing filters or fetching objects
+- AND the exact checked-in profile from the bound immutable revision reaches the worker
+
+### A physical Git object cannot impersonate its requested address
+
+- GIVEN the bytes stored for a commit, tree, manifest blob, or specialist-profile blob do not match the requested object ID
+- WHEN the parent binds a route or profile inventory
+- THEN delegation fails before parsing the substituted object or creating an SDK client
 
 ### A commit-only review starts from bounded evidence
 
@@ -107,3 +134,9 @@ specialist roles from becoming implicit authority.
 - Introduced by GitHub issue #114.
 - Closed commit-routing and out-of-tree configuration inventory gaps during
   pull request #121 review.
+- Bound route authorization to an immutable manifest commit and the worker's
+  exact repository snapshot during pull request #121 security review.
+- Replaced converting Git diffs with raw descriptor-bound state and pinned the
+  specialist inventory to the same immutable commit during that review.
+- Added content-address verification and SHA-1/SHA-256 substitution regressions
+  after independent adversarial review of the binding path.

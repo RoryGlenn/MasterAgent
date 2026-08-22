@@ -96,11 +96,13 @@ current broker-owned adapter may instantiate one profile through
 [`advisory_subagent.py`](../scripts/advisory_subagent.py) with an authenticated
 cross-process goal budget, exactly one parent-selected `--route ROUTE_ID`, a
 required minimum path route, repository-owned scoped read/search tools, and
-route/tracked/staged/untracked-content binding. The runner fully validates the
-manifest and exact route before worker construction, and the child receives
-only the selected route's canonical navigation fields—not the agent registry,
-sibling prompts, full manifest, or generated index. That is not direct
-GitHub-host invocation and is never a route to providers.
+route/tracked/staged/untracked-content binding. The runner parses the manifest
+and exact profile inventory from content-address-verified objects at the
+immutable HEAD revision inside that binding, rejects worktree manifest or
+profile drift, and fully validates the exact route before worker construction. The
+child receives only the selected route's canonical navigation fields—not the
+agent registry, sibling prompts, full manifest, or generated index. That is not
+direct GitHub-host invocation and is never a route to providers.
 
 When the optional adapter is unavailable or a task fails closed, MasterAgent
 completes the same work directly. It does not ask the operator to repeat the
