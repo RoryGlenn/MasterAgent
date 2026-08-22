@@ -36,7 +36,7 @@ from master_agent.errors import (
     RateLimitError,
     ResourceNotFoundError,
 )
-from master_agent.trust_store import capture_ca_bundle
+from master_agent.trust_store import capture_ca_bundle, create_ssl_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,19 +286,7 @@ class _PinnedHTTPSHandler(HTTPSHandler):
 def _create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
     """Create TLS trust from immutable captured data, never from a live path."""
 
-    if ca_bundle_data is None:
-        return ssl.create_default_context()
-    try:
-        try:
-            certificate_data: str | bytes = ca_bundle_data.decode("ascii")
-        except UnicodeDecodeError:
-            # ``ssl`` accepts binary DER certificates as bytes and PEM as text.
-            certificate_data = ca_bundle_data
-        return ssl.create_default_context(cadata=certificate_data)
-    except (ValueError, ssl.SSLError) as error:
-        raise ConfigurationError(
-            "connector CA bundle is not valid certificate data"
-        ) from error
+    return create_ssl_context(ca_bundle_data)
 
 
 class UrllibTransport:

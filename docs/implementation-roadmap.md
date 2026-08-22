@@ -11,6 +11,7 @@ unsafe provider mutations non-routable.
 
 | Area | Software status | Operational status |
 |---|---|---|
+| Progressive user workflow | Complete | Install a reviewed organization profile; local installation, selected reads, governed effects, and enterprise deployment report independent readiness |
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |

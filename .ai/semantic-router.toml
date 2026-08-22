@@ -114,6 +114,20 @@ aliases = ["behavioral specification", "archive a change", "docs contract", "req
 agent = "master-agent"
 
 [[routes]]
+id = "operating-modes"
+title = "Progressive operating modes and user workflow"
+lifecycle = "released"
+summary = "Own strict organization profiles, employee/developer boundaries, capability-scoped doctor results, private setup, and one-command governed execution."
+authority = ["specs/current/runtime/MA-OPERATING-MODES-001.md", "specs/current/runtime/MA-USER-WORKFLOW-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md"]
+implementation = ["src/master_agent/operating.py"]
+configuration = ["config/organization-profile.toml", "src/master_agent/defaults/organization-profile.toml"]
+tests = ["tests/test_operating.py", "tests/test_operating_modes.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["operating modes", "organization profile", "employee mode", "developer mode", "setup doctor execute", "progressive readiness"]
+agent = "master-agent"
+
+[[routes]]
 id = "governed-applied-run"
 title = "Governed applied-run runtime"
 lifecycle = "released"
@@ -442,6 +456,7 @@ agent = "master-agent"
 "src/master_agent/models.py" = "governed-applied-run"
 "src/master_agent/oauth.py" = "provider-security"
 "src/master_agent/oauth_config.py" = "provider-security"
+"src/master_agent/operating.py" = "operating-modes"
 "src/master_agent/orchestrator.py" = "governed-applied-run"
 "src/master_agent/planners/__init__.py" = "local-workflows"
 "src/master_agent/planners/base.py" = "local-workflows"
@@ -522,6 +537,8 @@ agent = "master-agent"
 "tests/test_oauth_flows.py" = "provider-security"
 "tests/test_oauth_readiness.py" = "direct-read"
 "tests/test_onenote_connector.py" = "microsoft-connectors"
+"tests/test_operating.py" = "operating-modes"
+"tests/test_operating_modes.py" = "operating-modes"
 "tests/test_orchestrator.py" = "governed-applied-run"
 "tests/test_orchestrator_compensation.py" = "governed-applied-run"
 "tests/test_outlook_connector.py" = "microsoft-connectors"
@@ -559,6 +576,8 @@ agent = "master-agent"
 "specs/current/development/MA-SPEC-004.md" = "specification-lifecycle"
 "specs/current/runtime/MA-DIRECT-READ-001.md" = "direct-read"
 "specs/current/runtime/MA-DIRECT-READ-002.md" = "direct-read"
+"specs/current/runtime/MA-OPERATING-MODES-001.md" = "operating-modes"
+"specs/current/runtime/MA-USER-WORKFLOW-001.md" = "operating-modes"
 "specs/current/security/MA-ADVISORY-001.md" = "agent-topology"
 "specs/current/security/MA-ADVISORY-002.md" = "agent-topology"
 "specs/current/security/MA-ADVISORY-003.md" = "agent-topology"
@@ -577,6 +596,7 @@ agent = "master-agent"
 "config/identities.toml" = "local-workflows"
 "config/integrations.toml" = "direct-read"
 "config/oauth.toml" = "direct-read"
+"config/organization-profile.toml" = "operating-modes"
 "config/policy.toml" = "governed-applied-run"
 "config/recurring.toml" = "local-workflows"
 "config/retention.toml" = "retention-audit"
@@ -591,6 +611,7 @@ agent = "master-agent"
 "src/master_agent/defaults/identities.toml" = "local-workflows"
 "src/master_agent/defaults/integrations.toml" = "direct-read"
 "src/master_agent/defaults/oauth.toml" = "direct-read"
+"src/master_agent/defaults/organization-profile.toml" = "operating-modes"
 "src/master_agent/defaults/policy.toml" = "governed-applied-run"
 "src/master_agent/defaults/recurring.toml" = "local-workflows"
 "src/master_agent/defaults/retention.toml" = "retention-audit"
@@ -611,9 +632,11 @@ agent = "master-agent"
 "connect" = "direct-read"
 "demo" = "governed-applied-run"
 "discover" = "direct-read"
+"doctor" = "operating-modes"
 "draft-package" = "local-workflows"
 "evidence-prune" = "retention-audit"
 "evidence-repair" = "retention-audit"
+"execute" = "operating-modes"
 "github-repositories" = "direct-read"
 "identity-resolve" = "local-workflows"
 "inspect" = "governed-applied-run"
@@ -628,6 +651,7 @@ agent = "master-agent"
 "run" = "governed-applied-run"
 "sample-plan" = "governed-applied-run"
 "scan" = "provider-security"
+"setup" = "operating-modes"
 "weekly-status" = "local-workflows"
 "weekly-status-plan" = "local-workflows"
 
@@ -776,6 +800,10 @@ route = "agent-topology"
 [[routing_cases]]
 query = "archive a behavioral specification"
 route = "specification-lifecycle"
+
+[[routing_cases]]
+query = "set up employee mode and run capability doctor"
+route = "operating-modes"
 
 [[routing_cases]]
 query = "run an approved change plan"

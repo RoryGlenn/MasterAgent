@@ -42,8 +42,11 @@ handling, and independent verification.
 
 ### Runtime and provider contracts
 
-- Repository configuration and all 13 wheel-packaged TOML defaults match
+- Repository configuration and all 14 wheel-packaged TOML defaults match
   exactly.
+- The strict organization profile, capability-scoped doctor report, employee
+  and developer boundaries, private setup, one-command read/effect routing, and
+  exact-profile approval resume are covered by positive and adversarial tests.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
 - All 82 typed capabilities have governance coverage.

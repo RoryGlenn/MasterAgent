@@ -53,7 +53,7 @@ class AgentBootstrapTests(unittest.TestCase):
 
     def test_first_run_creates_installs_and_checks_readiness(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
             (root / "setup.py").write_text("from setuptools import setup\n")
             commands: list[list[str]] = []
@@ -94,14 +94,19 @@ class AgentBootstrapTests(unittest.TestCase):
                         "-e",
                         str(root),
                     ],
-                    [str(root / ".venv/bin/master-agent"), "readiness"],
+                    [
+                        str(root / ".venv/bin/master-agent"),
+                        "doctor",
+                        "--require-level",
+                        "install",
+                    ],
                 ],
             )
             self.assertTrue((root / ".venv/.master-agent-bootstrap-v1").is_file())
 
     def test_prepared_runtime_skips_environment_changes(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             metadata = root / "pyproject.toml"
             metadata.write_text("[project]\n", encoding="utf-8")
             (root / "setup.py").write_text("from setuptools import setup\n")
@@ -124,7 +129,12 @@ class AgentBootstrapTests(unittest.TestCase):
 
             self.assertEqual(status, 0)
             run.assert_called_once_with(
-                [str(binary_dir / "master-agent"), "readiness"],
+                [
+                    str(binary_dir / "master-agent"),
+                    "doctor",
+                    "--require-level",
+                    "install",
+                ],
                 cwd=root,
                 check=False,
             )
@@ -133,7 +143,7 @@ class AgentBootstrapTests(unittest.TestCase):
         """A usable local environment is not rewritten solely for provenance."""
 
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             binary_dir = root / ".venv/bin"
             binary_dir.mkdir(parents=True)
             (binary_dir / "python").touch()
@@ -144,7 +154,7 @@ class AgentBootstrapTests(unittest.TestCase):
                 redirect_stdout(stdout),
                 patch("scripts.bootstrap_agent.subprocess.run") as run,
             ):
-                run.return_value = subprocess.CompletedProcess([], 2)
+                run.return_value = subprocess.CompletedProcess([], 0)
                 status = bootstrap(
                     root,
                     python_executable="/usr/bin/python3",
@@ -153,17 +163,22 @@ class AgentBootstrapTests(unittest.TestCase):
 
             self.assertEqual(status, 0)
             run.assert_called_once_with(
-                [str(binary_dir / "master-agent"), "readiness"],
+                [
+                    str(binary_dir / "master-agent"),
+                    "doctor",
+                    "--require-level",
+                    "install",
+                ],
                 cwd=root,
                 check=False,
             )
             self.assertIn("Reusing the existing repository-local", stdout.getvalue())
-            self.assertIn("readiness-check-blocked", stdout.getvalue())
+            self.assertIn("setup_status: ready", stdout.getvalue())
             self.assertFalse((root / ".venv/.master-agent-bootstrap-v1").exists())
 
     def test_symbolic_link_environment_is_rejected_without_commands(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
             (root / "setup.py").write_text("from setuptools import setup\n")
             target = root / "elsewhere"
@@ -184,7 +199,7 @@ class AgentBootstrapTests(unittest.TestCase):
 
     def test_unsupported_python_is_rejected_without_commands(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             with (
                 patch("scripts.bootstrap_agent.subprocess.run") as run,
                 self.assertRaisesRegex(BootstrapError, "Python 3.12 or newer"),

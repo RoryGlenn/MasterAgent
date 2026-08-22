@@ -28,6 +28,20 @@ from master_agent.oauth import (
 )
 from master_agent.trust_store import CaBundleSnapshot, capture_ca_bundle
 
+_PLACEHOLDER_PROVIDER_HOSTS = frozenset({"example.atlassian.net"})
+
+
+def is_placeholder_provider_url(value: str | None) -> bool:
+    """Return whether an endpoint resolves to a packaged example hostname."""
+
+    if value is None:
+        return False
+    try:
+        hostname = (urlparse(value).hostname or "").casefold().rstrip(".")
+    except ValueError:
+        return False
+    return hostname in _PLACEHOLDER_PROVIDER_HOSTS
+
 
 class DeploymentType(StrEnum):
     """Supported deployment families."""
@@ -139,6 +153,16 @@ class ConnectorConfig:
             names.append(self.secret_env)
         return tuple(dict.fromkeys(names))
 
+    def effective_base_url(
+        self,
+        environ: Mapping[str, str] | None = None,
+    ) -> str:
+        """Return the environment-over-file provider URL selection."""
+
+        source = environ if environ is not None else os.environ
+        selected = source.get(self.base_url_env, "") if self.base_url_env else ""
+        return selected.strip() or (self.base_url or "").strip()
+
     def configuration_errors(
         self,
         environ: Mapping[str, str] | None = None,
@@ -192,9 +216,7 @@ class ConnectorConfig:
             f"environment variable {name} is missing"
             for name in self.missing_environment_variables(source)
         )
-        base_url = (
-            source.get(self.base_url_env, "") if self.base_url_env else ""
-        ).strip() or (self.base_url or "").strip()
+        base_url = self.effective_base_url(source)
         if base_url:
             try:
                 _validate_base_url(base_url, system=self.system)
@@ -217,7 +239,7 @@ class ConnectorConfig:
         return tuple(
             name
             for name in self.required_environment_variables()
-            if not source.get(name)
+            if not source.get(name, "").strip()
         )
 
     def resolve_execution_target(
@@ -234,8 +256,7 @@ class ConnectorConfig:
         if not self.enabled:
             raise ConfigurationError(f"connector is disabled: {self.system}")
         source = environ if environ is not None else os.environ
-        base_url = source.get(self.base_url_env, "") if self.base_url_env else ""
-        base_url = base_url.strip() or (self.base_url or "").strip()
+        base_url = self.effective_base_url(source)
         if not base_url:
             raise ConfigurationError(f"connector {self.system} requires a base URL")
         _validate_base_url(base_url, system=self.system)
@@ -730,6 +751,8 @@ def _validate_provider_origin(
 ) -> None:
     """Constrain cloud credentials to the provider's owned API domains."""
 
+    if system == "microsoft" and deployment is not DeploymentType.CLOUD:
+        raise ConfigurationError("connector microsoft requires Microsoft Graph Cloud")
     if deployment is not DeploymentType.CLOUD:
         return
     hostname = (urlparse(base_url).hostname or "").lower().rstrip(".")

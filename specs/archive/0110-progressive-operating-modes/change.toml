@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0110-progressive-operating-modes"
+title = "Progressive operating modes and one-command workflow"
+status = "archived"
+github_issue = 110
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-OPERATING-MODES-001"
+destination = "runtime/MA-OPERATING-MODES-001.md"
+source = "current/MA-OPERATING-MODES-001.md"
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-USER-WORKFLOW-001"
+destination = "runtime/MA-USER-WORKFLOW-001.md"
+source = "current/MA-USER-WORKFLOW-001.md"

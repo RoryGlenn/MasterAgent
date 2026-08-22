@@ -67,6 +67,7 @@ _DEFAULT_CONFIG_FILES = frozenset(
         "oauth.toml",
         "draft-package.toml",
         "recurring.toml",
+        "organization-profile.toml",
     }
 )
 

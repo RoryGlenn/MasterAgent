@@ -33,6 +33,38 @@ _BOB_SECRET = "bob-approval-secret-" + "b" * 32
 class ApprovalHandoffTests(unittest.TestCase):
     """Exercise the complete missing-approval, sign, and resume user flow."""
 
+    @unittest.skipUnless(
+        os.name == "posix"
+        and hasattr(os, "mkfifo")
+        and hasattr(os, "O_NONBLOCK")
+        and hasattr(os, "O_NOFOLLOW"),
+        "nonblocking no-follow FIFO safety requires POSIX",
+    )
+    def test_request_loader_rejects_fifo_without_blocking(self) -> None:
+        with private_temporary_directory() as directory:
+            request = Path(directory) / "request.json"
+            os.mkfifo(request, mode=0o600)
+            real_open = os.open
+
+            def guarded_open(
+                path: object,
+                flags: int,
+                *args: object,
+                **kwargs: object,
+            ) -> int:
+                if path == request.name and kwargs.get("dir_fd") is not None:
+                    self.assertTrue(flags & os.O_NONBLOCK)
+                    self.assertTrue(flags & os.O_NOFOLLOW)
+                return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch(
+                    "master_agent.approval_handoff.os.open", side_effect=guarded_open
+                ),
+                self.assertRaisesRegex(ConfigurationError, "unsafe"),
+            ):
+                load_approval_request(request)
+
     def test_bind_rejects_unresumable_approval_required_plan(self) -> None:
         with private_temporary_directory() as directory:
             paths = _workspace(Path(directory))
@@ -69,6 +101,7 @@ class ApprovalHandoffTests(unittest.TestCase):
             )
             self.assertEqual(len(request.required_approvals), 1)
             self.assertEqual(request.run.approval_paths, ())
+            self.assertNotIn("organization_profile", request.run.to_dict())
             self.assertIn("confluence.page.create", request_path.read_text())
             self.assertNotIn(_ALICE_SECRET, request_path.read_text())
             self.assertFalse(paths.result.exists())

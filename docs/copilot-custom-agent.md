@@ -39,6 +39,20 @@ execution runtime.
    The agent then continues the original request. Read connectors being
    available but inactive is the expected safe starting state.
 
+5. For ordinary runtime work, the agent uses the private organization profile
+   and capability-scoped checks:
+
+   ```bash
+   .venv/bin/master-agent setup --non-interactive
+   .venv/bin/master-agent doctor
+   ```
+
+   These commands do not contact a workplace provider. A missing optional
+   credential can make a selected read unavailable without making
+   `install_ready` false. The profile's default `employee` mode exposes only
+   installed, reviewed capabilities and keeps write and communication gates
+   off.
+
 For a non-mutating first interaction, say so explicitly: “Inspect the
 repository without changing or installing anything.” MasterAgent will answer
 without creating `.venv` or running pip. A provider operation, feature, build,
@@ -77,6 +91,16 @@ The profile:
   runtime rather than direct provider tools, CLIs, or generic HTTP; and
 - preserves every capability, governance, approval, retention, audit, and live
   connector gate already enforced by the runtime.
+
+The GitHub Copilot **MasterAgent** profile and the runtime's `employee` or
+`developer` organization-profile value solve different problems. The Copilot
+profile governs repository work. The organization profile narrows what the
+installed runtime may execute. Employee execution never writes missing
+capability code. When a repository change is authorized, the selected Copilot
+parent may implement that governed path in the development plane, but the code
+still needs its tests, behavioral specification, documentation, review,
+signing or release controls, and deployment before an employee profile can use
+it. Selecting `developer` does not skip those controls or grant approval.
 
 ## Advisory sub-agents
 

@@ -15,7 +15,12 @@ the packaged development placeholders for an organization deployment.
 
 ## 3. Select provider deployments
 
-For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS API root. For Microsoft, select the correct Graph national-cloud root and capability-specific identity mode. The built-in Teams send connector is delegated-only; any Teams bot must be implemented and approved as a separate connector.
+For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS API root. Every Microsoft connector is Microsoft Graph Cloud-only: set
+`deployment = "cloud"`, select one of the supported Graph national-cloud roots,
+and choose the capability-specific identity mode. A Data Center or arbitrary
+Graph origin is rejected before credentials are resolved. The built-in Teams
+send connector is delegated-only; any Teams bot must be implemented and
+approved as a separate connector.
 
 ## 4. Register only required applications and credentials
 
@@ -27,6 +32,25 @@ reversible write, and communication, and store persistent secrets in the
 approved secret manager.
 
 ## 5. Run offline readiness
+
+Create a reviewed `organization-profile.toml` with absolute paths to this
+deployment's configuration, exact installed capabilities, private state root,
+and disabled-at-rest effect gates. Install it for the service account, then
+check each progressive level without opening a provider connection:
+
+```bash
+master-agent setup \
+  --profile /trusted/config/organization-profile.toml \
+  --non-interactive
+master-agent doctor --require-level install
+```
+
+`install_ready`, `read_ready`, `draft_ready`, `effect_ready`, and
+`enterprise_ready` are independent. Do not treat an installed profile as
+provider authentication, effect approval, or production certification.
+
+Keep the detailed low-level deployment assessment below for connector, OAuth,
+identity, and provider-data egress diagnostics:
 
 ```bash
 mkdir -p "$HOME/.master-agent/MasterAgent"

@@ -136,6 +136,15 @@ tests, and documentation, then use it to finish the request. Never bypass the
 typed runtime with an arbitrary provider call merely because implementation
 work is required.
 
+This implement-then-continue rule belongs to the selected repository-
+development parent, not to an employee-mode runtime command. `employee` mode
+must reject a missing or unlisted capability as `unsupported_capability` before
+code loading or generation. A trusted `developer` profile may support explicit
+scaffolding, but its output remains quarantined data until independent review,
+tests, specification archival, signing, deployment, and ordinary catalog,
+governance, and policy admission complete. Switching profile modes never grants
+credentials, approval, signing, publication, promotion, or provider authority.
+
 Implementation does not make generated code trusted. Package a dynamically
 generated capability as an immutable capsule and keep it quarantined until its
 source, contracts, dependencies/licenses/SBOM, tests, sandbox evidence,

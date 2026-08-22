@@ -7,12 +7,15 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+import tomllib
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from fnmatch import fnmatch
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -36,14 +39,21 @@ from master_agent.config import (
     DeploymentType,
     IntegrationConfig,
     ResolvedExecutionTarget,
+    is_placeholder_provider_url,
 )
-from master_agent.config_sources import ConfigSource, resolve_config_source
+from master_agent.config_sources import (
+    ConfigSnapshot,
+    ConfigSource,
+    resolve_config_source,
+)
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.drafts import ArtifactBudget
 from master_agent.connectors.factory import (
     build_draft_registry,
     build_live_registry,
+    configured_builtin_capabilities,
+    installed_builtin_capabilities,
     register_draft_connectors,
 )
 from master_agent.connectors.github import GitHubConnector
@@ -66,6 +76,8 @@ from master_agent.discovery import (
     preflight_probe_provider_egress,
 )
 from master_agent.errors import (
+    AuthenticationError,
+    AuthorizationError,
     ConfigurationError,
     MasterAgentError,
     StructuredDataTypeError,
@@ -78,7 +90,7 @@ from master_agent.execution_context import (
     capture_runtime_execution_paths,
     enforce_execution_context,
 )
-from master_agent.governance import EnvironmentKind, GovernanceProfile
+from master_agent.governance import ApprovalTier, EnvironmentKind, GovernanceProfile
 from master_agent.http import HttpTransport
 from master_agent.identity import IdentityRegistry
 from master_agent.models import (
@@ -94,6 +106,20 @@ from master_agent.models import (
 )
 from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
+from master_agent.operating import (
+    ConnectorMode,
+    OperatingFailureCategory,
+    OperatingIssue,
+    OperatingValidationError,
+    OrganizationProfile,
+    ReadinessLevel,
+    allocate_operating_run,
+    assess_operating_readiness,
+    default_organization_profile_path,
+    install_organization_profile,
+    load_organization_profile,
+    require_operating_plan,
+)
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.plugins import (
@@ -174,7 +200,6 @@ _CONNECT_CONFIGURATION_BY_SYSTEM = {
     "teams": "microsoft",
     "onenote": "microsoft",
 }
-_PLACEHOLDER_PROVIDER_URLS = frozenset({"https://example.atlassian.net"})
 _MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS = 8 * 1024
 
 
@@ -184,6 +209,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "setup":
+            return _setup(
+                profile_path=args.profile,
+                non_interactive=args.non_interactive,
+            )
+        if args.command == "doctor":
+            return _doctor(
+                profile_path=args.profile,
+                require_level=args.require_level,
+                output=args.output,
+            )
+        if args.command == "execute":
+            return _execute(
+                plan_path=args.plan,
+                profile_path=args.profile,
+                request_path=args.resume,
+                approval_paths=args.approval,
+            )
         if args.command == "demo":
             return _demo()
         if args.command == "sample-plan":
@@ -412,6 +455,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "audit-verify":
             return _audit_verify(args.database)
         parser.error("unknown command")
+    except OperatingValidationError as error:
+        category = render_terminal_text(str(error.category), max_characters=80)
+        message = render_terminal_text(
+            str(error),
+            max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
+        )
+        print(f"error: {category}: {message}", file=sys.stderr)
+        return 2
     except (
         KeyError,
         MasterAgentError,
@@ -420,6 +471,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         TypeError,
         ValueError,
     ) as error:
+        if args.command in {"setup", "doctor", "execute"}:
+            category = OperatingFailureCategory.RUNTIME_DEFECT
+            if isinstance(error, AuthenticationError):
+                category = OperatingFailureCategory.MISSING_USER_AUTHENTICATION
+            elif isinstance(error, AuthorizationError):
+                category = OperatingFailureCategory.BLOCKED_POLICY
+            error_message = render_terminal_text(
+                str(error),
+                max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
+            )
+            print(f"error: {category}: {error_message}", file=sys.stderr)
+            return 2
         error_type = render_terminal_text(type(error).__name__, max_characters=80)
         error_message = render_terminal_text(
             str(error),
@@ -435,6 +498,49 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Governed enterprise-agent orchestration runtime.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    setup = subparsers.add_parser(
+        "setup",
+        help="install or validate a private organization profile without connecting",
+    )
+    setup.add_argument("--profile", type=Path)
+    interaction = setup.add_mutually_exclusive_group()
+    interaction.add_argument(
+        "--interactive", dest="non_interactive", action="store_false"
+    )
+    interaction.add_argument(
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+    )
+    setup.set_defaults(non_interactive=None)
+
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="report capability-scoped readiness without network access",
+    )
+    doctor.add_argument("--profile", type=Path)
+    doctor.add_argument(
+        "--require-level",
+        choices=("install", "read", "draft", "effect", "enterprise"),
+        default="install",
+    )
+    doctor.add_argument("--output", type=Path)
+
+    execute = subparsers.add_parser(
+        "execute",
+        help="run one reviewed plan or resume its exact approval handoff",
+    )
+    execute.add_argument("plan", type=Path, nargs="?")
+    execute.add_argument("--profile", type=Path)
+    execute.add_argument("--resume", type=Path)
+    execute.add_argument(
+        "--approval",
+        type=Path,
+        action="append",
+        default=[],
+        help="authenticated approval artifact; repeat for dual approval",
+    )
 
     subparsers.add_parser(
         "demo",
@@ -945,6 +1051,1514 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _setup(*, profile_path: Path | None, non_interactive: bool | None) -> int:
+    """Install or validate one user-private organization profile."""
+
+    destination = profile_path or default_organization_profile_path()
+    destination = destination.expanduser()
+    if not destination.is_absolute():
+        destination = Path.cwd() / destination
+    exists = os.path.lexists(destination)
+    source = resolve_config_source(
+        destination if exists else None,
+        "organization-profile.toml",
+    )
+    preview = OrganizationProfile.from_snapshot(source, installed_path=destination)
+    interactive = (
+        (sys.stdin.isatty() and sys.stdout.isatty())
+        if non_interactive is None
+        else not non_interactive
+    )
+    if interactive and not exists:
+        print(
+            f"organization: {_terminal_field(preview.organization, max_characters=256)}"
+        )
+        print(f"mode: {preview.mode}")
+        safe_destination = _terminal_field(destination)
+        try:
+            answer = input(f"Install private profile at {safe_destination}? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().casefold() not in {"y", "yes"}:
+            print("setup cancelled; no profile or state was created")
+            return 2
+    result = install_organization_profile(source, destination=destination)
+    print(f"profile: {_terminal_field(result.profile.source_path)}")
+    print(f"mode: {_terminal_field(result.profile.mode, max_characters=80)}")
+    print(f"state root: {_terminal_field(result.state.state_root)}")
+    print("provider connections: none")
+    print("write actions: disabled unless separately profile- and policy-enabled")
+    print("setup status: ready")
+    return 0
+
+
+def _doctor(
+    *,
+    profile_path: Path | None,
+    require_level: str,
+    output: Path | None,
+) -> int:
+    """Report progressive readiness without provider or credential I/O."""
+
+    selected = profile_path or default_organization_profile_path()
+    selected = selected.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    if not os.path.lexists(selected):
+        issue = OperatingIssue(
+            OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+            "organization profile is not installed; run master-agent setup",
+        )
+        payload: dict[str, object] = {
+            "schema": "master-agent/operating-readiness@1",
+            "mode": None,
+            "profile_fingerprint": None,
+            "profile_source": str(selected),
+            "levels": {
+                str(ReadinessLevel.INSTALL): True,
+                str(ReadinessLevel.READ): False,
+                str(ReadinessLevel.DRAFT): False,
+                str(ReadinessLevel.EFFECT): False,
+                str(ReadinessLevel.ENTERPRISE): False,
+            },
+            "enterprise_blocker": (
+                "enterprise readiness requires organization trust controls"
+            ),
+            "capabilities": [],
+            "issues": [issue.to_dict()],
+        }
+    else:
+        profile = _load_active_organization_profile(selected)
+        catalog = _operating_catalog(profile)
+        integrations, integrations_issue = _doctor_integrations(profile)
+        governance = _doctor_governance(profile)
+        policy = _doctor_policy(profile)
+        approval_required_reads = _doctor_approval_required_read_capabilities(
+            profile,
+            catalog=catalog,
+            governance=governance,
+            policy=policy,
+        )
+        read_capabilities = frozenset(
+            capability
+            for capability in profile.capabilities
+            if (definition := catalog.definitions.get(capability)) is not None
+            and definition.risk is RiskLevel.READ_ONLY
+        )
+        applied_read_capabilities = frozenset(
+            capability
+            for capability in read_capabilities
+            if catalog.definitions[capability].target_system
+            not in _CONNECT_CONFIGURATION_BY_SYSTEM
+        )
+        if governance is not None and not governance.metadata.get(
+            "allow_ephemeral_direct_reads",
+            False,
+        ):
+            applied_read_capabilities = read_capabilities
+        applied_read_capabilities |= approval_required_reads
+        readiness_catalog = _doctor_readiness_catalog(
+            catalog,
+            applied_read_capabilities=applied_read_capabilities,
+        )
+        payload = assess_operating_readiness(
+            profile=profile,
+            catalog=readiness_catalog,
+            integrations=integrations,
+            environ=os.environ,
+            runtime_capabilities=_operating_runtime_capabilities(
+                profile,
+                integrations,
+            ),
+            policy_blocked_capabilities=_operating_policy_blocked_capabilities(
+                profile,
+                integrations,
+                include_provider_gates=integrations_issue is None,
+            ),
+        ).to_dict()
+        state_issue = _offline_operating_state_issue(profile)
+        if state_issue is not None:
+            raw_levels = payload.get("levels")
+            if isinstance(raw_levels, dict):
+                raw_levels[str(ReadinessLevel.INSTALL)] = False
+                raw_levels[str(ReadinessLevel.DRAFT)] = False
+                raw_levels[str(ReadinessLevel.EFFECT)] = False
+            payload["issues"] = [state_issue.to_dict()]
+            _apply_doctor_capability_issue(
+                payload,
+                state_issue,
+                affected_levels=(ReadinessLevel.DRAFT, ReadinessLevel.EFFECT),
+            )
+            _apply_doctor_capability_issue(
+                payload,
+                state_issue,
+                affected_levels=(ReadinessLevel.READ,),
+                capability_names=applied_read_capabilities,
+            )
+        _apply_doctor_configuration_readiness(
+            payload,
+            profile,
+            catalog=catalog,
+            integrations=integrations,
+            integrations_valid=integrations_issue is None,
+            applied_read_capabilities=applied_read_capabilities,
+        )
+        if integrations_issue is not None:
+            _apply_doctor_integrations_issue(
+                payload,
+                integrations_issue,
+                catalog=catalog,
+            )
+        _apply_doctor_approval_readiness(
+            payload,
+            profile,
+            approval_required_reads=approval_required_reads,
+        )
+        _recompute_doctor_operational_levels(payload)
+    levels = payload["levels"]
+    if not isinstance(levels, Mapping):  # pragma: no cover - typed report invariant.
+        raise ValidationError("operating readiness levels are malformed")
+    print(
+        f"mode: {_terminal_field(payload.get('mode') or 'not configured', max_characters=80)}"
+    )
+    for level in ReadinessLevel:
+        print(f"{level}: {bool(levels.get(str(level), False))}")
+    capability_items = payload.get("capabilities", [])
+    if isinstance(capability_items, list):
+        for item in capability_items:
+            if not isinstance(item, Mapping):
+                continue
+            for raw_issue in item.get("issues", []):
+                if isinstance(raw_issue, Mapping):
+                    category = _terminal_field(
+                        raw_issue.get("category", "runtime_defect"), max_characters=80
+                    )
+                    capability = _terminal_field(
+                        raw_issue.get("capability", "installation"), max_characters=256
+                    )
+                    message = _terminal_field(raw_issue.get("message", "readiness gap"))
+                    print(f"{category}: {capability}: {message}")
+    general_issues = payload.get("issues", [])
+    if isinstance(general_issues, list):
+        for raw_issue in general_issues:
+            if isinstance(raw_issue, Mapping):
+                category = _terminal_field(
+                    raw_issue.get("category", "runtime_defect"), max_characters=80
+                )
+                message = _terminal_field(raw_issue.get("message", "readiness gap"))
+                print(f"{category}: {message}")
+    if output is not None:
+        _write_json(output, payload)
+        print(f"wrote {_terminal_field(output)}")
+    required_key = f"{require_level}_ready"
+    return 0 if bool(levels.get(required_key, False)) else 2
+
+
+def _execute(
+    *,
+    plan_path: Path | None,
+    profile_path: Path | None,
+    request_path: Path | None,
+    approval_paths: Sequence[Path],
+) -> int:
+    """Run or resume one profile-admitted plan through existing runtimes."""
+
+    if request_path is not None:
+        if plan_path is not None:
+            raise ValueError("execute accepts either PLAN or --resume, not both")
+        if profile_path is not None:
+            raise ValueError(
+                "execute --resume restores the bound organization profile; "
+                "omit --profile"
+            )
+        if not approval_paths:
+            raise ValueError("execute --resume requires at least one --approval")
+        return _execute_approval_resume(request_path, approval_paths)
+    if plan_path is None:
+        raise ValueError("execute requires PLAN or --resume REQUEST")
+    if approval_paths:
+        raise ValueError("--approval is accepted only with execute --resume")
+
+    selected_profile = profile_path or default_organization_profile_path()
+    profile, profile_source = _capture_active_organization_profile(selected_profile)
+    plan = _load_operating_plan(plan_path)
+    direct_read_candidate = _eligible_direct_operating_read(plan, profile=profile)
+    captured_sources = _capture_operating_execution_sources(
+        profile,
+        profile_source,
+        plan=plan,
+        applied=not direct_read_candidate,
+    )
+    catalog = CapabilityCatalog.from_toml(captured_sources["capabilities"])
+    integrations = IntegrationConfig.from_toml(captured_sources["integrations"])
+    operating_policy = PolicyConfig.from_toml(captured_sources["policy"])
+    operating_governance = GovernanceProfile.from_toml(captured_sources["governance"])
+    direct_read = (
+        direct_read_candidate
+        and operating_governance.allows_direct_read_session(plan)[0]
+        and not _plan_requires_authenticated_approval(
+            plan,
+            policy_source=captured_sources["policy"],
+            governance=operating_governance,
+        )
+    )
+    if direct_read_candidate and not direct_read:
+        captured_sources = _capture_operating_execution_sources(
+            profile,
+            profile_source,
+            plan=plan,
+            applied=True,
+        )
+        catalog = CapabilityCatalog.from_toml(captured_sources["capabilities"])
+        integrations = IntegrationConfig.from_toml(captured_sources["integrations"])
+        operating_policy = PolicyConfig.from_toml(captured_sources["policy"])
+        operating_governance = GovernanceProfile.from_toml(
+            captured_sources["governance"]
+        )
+    require_operating_plan(
+        plan,
+        profile=profile,
+        catalog=catalog,
+        integrations=integrations,
+        environ=os.environ,
+        runtime_capabilities=_operating_runtime_capabilities(profile, integrations),
+        policy_blocked_capabilities=_operating_policy_blocked_capabilities(
+            profile,
+            integrations,
+            catalog=catalog,
+            policy=operating_policy,
+            governance=operating_governance,
+        ),
+    )
+    _require_operating_policy_preflight(
+        plan=plan,
+        catalog=catalog,
+        governance=operating_governance,
+        policy=operating_policy,
+        sources=SourceOfTruthRegistry.from_toml(captured_sources["sources_of_truth"]),
+    )
+    if not direct_read:
+        try:
+            _preflight_applied_provider_reads(
+                plan=plan,
+                catalog=catalog,
+                governance=operating_governance,
+                enforce_non_provider=profile.connector_mode is ConnectorMode.LIVE,
+            )
+        except ConfigurationError as error:
+            raise OperatingValidationError(
+                (
+                    OperatingIssue(
+                        OperatingFailureCategory.BLOCKED_POLICY,
+                        str(error),
+                    ),
+                )
+            ) from error
+    configuration = profile.configuration_path
+    if direct_read:
+        return _run(
+            plan_path=plan_path,
+            apply=False,
+            direct_read=True,
+            approval_paths=[],
+            approval_authorities=None,
+            database=Path(".master-agent/audit.sqlite3"),
+            connector_mode="live",
+            integrations_path=configuration("integrations"),
+            result_json=None,
+            retention_path=None,
+            evidence_type="run-result/full",
+            identities_path=None,
+            include_writes=False,
+            include_communications=False,
+            workspace_root=None,
+            draft_output_dir=Path(".master-agent/drafts"),
+            capabilities_path=configuration("capabilities"),
+            governance_path=configuration("governance"),
+            policy_path=configuration("policy"),
+            sources_of_truth_path=configuration("sources_of_truth"),
+            plugin_names=[],
+            plugin_lock_path=None,
+            credentials_file=None,
+            organization_profile_path=profile.source_path,
+            high_level=True,
+            loaded_plan=plan,
+            expected_plan_fingerprint=plan.fingerprint,
+            expected_profile_fingerprint=profile.fingerprint,
+            captured_configuration_sources=captured_sources,
+        )
+
+    approval_required = _plan_requires_authenticated_approval(
+        plan,
+        policy_source=captured_sources["policy"],
+        governance=operating_governance,
+    )
+    selected_approval_authorities = configuration("approval_authorities")
+    if approval_required and selected_approval_authorities is None:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                    "the organization profile must select approval authorities "
+                    "for this effect",
+                ),
+            )
+        )
+    approval_authorities = selected_approval_authorities if approval_required else None
+    if approval_authorities is not None:
+        approval_source = _resolve_operating_configuration(
+            profile,
+            "approval_authorities",
+            "approval-authorities.toml",
+        )
+        try:
+            _validate_approval_authorities_offline(approval_source)
+        except ConfigurationError as error:
+            raise OperatingValidationError(
+                (
+                    OperatingIssue(
+                        OperatingFailureCategory.RUNTIME_DEFECT,
+                        f"organization approval configuration is invalid: {error}",
+                    ),
+                )
+            ) from error
+        captured_sources["approval_authorities"] = approval_source
+    run_paths = allocate_operating_run(profile)
+    _write_json(run_paths.plan, plan.to_dict())
+    bind_status = _bind_context(
+        plan_path=run_paths.plan,
+        integrations_path=configuration("integrations"),
+        plugin_names=[],
+        plugin_lock_path=None,
+        connector_mode=str(profile.connector_mode),
+        approval_authorities=approval_authorities,
+        database=run_paths.audit_database,
+        result_json=run_paths.result,
+        retention_path=configuration("retention"),
+        evidence_type="run-result/full",
+        identities_path=configuration("identities"),
+        include_writes=profile.writes_enabled,
+        include_communications=profile.communications_enabled,
+        workspace_root=run_paths.workspace,
+        draft_output_dir=run_paths.artifacts,
+        policy_path=configuration("policy"),
+        sources_of_truth_path=configuration("sources_of_truth"),
+        capabilities_path=configuration("capabilities"),
+        governance_path=configuration("governance"),
+        credentials_file=None,
+        output=run_paths.bound_plan,
+        organization_profile_path=profile.source_path,
+        expected_plan_fingerprint=plan.fingerprint,
+        expected_profile_fingerprint=profile.fingerprint,
+        organization_run_root=run_paths.run_root,
+        captured_configuration_sources=captured_sources,
+    )
+    if bind_status:
+        return bind_status
+    bound = _load_operating_plan(run_paths.bound_plan)
+    if bound.execution_context is None or bound.execution_context.runtime is None:
+        raise ValidationError("execute did not produce a bound runtime plan")
+    print(f"prepared plan: {bound.fingerprint}")
+    return _run(
+        plan_path=run_paths.bound_plan,
+        apply=True,
+        approval_paths=[],
+        approval_authorities=approval_authorities,
+        database=run_paths.audit_database,
+        connector_mode=str(profile.connector_mode),
+        integrations_path=configuration("integrations"),
+        result_json=run_paths.result,
+        retention_path=configuration("retention"),
+        evidence_type="run-result/full",
+        identities_path=configuration("identities"),
+        include_writes=profile.writes_enabled,
+        include_communications=profile.communications_enabled,
+        workspace_root=run_paths.workspace,
+        draft_output_dir=run_paths.artifacts,
+        capabilities_path=configuration("capabilities"),
+        governance_path=configuration("governance"),
+        policy_path=configuration("policy"),
+        sources_of_truth_path=configuration("sources_of_truth"),
+        plugin_names=[],
+        plugin_lock_path=None,
+        credentials_file=None,
+        organization_profile_path=profile.source_path,
+        high_level=True,
+        expected_plan_fingerprint=bound.fingerprint,
+        expected_profile_fingerprint=profile.fingerprint,
+        organization_run_root=run_paths.run_root,
+        captured_configuration_sources=captured_sources,
+    )
+
+
+def _execute_approval_resume(
+    request_path: Path,
+    approval_paths: Sequence[Path],
+) -> int:
+    """Resume without accepting any replacement profile or runtime input."""
+
+    request = load_approval_request(request_path)
+    profile_value = request.run.organization_profile
+    if profile_value is None:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                    "approval request has no bound organization profile",
+                ),
+            )
+        )
+    runtime = request.execution_context.runtime
+    if runtime is None:  # pragma: no cover - approval request invariant.
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    "approval request has no bound runtime",
+                ),
+            )
+        )
+    approved_profile_path_fingerprint = next(
+        (
+            item.sha256
+            for item in runtime.configurations
+            if item.name == "organization_profile_path"
+        ),
+        None,
+    )
+    observed_profile_path_fingerprint = hashlib.sha256(
+        _organization_profile_path_snapshot(Path(profile_value)).payload
+    ).hexdigest()
+    if approved_profile_path_fingerprint != observed_profile_path_fingerprint:
+        _raise_profile_selection_error("profile path")
+    profile = _load_active_organization_profile(Path(profile_value))
+    bound_plan = _load_operating_plan(Path(request.run.plan_path))
+    request.validate_plan(bound_plan)
+    approved_profile_fingerprint = next(
+        (
+            item.sha256
+            for item in runtime.configurations
+            if item.name == "organization_profile"
+        ),
+        None,
+    )
+    if approved_profile_fingerprint != profile.fingerprint:
+        _raise_profile_selection_error("profile fingerprint")
+    catalog, integrations = _operating_plan_catalog_and_integrations(
+        profile,
+        replace(bound_plan, execution_context=None),
+    )
+    require_operating_plan(
+        replace(bound_plan, execution_context=None),
+        profile=profile,
+        catalog=catalog,
+        integrations=integrations,
+        environ=os.environ,
+        runtime_capabilities=_operating_runtime_capabilities(profile, integrations),
+        policy_blocked_capabilities=_operating_policy_blocked_capabilities(
+            profile,
+            integrations,
+        ),
+    )
+    return _resume_approval(
+        request_path=request_path,
+        expected_fingerprint=request.fingerprint,
+        approval_paths=approval_paths,
+        high_level=True,
+        expected_profile_fingerprint=profile.fingerprint,
+    )
+
+
+def _offline_operating_state_issue(
+    profile: OrganizationProfile,
+) -> OperatingIssue | None:
+    """Validate profile-owned state paths without creating or changing them."""
+
+    state_root = profile.state_root
+    runs_root = state_root / "runs"
+    if not os.path.lexists(state_root) or not os.path.lexists(runs_root):
+        return OperatingIssue(
+            OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+            "private operating state is not installed; run master-agent setup",
+        )
+    try:
+        with PinnedDirectory.open(state_root), PinnedDirectory.open(runs_root):
+            pass
+    except ConfigurationError:
+        return OperatingIssue(
+            OperatingFailureCategory.RUNTIME_DEFECT,
+            "private operating state failed ownership, permission, or path checks",
+        )
+    return None
+
+
+def _apply_doctor_configuration_readiness(
+    payload: dict[str, object],
+    profile: OrganizationProfile,
+    *,
+    catalog: CapabilityCatalog,
+    integrations: IntegrationConfig,
+    integrations_valid: bool,
+    applied_read_capabilities: frozenset[str],
+) -> None:
+    """Validate the offline configuration slice consumed by each level."""
+
+    checks = (
+        (
+            "policy",
+            "policy.toml",
+            True,
+        ),
+        (
+            "governance",
+            "governance.toml",
+            True,
+        ),
+        (
+            "sources_of_truth",
+            "sources_of_truth.toml",
+            True,
+        ),
+        (
+            "identities",
+            "identities.toml",
+            False,
+        ),
+        (
+            "retention",
+            "retention.toml",
+            False,
+        ),
+    )
+    invalid_names: set[str] = set()
+    for name, filename, affects_all_reads in checks:
+        issue = _doctor_configuration_issue(profile, name=name, filename=filename)
+        if issue is None:
+            continue
+        invalid_names.add(name)
+        affected_levels: Sequence[ReadinessLevel] = (
+            ReadinessLevel.DRAFT,
+            ReadinessLevel.EFFECT,
+        )
+        if affects_all_reads:
+            affected_levels = (ReadinessLevel.READ, *affected_levels)
+        raw_levels = payload.get("levels")
+        if isinstance(raw_levels, dict):
+            for level in affected_levels:
+                raw_levels[str(level)] = False
+        _append_doctor_issue(payload, issue)
+        _apply_doctor_capability_issue(
+            payload,
+            issue,
+            affected_levels=affected_levels,
+        )
+        if not affects_all_reads:
+            _apply_doctor_capability_issue(
+                payload,
+                issue,
+                affected_levels=(ReadinessLevel.READ,),
+                capability_names=applied_read_capabilities,
+            )
+    if not {"policy", "governance"} & invalid_names:
+        policy = PolicyConfig.from_toml(
+            _resolve_operating_configuration(profile, "policy", "policy.toml")
+        )
+        governance = GovernanceProfile.from_toml(
+            _resolve_operating_configuration(
+                profile,
+                "governance",
+                "governance.toml",
+            )
+        )
+        _apply_doctor_policy_blocks(
+            payload,
+            _operating_policy_blocked_capabilities(
+                profile,
+                integrations,
+                catalog=catalog,
+                policy=policy,
+                governance=governance,
+                include_provider_gates=integrations_valid,
+            ),
+        )
+
+
+def _apply_doctor_integrations_issue(
+    payload: dict[str, object],
+    issue: OperatingIssue,
+    *,
+    catalog: CapabilityCatalog,
+) -> None:
+    """Attach an integrations failure only to selected provider capabilities."""
+
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_capabilities, list):
+        return
+    for raw_capability in raw_capabilities:
+        if not isinstance(raw_capability, dict):
+            continue
+        capability = raw_capability.get("capability")
+        if not isinstance(capability, str):
+            continue
+        definition = catalog.definitions.get(capability)
+        if definition is None or definition.authentication in {"local", "local_git"}:
+            continue
+        raw_issues = raw_capability.get("issues")
+        issues = raw_issues if isinstance(raw_issues, list) else []
+        issues = [
+            raw_issue
+            for raw_issue in issues
+            if not (
+                isinstance(raw_issue, Mapping)
+                and raw_issue.get("message")
+                == "live capability has no enabled typed connector configuration"
+            )
+        ]
+        capability_issue = OperatingIssue(
+            issue.category,
+            issue.message,
+            capability,
+        ).to_dict()
+        if capability_issue not in issues:
+            issues.append(capability_issue)
+        raw_capability["issues"] = issues
+        risk = raw_capability.get("risk")
+        if risk == str(RiskLevel.READ_ONLY):
+            raw_capability[str(ReadinessLevel.READ)] = False
+        elif risk == str(RiskLevel.LOCAL_GENERATION):
+            raw_capability[str(ReadinessLevel.DRAFT)] = False
+        else:
+            raw_capability[str(ReadinessLevel.EFFECT)] = False
+
+
+def _doctor_configuration_issue(
+    profile: OrganizationProfile,
+    *,
+    name: str,
+    filename: str,
+) -> OperatingIssue | None:
+    """Return one stable issue for a selected, offline-only config parser."""
+
+    try:
+        source = _resolve_operating_configuration(profile, name, filename)
+        if name == "policy":
+            PolicyConfig.from_toml(source)
+        elif name == "governance":
+            governance = GovernanceProfile.from_toml(source)
+            if not isinstance(
+                governance.metadata.get("allow_ephemeral_direct_reads", False),
+                bool,
+            ):
+                raise ConfigurationError(
+                    "allow_ephemeral_direct_reads must be a boolean"
+                )
+        elif name == "sources_of_truth":
+            SourceOfTruthRegistry.from_toml(source)
+        elif name == "identities":
+            IdentityRegistry.from_toml(source)
+        elif name == "retention":
+            RetentionConfig.from_toml(source)
+        elif name == "approval_authorities":
+            _validate_approval_authorities_offline(source)
+        else:  # pragma: no cover - fixed internal table.
+            raise ConfigurationError(f"unsupported doctor configuration: {name}")
+    except OperatingValidationError as error:
+        return error.issues[0]
+    except (
+        ConfigurationError,
+        TypeError,
+        ValueError,
+        tomllib.TOMLDecodeError,
+    ) as error:
+        return OperatingIssue(
+            OperatingFailureCategory.RUNTIME_DEFECT,
+            f"organization {name} configuration is invalid: {error}",
+        )
+    return None
+
+
+def _validate_approval_authorities_offline(source: ConfigSnapshot) -> None:
+    """Validate authority structure with synthetic values, never real secrets."""
+
+    try:
+        raw = tomllib.loads(source.payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ConfigurationError(
+            "approval authority configuration is not valid UTF-8 TOML"
+        ) from error
+    synthetic: dict[str, str] = {}
+    authorities = raw.get("authorities")
+    if isinstance(authorities, Mapping):
+        for item in authorities.values():
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("secret_env", "")).strip()
+            if name:
+                synthetic[name] = "offline-validation-secret-" + "x" * 32
+    HmacApprovalAuthenticator.from_toml(source, environ=synthetic)
+
+
+def _append_doctor_issue(
+    payload: dict[str, object],
+    issue: OperatingIssue,
+) -> None:
+    raw_issues = payload.get("issues")
+    issues = raw_issues if isinstance(raw_issues, list) else []
+    serialized = issue.to_dict()
+    if serialized not in issues:
+        issues.append(serialized)
+    payload["issues"] = issues
+
+
+def _apply_doctor_capability_issue(
+    payload: dict[str, object],
+    issue: OperatingIssue,
+    *,
+    affected_levels: Sequence[ReadinessLevel],
+    capability_prefix: str | None = None,
+    capability_names: frozenset[str] | None = None,
+) -> None:
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_capabilities, list):
+        return
+    for raw_capability in raw_capabilities:
+        if not isinstance(raw_capability, dict):
+            continue
+        capability = raw_capability.get("capability")
+        risk = raw_capability.get("risk")
+        for level in affected_levels:
+            applies = (
+                (level is ReadinessLevel.READ and risk == str(RiskLevel.READ_ONLY))
+                or (
+                    level is ReadinessLevel.DRAFT
+                    and risk == str(RiskLevel.LOCAL_GENERATION)
+                )
+                or (
+                    level is ReadinessLevel.EFFECT
+                    and risk
+                    not in {
+                        None,
+                        str(RiskLevel.READ_ONLY),
+                        str(RiskLevel.LOCAL_GENERATION),
+                    }
+                )
+            )
+            if (
+                applies
+                and capability_prefix is not None
+                and level is ReadinessLevel.READ
+                and (
+                    not isinstance(capability, str)
+                    or not capability.startswith(capability_prefix)
+                )
+            ):
+                applies = False
+            if (
+                applies
+                and capability_names is not None
+                and (
+                    not isinstance(capability, str)
+                    or capability not in capability_names
+                )
+            ):
+                applies = False
+            if not applies:
+                continue
+            raw_capability[str(level)] = False
+            raw_issues = raw_capability.get("issues")
+            issues = raw_issues if isinstance(raw_issues, list) else []
+            capability_issue = OperatingIssue(
+                issue.category,
+                issue.message,
+                capability if isinstance(capability, str) else None,
+            ).to_dict()
+            if capability_issue not in issues:
+                issues.append(capability_issue)
+            raw_capability["issues"] = issues
+
+
+def _recompute_doctor_operational_levels(payload: dict[str, object]) -> None:
+    raw_levels = payload.get("levels")
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_levels, dict) or not isinstance(raw_capabilities, list):
+        return
+    for level in (ReadinessLevel.READ, ReadinessLevel.DRAFT, ReadinessLevel.EFFECT):
+        raw_levels[str(level)] = bool(raw_levels.get(str(level), False)) and any(
+            isinstance(item, Mapping) and bool(item.get(str(level), False))
+            for item in raw_capabilities
+        )
+
+
+def _apply_doctor_policy_blocks(
+    payload: dict[str, object],
+    blocked_capabilities: frozenset[str],
+) -> None:
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_capabilities, list):
+        return
+    for raw_capability in raw_capabilities:
+        if not isinstance(raw_capability, dict):
+            continue
+        capability = raw_capability.get("capability")
+        if not isinstance(capability, str) or capability not in blocked_capabilities:
+            continue
+        issue = OperatingIssue(
+            OperatingFailureCategory.BLOCKED_POLICY,
+            "capability is disabled by the selected organization policy or provider gate",
+            capability,
+        )
+        risk = raw_capability.get("risk")
+        if risk == str(RiskLevel.READ_ONLY):
+            levels = (ReadinessLevel.READ,)
+        elif risk == str(RiskLevel.LOCAL_GENERATION):
+            levels = (ReadinessLevel.DRAFT,)
+        else:
+            levels = (ReadinessLevel.EFFECT,)
+        _apply_doctor_capability_issue(
+            payload,
+            issue,
+            affected_levels=levels,
+        )
+
+
+def _apply_doctor_approval_readiness(
+    payload: dict[str, object],
+    profile: OrganizationProfile,
+    *,
+    approval_required_reads: frozenset[str] = frozenset(),
+) -> None:
+    """Keep approval-gated readiness false without a selected authority."""
+
+    selected = profile.configuration_path("approval_authorities")
+    approval_issue = (
+        OperatingIssue(
+            OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+            "approval-required capability needs selected approval authorities",
+        )
+        if selected is None
+        else _doctor_configuration_issue(
+            profile,
+            name="approval_authorities",
+            filename="approval-authorities.toml",
+        )
+    )
+    if approval_issue is None:
+        return
+    raw_capabilities = payload.get("capabilities")
+    if not isinstance(raw_capabilities, list):
+        return
+    affected_levels: set[ReadinessLevel] = set()
+    for raw_capability in raw_capabilities:
+        if not isinstance(raw_capability, dict):
+            continue
+        risk = raw_capability.get("risk")
+        if risk is None or risk == str(RiskLevel.LOCAL_GENERATION):
+            continue
+        if risk == str(RiskLevel.READ_ONLY):
+            capability = raw_capability.get("capability")
+            if (
+                not isinstance(capability, str)
+                or capability not in approval_required_reads
+            ):
+                continue
+        level = (
+            ReadinessLevel.READ
+            if risk == str(RiskLevel.READ_ONLY)
+            else ReadinessLevel.EFFECT
+        )
+        affected_levels.add(level)
+        raw_capability[str(level)] = False
+        raw_issues = raw_capability.get("issues")
+        issues = raw_issues if isinstance(raw_issues, list) else []
+        issues.append(
+            OperatingIssue(
+                approval_issue.category,
+                approval_issue.message,
+                (
+                    str(raw_capability["capability"])
+                    if isinstance(raw_capability.get("capability"), str)
+                    else None
+                ),
+            ).to_dict()
+        )
+        raw_capability["issues"] = issues
+    if affected_levels:
+        _append_doctor_issue(payload, approval_issue)
+
+
+def _load_active_organization_profile(path: Path) -> OrganizationProfile:
+    profile, _snapshot = _capture_active_organization_profile(path)
+    return profile
+
+
+def _capture_active_organization_profile(
+    path: Path,
+) -> tuple[OrganizationProfile, ConfigSnapshot]:
+    """Capture and parse one active profile from the same immutable bytes."""
+
+    selected = path.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    if not os.path.lexists(selected):
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                    "organization profile is not installed; run master-agent setup",
+                ),
+            )
+        )
+    try:
+        source = resolve_config_source(selected, "organization-profile.toml")
+    except ConfigurationError as error:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    f"organization profile could not be loaded safely: {error}",
+                ),
+            )
+        ) from error
+    return load_organization_profile(source), source
+
+
+def _operating_catalog_and_integrations(
+    profile: OrganizationProfile,
+) -> tuple[CapabilityCatalog, IntegrationConfig]:
+    catalog = _operating_catalog(profile)
+    try:
+        integration_source = _resolve_operating_configuration(
+            profile,
+            "integrations",
+            "integrations.toml",
+        )
+        return catalog, IntegrationConfig.from_toml(integration_source)
+    except OperatingValidationError:
+        raise
+    except (ConfigurationError, TypeError, ValueError) as error:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    f"organization configuration is invalid: {error}",
+                ),
+            )
+        ) from error
+
+
+def _plan_requires_provider_integrations(
+    plan: ChangePlan,
+    catalog: CapabilityCatalog,
+) -> bool:
+    """Return whether any selected action needs a provider connector bundle."""
+
+    return any(
+        definition is not None
+        and definition.authentication not in {"local", "local_git"}
+        for action in plan.actions
+        for definition in (catalog.definitions.get(action.capability),)
+    )
+
+
+def _empty_operating_integrations_source() -> ConfigSnapshot:
+    """Return the approval-bound no-provider bundle for local-only work."""
+
+    return ConfigSnapshot(
+        display_path=Path("<local-only-integrations>"),
+        payload=b"",
+    )
+
+
+def _operating_plan_catalog_and_integrations(
+    profile: OrganizationProfile,
+    plan: ChangePlan,
+) -> tuple[CapabilityCatalog, IntegrationConfig]:
+    """Load only the integration configuration needed by this exact plan."""
+
+    catalog = _operating_catalog(profile)
+    if not _plan_requires_provider_integrations(plan, catalog):
+        return catalog, IntegrationConfig.from_toml(
+            _empty_operating_integrations_source()
+        )
+    _catalog, integrations = _operating_catalog_and_integrations(profile)
+    return catalog, integrations
+
+
+def _operating_catalog(profile: OrganizationProfile) -> CapabilityCatalog:
+    """Load the mandatory capability catalog with a stable failure category."""
+
+    try:
+        source = _resolve_operating_configuration(
+            profile,
+            "capabilities",
+            "capabilities.toml",
+        )
+        return CapabilityCatalog.from_toml(source)
+    except OperatingValidationError:
+        raise
+    except (ConfigurationError, TypeError, ValueError) as error:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    f"organization capabilities configuration is invalid: {error}",
+                ),
+            )
+        ) from error
+
+
+def _doctor_integrations(
+    profile: OrganizationProfile,
+) -> tuple[IntegrationConfig, OperatingIssue | None]:
+    """Load optional provider setup without hiding local readiness."""
+
+    try:
+        source = _resolve_operating_configuration(
+            profile,
+            "integrations",
+            "integrations.toml",
+        )
+        return IntegrationConfig.from_toml(source), None
+    except OperatingValidationError as error:
+        return IntegrationConfig({}), error.issues[0]
+    except (ConfigurationError, TypeError, ValueError) as error:
+        return IntegrationConfig({}), OperatingIssue(
+            OperatingFailureCategory.RUNTIME_DEFECT,
+            f"organization integrations configuration is invalid: {error}",
+        )
+
+
+def _doctor_governance(profile: OrganizationProfile) -> GovernanceProfile | None:
+    """Return valid offline governance for route-specific readiness."""
+
+    try:
+        source = _resolve_operating_configuration(
+            profile,
+            "governance",
+            "governance.toml",
+        )
+        governance = GovernanceProfile.from_toml(source)
+        configured = governance.metadata.get("allow_ephemeral_direct_reads", False)
+        if not isinstance(configured, bool):
+            return None
+        return governance
+    except (OperatingValidationError, ConfigurationError, TypeError, ValueError):
+        return None
+
+
+def _doctor_policy(profile: OrganizationProfile) -> PolicyConfig | None:
+    """Return valid offline policy for route-specific readiness."""
+
+    try:
+        source = _resolve_operating_configuration(profile, "policy", "policy.toml")
+        return PolicyConfig.from_toml(source)
+    except (OperatingValidationError, ConfigurationError, TypeError, ValueError):
+        return None
+
+
+def _doctor_approval_required_read_capabilities(
+    profile: OrganizationProfile,
+    *,
+    catalog: CapabilityCatalog,
+    governance: GovernanceProfile | None,
+    policy: PolicyConfig | None,
+) -> frozenset[str]:
+    """Return selected reads whose exact policy route requires approval."""
+
+    if governance is None or policy is None:
+        return frozenset()
+    selected_reads = frozenset(
+        capability
+        for capability in profile.capabilities
+        if (definition := catalog.definitions.get(capability)) is not None
+        and definition.risk is RiskLevel.READ_ONLY
+    )
+    if (
+        RiskLevel.READ_ONLY in policy.require_approval_risks
+        or RiskLevel.READ_ONLY not in policy.auto_permit_risks
+    ):
+        return selected_reads
+    required: set[str] = set()
+    for capability in profile.capabilities:
+        definition = catalog.definitions.get(capability)
+        if definition is None or definition.risk is not RiskLevel.READ_ONLY:
+            continue
+        rule = governance.rule_for(capability)
+        if rule is not None and rule.approval_tier in {
+            ApprovalTier.SINGLE,
+            ApprovalTier.DUAL,
+        }:
+            required.add(capability)
+    return frozenset(required)
+
+
+def _doctor_readiness_catalog(
+    catalog: CapabilityCatalog,
+    *,
+    applied_read_capabilities: frozenset[str],
+) -> CapabilityCatalog:
+    """Require configured authentication when reads use the applied runtime."""
+
+    if not applied_read_capabilities:
+        return catalog
+    return CapabilityCatalog(
+        {
+            capability: (
+                replace(definition, authentication="configured_connector")
+                if capability in applied_read_capabilities
+                and definition.risk is RiskLevel.READ_ONLY
+                and definition.authentication == "anonymous_or_configured_connector"
+                else definition
+            )
+            for capability, definition in catalog.definitions.items()
+        }
+    )
+
+
+def _capture_operating_execution_sources(
+    profile: OrganizationProfile,
+    profile_source: ConfigSnapshot,
+    *,
+    plan: ChangePlan,
+    applied: bool,
+) -> dict[str, ConfigSnapshot]:
+    """Capture and parse every configuration needed before run allocation."""
+
+    names = [
+        ("capabilities", "capabilities.toml"),
+        ("policy", "policy.toml"),
+        ("governance", "governance.toml"),
+        ("sources_of_truth", "sources_of_truth.toml"),
+    ]
+    if applied:
+        names.extend(
+            (
+                ("identities", "identities.toml"),
+                ("retention", "retention.toml"),
+            )
+        )
+    sources = {
+        name: _resolve_operating_configuration(profile, name, filename)
+        for name, filename in names
+    }
+    catalog = CapabilityCatalog.from_toml(sources["capabilities"])
+    provider_integrations_required = _plan_requires_provider_integrations(plan, catalog)
+    sources["integrations"] = (
+        _resolve_operating_configuration(
+            profile,
+            "integrations",
+            "integrations.toml",
+        )
+        if provider_integrations_required
+        else _empty_operating_integrations_source()
+    )
+    sources["organization_profile"] = profile_source
+    sources["organization_profile_path"] = _organization_profile_path_snapshot(
+        profile.source_path
+    )
+    try:
+        IntegrationConfig.from_toml(sources["integrations"])
+        PolicyConfig.from_toml(sources["policy"])
+        GovernanceProfile.from_toml(sources["governance"])
+        SourceOfTruthRegistry.from_toml(sources["sources_of_truth"])
+        if applied:
+            IdentityRegistry.from_toml(sources["identities"])
+            RetentionConfig.from_toml(sources["retention"])
+    except (ConfigurationError, ValueError, tomllib.TOMLDecodeError) as error:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    f"organization execution configuration is invalid: {error}",
+                ),
+            )
+        ) from error
+    return sources
+
+
+def _operating_runtime_capabilities(
+    profile: OrganizationProfile,
+    integrations: IntegrationConfig,
+) -> frozenset[str]:
+    """Return built-in code whose optional runtime dependencies are installed."""
+
+    del profile, integrations
+    return installed_builtin_capabilities()
+
+
+def _operating_policy_blocked_capabilities(
+    profile: OrganizationProfile,
+    integrations: IntegrationConfig,
+    *,
+    catalog: CapabilityCatalog | None = None,
+    policy: PolicyConfig | None = None,
+    governance: GovernanceProfile | None = None,
+    include_provider_gates: bool = True,
+) -> frozenset[str]:
+    """Return installed routes disabled by the selected factory configuration."""
+
+    installed = installed_builtin_capabilities()
+    blocked: set[str] = set()
+    if include_provider_gates:
+        configured = configured_builtin_capabilities(
+            integrations,
+            connector_mode=str(profile.connector_mode),
+            include_writes=profile.writes_enabled,
+            include_communications=profile.communications_enabled,
+        )
+        blocked.update(
+            capability
+            for capability in profile.capabilities
+            if capability in installed and capability not in configured
+        )
+    if catalog is not None and policy is not None and governance is not None:
+        for capability in profile.capabilities:
+            definition = catalog.definitions.get(capability)
+            if definition is None:
+                continue
+            rule = governance.rule_for(capability)
+            if (
+                definition.risk in policy.prohibit_risks
+                or any(
+                    fnmatch(capability, pattern)
+                    for pattern in policy.prohibited_capabilities
+                )
+                or rule is None
+                or not rule.enabled
+                or governance.environment not in rule.environments
+                or not rule.data_classifications
+                or rule.approval_tier is ApprovalTier.PROHIBITED
+                or (
+                    rule.approval_tier is ApprovalTier.AUTOMATIC
+                    and definition.risk
+                    not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+                )
+            ):
+                blocked.add(capability)
+    return frozenset(blocked)
+
+
+def _resolve_operating_configuration(
+    profile: OrganizationProfile,
+    name: str,
+    default_filename: str,
+) -> ConfigSnapshot:
+    """Resolve one profile-selected configuration with a stable category."""
+
+    selected = profile.configuration_path(name)
+    try:
+        return resolve_config_source(selected, default_filename)
+    except ConfigurationError as error:
+        category = (
+            OperatingFailureCategory.MISSING_ORGANIZATION_SETUP
+            if selected is not None and "not found" in str(error)
+            else OperatingFailureCategory.RUNTIME_DEFECT
+        )
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    category,
+                    f"organization {name} configuration is unavailable: {error}",
+                ),
+            )
+        ) from error
+
+
+def _eligible_direct_operating_read(
+    plan: ChangePlan,
+    *,
+    profile: OrganizationProfile,
+) -> bool:
+    if profile.connector_mode is not ConnectorMode.LIVE:
+        return False
+    if plan.execution_context is not None or plan.workflow_id is not None:
+        return False
+    if plan.workflow_fingerprint is not None or plan.compensate_on_failure:
+        return False
+    systems = {action.target.system for action in plan.actions}
+    if len(systems) != 1 or not systems <= set(_CONNECT_CONFIGURATION_BY_SYSTEM):
+        return False
+    return all(
+        action.risk is RiskLevel.READ_ONLY
+        and action.authority_source is AuthoritySource.DIRECT_USER
+        and not action.requires_approval
+        for action in plan.actions
+    )
+
+
+def _require_organization_selection(
+    plan: ChangePlan,
+    *,
+    organization_profile_path: Path,
+    expected_profile_fingerprint: str | None = None,
+    connector_mode: str,
+    include_writes: bool,
+    include_communications: bool,
+    integrations_path: Path | None,
+    approval_authorities: Path | None,
+    retention_path: Path | None,
+    identities_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+    allow_bound_plan: bool,
+    captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
+) -> tuple[OrganizationProfile, ConfigSnapshot]:
+    """Revalidate the current profile and every selected normal input."""
+
+    profile, snapshot = _capture_active_organization_profile(organization_profile_path)
+    if (
+        expected_profile_fingerprint is not None
+        and profile.fingerprint != expected_profile_fingerprint
+    ):
+        _raise_profile_selection_error("profile fingerprint")
+    if connector_mode != str(profile.connector_mode):
+        _raise_profile_selection_error("connector mode")
+    if include_writes != profile.writes_enabled:
+        _raise_profile_selection_error("write gate")
+    if include_communications != profile.communications_enabled:
+        _raise_profile_selection_error("communication gate")
+    observed = {
+        "approval_authorities": approval_authorities,
+        "capabilities": capabilities_path,
+        "governance": governance_path,
+        "identities": identities_path,
+        "integrations": integrations_path,
+        "policy": policy_path,
+        "retention": retention_path,
+        "sources_of_truth": sources_of_truth_path,
+    }
+    for name, selected in observed.items():
+        if (
+            captured_configuration_sources is not None
+            and name not in captured_configuration_sources
+        ):
+            continue
+        expected = profile.configuration_path(name)
+        if _normalized_optional_path(selected) != _normalized_optional_path(expected):
+            _raise_profile_selection_error(f"{name} configuration")
+    candidate = (
+        replace(plan, execution_context=None)
+        if allow_bound_plan and plan.execution_context is not None
+        else plan
+    )
+    if captured_configuration_sources is None:
+        catalog, integrations = _operating_plan_catalog_and_integrations(
+            profile,
+            candidate,
+        )
+    else:
+        catalog = CapabilityCatalog.from_toml(
+            captured_configuration_sources["capabilities"]
+        )
+        integrations = IntegrationConfig.from_toml(
+            captured_configuration_sources["integrations"]
+        )
+    policy_source = (
+        captured_configuration_sources["policy"]
+        if captured_configuration_sources is not None
+        else _resolve_operating_configuration(profile, "policy", "policy.toml")
+    )
+    governance_source = (
+        captured_configuration_sources["governance"]
+        if captured_configuration_sources is not None
+        else _resolve_operating_configuration(
+            profile,
+            "governance",
+            "governance.toml",
+        )
+    )
+    operating_policy = PolicyConfig.from_toml(policy_source)
+    operating_governance = GovernanceProfile.from_toml(governance_source)
+    require_operating_plan(
+        candidate,
+        profile=profile,
+        catalog=catalog,
+        integrations=integrations,
+        environ=os.environ,
+        runtime_capabilities=_operating_runtime_capabilities(profile, integrations),
+        policy_blocked_capabilities=_operating_policy_blocked_capabilities(
+            profile,
+            integrations,
+            catalog=catalog,
+            policy=operating_policy,
+            governance=operating_governance,
+        ),
+    )
+    return profile, snapshot
+
+
+def _normalized_optional_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    return path.expanduser().resolve(strict=False)
+
+
+def _raise_profile_selection_error(name: str) -> None:
+    raise OperatingValidationError(
+        (
+            OperatingIssue(
+                OperatingFailureCategory.BLOCKED_POLICY,
+                f"{name} differs from the active organization profile",
+            ),
+        )
+    )
+
+
+def _require_plan_fingerprint(
+    plan: ChangePlan,
+    expected_fingerprint: str | None,
+) -> None:
+    if expected_fingerprint is not None and plan.fingerprint != expected_fingerprint:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.BLOCKED_POLICY,
+                    "plan differs from the profile-admitted immutable snapshot",
+                ),
+            )
+        )
+
+
+def _require_operating_run_paths(
+    *,
+    profile: OrganizationProfile,
+    run_root: Path,
+    plan_path: Path,
+    bound_plan_path: Path | None,
+    database: Path,
+    result_json: Path | None,
+    workspace_root: Path | None,
+    draft_output_dir: Path,
+) -> None:
+    """Require every high-level persistent path to remain in one profile run."""
+
+    expected = {
+        "run root": profile.state_root / "runs" / run_root.name,
+        "plan": run_root / "plan.json",
+        "audit database": run_root / "state" / "audit.sqlite3",
+        "artifact root": run_root / "artifacts",
+        "result": run_root / "results" / "result.json",
+        "workspace": run_root / "workspace",
+    }
+    observed: dict[str, Path | None] = {
+        "run root": run_root,
+        "plan": plan_path,
+        "audit database": database,
+        "artifact root": draft_output_dir,
+        "result": result_json,
+        "workspace": workspace_root,
+    }
+    if bound_plan_path is not None:
+        expected["bound plan"] = run_root / "bound-plan.json"
+        observed["bound plan"] = bound_plan_path
+    for name, expected_path in expected.items():
+        actual = observed[name]
+        if actual is None or actual != expected_path:
+            _raise_profile_selection_error(f"{name} path")
+
+
 def _sample_plan(output: Path) -> int:
     plan = build_weekly_status_plan()
     _write_json(output, plan.to_dict())
@@ -999,11 +2613,56 @@ def _bind_context(
     output: Path,
     credential_mappings: Sequence[str] = (),
     connector_urls: Sequence[str] = (),
+    organization_profile_path: Path | None = None,
+    expected_plan_fingerprint: str | None = None,
+    expected_profile_fingerprint: str | None = None,
+    organization_run_root: Path | None = None,
+    captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
 ) -> int:
     """Write a plan whose fingerprint covers the complete applied runtime."""
 
-    plan = _load_plan(plan_path)
-    integrations_source = resolve_config_source(integrations_path, "integrations.toml")
+    plan = (
+        _load_operating_plan(plan_path)
+        if organization_profile_path is not None
+        else _load_plan(plan_path)
+    )
+    _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    organization_profile_source: ConfigSnapshot | None = None
+    if organization_profile_path is not None:
+        profile, organization_profile_source = _require_organization_selection(
+            plan,
+            organization_profile_path=organization_profile_path,
+            expected_profile_fingerprint=expected_profile_fingerprint,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            integrations_path=integrations_path,
+            approval_authorities=approval_authorities,
+            retention_path=retention_path,
+            identities_path=identities_path,
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
+            allow_bound_plan=False,
+            captured_configuration_sources=captured_configuration_sources,
+        )
+        if organization_run_root is not None:
+            _require_operating_run_paths(
+                profile=profile,
+                run_root=organization_run_root,
+                plan_path=plan_path,
+                bound_plan_path=output,
+                database=database,
+                result_json=result_json,
+                workspace_root=workspace_root,
+                draft_output_dir=draft_output_dir,
+            )
+    integrations_source = (
+        captured_configuration_sources["integrations"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(integrations_path, "integrations.toml")
+    )
     integrations = IntegrationConfig.from_toml(integrations_source)
     configuration_sources = _execution_configuration_sources(
         approval_authorities=approval_authorities,
@@ -1013,6 +2672,9 @@ def _bind_context(
         sources_of_truth_path=sources_of_truth_path,
         capabilities_path=capabilities_path,
         governance_path=governance_path,
+        organization_profile_path=organization_profile_path,
+        organization_profile_source=organization_profile_source,
+        captured_sources=captured_configuration_sources,
     )
     governance = GovernanceProfile.from_toml(configuration_sources["governance"])
     capability_catalog = CapabilityCatalog.from_toml(
@@ -1024,7 +2686,11 @@ def _bind_context(
         governance=governance,
         enforce_non_provider=connector_mode == "live",
     )
-    live_systems = _live_systems_for_plan(plan, integrations)
+    live_systems = _live_systems_for_plan(
+        plan,
+        integrations,
+        catalog=capability_catalog,
+    )
     configurations = _configuration_names_for_systems(live_systems)
     integrations = _with_connector_url_overrides(
         integrations,
@@ -1230,6 +2896,8 @@ def _resume_approval(
     request_path: Path,
     expected_fingerprint: str,
     approval_paths: Sequence[Path],
+    high_level: bool = False,
+    expected_profile_fingerprint: str | None = None,
 ) -> int:
     """Retry the exact captured invocation with supplied approval artifacts."""
 
@@ -1239,7 +2907,11 @@ def _resume_approval(
             "approval request fingerprint does not match --expected-fingerprint; "
             "inspect the current request before resuming"
         )
-    plan = _load_plan(Path(request.run.plan_path))
+    plan = (
+        _load_operating_plan(Path(request.run.plan_path))
+        if high_level
+        else _load_plan(Path(request.run.plan_path))
+    )
     request.validate_plan(plan)
     invocation = request.run.with_approvals(approval_paths)
     return _run(
@@ -1267,6 +2939,13 @@ def _resume_approval(
         credentials_file=_optional_path(invocation.credentials_file),
         credential_mappings=invocation.credential_mappings,
         connector_urls=invocation.connector_urls,
+        organization_profile_path=_optional_path(invocation.organization_profile),
+        high_level=high_level,
+        expected_plan_fingerprint=plan.fingerprint,
+        expected_profile_fingerprint=expected_profile_fingerprint,
+        organization_run_root=(
+            Path(invocation.database).parent.parent if high_level else None
+        ),
     )
 
 
@@ -1297,6 +2976,13 @@ def _run(
     credentials_file: Path | None,
     credential_mappings: Sequence[str] = (),
     connector_urls: Sequence[str] = (),
+    organization_profile_path: Path | None = None,
+    high_level: bool = False,
+    loaded_plan: ChangePlan | None = None,
+    expected_plan_fingerprint: str | None = None,
+    expected_profile_fingerprint: str | None = None,
+    organization_run_root: Path | None = None,
+    captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -1325,6 +3011,11 @@ def _run(
             credentials_file=credentials_file,
             credential_mappings=credential_mappings,
             connector_urls=connector_urls,
+            organization_profile_path=organization_profile_path,
+            loaded_plan=loaded_plan,
+            expected_plan_fingerprint=expected_plan_fingerprint,
+            expected_profile_fingerprint=expected_profile_fingerprint,
+            captured_configuration_sources=captured_configuration_sources,
         )
 
     if apply and plugin_names:
@@ -1344,8 +3035,45 @@ def _run(
         raise ValueError("--credential-map requires --apply and --credentials-file")
     if not apply and connector_urls:
         raise ValueError("--connector-url requires --apply")
-    plan = _load_plan(plan_path)
-    approvals = tuple(_load_approval(path) for path in approval_paths)
+    plan = (
+        loaded_plan
+        if loaded_plan is not None
+        else (_load_operating_plan(plan_path) if high_level else _load_plan(plan_path))
+    )
+    _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    organization_profile_source: ConfigSnapshot | None = None
+    if organization_profile_path is not None:
+        profile, organization_profile_source = _require_organization_selection(
+            plan,
+            organization_profile_path=organization_profile_path,
+            expected_profile_fingerprint=expected_profile_fingerprint,
+            connector_mode=connector_mode,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            integrations_path=integrations_path,
+            approval_authorities=approval_authorities,
+            retention_path=retention_path,
+            identities_path=identities_path,
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
+            allow_bound_plan=apply,
+            captured_configuration_sources=captured_configuration_sources,
+        )
+        if organization_run_root is not None:
+            _require_operating_run_paths(
+                profile=profile,
+                run_root=organization_run_root,
+                plan_path=organization_run_root / "plan.json",
+                bound_plan_path=plan_path,
+                database=database,
+                result_json=result_json,
+                workspace_root=workspace_root,
+                draft_output_dir=draft_output_dir,
+            )
+    approval_loader = _load_operating_approval if high_level else _load_approval
+    approvals = tuple(approval_loader(path) for path in approval_paths)
     if approvals and approval_authorities is None:
         raise ValueError(
             "--approval-authorities is required when approval artifacts are supplied"
@@ -1358,6 +3086,9 @@ def _run(
         sources_of_truth_path=sources_of_truth_path,
         capabilities_path=capabilities_path,
         governance_path=governance_path,
+        organization_profile_path=organization_profile_path,
+        organization_profile_source=organization_profile_source,
+        captured_sources=captured_configuration_sources,
     )
     capability_catalog = CapabilityCatalog.from_toml(
         configuration_sources["capabilities"]
@@ -1401,8 +3132,12 @@ def _run(
         return 0 if report.successful else 2
 
     with ExitStack() as runtime_resources:
-        integrations_source = resolve_config_source(
-            integrations_path, "integrations.toml"
+        integrations_source = _execution_integrations_source(
+            plan=plan,
+            catalog=capability_catalog,
+            integrations_path=integrations_path,
+            high_level=high_level,
+            captured_sources=captured_configuration_sources,
         )
         integration_config = IntegrationConfig.from_toml(integrations_source)
         approved_context = plan.execution_context
@@ -1410,6 +3145,11 @@ def _run(
             raise ConfigurationError(
                 "applied execution requires an approval-bound runtime path identity"
             )
+        _enforce_approved_configuration_inputs(
+            plan,
+            integrations=integration_config,
+            configuration_sources=configuration_sources,
+        )
         _enforce_approved_credential_file(
             approved_context.runtime.credential_file, credentials_file
         )
@@ -1420,7 +3160,11 @@ def _run(
             governance=governance,
             enforce_non_provider=connector_mode == "live",
         )
-        live_systems = _live_systems_for_plan(plan, integration_config)
+        live_systems = _live_systems_for_plan(
+            plan,
+            integration_config,
+            catalog=capability_catalog,
+        )
         configurations = _configuration_names_for_systems(live_systems)
         integration_config = _with_connector_url_overrides(
             integration_config,
@@ -1481,6 +3225,7 @@ def _run(
                 captured_paths=captured_paths,
             ),
             include_connectors=connector_mode == "live",
+            approved_execution_context=approved_context,
         )
         enforce_execution_context(
             plan,
@@ -1599,45 +3344,35 @@ def _run(
             sources_of_truth_path=sources_of_truth_path,
             capabilities_path=capabilities_path,
             governance_path=governance_path,
+            organization_profile_path=organization_profile_path,
         )
         current_integrations = _with_connector_url_overrides(
             IntegrationConfig.from_toml(
-                resolve_config_source(integrations_path, "integrations.toml")
+                _execution_integrations_source(
+                    plan=plan,
+                    catalog=capability_catalog,
+                    integrations_path=integrations_path,
+                    high_level=high_level,
+                    captured_sources=None,
+                )
             ),
             connector_urls,
             selected_configurations=configurations,
         )
-        current_environ = _credential_environment(
-            credential_store,
-            os.environ,
-            compatible_names=compatibility,
-        )
-        enforce_execution_context(
+        _enforce_approved_configuration_inputs(
             plan,
-            build_execution_context(
-                current_integrations,
-                environ=current_environ,
-                systems=live_systems,
-                runtime=build_runtime_execution_binding(
-                    current_integrations,
-                    connector_mode=connector_mode,
-                    include_writes=include_writes,
-                    include_communications=include_communications,
-                    audit_database=database,
-                    artifact_root=draft_output_dir,
-                    workspace_root=workspace_root,
-                    result_json=result_json,
-                    evidence_type=evidence_type,
-                    configuration_sources=current_configuration_sources,
-                    credential_file=(
-                        credential_store.path if credential_store else None
-                    ),
-                    environ=current_environ,
-                    captured_paths=captured_paths,
-                ),
-                include_connectors=connector_mode == "live",
-            ),
+            integrations=current_integrations,
+            configuration_sources=current_configuration_sources,
         )
+        if connector_mode == "live":
+            capture_connector_executions(
+                current_integrations,
+                environ=os.environ,
+                systems=live_systems,
+                require_trusted_principal=False,
+                include_resolved_credentials=False,
+                approved_execution_context=approved_context,
+            )
         for captured in captured_paths:
             captured.validate()
         for pinned in pinned_paths.values():
@@ -1706,6 +3441,7 @@ def _run(
                 credentials_file=credentials_file,
                 credential_mappings=credential_mappings,
                 connector_urls=connector_urls,
+                organization_profile=organization_profile_path,
             )
             approval_request = ApprovalRequest.build(
                 plan=plan,
@@ -1728,11 +3464,18 @@ def _run(
         if approval_request_path is not None and approval_request is not None:
             print(f"approval request: {approval_request_path}")
             print(f"request fingerprint: {approval_request.fingerprint}")
-            print(
-                "pending actions were not executed; a trusted operator must use "
-                "inspect-approval-request and approve-request, then MasterAgent "
-                "can resume-approval without rebuilding this run"
-            )
+            if high_level:
+                print(
+                    "pending actions were not executed; a trusted operator must use "
+                    "inspect-approval-request and approve-request, then resume with "
+                    "execute --resume REQUEST --approval ARTIFACT"
+                )
+            else:
+                print(
+                    "pending actions were not executed; a trusted operator must use "
+                    "inspect-approval-request and approve-request, then MasterAgent "
+                    "can resume-approval without rebuilding this run"
+                )
         return 0 if report.successful else 2
 
 
@@ -1786,6 +3529,51 @@ def _preflight_applied_provider_reads(
         )
 
 
+def _require_operating_policy_preflight(
+    *,
+    plan: ChangePlan,
+    catalog: CapabilityCatalog,
+    governance: GovernanceProfile,
+    policy: PolicyConfig,
+    sources: SourceOfTruthRegistry,
+) -> None:
+    """Reject every deterministic plan-policy denial before run allocation."""
+
+    engine = PolicyEngine(policy)
+    for action in plan.actions:
+        checks = (
+            catalog.validate_action(action),
+            governance.validate_action(action),
+            sources.validate(plan, action),
+        )
+        for allowed, reason in checks:
+            if not allowed:
+                raise OperatingValidationError(
+                    (
+                        OperatingIssue(
+                            OperatingFailureCategory.BLOCKED_POLICY,
+                            reason,
+                            action.capability,
+                        ),
+                    )
+                )
+        decision = engine.evaluate(
+            plan,
+            action,
+            minimum_distinct_approvers=governance.minimum_approvers(action.capability),
+        )
+        if not decision.permitted and not decision.approval_required:
+            raise OperatingValidationError(
+                (
+                    OperatingIssue(
+                        OperatingFailureCategory.BLOCKED_POLICY,
+                        decision.reason,
+                        action.capability,
+                    ),
+                )
+            )
+
+
 def _run_direct_read(
     *,
     plan_path: Path,
@@ -1811,6 +3599,11 @@ def _run_direct_read(
     credentials_file: Path | None,
     credential_mappings: Sequence[str],
     connector_urls: Sequence[str],
+    organization_profile_path: Path | None = None,
+    loaded_plan: ChangePlan | None = None,
+    expected_plan_fingerprint: str | None = None,
+    expected_profile_fingerprint: str | None = None,
+    captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
 ) -> int:
     """Run one stateless typed provider-read session.
 
@@ -1836,13 +3629,47 @@ def _run_direct_read(
         plugin_names=plugin_names,
         plugin_lock_path=plugin_lock_path,
     )
-    plan = _load_plan(plan_path)
-    capabilities_source = resolve_config_source(capabilities_path, "capabilities.toml")
-    governance_source = resolve_config_source(governance_path, "governance.toml")
-    policy_source = resolve_config_source(policy_path, "policy.toml")
-    sources_source = resolve_config_source(
-        sources_of_truth_path,
-        "sources_of_truth.toml",
+    plan = loaded_plan if loaded_plan is not None else _load_plan(plan_path)
+    _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    if organization_profile_path is not None:
+        profile = _load_active_organization_profile(organization_profile_path)
+        _require_organization_selection(
+            plan,
+            organization_profile_path=organization_profile_path,
+            expected_profile_fingerprint=expected_profile_fingerprint,
+            connector_mode="live",
+            include_writes=profile.writes_enabled,
+            include_communications=profile.communications_enabled,
+            integrations_path=integrations_path,
+            approval_authorities=profile.configuration_path("approval_authorities"),
+            retention_path=profile.configuration_path("retention"),
+            identities_path=profile.configuration_path("identities"),
+            policy_path=policy_path,
+            sources_of_truth_path=sources_of_truth_path,
+            capabilities_path=capabilities_path,
+            governance_path=governance_path,
+            allow_bound_plan=False,
+            captured_configuration_sources=captured_configuration_sources,
+        )
+    capabilities_source = (
+        captured_configuration_sources["capabilities"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(capabilities_path, "capabilities.toml")
+    )
+    governance_source = (
+        captured_configuration_sources["governance"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(governance_path, "governance.toml")
+    )
+    policy_source = (
+        captured_configuration_sources["policy"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(policy_path, "policy.toml")
+    )
+    sources_source = (
+        captured_configuration_sources["sources_of_truth"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(sources_of_truth_path, "sources_of_truth.toml")
     )
     catalog = CapabilityCatalog.from_toml(capabilities_source)
     governance = GovernanceProfile.from_toml(governance_source)
@@ -1864,30 +3691,55 @@ def _run_direct_read(
         )
     systems = {provider}
     configurations = _configuration_names_for_systems(systems)
-    integrations = IntegrationConfig.from_toml(
-        resolve_config_source(integrations_path, "integrations.toml")
+    integration_source = (
+        captured_configuration_sources["integrations"]
+        if captured_configuration_sources is not None
+        else resolve_config_source(integrations_path, "integrations.toml")
     )
+    integrations = IntegrationConfig.from_toml(integration_source)
     integrations = _with_connector_url_overrides(
         integrations,
         connector_urls,
         selected_configurations=configurations,
     )
-    credential_store = _load_credential_store(
-        credentials_file,
+    integrations, anonymous = _adapt_anonymous_direct_read_integrations(
+        plan,
+        provider=provider,
         integrations=integrations,
-        governance=governance,
-        connector_mode="live",
-        credential_mappings=credential_mappings,
-        systems=systems,
+        catalog=catalog,
     )
-    compatibility = _atlassian_credential_compatibility(
-        integrations,
-        configurations=configurations,
+    credential_store = (
+        None
+        if anonymous
+        else _load_credential_store(
+            credentials_file,
+            integrations=integrations,
+            governance=governance,
+            connector_mode="live",
+            credential_mappings=credential_mappings,
+            systems=systems,
+        )
     )
-    execution_environ = _credential_environment(
-        credential_store,
-        os.environ,
-        compatible_names=compatibility,
+    compatibility = (
+        {}
+        if anonymous
+        else _atlassian_credential_compatibility(
+            integrations,
+            configurations=configurations,
+        )
+    )
+    execution_environ = (
+        _anonymous_direct_read_environment(
+            integrations,
+            configurations=configurations,
+            environ=os.environ,
+        )
+        if anonymous
+        else _credential_environment(
+            credential_store,
+            os.environ,
+            compatible_names=compatibility,
+        )
     )
     captured = capture_connector_executions(
         integrations,
@@ -1932,6 +3784,76 @@ def _run_direct_read(
 
     _print_direct_read_report(report)
     return 0 if report.successful else 2
+
+
+def _adapt_anonymous_direct_read_integrations(
+    plan: ChangePlan,
+    *,
+    provider: str,
+    integrations: IntegrationConfig,
+    catalog: CapabilityCatalog,
+) -> tuple[IntegrationConfig, bool]:
+    """Remove credential references for two exact reviewed public-read routes."""
+
+    capabilities = {action.capability for action in plan.actions}
+    if any(
+        catalog.definition(action.capability).authentication
+        != "anonymous_or_configured_connector"
+        for action in plan.actions
+    ):
+        return integrations, False
+    configuration_name: str | None = None
+    if provider == "github" and capabilities == {"github.public_repository.list"}:
+        configuration_name = "github"
+    elif provider == "bitbucket" and capabilities == {
+        "bitbucket.public_repository.list"
+    }:
+        configuration_name = "bitbucket"
+    if configuration_name is None:
+        return integrations, False
+    selected = integrations.connector(configuration_name)
+    if not selected.enabled:
+        raise ConfigurationError(
+            f"anonymous {provider} reads require the reviewed connector to be enabled"
+        )
+    if provider == "bitbucket" and selected.deployment is not DeploymentType.CLOUD:
+        raise ConfigurationError(
+            "Bitbucket public workspace repositories require Bitbucket Cloud"
+        )
+    connectors = dict(integrations.connectors)
+    connectors[configuration_name] = replace(
+        selected,
+        auth_mode=AuthMode.NONE,
+        username_env=None,
+        secret_env=None,
+    )
+    return (
+        IntegrationConfig(
+            connectors=connectors,
+            source_sha256=integrations.source_sha256,
+        ),
+        True,
+    )
+
+
+def _anonymous_direct_read_environment(
+    integrations: IntegrationConfig,
+    *,
+    configurations: Iterable[str],
+    environ: Mapping[str, str],
+) -> dict[str, str]:
+    """Copy only endpoint and trust values needed by an anonymous connector."""
+
+    selected: dict[str, str] = {}
+    for name in configurations:
+        connector = integrations.connector(name)
+        for variable in (connector.base_url_env, connector.ca_bundle_env):
+            if variable is None:
+                continue
+            value = environ.get(variable)
+            if value is not None:
+                selected[variable] = value
+    return selected
 
 
 def _validate_direct_read_options(
@@ -2748,11 +4670,12 @@ def _connect(
     connectors = dict(integrations.connectors)
     for name in configurations:
         unresolved = integrations.connector(name)
-        if (unresolved.base_url or "").rstrip("/") in _PLACEHOLDER_PROVIDER_URLS:
+        if is_placeholder_provider_url(unresolved.effective_base_url(os.environ)):
             raise ConfigurationError(
                 f"connector {name} still uses a placeholder provider URL; supply "
                 "the organization's reviewed integrations file"
             )
+        replace(unresolved, enabled=True).resolve_execution_target(os.environ)
         extra = dict(unresolved.extra)
         if name == "microsoft" and "onenote" in systems:
             extra["onenote_read_enabled"] = True
@@ -3867,25 +5790,116 @@ def _execution_configuration_sources(
     sources_of_truth_path: Path | None,
     capabilities_path: Path | None,
     governance_path: Path | None,
+    organization_profile_path: Path | None = None,
+    organization_profile_source: ConfigSnapshot | None = None,
+    captured_sources: Mapping[str, ConfigSnapshot] | None = None,
 ) -> dict[str, ConfigSource]:
     """Capture the exact policy/configuration snapshots used by one run."""
 
+    captured = captured_sources or {}
     sources: dict[str, ConfigSource] = {
-        "policy": resolve_config_source(policy_path, "policy.toml"),
-        "sources_of_truth": resolve_config_source(
-            sources_of_truth_path, "sources_of_truth.toml"
-        ),
-        "capabilities": resolve_config_source(capabilities_path, "capabilities.toml"),
-        "governance": resolve_config_source(governance_path, "governance.toml"),
-        "identities": resolve_config_source(identities_path, "identities.toml"),
-        "retention": resolve_config_source(retention_path, "retention.toml"),
+        "policy": captured.get("policy")
+        or resolve_config_source(policy_path, "policy.toml"),
+        "sources_of_truth": captured.get("sources_of_truth")
+        or resolve_config_source(sources_of_truth_path, "sources_of_truth.toml"),
+        "capabilities": captured.get("capabilities")
+        or resolve_config_source(capabilities_path, "capabilities.toml"),
+        "governance": captured.get("governance")
+        or resolve_config_source(governance_path, "governance.toml"),
+        "identities": captured.get("identities")
+        or resolve_config_source(identities_path, "identities.toml"),
+        "retention": captured.get("retention")
+        or resolve_config_source(retention_path, "retention.toml"),
     }
     if approval_authorities is not None:
-        sources["approval_authorities"] = resolve_config_source(
-            approval_authorities,
-            "approval-authorities.toml",
+        sources["approval_authorities"] = captured.get(
+            "approval_authorities"
+        ) or resolve_config_source(approval_authorities, "approval-authorities.toml")
+    if organization_profile_source is not None:
+        sources["organization_profile"] = organization_profile_source
+    elif organization_profile_path is not None:
+        sources["organization_profile"] = resolve_config_source(
+            organization_profile_path,
+            "organization-profile.toml",
+        )
+    if organization_profile_path is not None:
+        sources["organization_profile_path"] = captured.get(
+            "organization_profile_path"
+        ) or _organization_profile_path_snapshot(organization_profile_path)
+    elif organization_profile_source is not None:
+        sources["organization_profile_path"] = captured.get(
+            "organization_profile_path"
+        ) or _organization_profile_path_snapshot(
+            organization_profile_source.display_path
         )
     return sources
+
+
+def _execution_integrations_source(
+    *,
+    plan: ChangePlan,
+    catalog: CapabilityCatalog,
+    integrations_path: Path | None,
+    high_level: bool,
+    captured_sources: Mapping[str, ConfigSnapshot] | None,
+) -> ConfigSnapshot:
+    """Select the exact provider bundle, or the bound empty local-only bundle."""
+
+    if captured_sources is not None:
+        return captured_sources["integrations"]
+    if high_level and not _plan_requires_provider_integrations(plan, catalog):
+        return _empty_operating_integrations_source()
+    return resolve_config_source(integrations_path, "integrations.toml")
+
+
+def _enforce_approved_configuration_inputs(
+    plan: ChangePlan,
+    *,
+    integrations: IntegrationConfig,
+    configuration_sources: Mapping[str, ConfigSource],
+) -> None:
+    """Reject configuration drift before credentials or provider I/O."""
+
+    context = plan.execution_context
+    if context is None or context.runtime is None:
+        raise ConfigurationError(
+            "applied execution requires an approval-bound runtime path identity"
+        )
+    if integrations.source_sha256 != context.integrations_sha256:
+        raise ConfigurationError(
+            "applied execution context differs from the approved plan: "
+            "integrations bundle"
+        )
+    approved = {item.name: item.sha256 for item in context.runtime.configurations}
+    observed = {
+        name: _configuration_source_sha256(source)
+        for name, source in configuration_sources.items()
+    }
+    if approved != observed:
+        raise ConfigurationError(
+            "applied execution context differs from the approved plan: "
+            "runtime policy, principal, gate, or path binding"
+        )
+
+
+def _configuration_source_sha256(source: ConfigSource) -> str:
+    """Hash one immutable trusted source for an early approval gate."""
+
+    with source.open("rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def _organization_profile_path_snapshot(path: Path) -> ConfigSnapshot:
+    """Bind the canonical profile pathname into the approved runtime context."""
+
+    selected = path.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    canonical = selected.resolve(strict=False)
+    return ConfigSnapshot(
+        display_path=canonical,
+        payload=os.fsencode(canonical),
+    )
 
 
 def _orchestrator(
@@ -3944,7 +5958,10 @@ def _require_systems(
 
 
 def _live_systems_for_plan(
-    plan: ChangePlan, integrations: IntegrationConfig
+    plan: ChangePlan,
+    integrations: IntegrationConfig,
+    *,
+    catalog: CapabilityCatalog | None = None,
 ) -> set[str]:
     """Select plan providers while preserving mismatched-config validation."""
 
@@ -3952,6 +5969,11 @@ def _live_systems_for_plan(
         action.target.system
         for action in plan.actions
         if action.target.system in _CONNECT_CONFIGURATION_BY_SYSTEM
+        and (
+            catalog is None
+            or catalog.definition(action.capability).authentication
+            not in {"local", "local_git"}
+        )
     }
     configured = set(integrations.connectors)
     requested_configurations = {
@@ -3968,9 +5990,125 @@ def _live_systems_for_plan(
     }
 
 
+def _load_operating_plan(path: Path) -> ChangePlan:
+    """Snapshot one high-level plan through a bounded no-follow file descriptor."""
+
+    return _parse_plan_payload(
+        _read_operating_private_payload(path, label="operating plan")
+    )
+
+
+def _load_operating_approval(path: Path) -> Approval:
+    """Snapshot one high-level approval without blocking on special files."""
+
+    payload = _read_operating_private_payload(path, label="approval artifact")
+    try:
+        raw = json.loads(payload.decode("utf-8"))
+    except (ValueError, RecursionError, MemoryError) as error:
+        raise ValidationError(
+            "approval artifact is not bounded valid UTF-8 JSON"
+        ) from error
+    if not isinstance(raw, Mapping):
+        raise ValidationError("approval artifact must be a JSON object")
+    return Approval.from_dict(raw)
+
+
+def _read_operating_private_payload(path: Path, *, label: str) -> bytes:
+    """Return one bounded current-user private regular-file snapshot."""
+
+    selected = path.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    if selected.name in {"", ".", ".."}:
+        raise ConfigurationError(f"{label} path is invalid")
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not nonblocking or not no_follow:
+        raise ConfigurationError(f"secure {label} snapshots are unavailable")
+    descriptor = -1
+    try:
+        with PinnedDirectory.open(
+            selected.parent,
+            require_private=False,
+        ) as directory:
+            descriptor = os.open(
+                selected.name,
+                os.O_RDONLY | nonblocking | no_follow | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=directory.fileno(),
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or (os.name == "posix" and before.st_uid != os.geteuid())
+                or stat.S_IMODE(before.st_mode) & 0o077
+                or before.st_nlink != 1
+            ):
+                raise ConfigurationError(
+                    f"{label} must be a current-user private regular file"
+                )
+            payload = _read_operating_descriptor(descriptor, label=label)
+            after = os.fstat(descriptor)
+            published = os.stat(
+                selected.name,
+                dir_fd=directory.fileno(),
+                follow_symlinks=False,
+            )
+            if _operating_plan_file_identity(before) != _operating_plan_file_identity(
+                after
+            ) or _operating_plan_file_identity(after) != _operating_plan_file_identity(
+                published
+            ):
+                raise ConfigurationError(f"{label} changed during snapshot")
+            directory.validate()
+    except OSError as error:
+        raise ConfigurationError(f"{label} could not be opened safely") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return payload
+
+
+def _operating_plan_file_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int, int]:
+    """Return identity and mutation metadata for one captured plan file."""
+
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_operating_descriptor(descriptor: int, *, label: str) -> bytes:
+    """Read at most one bounded high-level input from a validated descriptor."""
+
+    chunks: list[bytes] = []
+    remaining = MAX_PLAN_BYTES + 1
+    while remaining > 0:
+        chunk = os.read(descriptor, min(remaining, 64 * 1024))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    payload = b"".join(chunks)
+    if len(payload) > MAX_PLAN_BYTES:
+        raise ValidationError(f"{label} exceeds the {MAX_PLAN_BYTES}-byte file limit")
+    return payload
+
+
 def _load_plan(path: Path) -> ChangePlan:
     with path.open("rb") as handle:
         payload = handle.read(MAX_PLAN_BYTES + 1)
+    return _parse_plan_payload(payload)
+
+
+def _parse_plan_payload(payload: bytes) -> ChangePlan:
     if len(payload) > MAX_PLAN_BYTES:
         raise ValidationError(
             f"change plan exceeds the {MAX_PLAN_BYTES}-byte file limit"

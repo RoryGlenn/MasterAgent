@@ -43,8 +43,8 @@ The first-run attempt may only:
 3. create `.venv` with Python's standard `venv` module when it is absent;
 4. install this repository and its declared dependencies into that `.venv`
    without upgrading pip; and
-5. run `.venv/bin/master-agent readiness`, which performs no provider network
-   requests.
+5. run `.venv/bin/master-agent doctor --require-level install`, which performs
+   no provider network requests.
 
 Package installation may contact the Python package index already configured
 for the machine. It must never use `sudo`, an operating-system package manager,
@@ -58,9 +58,17 @@ credentials, activates a connector, enables mutation or communication gates,
 changes permissions outside `.venv`, accesses a workplace provider, grants
 approval, sends content, or performs an enterprise mutation.
 
+Bootstrap also does not select a trusted developer mode or admit generated
+capabilities. The installed CLI may subsequently run its dedicated
+`master-agent setup` and `master-agent doctor` employee workflow; those commands
+remain offline, treat optional provider credentials as level-specific gaps,
+and grant no provider, effect, approval, or code-promotion authority.
+
 The bounded setup installs the lightweight core. A task that needs local
 PowerPoint or draft rendering may install the declared `.[drafts]` extra later;
-that extra is not required for readiness or direct provider reads.
+that extra is not required for readiness or direct provider reads. PowerPoint
+generation remains outside the high-level employee allowlist until its optional
+in-process import is isolated from ambient project modules.
 
 ## Response contract
 
@@ -75,6 +83,10 @@ Keep the first-run response useful to a nontechnical operator:
   virtual environment or repeat commands the agent can run itself.
 - Treat available connectors without credentials as the expected safe starting
   state, not as a failed installation or an active workplace connection.
+- When a capability-scoped summary is useful, explain `install_ready`,
+  `read_ready`, `draft_ready`, `effect_ready`, and `enterprise_ready`
+  independently. Do not present local installation success as effect or
+  enterprise approval.
 - Do not stop after local readiness when the original prompt requested an
   operation. Continue through setup, connection, implementation, validation,
   and verification needed for the requested outcome under the force-multiplier

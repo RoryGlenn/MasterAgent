@@ -668,6 +668,47 @@ class ExecutionContextTests(unittest.TestCase):
             json.dumps(approved.to_dict()),
         )
 
+    def test_ca_drift_is_rejected_before_principal_attestation(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            path = root / "integrations.toml"
+            path.write_text(
+                _GITHUB_BEARER_CONFIG
+                + '\nca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"\n',
+                encoding="utf-8",
+            )
+            ca_bundle = root / "enterprise-ca.pem"
+            ca_bundle.write_text("APPROVED CA\n", encoding="ascii")
+            integrations = IntegrationConfig.from_toml(path)
+            environ = {
+                "MASTER_AGENT_GITHUB_TOKEN": "approved-token",
+                "MASTER_AGENT_ENTERPRISE_CA_BUNDLE": str(ca_bundle),
+            }
+            approved = build_execution_context(
+                integrations,
+                environ=environ,
+                principal_transport=_github_principal_transport(
+                    login="ApprovedUser",
+                    user_id=42,
+                ),
+            )
+            ca_bundle.write_text("UNAPPROVED CA\n", encoding="ascii")
+            transport = _github_principal_transport(
+                login="ApprovedUser",
+                user_id=42,
+            )
+
+            with self.assertRaisesRegex(ConfigurationError, "CA digest"):
+                build_live_connectors(
+                    integrations,
+                    environ=environ,
+                    systems={"github"},
+                    transport=transport,
+                    approved_execution_context=approved,
+                )
+
+        self.assertEqual(transport.requests, [])
+
     def test_effective_bitbucket_publication_root_is_bound(self) -> None:
         with private_temporary_directory() as directory:
             root = Path(directory)

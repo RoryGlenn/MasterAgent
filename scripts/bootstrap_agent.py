@@ -11,7 +11,6 @@ from pathlib import Path
 
 _MINIMUM_PYTHON = (3, 12)
 _MARKER_NAME = ".master-agent-bootstrap-v1"
-_READINESS_CONFIGURATION_GAP = 2
 
 
 class BootstrapError(RuntimeError):
@@ -152,10 +151,10 @@ def bootstrap(
         )
 
     print("Running the offline readiness check...", flush=True)
-    readiness_status = _run([str(command), "readiness"], root=root)
-    if readiness_status == _READINESS_CONFIGURATION_GAP:
-        print("setup_status: local-runtime-ready; readiness-check-blocked", flush=True)
-        return 0
+    readiness_status = _run(
+        [str(command), "doctor", "--require-level", "install"],
+        root=root,
+    )
     if readiness_status:
         raise BootstrapError(
             "the installed local runtime could not complete the offline readiness check"

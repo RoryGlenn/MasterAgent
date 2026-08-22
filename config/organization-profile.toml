@@ -1,0 +1,28 @@
+schema = "master-agent/organization-profile@1"
+organization = "local-default"
+mode = "employee"
+state_root = "."
+connector_mode = "live"
+writes_enabled = false
+communications_enabled = false
+
+# This allowlist is deliberately limited to anonymous public reads and reviewed
+# local-generation capabilities. Catalog, governance, policy, provider, and
+# approval checks remain independently mandatory.
+capabilities = [
+  "bitbucket.public_repository.list",
+  "confluence.page.create.draft",
+  "confluence.page.update.draft",
+  "github.public_repository.list",
+  "jira.issue.comment.draft",
+  "jira.issue.transition.draft",
+  "jira.issue.update.draft",
+  "outlook.email.draft",
+  "repository.branch.plan",
+  "repository.patch.generate",
+  "teams.message.draft",
+]
+
+# Empty paths select the wheel-packaged safe defaults. Organization deployments
+# should set reviewed absolute paths for the configuration files they replace.
+[configuration]

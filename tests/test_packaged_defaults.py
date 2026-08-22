@@ -20,6 +20,7 @@ _DEFAULTS = (
     "oauth.toml",
     "draft-package.toml",
     "recurring.toml",
+    "organization-profile.toml",
 )
 
 

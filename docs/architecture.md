@@ -69,6 +69,38 @@ second runtime or provider path. The parent continues directly whenever that
 adapter is absent or cannot satisfy the full boundary.
 See [`advisory-subagents.md`](advisory-subagents.md).
 
+### Progressive user front door
+
+The user-facing `setup`, `doctor`, and `execute` commands form a thin adapter
+over the same runtime shown above. A strict organization profile supplies
+reviewed configuration paths, one employee/developer mode, a private state
+root, and an exact installed-capability allowlist. The profile is bound input,
+not authority: the catalog, connector registry, governance, policy,
+source-of-truth, credential, approval, verification, compensation, retention,
+and audit boundaries remain independently decisive.
+
+```text
+setup ──> private profile + minimum local state (no provider access)
+                 │
+doctor ──────────┼──> install / read / draft / effect / enterprise readiness
+                 │
+execute PLAN ────┴──> stateless direct read
+                      or bound inspect/apply/approval/resume
+```
+
+Risk determines state and interaction. Eligible single-provider direct reads
+remain in memory. Draft/local and effect work use fresh descriptor-safe private
+run directories. Approval-required effects emit one exact request whose resume
+surface includes the original organization-profile binding. High-impact work
+retains its existing mandatory controls and disabled-at-rest posture. The
+low-level commands remain available and reach the same implementations.
+
+Employee mode cannot turn a capability gap into executable code. Trusted
+developer mode may expose explicit scaffolding in the development plane, but
+generated effect code remains untrusted and quarantined until its independent
+review, tests, specification archival, signing, deployment, and standard
+runtime admission finish. Neither mode can self-approve or self-promote code.
+
 ## Repository discovery topology
 
 Repository development uses a separate hub-and-spoke discovery map before any
@@ -213,6 +245,11 @@ selected identities. See
 [`capability-capsules.md`](capability-capsules.md).
 
 ### Organization governance
+
+`organization-profile.toml` is the user-workflow selector: it points at the
+reviewed configuration set and narrows the installed capabilities exposed to
+that employee or trusted developer. It does not replace the governance file or
+make a listed capability permissible.
 
 `config/governance.toml` maps capability patterns to:
 
