@@ -160,6 +160,12 @@ jobs:
             Invoke-CheckedIcacls @($testRoot, "/setowner", $account)
             Invoke-CheckedIcacls @(
               $testRoot,
+              "/remove:g",
+              "*S-1-5-11",
+              "*S-1-5-32-545"
+            )
+            Invoke-CheckedIcacls @(
+              $testRoot,
               "/grant:r",
               "${account}:(OI)(CI)(F)",
               "*S-1-5-18:(OI)(CI)(F)",
