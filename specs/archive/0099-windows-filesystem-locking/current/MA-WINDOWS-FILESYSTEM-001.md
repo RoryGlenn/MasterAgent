@@ -59,10 +59,16 @@ DACL/owner changes, generic writes, or any other replacement-capable right.
 The ancestor/target/private policy mode MUST be included in the immutable
 trust-policy digest and revalidated with the retained handle. The default
 user-private policy MUST trust only the effective user plus fixed
-operating-system administration principals. An explicit additional SID set
-MAY be supplied for the later organization-managed trust profile, but the file
-being authorized MUST NOT be able to authorize its own writers. The policy and
-its digest MUST be immutable for the lifetime of a pin.
+operating-system administration principals. The exact Windows `OWNER RIGHTS`
+well-known SID MAY carry access only as an alias for an owner that has already
+passed that trust policy; it MUST NOT enter the configured trusted-SID set or
+bypass owner admission or revalidation. No other applying well-known SID MAY
+receive this owner-alias treatment; each MUST remain subject to the ordinary
+trusted-SID and dangerous-access evaluation. An explicit additional SID set
+MAY be supplied for the later
+organization-managed trust profile, but the file being authorized MUST NOT be
+able to authorize its own writers. The policy and its digest MUST be immutable
+for the lifetime of a pin.
 
 `LockFileEx` MUST preserve deterministic shared, exclusive, blocking, and
 nonblocking intent for Python file descriptors and MUST map lock contention to
@@ -98,6 +104,15 @@ certified primitive.
   changes before or during use
 - THEN validation fails before bytes or effects are accepted
 - AND no pathname-only retry or weaker fallback occurs
+
+### Owner Rights remains bound to the validated owner
+
+- GIVEN a Windows object owned by an admitted user or system principal
+- AND its DACL grants access through the `OWNER RIGHTS` well-known SID
+- WHEN MasterAgent admits and later revalidates the object
+- THEN that SID is evaluated only as an alias for the separately trusted owner
+- AND an untrusted owner or owner change still fails closed
+- AND the distinct `CREATOR OWNER` SID remains untrusted
 
 ### Ordinary system ancestors do not weaken the selected target
 

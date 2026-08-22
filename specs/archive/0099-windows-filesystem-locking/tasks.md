@@ -8,6 +8,8 @@
 - [x] Select the partial Windows runtime without enabling incomplete contracts.
 - [x] Port every secure-filesystem-only caller needed before advertising the
   backend and preserve POSIX behavior.
+- [x] Admit the exact Windows `OWNER RIGHTS` SID only as an alias for a
+  separately trusted owner and reject neighboring creator/owner aliases.
 - [x] Add native Windows and platform-neutral adversarial regression coverage.
 - [x] Release semantic ownership and update user, architecture, threat-model,
   CLI, roadmap, release, and changelog documentation.

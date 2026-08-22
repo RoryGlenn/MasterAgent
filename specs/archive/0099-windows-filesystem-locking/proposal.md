@@ -49,8 +49,9 @@ organization trust configuration (#111), or native release certification
 
 ## Risks
 
-The main risks are incomplete ACE parsing, handle/path identity drift, unsafe
-Windows namespace aliases, stale trust configuration, and accidentally
-enabling state operations when only two contracts are ready. Exact DACL
-evaluation, retained no-delete-share handles, versioned bindings, adversarial
-native tests, and unchanged fail-closed contract admission mitigate them.
+The main risks are incomplete ACE parsing, mishandling Windows well-known SID
+aliases, handle/path identity drift, unsafe Windows namespace aliases, stale
+trust configuration, and accidentally enabling state operations when only two
+contracts are ready. Exact DACL evaluation, separately admitted owners,
+retained no-delete-share handles, versioned bindings, adversarial native tests,
+and unchanged fail-closed contract admission mitigate them.

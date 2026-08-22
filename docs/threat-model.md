@@ -192,6 +192,8 @@ Controls:
   unsupported volumes, and revalidates before and after bounded reads. Its
   ancestor policy permits only unrelated child creation while rejecting
   delete-child, metadata, generic-write, ACL, owner, and replacement rights;
+  the exact `OWNER RIGHTS` SID aliases only a separately admitted and
+  revalidated owner and never enters the configured trusted-SID set;
 - Windows create-only publication attaches a protected DACL during exclusive
   creation, bounds and flushes the write, reads back and revalidates the same
   identity, and cleans up only the exact file created by the failed attempt;

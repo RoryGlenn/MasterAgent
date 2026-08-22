@@ -67,8 +67,13 @@ The backend treats paths, ACLs, SIDs, and filesystem metadata as untrusted.
 It rejects namespace aliases, reparse and cloud objects, untrusted write/delete
 authority, null DACLs, owner or policy drift, and identity changes. Additional
 organization SIDs are immutable explicit inputs and are incorporated into the
-approval identity; no authorized file can define its own trust policy. A
-partial runtime cannot satisfy persistent-state admission.
+approval identity. The exact Windows `OWNER RIGHTS` well-known SID is treated
+only as an alias for the separately admitted and continuously revalidated
+owner, so CPython's private temporary-directory ACLs remain usable without
+adding the alias to the configured trusted-SID set. Every other applying
+well-known SID remains subject to the ordinary configured-principal and
+dangerous-access evaluation. No authorized file can define its own trust
+policy. A partial runtime cannot satisfy persistent-state admission.
 
 ## Rejected alternatives
 

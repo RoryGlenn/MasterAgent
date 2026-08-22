@@ -446,17 +446,25 @@ assert 'msvcrt' not in sys.modules
             untrusted_owner.reason,
             "Windows file owner SID is not trusted",
         )
-        configured_alias = evaluate_windows_dacl(
-            owner_sid=CURRENT_SID,
-            dacl=owner_rights,
-            trusted_sids=(*trusted_sids, OWNER_RIGHTS_SID),
-            require_private=True,
-        )
-        self.assertFalse(configured_alias.trusted)
-        self.assertEqual(
-            configured_alias.reason,
-            "Windows trust policy treats a contextual SID as a standalone principal",
-        )
+        for contextual_sid in (
+            "S-1-3-0",
+            "S-1-3-1",
+            "S-1-3-2",
+            "S-1-3-3",
+            "S-1-3-4",
+        ):
+            with self.subTest(contextual_sid=contextual_sid):
+                configured_alias = evaluate_windows_dacl(
+                    owner_sid=CURRENT_SID,
+                    dacl=owner_rights,
+                    trusted_sids=(*trusted_sids, contextual_sid),
+                    require_private=True,
+                )
+                self.assertFalse(configured_alias.trusted)
+                self.assertEqual(
+                    configured_alias.reason,
+                    "Windows trust policy treats a contextual SID as a standalone principal",
+                )
         creator_owner = evaluate_windows_dacl(
             owner_sid=CURRENT_SID,
             dacl=WindowsDacl(
