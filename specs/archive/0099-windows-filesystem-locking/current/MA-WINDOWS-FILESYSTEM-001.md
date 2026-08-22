@@ -46,7 +46,10 @@ UNC/SMB, device, NT, volume-GUID, and other remote namespaces; alternate data
 streams; reserved device names; control or reserved characters; dot traversal;
 and components ending in a space or period. Trusted mutable objects MUST reside
 on a fixed local NTFS or ReFS volume until another filesystem is separately
-certified.
+certified. Case-insensitive name and handle-path comparisons MUST use Windows
+ordinal uppercase-table semantics rather than linguistic or Unicode full case
+folding, so names such as `ß` and `ss` remain distinct when Windows treats them
+as distinct.
 
 The DACL policy MUST reject a missing or null DACL. On the selected target or
 mutable root it MUST reject any untrusted principal that can write data or
@@ -130,6 +133,14 @@ certified primitive.
   reparse/cloud path
 - WHEN the secure-filesystem backend is asked to pin or read it
 - THEN the request fails with a bounded non-secret configuration error
+
+### Windows ordinal Unicode names remain lossless
+
+- GIVEN a case-insensitive Windows directory containing Unicode names that are
+  distinct under the operating system's ordinal uppercase table
+- WHEN the backend lists, pins, or exclusively creates an immediate child
+- THEN canonical case aliases still match and fail closed where required
+- AND linguistic expansions such as `ß` to `ss` never create a false collision
 
 ### Native locks are deterministic under contention
 

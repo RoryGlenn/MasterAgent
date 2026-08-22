@@ -4,7 +4,8 @@
   `windows-native-partial` now binds trusted paths to retained Win32 handles,
   volume/file IDs, owner SIDs, DACL and trust-policy digests; performs bounded
   restricted reads and exclusive protected create-only publication; and
-  provides shared/exclusive `LockFileEx` locking. Unsafe
+  provides shared/exclusive `LockFileEx` locking. Unicode name checks use
+  Windows ordinal comparison rather than lossy linguistic case folding. Unsafe
   namespaces, reparse/cloud objects, unsupported volumes, permission drift, and
   replacement fail closed. A separately digested ancestor policy permits only
   unrelated child creation on retained system roots while continuing to reject

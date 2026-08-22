@@ -189,7 +189,9 @@ Controls:
 - native Windows filesystem trust retains every opened ancestor and leaf
   handle without delete sharing, binds volume/file identity plus owner/DACL and
   trust-policy digests, rejects unsafe namespaces, reparse/cloud objects and
-  unsupported volumes, and revalidates before and after bounded reads. Its
+  unsupported volumes, compares Unicode components and handle paths with the
+  operating system's non-linguistic ordinal uppercase table, and revalidates
+  before and after bounded reads. Its
   ancestor policy permits only unrelated child creation while rejecting
   delete-child, metadata, generic-write, ACL, owner, and replacement rights;
   the exact `OWNER RIGHTS` SID aliases only a separately admitted and

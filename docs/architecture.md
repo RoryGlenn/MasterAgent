@@ -151,7 +151,10 @@ Windows therefore has a deliberately split status. Package import, command
 help/version, deployment readiness, and install diagnosis are supported.
 Protected read paths use a chain of retained non-delete-share Win32 handles,
 fixed-volume file identity, owner SID and effective-DACL policy, and bounded
-handle reads. Retained immutable ancestors may grant unrelated child creation,
+handle reads. Component and handle-path comparisons use Windows ordinal
+uppercase-table semantics, preserving distinct non-linguistic Unicode names
+instead of applying full case folding. Retained immutable ancestors may grant
+unrelated child creation,
 as normal Windows system roots do, but delete-child, metadata, generic-write,
 ACL, owner, and replacement authority remain forbidden; selected targets keep
 the stricter writer/private policy. Approval bindings serialize the exact

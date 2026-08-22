@@ -15,6 +15,7 @@ import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cmp_to_key
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol, Self
@@ -386,6 +387,8 @@ class _WindowsFilesystemApi(Protocol):
     def final_path(self, handle: int) -> str: ...
 
     def directory_names(self, path: str) -> Sequence[str]: ...
+
+    def compare_ordinal_ignore_case(self, left: str, right: str) -> int: ...
 
     def rewind_file(self, handle: int) -> None: ...
 
@@ -853,19 +856,21 @@ class PinnedWindowsPath:
             names = tuple(
                 sorted(
                     self._api.directory_names(self._path.canonical),
-                    key=lambda item: (item.casefold(), item),
+                    key=cmp_to_key(self._api.compare_ordinal_ignore_case),
                 )
             )
             self._revalidate_locked()
-            folded: set[str] = set()
+            previous: str | None = None
             for name in names:
                 _validate_windows_component(name)
-                key = name.casefold()
-                if key in folded:
+                if (
+                    previous is not None
+                    and self._api.compare_ordinal_ignore_case(previous, name) == 0
+                ):
                     raise WindowsPathSecurityError(
                         "Windows secure path contains a case-insensitive name collision"
                     )
-                folded.add(key)
+                previous = name
             return names
 
     def pin_child(
@@ -887,6 +892,7 @@ class PinnedWindowsPath:
                 raise NotADirectoryError("pinned Windows path is not a directory")
             self._revalidate_locked()
             _require_exact_component(
+                self._api,
                 child_name,
                 self._api.directory_names(self._path.canonical),
             )
@@ -980,6 +986,7 @@ class PinnedWindowsPath:
                 )
             self._revalidate_locked()
             _require_component_absent(
+                self._api,
                 child_name,
                 self._api.directory_names(self._path.canonical),
             )
@@ -1612,7 +1619,7 @@ class WindowsSecureFilesystemBackend:
                     policy=acl_policies[-1],
                 )
                 names = api.directory_names(prefixes[index - 1])
-                _require_exact_component(component, names)
+                _require_exact_component(api, component, names)
                 _assert_handle_identity(
                     api,
                     parent,
@@ -1766,8 +1773,14 @@ def _validate_volume(
         )
 
 
-def _require_exact_component(component: str, names: Sequence[str]) -> None:
-    matches = tuple(name for name in names if name.casefold() == component.casefold())
+def _require_exact_component(
+    api: _WindowsFilesystemApi,
+    component: str,
+    names: Sequence[str],
+) -> None:
+    matches = tuple(
+        name for name in names if api.compare_ordinal_ignore_case(name, component) == 0
+    )
     if not matches:
         raise FileNotFoundError("Windows secure path component does not exist")
     if len(matches) != 1:
@@ -1780,8 +1793,12 @@ def _require_exact_component(component: str, names: Sequence[str]) -> None:
         )
 
 
-def _require_component_absent(component: str, names: Sequence[str]) -> None:
-    if any(name.casefold() == component.casefold() for name in names):
+def _require_component_absent(
+    api: _WindowsFilesystemApi,
+    component: str,
+    names: Sequence[str],
+) -> None:
+    if any(api.compare_ordinal_ignore_case(name, component) == 0 for name in names):
         raise FileExistsError("Windows child file already exists")
 
 
@@ -1867,7 +1884,7 @@ def _admit_open_handle(
         )
     observed = validate_windows_drive_path(api.final_path(handle.value))
     expected = validate_windows_drive_path(expected_path)
-    if observed.canonical.casefold() != expected.canonical.casefold():
+    if api.compare_ordinal_ignore_case(observed.canonical, expected.canonical) != 0:
         raise WindowsPathSecurityError(
             "Windows secure path handle resolved to a different path"
         )

@@ -14,9 +14,11 @@ private-file publication with an explicit protected DACL at creation, bounded
 write/flush/readback, path-to-handle revalidation, and exact-identity cleanup;
 it MUST NOT claim atomic replacement or recovery. Unsupported path namespaces,
 volumes, filesystems, reparse/cloud objects, case-sensitive directories, unsafe
-names, and untrusted writers of selected targets MUST fail closed. Retained
-immutable ancestors MAY permit unrelated child creation, but MUST reject
-untrusted deletion, replacement, metadata, DACL, owner, and generic-write
+names, and untrusted writers of selected targets MUST fail closed. Every
+case-insensitive name or handle-path comparison MUST use the operating system's
+ordinal uppercase table without linguistic or full-case-fold expansions.
+Retained immutable ancestors MAY permit unrelated child creation, but MUST
+reject untrusted deletion, replacement, metadata, DACL, owner, and generic-write
 authority, with the exact ancestor policy bound into revalidation. The exact
 Windows `OWNER RIGHTS` well-known SID MAY carry access only as an alias for an
 owner that separately passes admission and revalidation; it MUST NOT enter the

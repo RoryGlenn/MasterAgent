@@ -31,6 +31,10 @@ _ERROR_FILE_NOT_FOUND = 2
 _ERROR_NO_MORE_FILES = 18
 _ERROR_INSUFFICIENT_BUFFER = 122
 
+_CSTR_LESS_THAN = 1
+_CSTR_EQUAL = 2
+_CSTR_GREATER_THAN = 3
+
 _FILE_READ_ATTRIBUTES = 0x00000080
 _FILE_READ_DATA = 0x00000001
 _FILE_WRITE_DATA = 0x00000002
@@ -504,6 +508,28 @@ class NativeWindowsApi:
             if not self._kernel32.FindClose(_HANDLE(handle)):
                 self._raise_last_error("FindClose")
 
+    def compare_ordinal_ignore_case(self, left: str, right: str) -> int:
+        """Compare two names with the Windows non-linguistic uppercase table."""
+
+        if not isinstance(left, str) or not isinstance(right, str):
+            raise TypeError("Windows ordinal comparison values must be text")
+        if "\0" in left or "\0" in right:
+            raise ValueError("Windows ordinal comparison values contain NUL")
+        result = int(
+            self._kernel32.CompareStringOrdinal(
+                left,
+                -1,
+                right,
+                -1,
+                True,
+            )
+        )
+        if result == 0:
+            self._raise_last_error("CompareStringOrdinal")
+        if result not in {_CSTR_LESS_THAN, _CSTR_EQUAL, _CSTR_GREATER_THAN}:
+            raise OSError("CompareStringOrdinal returned an invalid result")
+        return result - _CSTR_EQUAL
+
     def rewind_file(self, handle: int) -> None:
         """Set the pinned file pointer to byte zero."""
 
@@ -875,6 +901,14 @@ class NativeWindowsApi:
         self._kernel32.FindNextFileW.restype = _BOOL
         self._kernel32.FindClose.argtypes = [_HANDLE]
         self._kernel32.FindClose.restype = _BOOL
+        self._kernel32.CompareStringOrdinal.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_int,
+            ctypes.c_wchar_p,
+            ctypes.c_int,
+            _BOOL,
+        ]
+        self._kernel32.CompareStringOrdinal.restype = ctypes.c_int
         self._kernel32.SetFilePointerEx.argtypes = [
             _HANDLE,
             ctypes.c_int64,

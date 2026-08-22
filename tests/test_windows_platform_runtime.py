@@ -224,6 +224,14 @@ class _FakeFilesystemApi:
     def directory_names(self, path: str) -> tuple[str, ...]:
         return self.directories[path]
 
+    @staticmethod
+    def compare_ordinal_ignore_case(left: str, right: str) -> int:
+        # This deterministic test double models the cases exercised below;
+        # production delegates the full Unicode mapping to CompareStringOrdinal.
+        left_key = left.lower()
+        right_key = right.lower()
+        return (left_key > right_key) - (left_key < right_key)
+
     def rewind_file(self, handle: int) -> None:
         self._require_handle(handle)
         self._positions[handle] = 0
@@ -247,7 +255,8 @@ class _FakeFilesystemApi:
         if parent not in self.directories:
             raise NotADirectoryError(parent)
         if any(
-            child.casefold() == name.casefold() for child in self.directories[parent]
+            self.compare_ordinal_ignore_case(child, name) == 0
+            for child in self.directories[parent]
         ):
             raise FileExistsError(name)
         path = parent.rstrip("\\") + "\\" + name
@@ -646,6 +655,51 @@ assert 'msvcrt' not in sys.modules
         self.assertEqual(api.write_file(0x1234, b"payload"), 7)
         self.assertEqual(calls, [(0x1234, b"payload", 7, None)])
 
+    def test_native_ordinal_comparison_uses_null_terminated_unicode_inputs(
+        self,
+    ) -> None:
+        calls: list[tuple[str, int, str, int, bool]] = []
+        results = iter((1, 2, 3))
+
+        def compare(
+            left: str,
+            left_length: int,
+            right: str,
+            right_length: int,
+            ignore_case: bool,
+        ) -> int:
+            calls.append((left, left_length, right, right_length, ignore_case))
+            return next(results)
+
+        api = object.__new__(NativeWindowsApi)
+        api._kernel32 = SimpleNamespace(CompareStringOrdinal=compare)
+        self.assertEqual(api.compare_ordinal_ignore_case("a", "b"), -1)
+        self.assertEqual(api.compare_ordinal_ignore_case("A", "a"), 0)
+        self.assertEqual(api.compare_ordinal_ignore_case("ß", "ss"), 1)
+        self.assertEqual(
+            calls,
+            [
+                ("a", -1, "b", -1, True),
+                ("A", -1, "a", -1, True),
+                ("ß", -1, "ss", -1, True),
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "contain NUL"):
+            api.compare_ordinal_ignore_case("embedded\0value", "value")
+
+    def test_native_ordinal_comparison_fails_closed_on_api_error(self) -> None:
+        api = object.__new__(NativeWindowsApi)
+        api._kernel32 = SimpleNamespace(CompareStringOrdinal=lambda *_args: 0)
+        with (
+            patch.object(windows_native, "_last_error", return_value=87),
+            self.assertRaisesRegex(OSError, "CompareStringOrdinal failed"),
+        ):
+            api.compare_ordinal_ignore_case("left", "right")
+
+        api._kernel32 = SimpleNamespace(CompareStringOrdinal=lambda *_args: 4)
+        with self.assertRaisesRegex(OSError, "invalid result"):
+            api.compare_ordinal_ignore_case("left", "right")
+
     def test_post_create_validation_failure_deletes_exact_native_entry(self) -> None:
         def exercise(failure: str) -> None:
             events: list[str] = []
@@ -956,6 +1010,35 @@ class WindowsPinnedPathTests(unittest.TestCase):
                 ("C:\\Secure\\note.txt", False, True),
             ],
         )
+
+    def test_windows_ordinal_names_preserve_sharp_s_and_ss_as_distinct(self) -> None:
+        api = _FakeFilesystemApi()
+        api.directories[r"C:\Secure"] = (
+            *api.directories[r"C:\Secure"],
+            "ß.txt",
+            "ss.txt",
+        )
+        api.content[r"C:\Secure\ß.txt"] = b"sharp s"
+        api.content[r"C:\Secure\ss.txt"] = b"double s"
+        backend = WindowsSecureFilesystemBackend(_api=api)
+
+        with backend.pin_directory(r"C:\Secure") as directory:
+            self.assertEqual(
+                directory.list_children(),
+                ("nested", "note.txt", "ss.txt", "ß.txt"),
+            )
+            for name, payload in (("ß.txt", b"sharp s"), ("ss.txt", b"double s")):
+                with (
+                    self.subTest(name=name),
+                    directory.pin_child(
+                        name,
+                        kind=WindowsObjectKind.FILE,
+                        require_private=True,
+                    ) as child,
+                ):
+                    self.assertEqual(child.read_bytes(32), payload)
+            with self.assertRaises(FileExistsError):
+                directory.create_private_file("SS.TXT", max_bytes=32)
 
     def test_read_restricted_file_is_bounded_and_returns_identity(self) -> None:
         api = _FakeFilesystemApi()
@@ -1525,6 +1608,30 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                 "component casing is not canonical",
             ):
                 backend.pin_file(alias, require_private=False)
+
+    def test_native_ordinal_names_keep_sharp_s_distinct_from_ss(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            sharp_s = root / "ß.txt"
+            double_s = root / "ss.txt"
+            sharp_s.write_bytes(b"sharp s")
+            double_s.write_bytes(b"double s")
+            backend = WindowsSecureFilesystemBackend()
+            with backend.pin_directory(root, require_private=False) as directory:
+                self.assertEqual(set(directory.list_children()), {"ß.txt", "ss.txt"})
+                for name, payload in (
+                    ("ß.txt", b"sharp s"),
+                    ("ss.txt", b"double s"),
+                ):
+                    with (
+                        self.subTest(name=name),
+                        directory.pin_child(
+                            name,
+                            kind=WindowsObjectKind.FILE,
+                            require_private=False,
+                        ) as child,
+                    ):
+                        self.assertEqual(child.read_bytes(32), payload)
 
     def test_native_rejects_reparse_alias_when_symlinks_are_available(self) -> None:
         with TemporaryDirectory() as raw:

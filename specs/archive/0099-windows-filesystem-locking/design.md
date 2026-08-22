@@ -4,10 +4,11 @@
 
 Add a lazily imported native Windows runtime that selects only a handle/ACL
 filesystem backend and a `LockFileEx` backend. The filesystem backend validates
-the input namespace and every path component, opens objects with Win32 handles
-that omit delete sharing, captures stable file and security information, and
-retains the full ancestor chain. A versioned platform-neutral identity is added
-to runtime-path approval bindings while legacy POSIX fields remain readable.
+the input namespace and every path component with `CompareStringOrdinal`
+case-insensitive semantics, opens objects with Win32 handles that omit delete
+sharing, captures stable file and security information, and retains the full
+ancestor chain. A versioned platform-neutral identity is added to runtime-path
+approval bindings while legacy POSIX fields remain readable.
 
 Read-only callers that need only `secure_filesystem` consume an already pinned
 handle through bounded backend operations. Persistent-state callers continue to
@@ -65,7 +66,8 @@ contracts while all other Windows contracts keep bounded unavailable status.
 
 The backend treats paths, ACLs, SIDs, and filesystem metadata as untrusted.
 It rejects namespace aliases, reparse and cloud objects, untrusted write/delete
-authority, null DACLs, owner or policy drift, and identity changes. Additional
+authority, null DACLs, owner or policy drift, identity changes, and linguistic
+case folding that could conflate distinct NTFS/ReFS names. Additional
 organization SIDs are immutable explicit inputs and are incorporated into the
 approval identity. The exact Windows `OWNER RIGHTS` well-known SID is treated
 only as an alias for the separately admitted and continuously revalidated
