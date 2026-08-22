@@ -18,10 +18,7 @@ import hashlib
 import importlib
 import json
 import os
-import selectors
 import stat
-import subprocess
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -37,7 +34,12 @@ from master_agent.advisory import (
     AgentProfile,
     load_agent_inventory_from_texts,
 )
-from master_agent.platform_runtime import PlatformContract, require_platform_contract
+from master_agent.platform_runtime import (
+    PlatformContract,
+    TrustedGitError,
+    get_trusted_git_backend,
+    require_platform_contract,
+)
 
 _READ_ONLY_SDK_TOOLS = (
     "masteragent_read",
@@ -900,113 +902,21 @@ def _sha256_text(value: str) -> str:
 
 
 def _run_git(root: Path, *arguments: str, max_bytes: int) -> bytes:
+    """Run one bounded read through the selected native trusted-Git backend."""
+
     require_platform_contract(PlatformContract.TRUSTED_GIT)
     require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
-    command = (
-        "git",
-        "--no-pager",
-        f"--work-tree={root}",
-        "-c",
-        f"core.hooksPath={os.devnull}",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.untrackedCache=false",
-        "-c",
-        f"core.attributesFile={os.devnull}",
-        "-c",
-        f"core.excludesFile={os.devnull}",
-        "-c",
-        "diff.external=",
-        "-c",
-        "protocol.allow=never",
-        "-c",
-        "protocol.ext.allow=never",
-        *arguments,
-    )
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=root,
-            env=_git_environment(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+        return get_trusted_git_backend().read(
+            root,
+            arguments,
+            timeout_seconds=10,
+            max_output_bytes=max_bytes,
         )
-    except OSError as error:
+    except TrustedGitError as error:
         raise CopilotRepositoryScanRejected(
-            "repository state command could not start"
+            "repository state command failed"
         ) from error
-    selector = selectors.DefaultSelector()
-    output = bytearray()
-    deadline = time.monotonic() + 10
-    try:
-        if process.stdout is None:
-            raise CopilotRepositoryScanRejected(
-                "repository state command has no output stream"
-            )
-        selector.register(process.stdout, selectors.EVENT_READ)
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise CopilotRepositoryScanRejected(
-                    "repository state command exceeded its time limit"
-                )
-            if not selector.select(remaining):
-                raise CopilotRepositoryScanRejected(
-                    "repository state command exceeded its time limit"
-                )
-            chunk = os.read(
-                process.stdout.fileno(),
-                min(64 * 1024, max_bytes + 1 - len(output)),
-            )
-            if not chunk:
-                break
-            output.extend(chunk)
-            if len(output) > max_bytes:
-                raise CopilotRepositoryScanRejected(
-                    "repository state output exceeds its byte limit"
-                )
-        wait_timeout = max(0.1, deadline - time.monotonic())
-        try:
-            return_code = process.wait(timeout=wait_timeout)
-        except subprocess.TimeoutExpired as error:
-            raise CopilotRepositoryScanRejected(
-                "repository state command exceeded its time limit"
-            ) from error
-    except BaseException:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        raise
-    finally:
-        selector.close()
-        if process.stdout is not None:
-            process.stdout.close()
-    if return_code != 0:
-        raise CopilotRepositoryScanRejected("repository state command failed")
-    return bytes(output)
-
-
-def _git_environment(root: Path) -> dict[str, str]:
-    environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
-    environment.update(
-        {
-            "GIT_ALLOW_PROTOCOL": "",
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CEILING_DIRECTORIES": str(root.parent),
-            "GIT_NO_LAZY_FETCH": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_PAGER": "cat",
-            "GIT_TERMINAL_PROMPT": "0",
-            "LC_ALL": "C",
-        }
-    )
-    return environment
 
 
 def repository_state_digest(root: Path) -> str:

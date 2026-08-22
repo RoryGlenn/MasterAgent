@@ -23,12 +23,13 @@ handling, and independent verification.
   examples are validated against the current source.
 - A hosted Windows 11 ARM isolated installed-package job imports
   `master_agent`, `master_agent.cli`, and `master_agent.readiness`; runs the
-  native retained-handle/ACL, `LockFileEx`, and atomic-state tests through a
-  fresh local standard-user account; asserts the workstation build and
-  non-administrator token without skipping; exercises `--help`, `--version`,
-  deployment `readiness`, restricted readiness output, and
-  `doctor --require-level install`; validates SQLite and retention lifecycles;
-  and proves unrelated unavailable contracts still fail closed.
+  native retained-handle/ACL, `LockFileEx`, atomic-state, credential, Job
+  Object, and trusted-Git tests through a fresh local standard-user account;
+  asserts the workstation build and non-administrator token without skipping;
+  exercises `--help`, `--version`, deployment `readiness`, restricted
+  readiness output, and `doctor --require-level install`; validates SQLite and
+  retention lifecycles; and proves unrelated unavailable contracts still fail
+  closed.
 
 ### Behavioral specifications
 
@@ -71,7 +72,9 @@ handling, and independent verification.
   `windows-handle-atomic-state` available; proves protected exclusive
   create/write/replacement/removal, first-ledger staging, old/new recovery,
   directory durability, SQLite lifecycle, and post-publication identity/DACL
-  validation; and keeps process, Git, and capsule isolation unavailable.
+  validation; runs explicit executables through `windows-job-object`; pins Git
+  for Windows and repository metadata for bounded read-only inspection through
+  `windows-trusted-git`; and keeps capsule isolation unavailable.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
@@ -134,9 +137,9 @@ handling, and independent verification.
   changed paths, affected route contracts, and any unmapped path.
 - The topology is hub-and-spoke: the parent sees the complete registry;
   specialists see only their own profile and selected route. The common
-  platform-runtime, Windows-filesystem, and Windows atomic-state routes are
-  released; the other five native Windows routes remain distinctly planned
-  until separately implemented and certified.
+  platform-runtime, Windows filesystem, atomic-state, credentials, process,
+  and Git routes are released; capsule isolation and hosted certification
+  remain distinctly planned until separately implemented and certified.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay

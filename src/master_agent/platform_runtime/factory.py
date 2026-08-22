@@ -18,6 +18,7 @@ from master_agent.platform_runtime.contracts import (
     PlatformRuntimeStatus,
     ProcessSupervisionBackend,
     SecureFilesystemBackend,
+    TrustedGitBackend,
 )
 
 _HOST_PLATFORM: Final = sys.platform
@@ -100,6 +101,14 @@ def get_process_supervision_backend(
     """Return the selected process-supervision backend."""
 
     return get_platform_runtime(platform).require_process_supervision()
+
+
+def get_trusted_git_backend(
+    platform: str | None = None,
+) -> TrustedGitBackend:
+    """Return the selected native trusted-Git backend."""
+
+    return get_platform_runtime(platform).require_trusted_git()
 
 
 def get_capsule_isolation_backend(

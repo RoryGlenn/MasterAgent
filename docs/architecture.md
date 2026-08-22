@@ -138,8 +138,12 @@ Credential Manager entries and current-user DPAPI documents. Its
 `windows-job-object` process backend launches explicit executables suspended,
 assigns bounded CPU, memory, process-count, and kill-on-close limits before
 resuming, inherits only selected handles and a minimal environment, and shares
-one output budget across stdout and stderr. Trusted Git and capsule isolation
-retain bounded unavailable entries. A non-Windows host that
+one output budget across stdout and stderr. Its `windows-trusted-git` backend
+pins a validated Git for Windows executable and a bounded local repository
+metadata tree, rejects linked-worktree and alternate-object redirection, admits
+only complete fixed read-only command forms, disables ambient configuration and
+executable helpers, and launches through that Job Object boundary. Capsule isolation
+retains a bounded unavailable entry. A non-Windows host that
 explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.

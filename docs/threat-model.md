@@ -223,15 +223,22 @@ Controls:
   starts from a Windows-directory baseline instead of caller environment,
   stdout and stderr share one retention budget, and timeouts terminate the
   complete job;
+- Windows trusted Git accepts only a pinned Git for Windows executable and a
+  bounded retained local metadata tree, rejects reparse points, case
+  collisions, lock contention, linked-worktree redirection, and alternate
+  object databases, disables ambient configuration, credentials, hooks,
+  filters, helpers, prompts, and transports, and admits only complete fixed
+  read-only command forms through the Job Object supervisor;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows native filesystem, locking, atomic-state, credential-storage, process
-  supervision, and existing POSIX behavior receive separate regression
-  coverage, while the remaining Windows backend routes remain planned.
+- Windows native filesystem, locking, atomic-state, credential-storage,
+  process supervision, trusted Git, and existing POSIX behavior receive
+  separate regression coverage, while capsule isolation and hosted
+  certification remain separately planned.
 
 ### Excessive permissions
 
