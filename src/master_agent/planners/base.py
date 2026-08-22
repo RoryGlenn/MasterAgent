@@ -152,7 +152,9 @@ class SystemsAssessment:
             object.__setattr__(
                 self,
                 name,
-                _normalize_text_tuple(getattr(self, name), f"systems assessment {name}"),
+                _normalize_text_tuple(
+                    getattr(self, name), f"systems assessment {name}"
+                ),
             )
         complexity = tuple(self.added_complexity)
         if not all(isinstance(item, ComplexityItem) for item in complexity):
@@ -266,7 +268,9 @@ class GovernedPlan:
 
     def __post_init__(self) -> None:
         if not self.decision.permitted:
-            raise ValidationError("a denied systems decision cannot bind a governed plan")
+            raise ValidationError(
+                "a denied systems decision cannot bind a governed plan"
+            )
         if self.decision.assessment_fingerprint != self.assessment.fingerprint:
             raise ValidationError(
                 "systems gate decision is not bound to the supplied assessment"
