@@ -17,8 +17,22 @@ from master_agent.advisory import (
     BoundaryRecorders,
     DelegationStatus,
     RepositoryFixture,
+    SemanticRouteSlice,
     load_agent_inventory,
     validate_profile_inventory,
+)
+
+_TEST_ROUTE = SemanticRouteSlice(
+    route="agent-topology",
+    title="Parent and bounded advisory topology",
+    lifecycle="released",
+    summary="Bounded advisory test route.",
+    authority=(),
+    implementation=(),
+    configuration=(),
+    tests=(),
+    release_gates=(),
+    dependencies=(),
 )
 from master_agent.models import (
     AgentAction,
@@ -88,13 +102,18 @@ class AdvisoryIntegrationTests(unittest.TestCase):
         """Repository-owned orchestration binds every budget to MasterAgent."""
 
         with self.assertRaises(AdvisoryDispatchDenied):
-            self.broker.start_session("MasterAgent Read Researcher", "task")
+            self.broker.start_session(
+                "MasterAgent Read Researcher",
+                "task",
+                semantic_route=_TEST_ROUTE,
+            )
 
     def test_bounded_research_uses_profile_derived_read_search_tools(self) -> None:
         """Research succeeds only through the profile-derived safe dispatcher."""
 
         def worker(envelope, dispatcher):  # type: ignore[no-untyped-def]
             self.assertEqual(envelope.profile_name, self.inventory.researcher.name)
+            self.assertEqual(envelope.semantic_route, _TEST_ROUTE)
             self.assertEqual(dispatcher.allowed_tools, frozenset({"read", "search"}))
             result = dispatcher.dispatch("search", {"query": "safe_function"})
             return AdvisoryReport(
@@ -103,7 +122,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
                 citations=tuple(item.path for item in result.citations),
             )
 
-        session = self.broker.start_session("MasterAgent", "research-task")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "research-task",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "Find the safe function", "paths": ["fixtures/source.py"]},
@@ -116,6 +139,30 @@ class AdvisoryIntegrationTests(unittest.TestCase):
         verified = self.broker.recheck_report(outcome.report)
         self.assertEqual(verified.citations, ("fixtures/source.py",))
         self.assertEqual(self.recorders.snapshot(), self.broker.protected_state)
+
+    def test_missing_parent_selected_route_is_denied_before_worker(self) -> None:
+        """No child or budget attempt starts without one selected route."""
+
+        called = False
+
+        def worker(envelope, dispatcher):  # type: ignore[no-untyped-def]
+            del envelope, dispatcher
+            nonlocal called
+            called = True
+            return AdvisoryReport("unused", (), ())
+
+        session = self.broker.start_session("MasterAgent", "missing-route")
+        outcome = session.delegate(
+            AdvisoryRole.RESEARCH,
+            {"task": "must remain on parent"},
+            worker=worker,
+        )
+
+        self.assertEqual(outcome.status, DelegationStatus.DENIED)
+        self.assertTrue(outcome.fallback_to_parent)
+        self.assertIn("parent-selected semantic route", outcome.reason)
+        self.assertEqual(session.research_attempts, 0)
+        self.assertFalse(called)
 
     def test_plan_review_cannot_execute_mutate_contact_or_delegate(self) -> None:
         """Reviewer tools technically exclude every effect-bearing category."""
@@ -145,7 +192,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
                 citations=tuple(item.path for item in result.citations),
             )
 
-        session = self.broker.start_session("MasterAgent", "review-task")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "review-task",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.PLAN_REVIEW,
             {"task": "Review the plan", "plan_summary": "read-only plan"},
@@ -207,7 +258,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
                         ),
                     )
 
-                session = self.broker.start_session("MasterAgent", "injection-task")
+                session = self.broker.start_session(
+                    "MasterAgent",
+                    "injection-task",
+                    semantic_route=_TEST_ROUTE,
+                )
                 outcome = session.delegate(
                     AdvisoryRole.RESEARCH,
                     {"task": "Inspect untrusted fixtures"},
@@ -226,7 +281,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
     def test_nested_delegation_and_budget_overflow_remain_on_parent(self) -> None:
         """Depth one and three-research/one-review limits use counters."""
 
-        session = self.broker.start_session("MasterAgent", "budget-task")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "budget-task",
+            semantic_route=_TEST_ROUTE,
+        )
         nested = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "nested"},
@@ -271,7 +330,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
         """Optional delegation failure never blocks or mutates the parent path."""
 
         before = self.recorders.snapshot()
-        session = self.broker.start_session("MasterAgent", "fallback-task")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "fallback-task",
+            semantic_route=_TEST_ROUTE,
+        )
         unavailable = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "research"},
@@ -301,7 +364,11 @@ class AdvisoryIntegrationTests(unittest.TestCase):
             called = True
             return AdvisoryReport("unused", (), ())
 
-        session = self.broker.start_session("MasterAgent", "sensitive-task")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "sensitive-task",
+            semantic_route=_TEST_ROUTE,
+        )
         payloads = (
             {"task": "research", "credential": "ghp_1234567890"},
             {"task": "research", "context": "token=TOPSECRET"},

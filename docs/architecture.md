@@ -69,6 +69,45 @@ second runtime or provider path. The parent continues directly whenever that
 adapter is absent or cannot satisfy the full boundary.
 See [`advisory-subagents.md`](advisory-subagents.md).
 
+## Repository discovery topology
+
+Repository development uses a separate hub-and-spoke discovery map before any
+broad source search:
+
+```text
+User -> MasterAgent
+          -> Read Researcher (optional, read/search only)
+          -> Plan Reviewer (optional, read/search only)
+          -> Docs contract (applied directly by the parent)
+          -> deterministic governed runtime
+```
+
+The exact ownership and topology data lives in
+[`semantic-router.toml`](../.ai/semantic-router.toml). The compact
+[`semantic index`](semantic-index.md) is generated from that manifest and is
+navigation data, never authority. After loading the minimum repository policy,
+the parent selects one route and loads only its linked policy, specification,
+implementation, and verification slice. Exact inventory validation prevents a
+new module, test, requirement, command, capability, connector, configuration,
+profile, or platform area from silently inheriting an owner.
+Implementation, test, and current-requirement links must agree with that exact
+owner. A route that intentionally references another route's shared
+configuration, authority, or release gate declares that owner as an exact
+dependency, so an unrelated but valid path cannot silently replace it.
+
+Generation opens the destination directory through no-follow descriptors,
+writes a private same-directory temporary file, and atomically replaces the
+index only after a complete synchronized write. A symbolic-link, non-regular,
+or raced destination cannot redirect generated content outside the repository.
+
+Each specialist receives only its parent, scoped role, tool allowlist,
+input/output contract, return path, and selected repository route. Specialists
+do not load sibling prompts or require peer-to-peer awareness. The parent alone
+knows the complete topology and independently revalidates specialist output.
+Seven separate Windows routes remain `planned`; a generated index cannot
+present them as released until their own implementation and certification
+changes advance the manifest under validation.
+
 ## Principal components
 
 ### Advisory sub-agents

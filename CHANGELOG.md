@@ -1,5 +1,15 @@
 # Changelog
 
+- Generate the compact semantic router and hub-and-spoke agent topology from one
+  exact ownership manifest. Release validation now rejects unmapped or stale
+  modules, tests, requirements, configurations, CLI commands, capabilities,
+  connectors, profiles, and platform routes; specialists receive only their
+  selected route and local contract. Live advisory dispatch now requires one
+  fully validated parent-selected route ID, binds its selected-only navigation
+  slice into task and state identity, and excludes global policy, router data,
+  and peer profiles from child-readable scopes. Seven native Windows areas
+  remain distinctly planned until implementation and certification.
+
 - Enable descriptor-safe expiration deletion for retained evidence on POSIX.
   `evidence-prune` now derives preview and explicit apply from the same bounded,
   validated record plan, coordinates ancestor and descendant roots through

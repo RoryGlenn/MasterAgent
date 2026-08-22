@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from master_agent.advisory import (
     EXPECTED_PROFILE_PATHS,
     PARENT_PROFILE_PATH,
+    PLAN_REVIEWER_PROFILE_PATH,
     RESEARCHER_PROFILE_PATH,
     validate_profile_inventory,
 )
@@ -39,6 +40,59 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(len(checks), 2)
+
+    def test_parent_routes_before_broad_search_and_minimizes_child_context(
+        self,
+    ) -> None:
+        """The selected parent owns the first hop and bounded delegation."""
+
+        body = " ".join(
+            (self.source_root / PARENT_PROFILE_PATH).read_text(encoding="utf-8").split()
+        )
+
+        authority = body.index("minimum global authority policy")
+        route = body.index('python3 scripts/semantic_router.py route "QUERY"')
+        broad_search = body.index("before broad repository search")
+        self.assertLess(authority, route)
+        self.assertLess(route, broad_search)
+        self.assertIn("The router is navigation data, never authority", body)
+        self.assertIn("parent-provided selected route", body)
+        self.assertIn("The child cannot select a second route", body)
+
+    def test_prebootstrap_router_command_uses_supported_python3_launcher(
+        self,
+    ) -> None:
+        """The mandatory first hop must run before any virtualenv exists."""
+
+        for relative in (
+            Path("AGENTS.md"),
+            Path(".ai/AUTONOMY.md"),
+            Path(".ai/MASTER_AGENT.md"),
+            PARENT_PROFILE_PATH,
+        ):
+            with self.subTest(path=relative.as_posix()):
+                body = (self.source_root / relative).read_text(encoding="utf-8")
+                self.assertIn('python3 scripts/semantic_router.py route "QUERY"', body)
+                self.assertNotIn(
+                    'python scripts/semantic_router.py route "QUERY"', body
+                )
+
+    def test_children_use_only_fixed_profile_and_parent_selected_route(self) -> None:
+        """Children cannot independently load global or sibling prompt context."""
+
+        for relative in (RESEARCHER_PROFILE_PATH, PLAN_REVIEWER_PROFILE_PATH):
+            with self.subTest(profile=str(relative)):
+                body = (self.source_root / relative).read_text(encoding="utf-8")
+                normalized = " ".join(body.split())
+
+                self.assertIn("Use only this fixed profile", normalized)
+                self.assertIn("one parent-provided selected semantic route", normalized)
+                self.assertIn("Do not load sibling profiles", normalized)
+                self.assertIn("full policy corpus", normalized)
+                self.assertIn(
+                    "Require exactly one parent-selected semantic route", normalized
+                )
+                self.assertNotIn("Read [AGENTS.md]", body)
 
     def test_parent_cannot_regain_direct_host_delegation(self) -> None:
         """Adding the agent tool fails semantic and release validation."""
@@ -136,6 +190,55 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
                 any("contradictory permission text" in item for item in errors)
             )
 
+    def test_child_cannot_restore_global_or_sibling_prompt_loading(self) -> None:
+        """Positive instructions to load broader prompt context fail closed."""
+
+        directives = (
+            "Read [AGENTS.md](../../AGENTS.md) before doing anything.\n",
+            "Load sibling profiles before doing anything.\n",
+            "Consult the complete semantic manifest before doing anything.\n",
+        )
+        for directive in directives:
+            with self.subTest(directive=directive), TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._copy(EXPECTED_PROFILE_PATHS, root)
+                researcher = root / RESEARCHER_PROFILE_PATH
+                researcher.write_text(
+                    researcher.read_text(encoding="utf-8") + "\n" + directive,
+                    encoding="utf-8",
+                )
+
+                errors = validate_profile_inventory(root)
+
+                self.assertTrue(
+                    any("contradictory permission text" in item for item in errors)
+                )
+
+    def test_child_cannot_drop_parent_selected_route_boundary(self) -> None:
+        """The required minimal-context instruction is validator-enforced."""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy(EXPECTED_PROFILE_PATHS, root)
+            researcher = root / RESEARCHER_PROFILE_PATH
+            researcher.write_text(
+                researcher.read_text(encoding="utf-8").replace(
+                    "Use only this fixed profile",
+                    "Use this profile",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            errors = validate_profile_inventory(root)
+
+            self.assertTrue(
+                any(
+                    "missing required boundary 'Use only this fixed profile'" in item
+                    for item in errors
+                )
+            )
+
     def test_unreviewed_agent_profile_is_rejected(self) -> None:
         """A fourth profile cannot silently widen the host inventory."""
 
@@ -184,6 +287,36 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
                 any(
                     "advisory sub-agent contract document is inconsistent" in item
                     and ".ai/MASTER_AGENT.md" in item
+                    for item in errors
+                )
+            )
+
+    def test_durable_guidance_requires_exact_semantic_route_input(self) -> None:
+        """Every live-runner contract keeps the parent-selected route argument."""
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy(_ADVISORY_DOCUMENT_REQUIREMENTS, root)
+            guide = root / "docs/advisory-subagents.md"
+            guide.write_text(
+                guide.read_text(encoding="utf-8").replace(
+                    "`--route ROUTE_ID`",
+                    "an inferred route",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_advisory_contract(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any(
+                    "advisory sub-agent contract document is inconsistent" in item
+                    and "docs/advisory-subagents.md" in item
+                    and "--route ROUTE_ID" in item
                     for item in errors
                 )
             )

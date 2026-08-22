@@ -12,6 +12,7 @@ from master_agent.advisory import (
     AdvisoryRole,
     DelegationStatus,
     RepositoryFixture,
+    SemanticRouteSlice,
     load_agent_inventory,
 )
 from master_agent.advisory_budget import (
@@ -24,6 +25,11 @@ from master_agent.copilot_advisory import (
     CopilotSdkAdvisoryWorker,
     read_scoped_text,
 )
+
+if __package__:
+    from scripts import semantic_router as _semantic_router
+else:
+    import semantic_router as _semantic_router  # type: ignore[import-not-found,no-redef]
 
 _MAX_CITED_FILE_BYTES = 64 * 1024
 
@@ -46,6 +52,7 @@ def run(
     task: str,
     paths: tuple[str, ...],
     *,
+    route: str | None,
     goal_id: str,
     state_directory: Path | None = None,
 ) -> int:
@@ -54,9 +61,10 @@ def run(
     root = root.resolve()
     selected_state = state_directory or root / ".master-agent/advisory"
     try:
+        semantic_route = _validated_semantic_route(root, route)
         scope = AdvisoryPathScope.bind(root, paths)
         inventory = load_agent_inventory(root)
-        task_id = _task_id(goal_id, role, task, scope)
+        task_id = _task_id(goal_id, role, task, scope, semantic_route)
         with AdvisoryBudgetStore(selected_state, root) as budget:
             broker = AdvisoryBroker(
                 inventory,
@@ -67,6 +75,7 @@ def run(
                 "MasterAgent",
                 task_id,
                 goal_id=goal_id,
+                semantic_route=semantic_route,
             )
             outcome = session.delegate(
                 role,
@@ -119,11 +128,13 @@ def _task_id(
     role: AdvisoryRole,
     task: str,
     scope: AdvisoryPathScope,
+    semantic_route: SemanticRouteSlice,
 ) -> str:
     material = json.dumps(
         {
             "goal_id": goal_id,
             "role": role.value,
+            "semantic_route": semantic_route.to_payload(),
             "scope_digest": scope.digest,
             "task": task,
         },
@@ -132,6 +143,39 @@ def _task_id(
         ensure_ascii=False,
     ).encode("utf-8")
     return f"cli-{hashlib.sha256(material).hexdigest()}"
+
+
+def _validated_semantic_route(
+    root: Path,
+    route_id: str | None,
+) -> SemanticRouteSlice:
+    """Load one exact route from a fully validated semantic manifest."""
+
+    if not isinstance(route_id, str) or not route_id or route_id != route_id.strip():
+        raise _semantic_router.ManifestError(
+            "one exact parent-selected semantic route identifier is required"
+        )
+    manifest = _semantic_router.load_manifest(root)
+    errors = _semantic_router.validate_repository(root, manifest)
+    if errors:
+        raise _semantic_router.ManifestError("semantic router validation failed")
+    selected = manifest.routes_by_id.get(route_id)
+    if selected is None:
+        raise _semantic_router.ManifestError(
+            "parent-selected semantic route is unknown"
+        )
+    return SemanticRouteSlice(
+        route=selected.id,
+        title=selected.title,
+        lifecycle=selected.lifecycle,
+        summary=selected.summary,
+        authority=selected.authority,
+        implementation=selected.implementation,
+        configuration=selected.configuration,
+        tests=selected.tests,
+        release_gates=selected.release_gates,
+        dependencies=selected.dependencies,
+    )
 
 
 def _print_fallback(reason: str) -> int:
@@ -155,6 +199,12 @@ def main() -> int:
     parser.add_argument("role", choices=("research", "plan-review"))
     parser.add_argument("--task", required=True)
     parser.add_argument(
+        "--route",
+        action="append",
+        required=True,
+        help="Exact stable route ID selected by the parent semantic-router hop.",
+    )
+    parser.add_argument(
         "--goal-id",
         required=True,
         help="Opaque stable identifier reused for one operator goal.",
@@ -171,12 +221,17 @@ def main() -> int:
         help="Private mode-0700 budget directory (default: .master-agent/advisory).",
     )
     arguments = parser.parse_args()
+    if len(arguments.route) != 1:
+        return _print_fallback(
+            "advisory runner requires exactly one parent-selected semantic route"
+        )
     root = Path(__file__).resolve().parents[1]
     return run(
         root,
         _role(arguments.role),
         arguments.task,
         tuple(arguments.path),
+        route=arguments.route[0],
         goal_id=arguments.goal_id,
         state_directory=arguments.state_dir,
     )

@@ -1,0 +1,830 @@
+# Generated ownership data is authoritative only for repository navigation.
+# Runtime authority remains in policy, specifications, and typed code.
+
+[manifest]
+version = 1
+generated_document = "docs/semantic-index.md"
+allowed_lifecycles = ["released", "implementing", "planned", "archived"]
+
+[[agents]]
+id = "master-agent"
+kind = "profile"
+profile = ".github/agents/MasterAgent.agent.md"
+parent = ""
+tools = ["read", "search", "edit", "execute"]
+max_delegation_depth = 1
+fallback = "complete on the selected parent"
+sibling_awareness = false
+input_contract = "operator goal and minimum authority policy"
+output_contract = "validated repository or governed-runtime outcome"
+return_path = ""
+
+[[agents]]
+id = "read-researcher"
+kind = "profile"
+profile = ".github/agents/MasterAgent-Read-Researcher.agent.md"
+parent = "master-agent"
+tools = ["read", "search"]
+max_delegation_depth = 0
+fallback = "master-agent"
+sibling_awareness = false
+input_contract = "one sanitized scoped research task"
+output_contract = "bounded findings with repository citations"
+return_path = "master-agent"
+
+[[agents]]
+id = "plan-reviewer"
+kind = "profile"
+profile = ".github/agents/MasterAgent-Plan-Reviewer.agent.md"
+parent = "master-agent"
+tools = ["read", "search"]
+max_delegation_depth = 0
+fallback = "master-agent"
+sibling_awareness = false
+input_contract = "one sanitized plan-review task"
+output_contract = "blocking and non-blocking findings with citations"
+return_path = "master-agent"
+
+[[agents]]
+id = "docs-contract"
+kind = "contract"
+profile = ".ai/DOCS_AGENT.md"
+parent = "master-agent"
+tools = ["read", "search", "edit-documentation"]
+max_delegation_depth = 0
+fallback = "master-agent"
+sibling_awareness = false
+input_contract = "final change and verification evidence"
+output_contract = "updated, no_change, or needs_review"
+return_path = "master-agent"
+
+[[agents]]
+id = "deterministic-runtime"
+kind = "runtime"
+profile = "src/master_agent/orchestrator.py"
+parent = "master-agent"
+tools = ["typed-capabilities"]
+max_delegation_depth = 0
+fallback = "master-agent"
+sibling_awareness = false
+input_contract = "validated exact ChangePlan and execution context"
+output_contract = "verified RunReport and content-free evidence"
+return_path = "master-agent"
+
+[[routes]]
+id = "semantic-router"
+title = "Semantic router and exact ownership"
+lifecycle = "released"
+summary = "Validate exhaustive ownership, route one task, generate the compact index, and measure routing."
+authority = ["specs/current/development/MA-ROUTER-001.md", "AGENTS.md"]
+implementation = ["scripts/semantic_router.py"]
+configuration = []
+tests = ["tests/test_semantic_router.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["semantic router", "ownership manifest", "agent topology manifest", "routing accuracy", "semantic index generation"]
+agent = "master-agent"
+
+[[routes]]
+id = "agent-topology"
+title = "Parent and bounded advisory topology"
+lifecycle = "released"
+summary = "Own the selected parent, read researcher, plan reviewer, direct Docs contract, brokered SDK adapter, and fail-closed fallback."
+authority = [".ai/MASTER_AGENT.md", "specs/current/security/MA-ADVISORY-001.md", "specs/current/development/MA-ROUTER-001.md"]
+implementation = ["src/master_agent/advisory.py", "src/master_agent/copilot_advisory.py", "scripts/advisory_subagent.py"]
+configuration = []
+tests = ["tests/test_agent_profiles.py", "tests/test_advisory_integration.py", "tests/test_advisory_runner.py", "tests/test_copilot_advisory.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release", "semantic-router"]
+aliases = ["advisory sdk", "read researcher", "plan reviewer", "specialist tools", "delegation budget", "copilot advisory"]
+agent = "master-agent"
+
+[[routes]]
+id = "specification-lifecycle"
+title = "Behavioral specifications and documentation contract"
+lifecycle = "released"
+summary = "Own current requirements, change lifecycle, documentation completion, and archival."
+authority = ["specs/README.md", ".ai/DOCS_AGENT.md"]
+implementation = ["scripts/specs.py"]
+configuration = []
+tests = ["tests/test_specifications.py", "tests/test_docs_agent_contract.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["behavioral specification", "archive a change", "docs contract", "requirement delta", "spec lifecycle"]
+agent = "master-agent"
+
+[[routes]]
+id = "governed-applied-run"
+title = "Governed applied-run runtime"
+lifecycle = "released"
+summary = "Own typed plans, policy, approvals, exact execution binding, orchestration, verification, and compensation."
+authority = [".ai/MASTER_AGENT.md", "docs/architecture.md"]
+implementation = ["src/master_agent/models.py", "src/master_agent/policy.py", "src/master_agent/orchestrator.py"]
+configuration = ["config/capabilities.toml", "config/governance.toml", "config/policy.toml"]
+tests = ["tests/test_orchestrator.py", "tests/test_policy.py", "tests/test_execution_context.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog"]
+agent = "master-agent"
+
+[[routes]]
+id = "direct-read"
+title = "Stateless direct reads and readiness"
+lifecycle = "released"
+summary = "Own provider discovery, readiness, connector selection, and the in-memory direct-read path."
+authority = ["specs/current/runtime/MA-DIRECT-READ-001.md", "docs/phase-2-read-only.md"]
+implementation = ["src/master_agent/direct_read.py", "src/master_agent/discovery.py", "src/master_agent/readiness.py"]
+configuration = ["config/integrations.toml", "config/oauth.toml"]
+tests = ["tests/test_direct_read.py", "tests/test_discovery.py", "tests/test_oauth_readiness.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["direct read", "connection readiness", "discover provider", "connect provider", "public repositories"]
+agent = "master-agent"
+
+[[routes]]
+id = "provider-security"
+title = "Provider egress, authentication, HTTP, and untrusted content"
+lifecycle = "released"
+summary = "Own credentials, OAuth, provider-data egress, bounded HTTP, sanitization, and terminal rendering."
+authority = ["specs/current/security/MA-DATA-EGRESS-001.md", "docs/threat-model.md"]
+implementation = ["src/master_agent/provider_egress.py", "src/master_agent/http.py", "src/master_agent/security.py"]
+configuration = ["config/oauth.toml", "config/governance.toml"]
+tests = ["tests/test_provider_egress.py", "tests/test_http.py", "tests/test_security.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["direct-read", "governed-applied-run", "packaging-release"]
+aliases = ["provider egress", "oauth credentials", "http transport", "prompt injection", "terminal safety"]
+agent = "master-agent"
+
+[[routes]]
+id = "atlassian-connectors"
+title = "Jira, Confluence, and Bitbucket connectors"
+lifecycle = "released"
+summary = "Own bounded Atlassian reads, writes, verification, compensation, and the sandbox harness."
+authority = ["docs/live-connectors.md", "docs/integration-matrix.md"]
+implementation = ["src/master_agent/connectors/jira.py", "src/master_agent/connectors/confluence.py", "src/master_agent/connectors/bitbucket.py"]
+configuration = ["config/integrations.toml"]
+tests = ["tests/test_atlassian_connectors.py", "tests/test_confluence_sandbox.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["direct-read", "packaging-release"]
+aliases = ["jira connector", "confluence connector", "bitbucket connector", "atlassian cloud"]
+agent = "master-agent"
+
+[[routes]]
+id = "github-connectors"
+title = "GitHub connectors"
+lifecycle = "released"
+summary = "Own anonymous and authenticated GitHub reads plus bounded write contracts."
+authority = ["docs/github-connector-quickstart.md", "docs/integration-matrix.md"]
+implementation = ["src/master_agent/connectors/github.py", "src/master_agent/connectors/github_write.py"]
+configuration = ["config/integrations.toml"]
+tests = ["tests/test_github_connector.py", "tests/test_github_write_connector.py"]
+release_gates = [".github/workflows/github-actions-live-integration.yml", ".github/workflows/ci.yml"]
+dependencies = ["direct-read"]
+aliases = ["github connector", "github repository read", "github issue create", "github pull request"]
+agent = "master-agent"
+
+[[routes]]
+id = "microsoft-connectors"
+title = "Microsoft Graph, Outlook, Teams, OneNote, and SharePoint"
+lifecycle = "released"
+summary = "Own Microsoft identity, content reads, communications, and bounded writes."
+authority = ["docs/live-connectors.md", "docs/integration-matrix.md"]
+implementation = ["src/master_agent/connectors/microsoft_graph.py", "src/master_agent/connectors/outlook.py", "src/master_agent/connectors/teams.py"]
+configuration = ["config/integrations.toml", "config/oauth.toml"]
+tests = ["tests/test_microsoft_connectors.py", "tests/test_outlook_connector.py", "tests/test_teams_connector.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["direct-read", "packaging-release"]
+aliases = ["microsoft graph", "outlook connector", "teams connector", "sharepoint connector", "onenote connector"]
+agent = "master-agent"
+
+[[routes]]
+id = "git-connectors"
+title = "Local and remote Git boundaries"
+lifecycle = "released"
+summary = "Own repository observation, isolated Git subprocesses, remote publication, and disabled mutation contracts."
+authority = ["docs/architecture.md", "docs/threat-model.md"]
+implementation = ["src/master_agent/connectors/git_workspace.py", "src/master_agent/connectors/git_sandbox.py", "src/master_agent/connectors/git_remote.py"]
+configuration = ["config/capabilities.toml"]
+tests = ["tests/test_git_connectors.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["governed-applied-run", "packaging-release"]
+aliases = ["git connector", "git sandbox", "repository patch", "branch push", "repository state"]
+agent = "master-agent"
+
+[[routes]]
+id = "capability-capsules"
+title = "Generated capability capsules"
+lifecycle = "released"
+summary = "Own capsule admission, promotion, credentials, readiness, exact sessions, receipts, and isolated execution."
+authority = ["docs/capability-capsules.md", "docs/threat-model.md"]
+implementation = ["src/master_agent/capsules.py", "src/master_agent/capsule_runtime.py", "src/master_agent/capsule_worker.py"]
+configuration = ["config/capabilities.toml"]
+tests = ["tests/test_capability_capsules.py", "tests/test_capsule_broker_and_routing.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["governed-applied-run", "packaging-release"]
+aliases = ["capability capsule", "capsule promotion", "credential broker", "capsule sandbox", "signed receipt"]
+agent = "master-agent"
+
+[[routes]]
+id = "local-workflows"
+title = "Local generation and bounded workflows"
+lifecycle = "released"
+summary = "Own draft packages, weekly status, communication context, identity resolution, planners, and recurring registration."
+authority = ["docs/architecture.md", "docs/implementation-roadmap.md"]
+implementation = ["src/master_agent/workflows/draft_package.py", "src/master_agent/workflows/weekly_status.py", "src/master_agent/recurring.py"]
+configuration = ["config/draft-package.toml", "config/weekly-status.toml", "config/communication-context.toml", "config/recurring.toml", "config/identities.toml"]
+tests = ["tests/test_draft_package.py", "tests/test_weekly_status.py", "tests/test_recurring.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["draft package", "weekly status", "communication context", "identity resolve", "recurring workflow"]
+agent = "master-agent"
+
+[[routes]]
+id = "retention-audit"
+title = "Evidence, retention, citations, and audit integrity"
+lifecycle = "released"
+summary = "Own retained publication, descriptor-safe expiry, orphan repair, citations, SQLite integrity, and audit verification."
+authority = ["specs/current/security/MA-RETENTION-001.md", "docs/operations.md"]
+implementation = ["src/master_agent/retention.py", "src/master_agent/evidence.py", "src/master_agent/audit.py"]
+configuration = ["config/retention.toml"]
+tests = ["tests/test_retention.py", "tests/test_audit_safety.py", "tests/test_identity_and_citations.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["evidence prune", "evidence repair", "retention", "audit verify", "citations", "sqlite safety"]
+agent = "master-agent"
+
+[[routes]]
+id = "packaging-release"
+title = "Bootstrap, packaging, supply chain, and release validation"
+lifecycle = "released"
+summary = "Own local bootstrap, package metadata, source distributions, dependency evidence, and release assertions."
+authority = [".ai/FIRST_RUN.md", "docs/release-validation.md"]
+implementation = ["scripts/bootstrap_agent.py", "scripts/validate_release.py", "scripts/generate_sbom.py"]
+configuration = ["config/dependency-licenses.toml"]
+tests = ["tests/test_agent_bootstrap.py", "tests/test_release_metadata.py", "tests/test_packaged_defaults.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = []
+aliases = ["bootstrap", "release validation", "package artifact", "dependency license", "sbom", "source distribution"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-filesystem"
+title = "Windows filesystem identity and ACL backend"
+lifecycle = "planned"
+summary = "Windows 11 filesystem identity, ACLs, no-follow traversal, and locking."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows filesystem", "windows.filesystem", "windows filesystem identity and acl backend"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-atomic-state"
+title = "Windows atomic state and retention"
+lifecycle = "planned"
+summary = "Windows 11 atomic state, approval, token persistence, and retention transactions."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows atomic state", "windows.atomic state retention", "windows atomic state and retention"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-credentials"
+title = "Windows Credential Manager and DPAPI"
+lifecycle = "planned"
+summary = "Windows Credential Manager, DPAPI, and service identity credential storage."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows credentials", "windows.credentials", "windows credential manager and dpapi"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-process"
+title = "Windows Job Object process supervision"
+lifecycle = "planned"
+summary = "Windows Job Object subprocess limits and supervision."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows process supervision", "windows.process supervision", "windows job object process supervision"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-git"
+title = "Windows native Git isolation"
+lifecycle = "planned"
+summary = "Windows standard-user Git execution sandbox and repository identity."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows git isolation", "windows.git isolation", "windows native git isolation"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-capsules"
+title = "Windows AppContainer capsule isolation"
+lifecycle = "planned"
+summary = "Windows AppContainer isolation for generated capability capsules."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows capsule isolation", "windows.capsule isolation", "windows appcontainer capsule isolation"]
+agent = "master-agent"
+
+[[routes]]
+id = "windows-certification"
+title = "Windows hosted certification"
+lifecycle = "planned"
+summary = "Hosted standard-user Windows 11 CI, adversarial compatibility, and release certification."
+authority = ["docs/implementation-roadmap.md"]
+implementation = []
+configuration = []
+tests = []
+release_gates = []
+dependencies = []
+aliases = ["windows certification", "windows.certification", "windows hosted certification"]
+agent = "master-agent"
+
+[ownership.production_modules]
+"examples/generate_communication_demo.py" = "local-workflows"
+"examples/generate_demo_package.py" = "local-workflows"
+"examples/generate_phase2b_demo.py" = "local-workflows"
+"scripts/__init__.py" = "governed-applied-run"
+"scripts/advisory_subagent.py" = "agent-topology"
+"scripts/bootstrap_agent.py" = "packaging-release"
+"scripts/confluence_sandbox.py" = "atlassian-connectors"
+"scripts/generate_sbom.py" = "packaging-release"
+"scripts/semantic_router.py" = "semantic-router"
+"scripts/specs.py" = "specification-lifecycle"
+"scripts/validate_release.py" = "packaging-release"
+"setup.py" = "packaging-release"
+"src/master_agent/__init__.py" = "governed-applied-run"
+"src/master_agent/__main__.py" = "governed-applied-run"
+"src/master_agent/advisory.py" = "agent-topology"
+"src/master_agent/advisory_budget.py" = "agent-topology"
+"src/master_agent/approval_handoff.py" = "governed-applied-run"
+"src/master_agent/approvals.py" = "governed-applied-run"
+"src/master_agent/audit.py" = "retention-audit"
+"src/master_agent/auth.py" = "provider-security"
+"src/master_agent/canonical.py" = "governed-applied-run"
+"src/master_agent/capabilities.py" = "governed-applied-run"
+"src/master_agent/capability_routing.py" = "capability-capsules"
+"src/master_agent/capsule_operations.py" = "capability-capsules"
+"src/master_agent/capsule_promotion.py" = "capability-capsules"
+"src/master_agent/capsule_readiness.py" = "capability-capsules"
+"src/master_agent/capsule_runtime.py" = "capability-capsules"
+"src/master_agent/capsule_worker.py" = "capability-capsules"
+"src/master_agent/capsules.py" = "capability-capsules"
+"src/master_agent/citations.py" = "retention-audit"
+"src/master_agent/cli.py" = "governed-applied-run"
+"src/master_agent/compensation.py" = "governed-applied-run"
+"src/master_agent/config.py" = "direct-read"
+"src/master_agent/config_sources.py" = "direct-read"
+"src/master_agent/connectors/__init__.py" = "governed-applied-run"
+"src/master_agent/connectors/base.py" = "governed-applied-run"
+"src/master_agent/connectors/bitbucket.py" = "atlassian-connectors"
+"src/master_agent/connectors/bitbucket_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/communications.py" = "microsoft-connectors"
+"src/master_agent/connectors/confluence.py" = "atlassian-connectors"
+"src/master_agent/connectors/confluence_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/drafts.py" = "local-workflows"
+"src/master_agent/connectors/factory.py" = "governed-applied-run"
+"src/master_agent/connectors/git_remote.py" = "git-connectors"
+"src/master_agent/connectors/git_sandbox.py" = "git-connectors"
+"src/master_agent/connectors/git_workspace.py" = "git-connectors"
+"src/master_agent/connectors/github.py" = "github-connectors"
+"src/master_agent/connectors/github_write.py" = "github-connectors"
+"src/master_agent/connectors/identity.py" = "local-workflows"
+"src/master_agent/connectors/jira.py" = "atlassian-connectors"
+"src/master_agent/connectors/jira_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/microsoft.py" = "microsoft-connectors"
+"src/master_agent/connectors/microsoft_graph.py" = "microsoft-connectors"
+"src/master_agent/connectors/mock.py" = "governed-applied-run"
+"src/master_agent/connectors/onenote.py" = "microsoft-connectors"
+"src/master_agent/connectors/outlook.py" = "microsoft-connectors"
+"src/master_agent/connectors/read_only.py" = "provider-security"
+"src/master_agent/connectors/sharepoint_write.py" = "microsoft-connectors"
+"src/master_agent/connectors/teams.py" = "microsoft-connectors"
+"src/master_agent/connectors/utils.py" = "provider-security"
+"src/master_agent/copilot_advisory.py" = "agent-topology"
+"src/master_agent/credential_broker.py" = "capability-capsules"
+"src/master_agent/credentials.py" = "provider-security"
+"src/master_agent/defaults/__init__.py" = "governed-applied-run"
+"src/master_agent/direct_read.py" = "direct-read"
+"src/master_agent/directory_safety.py" = "retention-audit"
+"src/master_agent/discovery.py" = "direct-read"
+"src/master_agent/errors.py" = "governed-applied-run"
+"src/master_agent/evidence.py" = "retention-audit"
+"src/master_agent/execution_context.py" = "governed-applied-run"
+"src/master_agent/governance.py" = "governed-applied-run"
+"src/master_agent/http.py" = "provider-security"
+"src/master_agent/identity.py" = "local-workflows"
+"src/master_agent/models.py" = "governed-applied-run"
+"src/master_agent/oauth.py" = "provider-security"
+"src/master_agent/oauth_config.py" = "provider-security"
+"src/master_agent/orchestrator.py" = "governed-applied-run"
+"src/master_agent/planners/__init__.py" = "local-workflows"
+"src/master_agent/planners/base.py" = "local-workflows"
+"src/master_agent/planners/static.py" = "local-workflows"
+"src/master_agent/plugins.py" = "packaging-release"
+"src/master_agent/policy.py" = "governed-applied-run"
+"src/master_agent/provider_egress.py" = "provider-security"
+"src/master_agent/readiness.py" = "direct-read"
+"src/master_agent/receipts.py" = "capability-capsules"
+"src/master_agent/recurring.py" = "local-workflows"
+"src/master_agent/registry.py" = "governed-applied-run"
+"src/master_agent/resource_limits.py" = "provider-security"
+"src/master_agent/retention.py" = "retention-audit"
+"src/master_agent/security.py" = "provider-security"
+"src/master_agent/sqlite_safety.py" = "retention-audit"
+"src/master_agent/terminal.py" = "provider-security"
+"src/master_agent/text.py" = "governed-applied-run"
+"src/master_agent/trust_store.py" = "retention-audit"
+"src/master_agent/workflows/__init__.py" = "local-workflows"
+"src/master_agent/workflows/communication_context.py" = "local-workflows"
+"src/master_agent/workflows/draft_package.py" = "local-workflows"
+"src/master_agent/workflows/weekly_status.py" = "local-workflows"
+
+[ownership.tests]
+"tests/__init__.py" = "governed-applied-run"
+"tests/fakes.py" = "governed-applied-run"
+"tests/fixtures/advisory/source.py" = "agent-topology"
+"tests/helpers.py" = "governed-applied-run"
+"tests/test_advisory_budget.py" = "agent-topology"
+"tests/test_advisory_integration.py" = "agent-topology"
+"tests/test_advisory_runner.py" = "agent-topology"
+"tests/test_agent_bootstrap.py" = "packaging-release"
+"tests/test_agent_profiles.py" = "agent-topology"
+"tests/test_approval_claims.py" = "governed-applied-run"
+"tests/test_approval_handoff.py" = "governed-applied-run"
+"tests/test_atlassian_connectors.py" = "atlassian-connectors"
+"tests/test_audit_safety.py" = "retention-audit"
+"tests/test_canonical.py" = "governed-applied-run"
+"tests/test_capability_capsules.py" = "capability-capsules"
+"tests/test_capability_governance.py" = "governed-applied-run"
+"tests/test_capsule_broker_and_routing.py" = "capability-capsules"
+"tests/test_cli.py" = "governed-applied-run"
+"tests/test_cli_output_publication.py" = "governed-applied-run"
+"tests/test_cli_phase_completion.py" = "governed-applied-run"
+"tests/test_cli_plugin_boundary.py" = "governed-applied-run"
+"tests/test_cli_v1.py" = "governed-applied-run"
+"tests/test_communication_context.py" = "local-workflows"
+"tests/test_communications_write.py" = "microsoft-connectors"
+"tests/test_compensation.py" = "governed-applied-run"
+"tests/test_config.py" = "governed-applied-run"
+"tests/test_config_and_discovery.py" = "direct-read"
+"tests/test_config_sources.py" = "governed-applied-run"
+"tests/test_confluence_sandbox.py" = "atlassian-connectors"
+"tests/test_connector_contract_matrix.py" = "governed-applied-run"
+"tests/test_connector_integration_matrix.py" = "governed-applied-run"
+"tests/test_copilot_advisory.py" = "agent-topology"
+"tests/test_credentials.py" = "provider-security"
+"tests/test_direct_read.py" = "direct-read"
+"tests/test_directory_safety.py" = "retention-audit"
+"tests/test_discovery.py" = "direct-read"
+"tests/test_docs_agent_contract.py" = "specification-lifecycle"
+"tests/test_draft_package.py" = "local-workflows"
+"tests/test_draft_runtime_safety.py" = "local-workflows"
+"tests/test_execution_context.py" = "governed-applied-run"
+"tests/test_factory_and_catalog.py" = "governed-applied-run"
+"tests/test_factory_gates.py" = "governed-applied-run"
+"tests/test_git_connectors.py" = "git-connectors"
+"tests/test_github_actions_live_integration.py" = "github-connectors"
+"tests/test_github_connector.py" = "github-connectors"
+"tests/test_github_write_connector.py" = "github-connectors"
+"tests/test_helpers.py" = "governed-applied-run"
+"tests/test_http.py" = "provider-security"
+"tests/test_http_lifecycle_budget.py" = "provider-security"
+"tests/test_identity_and_citations.py" = "retention-audit"
+"tests/test_identity_retention.py" = "retention-audit"
+"tests/test_live_connectors.py" = "governed-applied-run"
+"tests/test_microsoft_connectors.py" = "microsoft-connectors"
+"tests/test_oauth_flows.py" = "provider-security"
+"tests/test_oauth_readiness.py" = "direct-read"
+"tests/test_onenote_connector.py" = "microsoft-connectors"
+"tests/test_orchestrator.py" = "governed-applied-run"
+"tests/test_orchestrator_compensation.py" = "governed-applied-run"
+"tests/test_outlook_connector.py" = "microsoft-connectors"
+"tests/test_packaged_defaults.py" = "packaging-release"
+"tests/test_phase4_connectors.py" = "governed-applied-run"
+"tests/test_pinned_runtime_io.py" = "retention-audit"
+"tests/test_plugins.py" = "governed-applied-run"
+"tests/test_policy.py" = "governed-applied-run"
+"tests/test_provider_egress.py" = "provider-security"
+"tests/test_recurring.py" = "local-workflows"
+"tests/test_registry.py" = "governed-applied-run"
+"tests/test_registry_capabilities.py" = "governed-applied-run"
+"tests/test_release_metadata.py" = "packaging-release"
+"tests/test_resource_limits.py" = "governed-applied-run"
+"tests/test_retention.py" = "retention-audit"
+"tests/test_runtime_hardening.py" = "governed-applied-run"
+"tests/test_security.py" = "provider-security"
+"tests/test_semantic_router.py" = "semantic-router"
+"tests/test_specifications.py" = "specification-lifecycle"
+"tests/test_sqlite_safety.py" = "retention-audit"
+"tests/test_strict_types.py" = "governed-applied-run"
+"tests/test_teams_connector.py" = "microsoft-connectors"
+"tests/test_terminal.py" = "provider-security"
+"tests/test_weekly_status.py" = "local-workflows"
+"tests/test_write_connectors.py" = "governed-applied-run"
+
+[ownership.current_requirements]
+"specs/current/development/MA-DOCS-001.md" = "specification-lifecycle"
+"specs/current/development/MA-DOCS-002.md" = "specification-lifecycle"
+"specs/current/development/MA-DOCS-003.md" = "specification-lifecycle"
+"specs/current/development/MA-ROUTER-001.md" = "semantic-router"
+"specs/current/development/MA-SPEC-001.md" = "specification-lifecycle"
+"specs/current/development/MA-SPEC-002.md" = "specification-lifecycle"
+"specs/current/development/MA-SPEC-003.md" = "specification-lifecycle"
+"specs/current/development/MA-SPEC-004.md" = "specification-lifecycle"
+"specs/current/runtime/MA-DIRECT-READ-001.md" = "direct-read"
+"specs/current/runtime/MA-DIRECT-READ-002.md" = "direct-read"
+"specs/current/security/MA-ADVISORY-001.md" = "agent-topology"
+"specs/current/security/MA-ADVISORY-002.md" = "agent-topology"
+"specs/current/security/MA-ADVISORY-003.md" = "agent-topology"
+"specs/current/security/MA-ADVISORY-004.md" = "agent-topology"
+"specs/current/security/MA-ADVISORY-005.md" = "agent-topology"
+"specs/current/security/MA-DATA-EGRESS-001.md" = "provider-security"
+"specs/current/security/MA-RETENTION-001.md" = "retention-audit"
+
+[ownership.configurations]
+"config/capabilities.toml" = "governed-applied-run"
+"config/communication-context.toml" = "local-workflows"
+"config/dependency-licenses.toml" = "packaging-release"
+"config/draft-package.toml" = "local-workflows"
+"config/governance.toml" = "governed-applied-run"
+"config/identities.toml" = "local-workflows"
+"config/integrations.toml" = "direct-read"
+"config/oauth.toml" = "direct-read"
+"config/policy.toml" = "governed-applied-run"
+"config/recurring.toml" = "local-workflows"
+"config/retention.toml" = "retention-audit"
+"config/sources_of_truth.toml" = "governed-applied-run"
+"config/weekly-status.toml" = "local-workflows"
+
+[ownership.cli_commands]
+"approve" = "governed-applied-run"
+"approve-request" = "governed-applied-run"
+"audit-verify" = "retention-audit"
+"bind-context" = "governed-applied-run"
+"bitbucket-repositories" = "direct-read"
+"citations" = "retention-audit"
+"communication-context" = "local-workflows"
+"communication-context-plan" = "local-workflows"
+"compensation-plan" = "governed-applied-run"
+"connect" = "direct-read"
+"demo" = "governed-applied-run"
+"discover" = "direct-read"
+"draft-package" = "local-workflows"
+"evidence-prune" = "retention-audit"
+"evidence-repair" = "retention-audit"
+"github-repositories" = "direct-read"
+"identity-resolve" = "local-workflows"
+"inspect" = "governed-applied-run"
+"inspect-approval-request" = "governed-applied-run"
+"oauth-device-code" = "direct-read"
+"plugins" = "packaging-release"
+"readiness" = "direct-read"
+"recurring-run" = "local-workflows"
+"recurring-status" = "local-workflows"
+"resume-approval" = "governed-applied-run"
+"retain-evidence" = "retention-audit"
+"run" = "governed-applied-run"
+"sample-plan" = "governed-applied-run"
+"scan" = "provider-security"
+"weekly-status" = "local-workflows"
+"weekly-status-plan" = "local-workflows"
+
+[ownership.capabilities]
+"bitbucket.branch.push" = "atlassian-connectors"
+"bitbucket.build_status.read" = "atlassian-connectors"
+"bitbucket.instance.read" = "atlassian-connectors"
+"bitbucket.public_repository.list" = "atlassian-connectors"
+"bitbucket.pull_request.create" = "atlassian-connectors"
+"bitbucket.pull_request.diffstat" = "atlassian-connectors"
+"bitbucket.pull_request.merge" = "atlassian-connectors"
+"bitbucket.pull_request.read" = "atlassian-connectors"
+"bitbucket.pull_request.search" = "atlassian-connectors"
+"bitbucket.repository.read" = "atlassian-connectors"
+"confluence.page.compensate" = "atlassian-connectors"
+"confluence.page.create" = "atlassian-connectors"
+"confluence.page.create.draft" = "atlassian-connectors"
+"confluence.page.read" = "atlassian-connectors"
+"confluence.page.search" = "atlassian-connectors"
+"confluence.page.update" = "atlassian-connectors"
+"confluence.page.update.draft" = "atlassian-connectors"
+"confluence.space.create" = "atlassian-connectors"
+"github.checks.read" = "github-connectors"
+"github.collaborator.access.update" = "github-connectors"
+"github.issue.create" = "github-connectors"
+"github.public_repository.list" = "github-connectors"
+"github.pull_request.create" = "github-connectors"
+"github.pull_request.read" = "github-connectors"
+"github.pull_request.search" = "github-connectors"
+"github.repository.list" = "github-connectors"
+"github.repository.read" = "github-connectors"
+"github.repository.settings.update" = "github-connectors"
+"identity.identifier.resolve" = "local-workflows"
+"identity.person.list" = "local-workflows"
+"identity.person.resolve" = "local-workflows"
+"jira.issue.comment.create" = "atlassian-connectors"
+"jira.issue.comment.draft" = "atlassian-connectors"
+"jira.issue.compensate" = "atlassian-connectors"
+"jira.issue.read" = "atlassian-connectors"
+"jira.issue.search" = "atlassian-connectors"
+"jira.issue.transition" = "atlassian-connectors"
+"jira.issue.transition.draft" = "atlassian-connectors"
+"jira.issue.update" = "atlassian-connectors"
+"jira.issue.update.draft" = "atlassian-connectors"
+"jira.server.info" = "atlassian-connectors"
+"microsoft.identity.read" = "microsoft-connectors"
+"microsoft.identity.search" = "microsoft-connectors"
+"onenote.notebook.list" = "microsoft-connectors"
+"onenote.page.create" = "microsoft-connectors"
+"onenote.page.list" = "microsoft-connectors"
+"onenote.page.read" = "microsoft-connectors"
+"onenote.page.update" = "microsoft-connectors"
+"onenote.section.list" = "microsoft-connectors"
+"outlook.attachment.list" = "microsoft-connectors"
+"outlook.attachment.text.read" = "microsoft-connectors"
+"outlook.email.draft" = "microsoft-connectors"
+"outlook.email.send" = "microsoft-connectors"
+"outlook.mail_folder.list" = "microsoft-connectors"
+"outlook.message.read" = "microsoft-connectors"
+"outlook.message.search" = "microsoft-connectors"
+"powerpoint.presentation.generate" = "local-workflows"
+"repository.branch.create" = "git-connectors"
+"repository.branch.plan" = "git-connectors"
+"repository.branch.push" = "git-connectors"
+"repository.commit.create" = "git-connectors"
+"repository.patch.apply" = "git-connectors"
+"repository.patch.generate" = "git-connectors"
+"sharepoint.drive.children" = "microsoft-connectors"
+"sharepoint.drive.list" = "microsoft-connectors"
+"sharepoint.file.metadata.read" = "microsoft-connectors"
+"sharepoint.file.text.read" = "microsoft-connectors"
+"sharepoint.file.upload" = "microsoft-connectors"
+"sharepoint.site.read" = "microsoft-connectors"
+"sharepoint.site.search" = "microsoft-connectors"
+"teams.channel.list" = "microsoft-connectors"
+"teams.channel.message.list" = "microsoft-connectors"
+"teams.channel.message.read" = "microsoft-connectors"
+"teams.channel.message.replies.list" = "microsoft-connectors"
+"teams.channel.message.reply" = "microsoft-connectors"
+"teams.channel.message.send" = "microsoft-connectors"
+"teams.chat.list" = "microsoft-connectors"
+"teams.chat.message.list" = "microsoft-connectors"
+"teams.chat.message.read" = "microsoft-connectors"
+"teams.chat.message.send" = "microsoft-connectors"
+"teams.message.draft" = "microsoft-connectors"
+"teams.team.list" = "microsoft-connectors"
+
+[ownership.connectors]
+"src/master_agent/connectors/__init__.py" = "governed-applied-run"
+"src/master_agent/connectors/base.py" = "governed-applied-run"
+"src/master_agent/connectors/bitbucket.py" = "atlassian-connectors"
+"src/master_agent/connectors/bitbucket_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/communications.py" = "microsoft-connectors"
+"src/master_agent/connectors/confluence.py" = "atlassian-connectors"
+"src/master_agent/connectors/confluence_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/drafts.py" = "local-workflows"
+"src/master_agent/connectors/factory.py" = "governed-applied-run"
+"src/master_agent/connectors/git_remote.py" = "git-connectors"
+"src/master_agent/connectors/git_sandbox.py" = "git-connectors"
+"src/master_agent/connectors/git_workspace.py" = "git-connectors"
+"src/master_agent/connectors/github.py" = "github-connectors"
+"src/master_agent/connectors/github_write.py" = "github-connectors"
+"src/master_agent/connectors/identity.py" = "local-workflows"
+"src/master_agent/connectors/jira.py" = "atlassian-connectors"
+"src/master_agent/connectors/jira_write.py" = "atlassian-connectors"
+"src/master_agent/connectors/microsoft.py" = "microsoft-connectors"
+"src/master_agent/connectors/microsoft_graph.py" = "microsoft-connectors"
+"src/master_agent/connectors/mock.py" = "governed-applied-run"
+"src/master_agent/connectors/onenote.py" = "microsoft-connectors"
+"src/master_agent/connectors/outlook.py" = "microsoft-connectors"
+"src/master_agent/connectors/read_only.py" = "provider-security"
+"src/master_agent/connectors/sharepoint_write.py" = "microsoft-connectors"
+"src/master_agent/connectors/teams.py" = "microsoft-connectors"
+"src/master_agent/connectors/utils.py" = "provider-security"
+
+[ownership.agent_profiles]
+".github/agents/MasterAgent.agent.md" = "agent-topology"
+".github/agents/MasterAgent-Read-Researcher.agent.md" = "agent-topology"
+".github/agents/MasterAgent-Plan-Reviewer.agent.md" = "agent-topology"
+
+[ownership.platform_capabilities]
+"direct_read" = "direct-read"
+"governed_applied_run" = "governed-applied-run"
+"advisory_sdk" = "agent-topology"
+"specification_lifecycle" = "specification-lifecycle"
+"windows.filesystem" = "windows-filesystem"
+"windows.atomic_state_retention" = "windows-atomic-state"
+"windows.credentials" = "windows-credentials"
+"windows.process_supervision" = "windows-process"
+"windows.git_isolation" = "windows-git"
+"windows.capsule_isolation" = "windows-capsules"
+"windows.certification" = "windows-certification"
+
+[[routing_cases]]
+query = "find the semantic router ownership manifest"
+route = "semantic-router"
+
+[[routing_cases]]
+query = "review the advisory sdk adapter"
+route = "agent-topology"
+
+[[routing_cases]]
+query = "archive a behavioral specification"
+route = "specification-lifecycle"
+
+[[routing_cases]]
+query = "run an approved change plan"
+route = "governed-applied-run"
+
+[[routing_cases]]
+query = "make a stateless direct read"
+route = "direct-read"
+
+[[routing_cases]]
+query = "inspect provider egress policy"
+route = "provider-security"
+
+[[routing_cases]]
+query = "change the confluence connector"
+route = "atlassian-connectors"
+
+[[routing_cases]]
+query = "change github repository reads"
+route = "github-connectors"
+
+[[routing_cases]]
+query = "change the teams connector"
+route = "microsoft-connectors"
+
+[[routing_cases]]
+query = "harden the git sandbox"
+route = "git-connectors"
+
+[[routing_cases]]
+query = "promote a capability capsule"
+route = "capability-capsules"
+
+[[routing_cases]]
+query = "build the weekly status package"
+route = "local-workflows"
+
+[[routing_cases]]
+query = "repair retained evidence"
+route = "retention-audit"
+
+[[routing_cases]]
+query = "validate a source distribution"
+route = "packaging-release"
+
+[[routing_cases]]
+query = "implement windows filesystem identity"
+route = "windows-filesystem"
+
+[[routing_cases]]
+query = "port windows atomic state retention"
+route = "windows-atomic-state"
+
+[[routing_cases]]
+query = "add windows credential manager"
+route = "windows-credentials"
+
+[[routing_cases]]
+query = "add windows job object process supervision"
+route = "windows-process"
+
+[[routing_cases]]
+query = "isolate git on windows"
+route = "windows-git"
+
+[[routing_cases]]
+query = "isolate capsules with windows appcontainer"
+route = "windows-capsules"
+
+[[routing_cases]]
+query = "windows certification"
+route = "windows-certification"

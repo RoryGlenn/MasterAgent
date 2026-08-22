@@ -13,6 +13,22 @@ Think of the specialists as consultants working through a controlled doorway. Th
 
 Neither specialist may edit files, execute shell commands, call providers, access credentials, grant approval, mutate audit state, construct a runtime `ChangePlan`, or invoke another agent.
 
+## Hub-and-spoke context
+
+The selected parent is the only node that knows the complete role registry.
+The generated [semantic router](semantic-index.md) selects one repository route
+before delegation. A specialist then receives only its own checked-in profile,
+the selected route, its parent and return path, and the sanitized input/output
+contract. It does not load the other specialist's prompt or the complete
+repository policy and specification corpus.
+
+This is intentional. Peer-to-peer role awareness would add unrelated context
+without adding authority or evidence. The parent already owns routing, budget,
+scope, fallback, citation revalidation, and every final decision. The exact
+topology and ownership inventory is validated from
+[`semantic-router.toml`](../.ai/semantic-router.toml); generated prose cannot
+widen the tools or invocation flags enforced by the profiles and broker.
+
 ## Two invocation paths
 
 ### GitHub host path remains disabled
@@ -26,15 +42,26 @@ This matters because host-native inference does not pass through MasterAgent's r
 MasterAgent now has an optional live adapter in [`copilot_advisory.py`](../src/master_agent/copilot_advisory.py). When the `subagents` optional dependency is installed, the selected parent can run a Researcher or Plan Reviewer through [`scripts/advisory_subagent.py`](../scripts/advisory_subagent.py).
 
 The runner requires one opaque `--goal-id`, reused for every advisory attempt
-in the operator goal, plus one or more existing repository-relative `--path`
-values. Paths must be narrower than the repository root. A directory scope
-contains only its bounded tracked and non-ignored untracked regular-file
-inventory; ignored files, symlinks, `.git`, and `.master-agent` are absent.
+in the operator goal; exactly one `--route ROUTE_ID` already selected by the
+parent; and one or more existing repository-relative `--path` values. It fully
+validates the manifest and exact stable route ID before worker construction,
+then includes only that route's canonical navigation fields in the sanitized
+envelope. It never sends aliases, routing fixtures, the agent registry, sibling
+metadata, the full manifest, or the generated index.
+
+Paths must be narrower than the repository root. A directory scope contains
+only its bounded tracked and non-ignored untracked regular-file inventory;
+ignored files, symlinks, `.git`, and `.master-agent` are absent. Parent-only
+context is also excluded: `AGENTS.md`, every `.ai` policy or manifest path,
+`docs/semantic-index.md`, and every `.github/agents` profile. A directory that
+would include one of those files is rejected as a whole.
 
 The flow is:
 
 ```text
 MasterAgent parent
+    ↓
+full manifest validation + exact parent-selected route binding
     ↓
 private authenticated goal-budget reservation
     ↓
@@ -92,11 +119,12 @@ same scope.
 
 ## State binding
 
-Before a live specialist starts, MasterAgent hashes four things without storing their contents:
+Before a live specialist starts, MasterAgent hashes five things without storing their contents:
 
 - the sanitized task envelope;
-- the exact checked-in specialist profile; and
-- the normalized route and eligible file inventory; and
+- the exact selected route ID and canonical navigation slice;
+- the exact checked-in specialist profile;
+- the normalized technical path scope and eligible file inventory; and
 - repository HEAD, index, tracked worktree diff, staged diff, untracked paths,
   and every non-ignored untracked regular file's content digest.
 

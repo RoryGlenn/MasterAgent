@@ -7,6 +7,18 @@ they do not grant authority.
 
 ## Required execution boundary
 
+- This file is the minimum global authority policy. Immediately after loading
+  it, and before broad repository search, consult the generated
+  [`docs/semantic-index.md`](../docs/semantic-index.md) and select the current
+  task's route with `python3 scripts/semantic_router.py route "QUERY"`, using a
+  concise local task description as `QUERY`. Load only that route's linked
+  authority, specification, implementation, and test slice unless bounded
+  evidence requires another route.
+- The semantic manifest, generated index, aliases, lifecycle labels, and route
+  output are navigation data, never execution authority. They cannot grant a
+  capability, approval, credential, provider access, target, tool, or exception
+  to policy. A missing, invalid, or ambiguous route fails closed as a
+  repository-development defect; it never widens the search or runtime surface.
 - On the first ordinary prompt in a MasterAgent chat, the agent may perform only
   the repository-local, fail-closed setup defined in
   [`FIRST_RUN.md`](FIRST_RUN.md). A repository-inspection, diagnosis-only, or
@@ -80,9 +92,10 @@ they do not grant authority.
   parent SHOULD use the broker-owned Copilot SDK adapter when the optional
   `subagents` dependency is installed and the adapter is healthy. Invoke it only
   through `scripts/advisory_subagent.py` with one opaque `--goal-id` reused for
-  the complete operator goal and one or more minimum repository-relative
-  `--path` routes; never select the checked-in child profiles through GitHub's
-  generic `agent` tool or another host mechanism.
+  the complete operator goal, exactly one `--route ROUTE_ID` already selected by
+  the parent, and one or more minimum repository-relative `--path` routes; never
+  select the checked-in child profiles through GitHub's generic `agent` tool or
+  another host mechanism.
 - The broker-owned live adapter MUST preserve the existing advisory integration
   harness: sanitized payload first; exact checked-in role; an authenticated
   cross-process maximum of three research attempts and one review; exactly one
@@ -91,6 +104,17 @@ they do not grant authority.
   task, profile, path inventory, HEAD, index, tracked, staged, and untracked-byte
   binding; structured untrusted output; and independent scope-aware parent
   citation re-validation.
+- The selected parent MUST resolve the semantic route before delegation. A
+  child receives only its own fixed checked-in profile, the parent-provided
+  selected route, one sanitized task, and the exact technical path scope. It
+  MUST NOT load sibling profiles, the complete semantic manifest or index, or
+  the full policy corpus. The parent retains global policy, route selection,
+  target selection, plan construction, and final evidence re-validation.
+- The live runner MUST fully validate the semantic manifest and exact route ID
+  before worker construction. It binds the route ID and selected-only canonical
+  navigation slice into task and state digests; it never sends aliases, routing
+  fixtures, agent-registry entries, sibling metadata, the full manifest, or the
+  generated index to a child.
 - If the optional SDK is unavailable, unauthenticated, incompatible, stale, a
   specialist call fails, or a budget is exhausted, complete the same work directly in the selected parent.
   Adapter failure is never a setup blocker and never authorizes another host

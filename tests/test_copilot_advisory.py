@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,11 +19,26 @@ from master_agent.advisory import (
     AdvisoryRole,
     DelegationStatus,
     RepositoryFixture,
+    SemanticRouteSlice,
     load_agent_inventory,
+)
+
+_TEST_ROUTE = SemanticRouteSlice(
+    route="agent-topology",
+    title="Parent and bounded advisory topology",
+    lifecycle="released",
+    summary="Bounded advisory test route.",
+    authority=("specs/current/security/MA-ADVISORY-001.md",),
+    implementation=("src/master_agent/advisory.py",),
+    configuration=(),
+    tests=("tests/test_advisory_integration.py",),
+    release_gates=("scripts/validate_release.py",),
+    dependencies=(),
 )
 from master_agent.copilot_advisory import (
     AdvisoryPathScope,
     CopilotRepositoryScanRejected,
+    CopilotScopeRejected,
     CopilotSdkAdvisoryWorker,
     CopilotSdkUnavailable,
     ScopedRepositoryTools,
@@ -181,7 +197,11 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             client_factory=lambda root: client,
             state_reader=state_reader,
         )
-        session = self.broker.start_session("MasterAgent", f"sdk-{role.value}")
+        session = self.broker.start_session(
+            "MasterAgent",
+            f"sdk-{role.value}",
+            semantic_route=_TEST_ROUTE,
+        )
         with patch.dict(sys.modules, self.modules):
             outcome = session.delegate(
                 role,
@@ -230,7 +250,34 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         )
         self.assertNotIn("agent", custom_agents[0]["tools"])
         self.assertNotIn("bash", custom_agents[0]["tools"])
-        self.assertIn("task_digest:", client.session.prompts[0])
+        task_prompt = client.session.prompts[0]
+        self.assertIn("task_digest:", task_prompt)
+        self.assertIn("route_digest:", task_prompt)
+        route_line = next(
+            line
+            for line in task_prompt.splitlines()
+            if line.startswith("semantic_route: ")
+        )
+        route_payload = json.loads(route_line.removeprefix("semantic_route: "))
+        self.assertEqual(
+            set(route_payload),
+            {
+                "route",
+                "title",
+                "lifecycle",
+                "summary",
+                "authority",
+                "implementation",
+                "configuration",
+                "tests",
+                "release_gates",
+                "dependencies",
+            },
+        )
+        self.assertEqual(route_payload["route"], "agent-topology")
+        self.assertNotIn("agent", route_payload)
+        self.assertNotIn("aliases", route_payload)
+        self.assertNotIn("routing_cases", route_payload)
         permission_handler = kwargs["on_permission_request"]
         rejected = permission_handler(object(), object())
         self.assertIsInstance(rejected, _Reject)
@@ -272,6 +319,7 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             "MasterAgent",
             "reuse-goal",
             goal_id="reuse-goal",
+            semantic_route=_TEST_ROUTE,
         )
         with patch.dict(sys.modules, self.modules):
             outcomes = [
@@ -306,7 +354,11 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             client_factory=lambda root: next(clients),
             state_reader=lambda root: "same",
         )
-        session = self.broker.start_session("MasterAgent", "disconnect-goal")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "disconnect-goal",
+            semantic_route=_TEST_ROUTE,
+        )
         with patch.dict(sys.modules, self.modules):
             failed = session.delegate(
                 AdvisoryRole.RESEARCH,
@@ -437,7 +489,11 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             client_factory=factory,
             state_reader=lambda root: "same",
         )
-        session = self.broker.start_session("MasterAgent", "sensitive-live-sdk")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "sensitive-live-sdk",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "research", "credential": "ghp_1234567890"},
@@ -459,7 +515,11 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             client_factory=unavailable,
             state_reader=lambda root: "same",
         )
-        session = self.broker.start_session("MasterAgent", "missing-sdk")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "missing-sdk",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "research", "paths": ["README.md"]},
@@ -527,6 +587,29 @@ class RepositoryStateDigestTests(unittest.TestCase):
 class AdvisoryPathScopeTests(unittest.TestCase):
     """Prove pathless search remains confined to the explicit route."""
 
+    def test_parent_policy_router_and_agent_prompts_are_never_route_scope(self) -> None:
+        """Global and peer prompt context stays exclusively on the parent."""
+
+        root = Path(__file__).resolve().parents[1]
+        forbidden = (
+            "AGENTS.md",
+            ".ai",
+            ".ai/MASTER_AGENT.md",
+            ".ai/semantic-router.toml",
+            "docs/semantic-index.md",
+            ".github",
+            ".github/agents",
+            ".github/agents/MasterAgent.agent.md",
+            ".github/agents/MasterAgent-Read-Researcher.agent.md",
+            ".github/agents/MasterAgent-Plan-Reviewer.agent.md",
+        )
+        for relative in forbidden:
+            with self.subTest(path=relative), self.assertRaises(CopilotScopeRejected):
+                AdvisoryPathScope.bind(root, (relative,))
+
+        allowed = AdvisoryPathScope.bind(root, ("docs/advisory-subagents.md",))
+        self.assertEqual(allowed.relative_paths, ("docs/advisory-subagents.md",))
+
     def test_search_and_list_cannot_cross_route_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -556,6 +639,91 @@ class AdvisoryPathScopeTests(unittest.TestCase):
                     {"path": "denied/outside.txt"},
                 )
             )
+
+    def test_bind_rejects_hardlinked_eligible_file(self) -> None:
+        """A safe-looking alias cannot expose parent-only file content."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            policy = root / ".ai/MASTER_AGENT.md"
+            allowed.mkdir()
+            policy.parent.mkdir()
+            policy.write_text("parent-only canary", encoding="utf-8")
+            try:
+                os.link(policy, allowed / "alias.md")
+            except OSError as error:  # pragma: no cover - platform limitation
+                self.skipTest(f"hardlinks unavailable: {error}")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "hardlink"):
+                AdvisoryPathScope.bind(root, ("allowed",))
+
+    def test_post_bind_regular_file_replacement_is_rejected_before_read(self) -> None:
+        """An allowed pathname stays bound to its original file identity."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            scoped = allowed / "file.txt"
+            scoped.write_text("public", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            scope = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(scope)
+            replacement = root / "replacement.txt"
+            replacement.write_text("secret", encoding="utf-8")
+            replacement.replace(scoped)
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "changed"):
+                tools.invoke("masteragent_read", {"path": "allowed/file.txt"})
+
+    def test_post_bind_in_place_mutation_is_rejected_before_read(self) -> None:
+        """Same-path and same-size writes cannot change child-visible bytes."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            scoped = allowed / "file.txt"
+            scoped.write_text("public", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            scope = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(scope)
+            scoped.write_text("secret", encoding="utf-8")
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "changed"):
+                tools.invoke("masteragent_search", {"query": "secret"})
+
+    def test_tracked_and_untracked_files_remain_readable_with_stable_digest(
+        self,
+    ) -> None:
+        """Normal scoped files keep deterministic binding and read behavior."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            tracked = allowed / "tracked.txt"
+            untracked = allowed / "untracked.txt"
+            tracked.write_text("tracked content", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            subprocess.run(("git", "add", "allowed/tracked.txt"), cwd=root, check=True)
+            untracked.write_text("untracked content", encoding="utf-8")
+
+            first = AdvisoryPathScope.bind(root, ("allowed",))
+            second = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(first)
+            tracked_result = json.loads(
+                tools.invoke("masteragent_read", {"path": "allowed/tracked.txt"})
+            )
+            untracked_result = json.loads(
+                tools.invoke("masteragent_read", {"path": "allowed/untracked.txt"})
+            )
+
+            self.assertEqual(first.digest, second.digest)
+            self.assertEqual(tracked_result["content"], "tracked content")
+            self.assertEqual(untracked_result["content"], "untracked content")
 
 
 if __name__ == "__main__":

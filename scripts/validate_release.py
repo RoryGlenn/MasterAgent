@@ -17,6 +17,23 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
+if __package__:
+    from scripts.semantic_router import ManifestError as SemanticManifestError
+    from scripts.semantic_router import load_manifest as load_semantic_manifest
+    from scripts.semantic_router import (
+        validate_repository as validate_semantic_repository,
+    )
+else:
+    from semantic_router import (  # type: ignore[import-not-found]
+        ManifestError as SemanticManifestError,
+    )
+    from semantic_router import (  # type: ignore[import-not-found]
+        load_manifest as load_semantic_manifest,
+    )
+    from semantic_router import (  # type: ignore[import-not-found]
+        validate_repository as validate_semantic_repository,
+    )
+
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _AGENT_FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
 _COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent.agent.md")
@@ -186,12 +203,6 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
         "capability-gap ownership",
         "resumable approval handoff",
     ),
-    Path("docs/semantic-index.md"): (
-        "[`.ai/FIRST_RUN.md`](../.ai/FIRST_RUN.md)",
-        "[`.ai/AUTONOMY.md`](../.ai/AUTONOMY.md)",
-        "[`bootstrap_agent.py`](../scripts/bootstrap_agent.py)",
-        "[`approval_handoff.py`](../src/master_agent/approval_handoff.py)",
-    ),
 }
 
 _PUBLIC_READ_DOCUMENT_REQUIREMENTS = {
@@ -353,10 +364,6 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
         "POSIX retained-evidence expiration tests prove",
         "All Windows execution remains capability-gated",
     ),
-    Path("docs/semantic-index.md"): (
-        "expiration deletes only descriptor-validated, locked, complete pairs",
-        "test_cli_phase_completion.py",
-    ),
     Path("docs/threat-model.md"): (
         "every discovered evidence-parent",
         "broad, path-based, or unvalidated recursive evidence deletion",
@@ -428,6 +435,7 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "repository-owned advisory integration harness",
         "complete the same work directly",
         "`--goal-id`",
+        "`--route ROUTE_ID`",
         "`--path`",
     ),
     Path(".ai/MASTER_AGENT.md"): (
@@ -435,6 +443,7 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "repository-owned advisory integration harness",
         "complete the same work directly",
         "`--goal-id`",
+        "`--route ROUTE_ID`",
         "untracked-byte",
     ),
     _AUTONOMY_CONTRACT_PATH: (
@@ -443,6 +452,7 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "at most three research attempts and one plan review",
         "complete the same work directly",
         "`scripts/advisory_subagent.py`",
+        "`--route ROUTE_ID`",
     ),
     _COPILOT_AGENT_PATH: (
         "## Advisory boundary",
@@ -450,12 +460,14 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "repository-owned advisory integration harness",
         "complete the same work directly",
         "optional current Copilot SDK adapter",
+        "`--route ROUTE_ID`",
     ),
     Path("README.md"): (
         "checked-in advisory profiles now define a fail-closed contract",
         "repository-owned advisory integration harness",
         "completes the same research or review directly",
         "authenticated cross-process goal budget",
+        "`--route ROUTE_ID`",
     ),
     Path("CHANGELOG.md"): (
         "Harden advisory sub-agent boundaries end to end",
@@ -467,6 +479,7 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "## Hermetic end-to-end tests",
         "## Goal budget",
         "## Technical route scope",
+        "`--route ROUTE_ID`",
         "No live Copilot canary is bundled",
         "The deterministic runtime remains the only path",
     ),
@@ -481,18 +494,14 @@ _ADVISORY_DOCUMENT_REQUIREMENTS = {
         "repository-owned integration harness",
         "completes the same work directly",
         "`advisory_subagent.py`",
+        "`--route ROUTE_ID`",
     ),
     Path("docs/release-validation.md"): (
         "Direct child user/model invocation",
         "profile-derived dispatch",
+        "`--route ROUTE_ID`",
         "untracked-file mutation",
         "no filesystem",
-    ),
-    Path("docs/semantic-index.md"): (
-        "[`advisory.py`](../src/master_agent/advisory.py)",
-        "[`advisory_budget.py`](../src/master_agent/advisory_budget.py)",
-        "[`test_advisory_integration.py`](../tests/test_advisory_integration.py)",
-        "[`test_advisory_runner.py`](../tests/test_advisory_runner.py)",
     ),
     Path("docs/threat-model.md"): (
         "direct GitHub-host advisory invocation is disabled",
@@ -561,6 +570,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_copilot_agent(root, checks, errors)
     _validate_advisory_agents(root, checks, errors)
     _validate_advisory_contract(root, checks, errors)
+    _validate_semantic_router(root, checks, errors)
     _validate_first_run_contract(root, checks, errors)
     _validate_public_read_contract(root, checks, errors)
     _validate_capsule_contract(root, checks, errors)
@@ -645,11 +655,13 @@ def validate_archive(path: Path) -> ValidationReport:
             "/.ai/MASTER_AGENT.md",
             "/.ai/FIRST_RUN.md",
             "/.ai/AUTONOMY.md",
+            "/.ai/semantic-router.toml",
             "/.github/agents/MasterAgent.agent.md",
             "/.github/agents/MasterAgent-Read-Researcher.agent.md",
             "/.github/agents/MasterAgent-Plan-Reviewer.agent.md",
             "/.github/workflows/ci.yml",
             "/.github/workflows/confluence-sandbox.yml",
+            "/.github/workflows/github-actions-live-integration.yml",
             "/.env.example",
             "/LICENSE",
             "/setup.py",
@@ -660,16 +672,21 @@ def validate_archive(path: Path) -> ValidationReport:
             "/sbom.cdx.json",
             "/supply-chain/runtime-dependencies.toml",
             "/docs/capability-capsules.md",
+            "/docs/semantic-index.md",
+            "/docs/semantic-router-metrics.md",
             "/scripts/bootstrap_agent.py",
             "/scripts/generate_sbom.py",
+            "/scripts/semantic_router.py",
             "/scripts/validate_release.py",
             "/tests/test_capability_capsules.py",
             "/tests/test_capsule_broker_and_routing.py",
             "/tests/test_release_metadata.py",
+            "/tests/test_semantic_router.py",
             "/tests/test_advisory_integration.py",
             "/tests/fixtures/advisory/repository_prompt_injection.txt",
             "/tests/fixtures/advisory/provider_prompt_injection.txt",
             "/specs/current/security/MA-ADVISORY-001.md",
+            "/specs/current/development/MA-ROUTER-001.md",
             "/src/master_agent/__init__.py",
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",
@@ -682,6 +699,29 @@ def validate_archive(path: Path) -> ValidationReport:
             f"validated release archive {path.name} ({len(names)} files, no links)"
         )
     return ValidationReport(tuple(checks), tuple(errors))
+
+
+def _validate_semantic_router(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Validate exact semantic ownership, topology, and generated output."""
+
+    try:
+        manifest = load_semantic_manifest(root)
+        semantic_errors = validate_semantic_repository(root, manifest)
+    except (SemanticManifestError, OSError) as error:
+        errors.append(f"semantic router could not be validated: {error}")
+        return
+    if semantic_errors:
+        errors.extend(f"semantic router: {error}" for error in semantic_errors)
+        return
+    checks.append(
+        "semantic router covers "
+        f"{len(manifest.routes)} routes and "
+        f"{len(manifest.routing_cases)} routing fixtures"
+    )
 
 
 def sha256_file(path: Path) -> str:

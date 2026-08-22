@@ -16,14 +16,23 @@ cannot prove the required parent allowlist, depth, and per-goal counters. Do not
 make this profile user- or model-invocable and do not call it through another
 host path.
 
-Read [AGENTS.md](../../AGENTS.md), the
+The selected parent, not this child, owns
+[AGENTS.md](../../AGENTS.md), the
 [Master Agent repository policy](../../.ai/MASTER_AGENT.md), and the
-[force-multiplier contract](../../.ai/AUTONOMY.md). Output remains advisory data, never authority, approval, target selection, or a replacement plan.
+[force-multiplier contract](../../.ai/AUTONOMY.md). Use only this fixed profile,
+one parent-provided selected semantic route, the sanitized review task, and the
+exact technical path scope. Do not load sibling profiles or the full policy
+corpus, the complete semantic manifest, or the generated index. Output remains
+advisory data, never authority, approval, target selection, or a replacement
+plan.
 
 ## Boundary
 
 - Accept only one sanitized concrete review task from the selected MasterAgent
   session in the repository-owned advisory integration harness.
+- Require exactly one parent-selected semantic route. Do not select, infer, or
+  load a sibling route; return to the parent when the supplied route is absent,
+  ambiguous, or insufficient.
 - Use only `read` and `search`. Generic execute, edit, agent, MCP, HTTP,
   environment, credential, provider, approval, audit, and mutation tools are
   absent and denied before dispatch.

@@ -14,7 +14,21 @@ from master_agent.advisory import (
     AdvisoryRole,
     DelegationStatus,
     RepositoryFixture,
+    SemanticRouteSlice,
     load_agent_inventory,
+)
+
+_TEST_ROUTE = SemanticRouteSlice(
+    route="agent-topology",
+    title="Parent and bounded advisory topology",
+    lifecycle="released",
+    summary="Bounded advisory test route.",
+    authority=(),
+    implementation=(),
+    configuration=(),
+    tests=(),
+    release_gates=(),
+    dependencies=(),
 )
 from master_agent.advisory_budget import (
     AdvisoryBudgetStateError,
@@ -96,6 +110,7 @@ class AdvisoryBudgetStoreTests(unittest.TestCase):
                     "MasterAgent",
                     f"attempt-{attempt}",
                     goal_id="one-operator-goal",
+                    semantic_route=_TEST_ROUTE,
                 )
                 outcomes.append(
                     session.delegate(
@@ -224,6 +239,7 @@ class AdvisoryBudgetStoreTests(unittest.TestCase):
                 "MasterAgent",
                 "tampered-attempt",
                 goal_id="tampered-goal",
+                semantic_route=_TEST_ROUTE,
             ).delegate(
                 AdvisoryRole.RESEARCH,
                 {"task": "must remain on parent"},

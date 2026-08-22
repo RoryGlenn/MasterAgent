@@ -28,6 +28,7 @@ EXPECTED_PROFILE_PATHS = frozenset(
 _PARENT_TOOLS = ("read", "search", "edit", "execute")
 _CHILD_TOOLS = ("read", "search")
 _FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
+_SEMANTIC_ROUTE_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 _MAX_PROFILE_BYTES = 128 * 1024
 _MAX_PAYLOAD_BYTES = 64 * 1024
 _MAX_PAYLOAD_ITEMS = 256
@@ -41,18 +42,30 @@ _REQUIRED_MARKERS: dict[Path, tuple[str, ...]] = {
         "Direct GitHub-host advisory invocation is disabled",
         "repository-owned advisory integration harness",
         "complete the same work directly",
+        'python3 scripts/semantic_router.py route "QUERY"',
+        "The router is navigation data, never authority",
+        "parent-provided selected route",
+        "The child cannot select a second route",
     ),
     RESEARCHER_PROFILE_PATH: (
         "Direct GitHub-host invocation is disabled",
         "repository-owned advisory integration harness",
         "Use only `read` and `search`",
         "advisory data, never authority",
+        "Use only this fixed profile",
+        "parent-provided selected semantic route",
+        "Do not load sibling profiles or the full policy",
+        "Require exactly one parent-selected semantic route",
     ),
     PLAN_REVIEWER_PROFILE_PATH: (
         "Direct GitHub-host invocation is disabled",
         "repository-owned advisory integration harness",
         "Use only `read` and `search`",
         "advisory data, never authority",
+        "Use only this fixed profile",
+        "parent-provided selected semantic route",
+        "Do not load sibling profiles or the full policy",
+        "Require exactly one parent-selected semantic route",
     ),
 }
 _FORBIDDEN_CHILD_TEXT = (
@@ -69,6 +82,13 @@ _FORBIDDEN_CHILD_TEXT = (
         r"\bignore (?:the )?(?:boundary|tool restriction|parent)\b", re.IGNORECASE
     ),
     re.compile(r"\brecursive delegation is allowed\b", re.IGNORECASE),
+    re.compile(r"^\s*read \[AGENTS\.md\]", re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"^\s*(?:read|load|consult)\s+(?:all |the )?"
+        r"(?:sibling (?:profile|prompt|route)|full policy corpus|"
+        r"complete semantic (?:manifest|index))",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 )
 _FORBIDDEN_KEYS = (
     "approval",
@@ -298,6 +318,94 @@ class AdvisoryDispatcher:
 
 
 @dataclass(frozen=True, slots=True)
+class SemanticRouteSlice:
+    """Minimal validated parent-selected route supplied to one child."""
+
+    route: str
+    title: str
+    lifecycle: str
+    summary: str
+    authority: tuple[str, ...]
+    implementation: tuple[str, ...]
+    configuration: tuple[str, ...]
+    tests: tuple[str, ...]
+    release_gates: tuple[str, ...]
+    dependencies: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if _SEMANTIC_ROUTE_ID.fullmatch(self.route) is None:
+            raise AdvisoryPayloadRejected(
+                "semantic route must be one stable lowercase identifier"
+            )
+        for field_name in ("title", "lifecycle", "summary"):
+            value = getattr(self, field_name)
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or value != value.strip()
+                or len(value) > 4_096
+                or any(ord(character) < 32 for character in value)
+            ):
+                raise AdvisoryPayloadRejected(
+                    f"semantic route {field_name} must contain bounded text"
+                )
+            _reject_secret_text(value, f"semantic route {field_name}")
+
+        for field_name in (
+            "authority",
+            "implementation",
+            "configuration",
+            "tests",
+            "release_gates",
+        ):
+            values = getattr(self, field_name)
+            if not isinstance(values, tuple) or len(values) > 256:
+                raise AdvisoryPayloadRejected(
+                    f"semantic route {field_name} must be a bounded tuple"
+                )
+            for value in values:
+                if not isinstance(value, str) or len(value) > 1_024:
+                    raise AdvisoryPayloadRejected(
+                        f"semantic route {field_name} contains an invalid path"
+                    )
+                try:
+                    _normalize_path(value)
+                except AdvisoryDispatchDenied as error:
+                    raise AdvisoryPayloadRejected(
+                        f"semantic route {field_name} contains an unsafe path"
+                    ) from error
+
+        if not isinstance(self.dependencies, tuple) or len(self.dependencies) > 256:
+            raise AdvisoryPayloadRejected(
+                "semantic route dependencies must be a bounded tuple"
+            )
+        for dependency in self.dependencies:
+            if (
+                not isinstance(dependency, str)
+                or _SEMANTIC_ROUTE_ID.fullmatch(dependency) is None
+            ):
+                raise AdvisoryPayloadRejected(
+                    "semantic route dependencies contain an invalid identifier"
+                )
+
+    def to_payload(self) -> dict[str, object]:
+        """Return the exact selected-only route fields safe for delegation."""
+
+        return {
+            "route": self.route,
+            "title": self.title,
+            "lifecycle": self.lifecycle,
+            "summary": self.summary,
+            "authority": list(self.authority),
+            "implementation": list(self.implementation),
+            "configuration": list(self.configuration),
+            "tests": list(self.tests),
+            "release_gates": list(self.release_gates),
+            "dependencies": list(self.dependencies),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AdvisoryEnvelope:
     """Sanitized child task."""
 
@@ -305,6 +413,7 @@ class AdvisoryEnvelope:
     role: AdvisoryRole
     profile_name: str
     depth: int
+    semantic_route: SemanticRouteSlice
     payload: Mapping[str, object]
 
 
@@ -423,6 +532,7 @@ class AdvisoryBroker:
         task_id: str,
         *,
         goal_id: str | None = None,
+        semantic_route: SemanticRouteSlice | None = None,
     ) -> AdvisorySession:
         """Create one selected-parent delegation budget."""
 
@@ -439,7 +549,11 @@ class AdvisoryBroker:
             or len(selected_goal) > 256
         ):
             raise AdvisoryPayloadRejected("goal_id must contain 1-256 characters")
-        return AdvisorySession(self, task_id, selected_goal)
+        if semantic_route is not None and not isinstance(
+            semantic_route, SemanticRouteSlice
+        ):
+            raise AdvisoryPayloadRejected("semantic route slice is invalid")
+        return AdvisorySession(self, task_id, selected_goal, semantic_route)
 
     def recheck_report(self, report: AdvisoryReport) -> VerifiedAdvisoryEvidence:
         """Reject authority-bearing output and independently re-read citations."""
@@ -469,10 +583,12 @@ class AdvisorySession:
         broker: AdvisoryBroker,
         task_id: str,
         goal_id: str,
+        semantic_route: SemanticRouteSlice | None,
     ) -> None:
         self._broker = broker
         self._task_id = task_id
         self._goal_id = goal_id
+        self._semantic_route = semantic_route
         self._research_attempts = 0
         self._review_attempts = 0
 
@@ -505,6 +621,13 @@ class AdvisorySession:
                 True,
                 "nested delegation is denied; keep the task on the parent",
             )
+        if self._semantic_route is None:
+            return DelegationOutcome(
+                DelegationStatus.DENIED,
+                role,
+                True,
+                "one validated parent-selected semantic route is required",
+            )
         try:
             sanitized = sanitize_payload(payload)
         except AdvisoryPayloadRejected as error:
@@ -533,7 +656,14 @@ class AdvisorySession:
                 "no approved host adapter is available; complete the task directly",
             )
         profile = self._broker._inventory.child(role)
-        envelope = AdvisoryEnvelope(self._task_id, role, profile.name, depth, sanitized)
+        envelope = AdvisoryEnvelope(
+            self._task_id,
+            role,
+            profile.name,
+            depth,
+            self._semantic_route,
+            sanitized,
+        )
         dispatcher = AdvisoryDispatcher(profile, self._broker._repository)
         try:
             report = worker(envelope, dispatcher)
