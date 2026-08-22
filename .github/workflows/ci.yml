@@ -87,6 +87,90 @@ jobs:
       - name: Validate release source
         run: python scripts/validate_release.py
 
+  windows-startup:
+    name: Windows installed-package startup
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install the package in an isolated runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtime = Join-Path $env:RUNNER_TEMP "master-agent-windows"
+          python -m venv $runtime
+          $runtimePython = Join-Path $runtime "Scripts\python.exe"
+          $runtimeCli = Join-Path $runtime "Scripts\master-agent.exe"
+          & $runtimePython -m pip install .
+          if ($LASTEXITCODE -ne 0) {
+            throw "isolated package installation failed with exit code $LASTEXITCODE"
+          }
+          "MASTER_AGENT_WINDOWS_PYTHON=$runtimePython" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MASTER_AGENT_WINDOWS_CLI=$runtimeCli" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Prove startup and config-only readiness outside the source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+          Set-Location $env:RUNNER_TEMP
+          & $env:MASTER_AGENT_WINDOWS_PYTHON -c "import master_agent; import master_agent.cli; import master_agent.readiness"
+          if ($LASTEXITCODE -ne 0) {
+            throw "installed-package imports failed with exit code $LASTEXITCODE"
+          }
+          & $env:MASTER_AGENT_WINDOWS_CLI --help | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "--help failed with exit code $LASTEXITCODE"
+          }
+          & $env:MASTER_AGENT_WINDOWS_CLI --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "--version failed with exit code $LASTEXITCODE"
+          }
+
+          $readinessOutput = (& $env:MASTER_AGENT_WINDOWS_CLI readiness | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "config-only readiness failed with exit code $LASTEXITCODE"
+          }
+
+          $profilePath = Join-Path $env:RUNNER_TEMP "missing-organization-profile.toml"
+          $doctorOutput = (& $env:MASTER_AGENT_WINDOWS_CLI doctor --profile $profilePath --require-level install | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "install-level doctor failed with exit code $LASTEXITCODE"
+          }
+
+          $contracts = @(
+            "secure_filesystem",
+            "cross_process_locking",
+            "atomic_publication_recovery",
+            "process_supervision",
+            "trusted_git",
+            "capsule_isolation"
+          )
+          foreach ($report in @($readinessOutput, $doctorOutput)) {
+            if ($report -notmatch "platform runtime: windows \(windows-unavailable\)") {
+              throw "platform runtime did not report the unavailable Windows backend"
+            }
+            foreach ($contractName in $contracts) {
+              if ($report -notmatch "$contractName`: unavailable \(windows-unavailable\)") {
+                throw "platform runtime did not fail closed for $contractName"
+              }
+            }
+          }
+
+          & $env:MASTER_AGENT_WINDOWS_CLI doctor --profile $profilePath --require-level draft | Out-Null
+          $draftExitCode = $LASTEXITCODE
+          if ($draftExitCode -ne 2) {
+            throw "draft readiness did not fail closed"
+          }
+          & $env:MASTER_AGENT_WINDOWS_CLI doctor --profile $profilePath --require-level effect | Out-Null
+          $effectExitCode = $LASTEXITCODE
+          if ($effectExitCode -ne 2) {
+            throw "effect readiness did not fail closed"
+          }
+          exit 0
+
   package:
     name: Package and isolated artifact tests
     runs-on: ubuntu-latest

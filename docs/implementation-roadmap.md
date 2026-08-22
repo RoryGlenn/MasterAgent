@@ -4,18 +4,21 @@
 
 The v1 governed core, provider contracts, bounded advisory profiles, capability
 capsule path, native behavioral specification lifecycle, and audience-aware
-documentation completion gate are implemented. Release-hardening gates keep
+documentation completion gate are implemented. A common platform-runtime
+contract now keeps imports and configuration diagnostics platform neutral while
+native Windows security backends remain separately planned. Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
-execution, native Windows retention maintenance, raw plugin execution, and
+execution, native Windows retention preview/apply/repair, raw plugin execution, and
 unsafe provider mutations non-routable.
 
 | Area | Software status | Operational status |
 |---|---|---|
 | Progressive user workflow | Complete | Install a reviewed organization profile; local installation, selected reads, governed effects, and enterprise deployment report independent readiness |
+| Platform runtime | Common contract complete; existing POSIX behavior preserved; native Windows backends planned | Windows supports imports, help/version, and offline configuration diagnostics; stateful operations remain unavailable until every required native contract exists |
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
-| 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX; native Windows expiry execution gated | Contract-tested; authenticated deployment requires approved applications and credentials |
+| 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX; native Windows retention preview/apply/repair gated | Contract-tested; authenticated deployment requires approved applications and credentials |
 | 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | Provider-data model-context boundary | Complete | Replace development destination/tenancy/classification rules and supply any required external audit or DLP adapters |
 | Protected credentialed integration evidence | Repository workflow and static contract complete | Configure least-privilege credentials, tenant consent, stable fixtures, dedicated communication targets, and run the approved manual matrix |
@@ -54,6 +57,25 @@ absent.
 - production configuration fails closed without explicit organization choices;
 - secret-free readiness identifies missing variable names and permissions; and
 - configuration-only readiness performs no network request.
+
+### Platform-runtime boundary
+
+- platform-neutral package and CLI imports do not initialize operating-system-
+  specific backends;
+- readiness exposes stable `platform`, `backend`, and per-contract availability
+  for secure filesystem, cross-process locking, atomic publication/recovery,
+  process supervision, trusted Git, and capsule isolation;
+- help, version, deployment readiness, and install-level progressive doctor
+  run on Windows before native stateful backends are complete;
+- a dependent operation fails with a bounded `runtime_defect` before protected
+  state, credentials, connector construction, provider access, or effects when
+  its exact backend is unavailable;
+- no compatibility shim or weaker cross-platform fallback can satisfy a secure
+  contract; and
+- existing POSIX filesystem, locking, atomic-state, process, and Git semantics
+  remain covered; Linux capsule isolation identifies bubblewrap and macOS
+  reports that independent contract unavailable; every native Windows route
+  stays planned until its own implementation and evidence are complete.
 
 ### Phase 1 — governed runtime
 
@@ -204,8 +226,10 @@ absent.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- native Windows retained-evidence preview and deletion pending equivalent
-  filesystem identity, locking, and atomic-state backends;
+- native Windows secure filesystem/ACL, locking, atomic state and retention,
+  including preview/apply/orphan repair, plus credentials, process supervision,
+  Git isolation, capsule isolation, and hosted certification behind the
+  released common platform contract;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
 - production credential-broker and external receipt/audit adapters;

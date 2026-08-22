@@ -101,6 +101,55 @@ generated effect code remains untrusted and quarantined until its independent
 review, tests, specification archival, signing, deployment, and standard
 runtime admission finish. Neither mode can self-approve or self-promote code.
 
+### Platform runtime boundary
+
+Platform-neutral package and CLI modules depend on a descriptive platform
+registry instead of importing Unix-only primitives at startup. The registry
+normalizes the host to one stable backend identity and reports six independent
+contracts:
+
+- `secure_filesystem`;
+- `cross_process_locking`;
+- `atomic_publication_recovery`;
+- `process_supervision`;
+- `trusted_git`; and
+- `capsule_isolation`.
+
+`platform_runtime_status()` is inspection only. It returns `platform`,
+`backend`, and a `capabilities` map whose entries contain `available`,
+`backend`, and an optional bounded, secret-free `reason`. Help, version, and
+configuration-only readiness can consume that status without initializing a
+stateful backend.
+
+Linux and macOS use the top-level `posix-linux` and `posix-macos` identities.
+Both select `posix-descriptor-filesystem`, `posix-flock`,
+`posix-atomic-publication`, `posix-rlimit`, and `posix-trusted-git`. Linux also
+selects `linux-bubblewrap` for executable capsule isolation. macOS reports
+`capsule_isolation` unavailable because owner/group artifact trust is a secure-
+filesystem property, not OS worker containment, and no native macOS isolation
+backend is certified. Windows uses `windows-unavailable` until a native
+contract replaces each unavailable entry; an unrecognized host uses
+`unsupported`.
+
+An operation selects its exact contract immediately before use. Selection
+returns only the certified native implementation or raises the typed platform-
+unavailable error; it never substitutes a compatibility shim, another platform,
+or a weaker implementation. That failure occurs before protected state,
+credentials, connector construction, provider access, or effects. Existing
+POSIX implementations retain their established ownership, no-follow, locking,
+atomicity, process, and Git behavior. Linux retains bubblewrap capsule
+isolation; macOS capsule execution fails closed instead of treating account-
+private artifact checks as executable isolation.
+
+Windows therefore has a deliberately split status. Package import, command
+help/version, deployment readiness, and the absent-profile install diagnosis
+are supported. Reading a present profile requires `secure_filesystem`; it fails
+before open or parse while that backend is unavailable. A stateful capability
+remains unavailable when any contract it requires reports unavailable, and its
+readiness issue is `runtime_defect`.
+The released common platform route supplies this contract only; the seven
+native Windows implementation and hosted-certification routes remain planned.
+
 ## Repository discovery topology
 
 Repository development uses a separate hub-and-spoke discovery map before any
@@ -146,8 +195,9 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-Seven separate Windows routes remain `planned`; a generated index cannot
-present them as released until their own implementation and certification
+The common platform-runtime route is released, while seven separate native
+Windows routes remain `planned`; a generated index cannot present those native
+backends or hosted certification as released until their own implementation
 changes advance the manifest under validation.
 
 ## Principal components
@@ -463,8 +513,9 @@ is removed. The common source parent is fsynced with both public names absent
 before recovery links are discarded, allowing a later apply to complete or
 roll back interrupted staging without losing deletion durability. Pending
 transactions beneath a nested retention root make an ancestor scan fail closed
-until the exact child root is recovered. Native Windows execution remains
-unavailable until equivalent filesystem and atomic-state contracts exist.
+until the exact child root is recovered. Native Windows retention preview,
+apply, and orphan repair remain unavailable until equivalent filesystem and
+atomic-state contracts exist.
 
 Descriptor-relative orphan repair participates in the same selected-root,
 ancestor, and descendant-parent lock handshake. It repeats the bounded scan

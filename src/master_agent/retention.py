@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -21,6 +20,13 @@ from master_agent.config_sources import ConfigSource
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.evidence import content_digest
+from master_agent.platform_runtime import (
+    LockMode,
+    PlatformContract,
+    get_cross_process_locking_backend,
+    get_secure_filesystem_backend,
+    require_platform_contract,
+)
 
 _SECURITY_CATEGORIES = frozenset(
     {
@@ -318,6 +324,7 @@ class RetainedJSONReservation:
         now: datetime | None = None,
         parent_directory: PinnedDirectory | None = None,
     ) -> None:
+        _require_retention_platform()
         self._rule = _permitted_rule(
             config,
             evidence_type=evidence_type,
@@ -358,7 +365,10 @@ class RetainedJSONReservation:
             self._lock_descriptor, self._lock_identity = _open_retention_lock(
                 self._parent_descriptor
             )
-            fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            _acquire_file_lock(
+                self._lock_descriptor,
+                mode=LockMode.EXCLUSIVE,
+            )
             self._hierarchy_locks = _acquire_retention_directory_hierarchy(
                 self._pinned,
             )
@@ -494,7 +504,7 @@ class RetainedJSONReservation:
         self._files.clear()
         if self._lock_descriptor >= 0:
             try:
-                fcntl.flock(self._lock_descriptor, fcntl.LOCK_UN)
+                _release_file_lock(self._lock_descriptor)
             finally:
                 os.close(self._lock_descriptor)
                 self._lock_descriptor = -1
@@ -525,6 +535,7 @@ def write_retained_json(
     ``metadata_only`` or ``prohibited`` reject such writes.
     """
 
+    _require_retention_platform()
     rule = _permitted_rule(
         config,
         evidence_type=evidence_type,
@@ -591,6 +602,7 @@ def write_retained_text(
 ) -> tuple[Path, Path]:
     """Write restricted text when an explicit-content rule permits it."""
 
+    _require_retention_platform()
     rule = _permitted_rule(
         config,
         evidence_type=evidence_type,
@@ -627,6 +639,7 @@ def purge_expired_evidence(
 ) -> RetentionPurgeResult:
     """Preview or apply bounded descriptor-safe expiration cleanup."""
 
+    _require_retention_platform()
     if os.name == "nt":
         raise ConfigurationError(
             "evidence pruning is unavailable on Windows until native filesystem "
@@ -680,9 +693,10 @@ def _purge_expired_evidence_locked(
                 lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
             if lock_descriptor >= 0:
                 try:
-                    fcntl.flock(
+                    _acquire_file_lock(
                         lock_descriptor,
-                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        mode=LockMode.EXCLUSIVE,
+                        blocking=False,
                     )
                     lock_acquired = True
                 except BlockingIOError as error:
@@ -892,13 +906,13 @@ def _purge_expired_evidence_locked(
             try:
                 for _, descriptor, _ in reversed(descendant_locks):
                     try:
-                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        _release_file_lock(descriptor)
                     finally:
                         os.close(descriptor)
             finally:
                 try:
                     if lock_acquired:
-                        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                        _release_file_lock(lock_descriptor)
                 finally:
                     try:
                         if lock_descriptor >= 0:
@@ -915,6 +929,7 @@ def repair_orphaned_evidence(
 ) -> RetentionRepairResult:
     """Detect or recoverably quarantine orphaned retained evidence."""
 
+    _require_retention_platform()
     return _repair_orphaned_evidence_locked(
         root,
         dry_run=dry_run,
@@ -960,9 +975,10 @@ def _repair_orphaned_evidence_locked(
                 lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
             if lock_descriptor >= 0:
                 try:
-                    fcntl.flock(
+                    _acquire_file_lock(
                         lock_descriptor,
-                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                        mode=LockMode.EXCLUSIVE,
+                        blocking=False,
                     )
                     lock_acquired = True
                 except BlockingIOError as error:
@@ -1098,13 +1114,13 @@ def _repair_orphaned_evidence_locked(
             try:
                 for _, descriptor, _ in reversed(descendant_locks):
                     try:
-                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        _release_file_lock(descriptor)
                     finally:
                         os.close(descriptor)
             finally:
                 try:
                     if lock_acquired:
-                        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                        _release_file_lock(lock_descriptor)
                 finally:
                     try:
                         if lock_descriptor >= 0:
@@ -1229,7 +1245,8 @@ def _scan_retained_files_at(
                         not stat.S_ISDIR(current.st_mode)
                         or (current.st_dev, current.st_ino)
                         != (metadata.st_dev, metadata.st_ino)
-                        or current.st_uid != os.getuid()
+                        or current.st_uid
+                        != get_secure_filesystem_backend().real_user_id()
                         or stat.S_IMODE(current.st_mode) & 0o022
                     ):
                         raise ConfigurationError(
@@ -1445,7 +1462,7 @@ def _acquire_retention_directory_hierarchy(
         for directory_descriptor in directory_descriptors[:-1]:
             directory = os.fstat(directory_descriptor)
             if (
-                directory.st_uid != os.getuid()
+                directory.st_uid != get_secure_filesystem_backend().real_user_id()
                 or stat.S_IMODE(directory.st_mode) & 0o022
             ):
                 continue
@@ -1454,9 +1471,10 @@ def _acquire_retention_directory_hierarchy(
                 continue
             lock_descriptor, identity = opened
             try:
-                fcntl.flock(
+                _acquire_file_lock(
                     lock_descriptor,
-                    fcntl.LOCK_SH | fcntl.LOCK_NB,
+                    mode=LockMode.SHARED,
+                    blocking=False,
                 )
             except BlockingIOError as error:
                 os.close(lock_descriptor)
@@ -1474,7 +1492,7 @@ def _acquire_retention_directory_hierarchy(
                 )
             except BaseException:
                 try:
-                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                    _release_file_lock(lock_descriptor)
                 finally:
                     os.close(lock_descriptor)
                 raise
@@ -1484,7 +1502,7 @@ def _acquire_retention_directory_hierarchy(
     except BaseException:
         for descriptor in reversed(acquired_locks):
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                _release_file_lock(descriptor)
             finally:
                 os.close(descriptor)
         raise
@@ -1498,7 +1516,7 @@ def _release_retention_directory_hierarchy(descriptors: list[int]) -> None:
 
     for descriptor in reversed(descriptors):
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            _release_file_lock(descriptor)
         finally:
             os.close(descriptor)
 
@@ -1541,7 +1559,11 @@ def _acquire_descendant_retention_locks_at(
                     )
                     continue
                 try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _acquire_file_lock(
+                        descriptor,
+                        mode=LockMode.EXCLUSIVE,
+                        blocking=False,
+                    )
                 except BlockingIOError as error:
                     os.close(descriptor)
                     if not dry_run:
@@ -1564,7 +1586,7 @@ def _acquire_descendant_retention_locks_at(
                     )
                 except BaseException:
                     try:
-                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        _release_file_lock(descriptor)
                     finally:
                         os.close(descriptor)
                     raise
@@ -1575,7 +1597,7 @@ def _acquire_descendant_retention_locks_at(
     except BaseException:
         for _, descriptor, _ in reversed(acquired):
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                _release_file_lock(descriptor)
             finally:
                 os.close(descriptor)
         raise
@@ -1823,7 +1845,7 @@ def _link_prune_stage_file_at(
         for metadata in (staged, current):
             if (
                 not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.getuid()
+                or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
                 or stat.S_IMODE(metadata.st_mode) != 0o600
                 or metadata.st_nlink != 2
                 or (metadata.st_dev, metadata.st_ino) != record.identity
@@ -2084,7 +2106,7 @@ def _open_existing_private_directory_at(
         initial_mode = stat.S_IMODE(initial.st_mode)
         if (
             not stat.S_ISDIR(initial.st_mode)
-            or initial.st_uid != os.getuid()
+            or initial.st_uid != get_secure_filesystem_backend().real_user_id()
             or initial_mode & ~0o700
         ):
             raise ConfigurationError("private transaction directory is unsafe")
@@ -2104,7 +2126,7 @@ def _open_existing_private_directory_at(
             )
             if (
                 not stat.S_ISDIR(normalized.st_mode)
-                or normalized.st_uid != os.getuid()
+                or normalized.st_uid != get_secure_filesystem_backend().real_user_id()
                 or stat.S_IMODE(normalized.st_mode) != 0o700
                 or (normalized.st_dev, normalized.st_ino) != expected_identity
             ):
@@ -2125,7 +2147,7 @@ def _open_existing_private_directory_at(
     metadata = os.fstat(descriptor)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
+        or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
         or stat.S_IMODE(metadata.st_mode) != 0o700
         or (
             expected_identity is not None
@@ -2150,7 +2172,10 @@ def _create_private_directory_at(
     try:
         os.mkdir(name, 0o700, dir_fd=parent_descriptor)
         created = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-        if not stat.S_ISDIR(created.st_mode) or created.st_uid != os.getuid():
+        if (
+            not stat.S_ISDIR(created.st_mode)
+            or created.st_uid != get_secure_filesystem_backend().real_user_id()
+        ):
             raise ConfigurationError("created private directory is unsafe")
         identity = created.st_dev, created.st_ino
         os.chmod(
@@ -2199,7 +2224,7 @@ def _remove_new_private_directory_at(
     current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     if (
         not stat.S_ISDIR(current.st_mode)
-        or current.st_uid != os.getuid()
+        or current.st_uid != get_secure_filesystem_backend().real_user_id()
         or (current.st_dev, current.st_ino) != expected_identity
     ):
         raise ConfigurationError("created private directory identity changed")
@@ -2239,7 +2264,7 @@ def _remove_private_transaction_directory_at(
     current = os.stat(name, dir_fd=stage_descriptor, follow_symlinks=False)
     if (
         not stat.S_ISDIR(current.st_mode)
-        or current.st_uid != os.getuid()
+        or current.st_uid != get_secure_filesystem_backend().real_user_id()
         or stat.S_IMODE(current.st_mode) != 0o700
         or (current.st_dev, current.st_ino) != expected_identity
     ):
@@ -3172,7 +3197,7 @@ def _read_record_bytes_at(
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.getuid()
+            or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
             or metadata.st_nlink not in allowed_link_counts
             or stat.S_IMODE(metadata.st_mode) != 0o600
             or (metadata.st_dev, metadata.st_ino) != record.identity
@@ -3220,7 +3245,7 @@ def _open_relative_directory_at(
             metadata = os.fstat(descriptor)
             if (
                 not stat.S_ISDIR(metadata.st_mode)
-                or metadata.st_uid != os.getuid()
+                or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
                 or stat.S_IMODE(metadata.st_mode) & 0o022
             ):
                 raise ConfigurationError(
@@ -3338,7 +3363,7 @@ def _quarantine_owned_name_at(
     source = os.stat(name, dir_fd=source_parent, follow_symlinks=False)
     if (
         (source.st_dev, source.st_ino) != expected_identity
-        or source.st_uid != os.getuid()
+        or source.st_uid != get_secure_filesystem_backend().real_user_id()
         or source.st_nlink != 1
         or stat.S_IFMT(source.st_mode) != stat.S_IFMT(expected_mode)
         or not (stat.S_ISREG(source.st_mode) or stat.S_ISLNK(source.st_mode))
@@ -3732,6 +3757,35 @@ def _aware_utc(value: datetime | None) -> datetime:
     return current.astimezone(UTC)
 
 
+def _require_retention_platform() -> None:
+    """Require the complete native state-publication contract set."""
+
+    get_secure_filesystem_backend()
+    get_cross_process_locking_backend()
+    require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
+
+
+def _acquire_file_lock(
+    descriptor: int,
+    *,
+    mode: LockMode,
+    blocking: bool = True,
+) -> None:
+    """Acquire one lock through the selected native locking contract."""
+
+    get_cross_process_locking_backend().acquire(
+        descriptor,
+        mode=mode,
+        blocking=blocking,
+    )
+
+
+def _release_file_lock(descriptor: int) -> None:
+    """Release one lock through the selected native locking contract."""
+
+    get_cross_process_locking_backend().release(descriptor)
+
+
 def _atomic_write_files(
     files: Mapping[Path, bytes],
     *,
@@ -3739,6 +3793,7 @@ def _atomic_write_files(
 ) -> None:
     """Commit same-directory retained files with rollback on partial failure."""
 
+    _require_retention_platform()
     if not files:
         raise ValueError("at least one retained file is required")
     targets = tuple(files)
@@ -3780,7 +3835,7 @@ def _atomic_write_files_at(
     published: list[tuple[str, tuple[int, int]]] = []
     try:
         lock_descriptor, lock_identity = _open_retention_lock(parent_descriptor)
-        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _acquire_file_lock(lock_descriptor, mode=LockMode.EXCLUSIVE)
         hierarchy_locks = _acquire_retention_directory_hierarchy(pinned)
         _validate_restricted_file_at(
             parent_descriptor,
@@ -3838,7 +3893,7 @@ def _atomic_write_files_at(
     finally:
         if lock_descriptor >= 0:
             try:
-                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                _release_file_lock(lock_descriptor)
             finally:
                 os.close(lock_descriptor)
         try:
@@ -4067,7 +4122,7 @@ def _open_existing_restricted_file_at(
     initial_mode = stat.S_IMODE(initial.st_mode)
     if (
         not stat.S_ISREG(initial.st_mode)
-        or initial.st_uid != os.getuid()
+        or initial.st_uid != get_secure_filesystem_backend().real_user_id()
         or initial.st_nlink != 1
         or (normalize_restricted and initial_mode & ~0o600 != 0)
         or (not normalize_restricted and initial_mode != 0o600)
@@ -4154,7 +4209,7 @@ def _open_new_restricted_file_at(
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.getuid()
+            or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
             or metadata.st_nlink != 1
         ):
             raise ConfigurationError(f"retained evidence file is unsafe: {name}")
@@ -4248,7 +4303,7 @@ def _publish_restricted_temp_file_at(
         for metadata in (temporary, final):
             if (
                 not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.getuid()
+                or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
                 or stat.S_IMODE(metadata.st_mode) != 0o600
                 or metadata.st_nlink != 2
                 or (metadata.st_dev, metadata.st_ino) != expected_identity
@@ -4344,7 +4399,7 @@ def _unlink_new_private_file_at(
         return
     if (
         not stat.S_ISREG(current.st_mode)
-        or current.st_uid != os.getuid()
+        or current.st_uid != get_secure_filesystem_backend().real_user_id()
         or current.st_nlink != 1
         or stat.S_IMODE(current.st_mode) & 0o077
         or (current.st_dev, current.st_ino) != expected_identity
@@ -4368,7 +4423,7 @@ def _unlink_owned_file_at(
         return
     if (
         not stat.S_ISREG(current.st_mode)
-        or current.st_uid != os.getuid()
+        or current.st_uid != get_secure_filesystem_backend().real_user_id()
         or stat.S_IMODE(current.st_mode) != 0o600
         or current.st_nlink not in allowed_link_counts
         or (current.st_dev, current.st_ino) != expected_identity
@@ -4385,7 +4440,7 @@ def _restricted_file_identity(
 
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
+        or metadata.st_uid != get_secure_filesystem_backend().real_user_id()
         or metadata.st_nlink != 1
         or stat.S_IMODE(metadata.st_mode) != 0o600
     ):

@@ -1754,13 +1754,23 @@ persistence = "explicit_content"
 
             attempted: list[int] = []
 
-            def fail_lock(descriptor: int, _operation: int) -> None:
+            def fail_lock(
+                descriptor: int,
+                *,
+                mode: retention.LockMode,
+                blocking: bool = True,
+            ) -> None:
+                del mode, blocking
                 attempted.append(descriptor)
                 raise OSError("simulated flock failure")
 
             with (
                 PinnedDirectory.open(child) as pinned,
-                patch.object(retention.fcntl, "flock", side_effect=fail_lock),
+                patch.object(
+                    retention,
+                    "_acquire_file_lock",
+                    side_effect=fail_lock,
+                ),
                 self.assertRaisesRegex(OSError, "simulated flock failure"),
             ):
                 retention._acquire_retention_directory_hierarchy(pinned)
@@ -1780,13 +1790,23 @@ persistence = "explicit_content"
 
             attempted: list[int] = []
 
-            def fail_lock(descriptor: int, _operation: int) -> None:
+            def fail_lock(
+                descriptor: int,
+                *,
+                mode: retention.LockMode,
+                blocking: bool = True,
+            ) -> None:
+                del mode, blocking
                 attempted.append(descriptor)
                 raise OSError("simulated flock failure")
 
             with (
                 PinnedDirectory.open(root) as pinned,
-                patch.object(retention.fcntl, "flock", side_effect=fail_lock),
+                patch.object(
+                    retention,
+                    "_acquire_file_lock",
+                    side_effect=fail_lock,
+                ),
                 self.assertRaisesRegex(OSError, "simulated flock failure"),
             ):
                 retention._acquire_descendant_retention_locks_at(

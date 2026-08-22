@@ -44,6 +44,7 @@ from master_agent.operating import (
     require_operating_plan,
     validate_operating_plan,
 )
+from master_agent.platform_runtime import PlatformContract, platform_runtime_status
 
 
 class OrganizationProfileTests(unittest.TestCase):
@@ -783,6 +784,244 @@ class OperatingReadinessTests(unittest.TestCase):
             self.assertFalse(report.draft_ready)
             self.assertFalse(report.effect_ready)
             self.assertFalse(report.enterprise_ready)
+
+    def test_unavailable_native_state_backends_fail_closed_per_capability(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            read = "github.private_repository.read"
+            draft = "draft.package.generate"
+            effect = "provider.item.write"
+            report = assess_operating_readiness(
+                profile=_profile(root, capabilities=(read, draft, effect)),
+                catalog=_catalog(
+                    _definition(read, authentication="configured"),
+                    _definition(
+                        draft,
+                        risk=RiskLevel.LOCAL_GENERATION,
+                        authentication="local",
+                    ),
+                    _definition(
+                        effect,
+                        risk=RiskLevel.REVERSIBLE_WRITE,
+                        authentication="local",
+                    ),
+                ),
+                state_backed_read_capabilities=frozenset({read}),
+                platform_status=platform_runtime_status("win32"),
+            )
+
+        self.assertTrue(report.install_ready)
+        self.assertFalse(report.read_ready)
+        self.assertFalse(report.draft_ready)
+        self.assertFalse(report.effect_ready)
+        self.assertEqual(report.platform_runtime.platform, "windows")
+        self.assertEqual(report.platform_runtime.backend, "windows-unavailable")
+        for item in report.capabilities:
+            platform_issues = tuple(
+                issue
+                for issue in item.issues
+                if "native platform runtime contracts" in issue.message
+            )
+            self.assertEqual(len(platform_issues), 1, item.capability)
+            self.assertEqual(
+                platform_issues[0].category,
+                OperatingFailureCategory.RUNTIME_DEFECT,
+            )
+            self.assertIn("secure_filesystem", platform_issues[0].message)
+            self.assertIn("cross_process_locking", platform_issues[0].message)
+            self.assertIn("atomic_publication_recovery", platform_issues[0].message)
+        payload = report.to_dict()
+        self.assertEqual(
+            tuple(payload["platform_runtime"]["capabilities"]),
+            (
+                "secure_filesystem",
+                "cross_process_locking",
+                "atomic_publication_recovery",
+                "process_supervision",
+                "trusted_git",
+                "capsule_isolation",
+            ),
+        )
+
+    def test_unavailable_native_state_backends_do_not_block_stateless_reads(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as raw:
+            capability = "github.public_repository.list"
+            report = assess_operating_readiness(
+                profile=_profile(Path(raw).resolve(), capabilities=(capability,)),
+                catalog=_catalog(_definition(capability, authentication="anonymous")),
+                integrations=_integrations(auth_mode=AuthMode.BEARER),
+                environ={},
+                platform_status=platform_runtime_status("win32"),
+            )
+
+        self.assertTrue(report.install_ready)
+        self.assertTrue(report.read_ready)
+        self.assertEqual(report.capabilities[0].issues, ())
+
+    def test_filesystem_backed_read_does_not_require_locking_or_atomic_state(
+        self,
+    ) -> None:
+        unavailable = platform_runtime_status("win32")
+        secure_filesystem_only = replace(
+            unavailable,
+            capabilities=tuple(
+                replace(
+                    item,
+                    available=True,
+                    backend="test-secure-filesystem",
+                    reason=None,
+                )
+                if item.contract is PlatformContract.SECURE_FILESYSTEM
+                else item
+                for item in unavailable.capabilities
+            ),
+        )
+        with TemporaryDirectory() as raw:
+            capability = "github.public_repository.list"
+            report = assess_operating_readiness(
+                profile=_profile(Path(raw).resolve(), capabilities=(capability,)),
+                catalog=_catalog(_definition(capability, authentication="anonymous")),
+                integrations=_integrations(auth_mode=AuthMode.BEARER),
+                environ={},
+                filesystem_backed_read_capabilities=frozenset({capability}),
+                platform_status=secure_filesystem_only,
+            )
+
+        self.assertTrue(report.install_ready)
+        self.assertTrue(report.read_ready)
+        self.assertEqual(report.capabilities[0].issues, ())
+
+    def test_ca_backed_readiness_uses_platform_status_before_trust_path(self) -> None:
+        configured = _integrations(auth_mode=AuthMode.BEARER)
+        github = replace(
+            configured.connector("github"),
+            ca_bundle_env="MASTER_AGENT_ENTERPRISE_CA_BUNDLE",
+        )
+        integrations = IntegrationConfig({"github": github})
+        with (
+            TemporaryDirectory() as raw,
+            patch("master_agent.config.Path") as path_constructor,
+            patch("master_agent.operating.capture_ca_bundle") as capture_bundle,
+            patch("master_agent.operating.create_ssl_context") as create_context,
+        ):
+            capability = "github.public_repository.list"
+            report_profile = _profile(
+                Path(raw).resolve(),
+                capabilities=(capability,),
+            )
+            report = assess_operating_readiness(
+                profile=report_profile,
+                catalog=_catalog(_definition(capability, authentication="anonymous")),
+                integrations=integrations,
+                environ={"MASTER_AGENT_ENTERPRISE_CA_BUNDLE": "never-inspected.pem"},
+                platform_status=platform_runtime_status("win32"),
+            )
+
+        self.assertFalse(report.read_ready)
+        issues = report.capabilities[0].issues
+        self.assertTrue(
+            any(
+                issue.category is OperatingFailureCategory.RUNTIME_DEFECT
+                and "secure_filesystem" in issue.message
+                for issue in issues
+            )
+        )
+        self.assertFalse(
+            any(
+                "destination or trust configuration" in issue.message
+                for issue in issues
+            )
+        )
+        path_constructor.assert_not_called()
+        capture_bundle.assert_not_called()
+        create_context.assert_not_called()
+
+        with (
+            patch("master_agent.platform_runtime.factory.sys.platform", "win32"),
+            patch("master_agent.config.Path") as validation_path,
+            patch("master_agent.operating.capture_ca_bundle") as validation_capture,
+        ):
+            validation = validate_operating_plan(
+                _plan(_action(capability)),
+                profile=report_profile,
+                catalog=_catalog(_definition(capability, authentication="anonymous")),
+                integrations=integrations,
+                environ={"MASTER_AGENT_ENTERPRISE_CA_BUNDLE": "never-inspected.pem"},
+            )
+
+        self.assertIsInstance(validation.issues, tuple)
+        validation_path.assert_not_called()
+        validation_capture.assert_not_called()
+
+    def test_read_only_local_git_readiness_requires_all_git_contracts(self) -> None:
+        from master_agent.operating import _readiness_platform_contracts
+
+        available = platform_runtime_status("linux")
+        git_contracts = (
+            PlatformContract.SECURE_FILESYSTEM,
+            PlatformContract.CROSS_PROCESS_LOCKING,
+            PlatformContract.PROCESS_SUPERVISION,
+            PlatformContract.TRUSTED_GIT,
+        )
+        git_runtime_unavailable = replace(
+            available,
+            capabilities=tuple(
+                replace(
+                    item,
+                    available=False,
+                    backend="test-git-runtime-unavailable",
+                    reason=f"simulated {item.contract} backend is unavailable",
+                )
+                if item.contract in git_contracts
+                else item
+                for item in available.capabilities
+            ),
+        )
+        with TemporaryDirectory() as raw:
+            capability = "git.repository.read"
+            definition = replace(
+                _definition(
+                    capability,
+                    risk=RiskLevel.READ_ONLY,
+                    authentication="local",
+                ),
+                authentication="local_git",
+            )
+            self.assertEqual(
+                _readiness_platform_contracts(
+                    definition,
+                    state_backed_read=False,
+                    filesystem_backed_read=False,
+                ),
+                git_contracts,
+            )
+            report = assess_operating_readiness(
+                profile=_profile(
+                    Path(raw).resolve(),
+                    mode="developer",
+                    capabilities=(capability,),
+                ),
+                catalog=_catalog(definition),
+                platform_status=git_runtime_unavailable,
+            )
+
+        self.assertFalse(report.read_ready)
+        platform_issues = tuple(
+            issue
+            for issue in report.capabilities[0].issues
+            if "native platform runtime contracts" in issue.message
+        )
+        self.assertEqual(len(platform_issues), 1)
+        for contract in git_contracts:
+            self.assertIn(contract, platform_issues[0].message)
+        self.assertNotIn(
+            PlatformContract.ATOMIC_PUBLICATION_RECOVERY,
+            platform_issues[0].message,
+        )
 
     def test_anonymous_capability_is_read_ready_without_optional_credentials(
         self,

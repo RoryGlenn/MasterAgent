@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from master_agent.config_sources import ConfigSource
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.sqlite_safety import PinnedSQLiteDatabase, path_entry_exists
 
 
@@ -252,6 +253,7 @@ class RecurringStateStore:
         *,
         lease_duration: timedelta = timedelta(minutes=5),
     ) -> None:
+        require_persistent_state_platform()
         if lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be positive")
         self._path = Path(os.path.abspath(os.fspath(path)))

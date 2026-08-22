@@ -21,6 +21,11 @@ from uuid import UUID
 from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import AgentAction, ChangePlan, ExecutionContext
+from master_agent.platform_runtime import (
+    PlatformContract,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 _SCHEMA = "master-agent/approval-request@1"
 _MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -454,6 +459,7 @@ def publish_approval_request(
 ) -> Path:
     """Create or safely reuse one exact mode-0600 request in a pinned root."""
 
+    require_persistent_state_platform()
     payload = _json_bytes(request.to_dict())
     with pin_directory(output_root) as directory:
         _publish_restricted_bytes(
@@ -468,6 +474,7 @@ def publish_approval_request(
 def load_approval_request(path: Path) -> ApprovalRequest:
     """Read one bounded request through a private no-follow parent directory."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected
@@ -487,6 +494,7 @@ def load_approval_request(path: Path) -> ApprovalRequest:
 def write_restricted_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Create one private JSON artifact without overwriting an existing name."""
 
+    require_persistent_state_platform()
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected
@@ -695,6 +703,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _canonical_path(path: Path) -> str:
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected

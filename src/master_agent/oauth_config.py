@@ -20,6 +20,12 @@ from master_agent.oauth import (
     RestrictedTokenFileProvider,
     TokenProvider,
 )
+from master_agent.platform_runtime import (
+    PlatformContract,
+    PlatformRuntimeStatus,
+    platform_runtime_status,
+    require_platform_contract,
+)
 
 
 class OAuthFlow(StrEnum):
@@ -87,6 +93,8 @@ class OAuthProfile:
     def readiness_errors(
         self,
         environ: Mapping[str, str] | None = None,
+        *,
+        platform_status: PlatformRuntimeStatus | None = None,
     ) -> tuple[str, ...]:
         """Return configuration errors without exposing credential values."""
 
@@ -114,12 +122,14 @@ class OAuthProfile:
         for name in self.required_environment_variables():
             if not source.get(name):
                 errors.append(f"environment variable {name} is missing")
-        if (
-            self.flow is OAuthFlow.RESTRICTED_FILE
-            and self.token_file is not None
-            and not self.token_file.expanduser().is_file()
-        ):
-            errors.append(f"token file does not exist: {self.token_file}")
+        if self.flow is OAuthFlow.RESTRICTED_FILE and self.token_file is not None:
+            filesystem = (platform_status or platform_runtime_status()).contract_status(
+                PlatformContract.SECURE_FILESYSTEM
+            )
+            if not filesystem.available:
+                errors.append(f"token file cannot be inspected: {filesystem.reason}")
+            elif not self.token_file.expanduser().is_file():
+                errors.append(f"token file does not exist: {self.token_file}")
         return tuple(dict.fromkeys(errors))
 
     def build_provider(
@@ -134,6 +144,8 @@ class OAuthProfile:
         """
 
         source = environ if environ is not None else os.environ
+        if self.enabled and self.flow is OAuthFlow.RESTRICTED_FILE:
+            require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         errors = self.readiness_errors(source)
         if errors:
             raise ConfigurationError(

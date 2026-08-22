@@ -87,6 +87,11 @@ master-agent doctor --require-level install
 `install_ready`, `read_ready`, `draft_ready`, `effect_ready`, and
 `enterprise_ready` are independent. Do not treat an installed profile as
 provider authentication, effect approval, or production certification.
+Inspect the additive `platform_runtime` object as a separate prerequisite: it
+names every selected backend and unavailable secure contract. On Windows,
+`doctor --require-level install` is usable for configuration diagnosis before
+native state backends exist, but `setup` and stateful deployment remain blocked
+until their exact contracts are available.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:

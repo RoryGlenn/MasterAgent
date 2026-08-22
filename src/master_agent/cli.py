@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from master_agent import __version__
 from master_agent.approval_handoff import (
     ApprovalRequest,
     ApprovalRunInvocation,
@@ -122,6 +122,15 @@ from master_agent.operating import (
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.platform_runtime import (
+    LockMode,
+    PlatformContract,
+    PlatformRuntimeStatus,
+    get_cross_process_locking_backend,
+    platform_runtime_status,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 from master_agent.plugins import (
     PluginLock,
     discover_connector_plugins,
@@ -209,6 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
+        _preflight_cli_persistent_output(args)
         if args.command == "setup":
             return _setup(
                 profile_path=args.profile,
@@ -492,10 +502,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
 
+def _preflight_cli_persistent_output(args: argparse.Namespace) -> None:
+    """Admit explicit CLI output paths before any protected input is loaded."""
+
+    if any(
+        getattr(args, name, None) is not None
+        for name in ("output", "output_dir", "token_file")
+    ):
+        require_persistent_state_platform()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="master-agent",
         description="Governed enterprise-agent orchestration runtime.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1054,6 +1079,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _setup(*, profile_path: Path | None, non_interactive: bool | None) -> int:
     """Install or validate one user-private organization profile."""
 
+    require_persistent_state_platform()
     destination = profile_path or default_organization_profile_path()
     destination = destination.expanduser()
     if not destination.is_absolute():
@@ -1100,6 +1126,9 @@ def _doctor(
 ) -> int:
     """Report progressive readiness without provider or credential I/O."""
 
+    if output is not None:
+        require_persistent_state_platform()
+    selected_platform = platform_runtime_status()
     selected = profile_path or default_organization_profile_path()
     selected = selected.expanduser()
     if not selected.is_absolute():
@@ -1114,6 +1143,7 @@ def _doctor(
             "mode": None,
             "profile_fingerprint": None,
             "profile_source": str(selected),
+            "platform_runtime": selected_platform.to_dict(),
             "levels": {
                 str(ReadinessLevel.INSTALL): True,
                 str(ReadinessLevel.READ): False,
@@ -1157,6 +1187,11 @@ def _doctor(
         ):
             applied_read_capabilities = read_capabilities
         applied_read_capabilities |= approval_required_reads
+        filesystem_backed_read_capabilities = _filesystem_backed_read_capabilities(
+            read_capabilities,
+            catalog=catalog,
+            integrations=integrations,
+        )
         readiness_catalog = _doctor_readiness_catalog(
             catalog,
             applied_read_capabilities=applied_read_capabilities,
@@ -1175,6 +1210,9 @@ def _doctor(
                 integrations,
                 include_provider_gates=integrations_issue is None,
             ),
+            state_backed_read_capabilities=applied_read_capabilities,
+            filesystem_backed_read_capabilities=(filesystem_backed_read_capabilities),
+            platform_status=selected_platform,
         ).to_dict()
         state_issue = _offline_operating_state_issue(profile)
         if state_issue is not None:
@@ -1221,6 +1259,7 @@ def _doctor(
     print(
         f"mode: {_terminal_field(payload.get('mode') or 'not configured', max_characters=80)}"
     )
+    _print_platform_runtime(selected_platform)
     for level in ReadinessLevel:
         print(f"{level}: {bool(levels.get(str(level), False))}")
     capability_items = payload.get("capabilities", [])
@@ -1254,6 +1293,37 @@ def _doctor(
     return 0 if bool(levels.get(required_key, False)) else 2
 
 
+def _filesystem_backed_read_capabilities(
+    capabilities: Iterable[str],
+    *,
+    catalog: CapabilityCatalog,
+    integrations: IntegrationConfig,
+) -> frozenset[str]:
+    """Return reads whose selected connector consumes filesystem trust state."""
+
+    selected: set[str] = set()
+    for capability in capabilities:
+        definition = catalog.definitions.get(capability)
+        if definition is None:
+            continue
+        configuration_name = _CONNECT_CONFIGURATION_BY_SYSTEM.get(
+            definition.target_system
+        )
+        if configuration_name is None:
+            continue
+        connector = integrations.connectors.get(configuration_name)
+        if connector is None:
+            continue
+        oauth_flow = str(connector.extra.get("oauth_flow", "environment")).strip()
+        ca_bundle_selected = bool(
+            connector.ca_bundle_env
+            and os.environ.get(connector.ca_bundle_env, "").strip()
+        )
+        if ca_bundle_selected or oauth_flow == "token_file":
+            selected.add(capability)
+    return frozenset(selected)
+
+
 def _execute(
     *,
     plan_path: Path | None,
@@ -1264,6 +1334,7 @@ def _execute(
     """Run or resume one profile-admitted plan through existing runtimes."""
 
     if request_path is not None:
+        require_persistent_state_platform()
         if plan_path is not None:
             raise ValueError("execute accepts either PLAN or --resume, not both")
         if profile_path is not None:
@@ -1274,6 +1345,7 @@ def _execute(
         if not approval_paths:
             raise ValueError("execute --resume requires at least one --approval")
         return _execute_approval_resume(request_path, approval_paths)
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     if plan_path is None:
         raise ValueError("execute requires PLAN or --resume REQUEST")
     if approval_paths:
@@ -1388,6 +1460,7 @@ def _execute(
             captured_configuration_sources=captured_sources,
         )
 
+    require_persistent_state_platform()
     approval_required = _plan_requires_authenticated_approval(
         plan,
         policy_source=captured_sources["policy"],
@@ -2621,6 +2694,7 @@ def _bind_context(
 ) -> int:
     """Write a plan whose fingerprint covers the complete applied runtime."""
 
+    require_persistent_state_platform()
     plan = (
         _load_operating_plan(plan_path)
         if organization_profile_path is not None
@@ -2770,6 +2844,7 @@ def _approve(
     output: Path,
     ttl_minutes: int,
 ) -> int:
+    require_persistent_state_platform()
     if ttl_minutes <= 0:
         raise ValueError("ttl-minutes must be positive")
     plan = _load_plan(plan_path)
@@ -2838,6 +2913,7 @@ def _approve_request(
 ) -> int:
     """Sign the pending actions in an already-inspected private handoff."""
 
+    require_persistent_state_platform()
     if ttl_minutes <= 0:
         raise ValueError("ttl-minutes must be positive")
     request = load_approval_request(request_path)
@@ -2901,6 +2977,7 @@ def _resume_approval(
 ) -> int:
     """Retry the exact captured invocation with supplied approval artifacts."""
 
+    require_persistent_state_platform()
     request = load_approval_request(request_path)
     if expected_fingerprint != request.fingerprint:
         raise ValueError(
@@ -3018,6 +3095,7 @@ def _run(
             captured_configuration_sources=captured_configuration_sources,
         )
 
+    require_persistent_state_platform()
     if apply and plugin_names:
         raise ConfigurationError(
             "in-process connector plugin execution is disabled pending an "
@@ -4015,6 +4093,8 @@ def _readiness(
 ) -> int:
     """Assess Phase 0/2C configuration without performing network requests."""
 
+    if output is not None:
+        require_persistent_state_platform()
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -4072,6 +4152,7 @@ def _readiness(
     payload = report.to_dict()
     print(f"environment: {_terminal_field(report.environment, max_characters=80)}")
     print(f"ready: {report.ready}")
+    _print_platform_runtime(report.platform_runtime)
     connector_checks = tuple(
         check
         for check in report.checks
@@ -4100,6 +4181,21 @@ def _readiness(
     return 0 if report.ready else 2
 
 
+def _print_platform_runtime(status: PlatformRuntimeStatus) -> None:
+    """Print one secret-free deterministic native-backend status."""
+
+    platform = _terminal_field(status.platform, max_characters=80)
+    backend = _terminal_field(status.backend, max_characters=80)
+    print(f"platform runtime: {platform} ({backend})")
+    for item in status.capabilities:
+        availability = "available" if item.available else "unavailable"
+        item_backend = _terminal_field(item.backend, max_characters=80)
+        line = f"  {item.contract}: {availability} ({item_backend})"
+        if item.reason is not None:
+            line += f": {_terminal_field(item.reason)}"
+        print(line)
+
+
 def _oauth_device_code(
     *,
     oauth_path: Path | None,
@@ -4108,6 +4204,7 @@ def _oauth_device_code(
 ) -> int:
     """Run an explicitly selected delegated Entra device-code flow."""
 
+    require_persistent_state_platform()
     profiles = OAuthProfiles.from_toml(resolve_config_source(oauth_path, "oauth.toml"))
     profile = profiles.profile(profile_name)
     if profile.flow is not OAuthFlow.ENTRA_DEVICE_CODE:
@@ -4134,6 +4231,7 @@ def _oauth_device_code(
 def _demo() -> int:
     """Run the complete credential-free demonstration outside the source tree."""
 
+    require_persistent_state_platform()
     workspace = _new_demo_workspace()
     workspace.chmod(0o700)
     artifacts = workspace / "artifacts"
@@ -4157,6 +4255,7 @@ def _demo() -> int:
 def _new_demo_workspace() -> Path:
     """Create the private, unpredictable root used by the safe demonstration."""
 
+    require_persistent_state_platform()
     runtime_root = Path.home() / ".master-agent"
     product_root = runtime_root / "MasterAgent"
     runtime_root.mkdir(mode=0o700, exist_ok=True)
@@ -4177,6 +4276,7 @@ def _draft_package(
 ) -> int:
     """Generate all Phase 3 artifacts locally without provider writes."""
 
+    require_persistent_state_platform()
     with ExitStack() as resources:
         output_directory = resources.enter_context(PinnedDirectory.open(output_dir))
         database_parent = resources.enter_context(
@@ -4186,7 +4286,10 @@ def _draft_package(
             raise ConfigurationError(
                 "draft artifact and audit database directories must be distinct"
             )
-        fcntl.flock(output_directory.fileno(), fcntl.LOCK_EX)
+        get_cross_process_locking_backend().acquire(
+            output_directory.fileno(),
+            mode=LockMode.EXCLUSIVE,
+        )
         if os.listdir(output_directory.fileno()):
             raise ConfigurationError(
                 "draft artifact directory must be empty; use a fresh directory"
@@ -4236,6 +4339,7 @@ def _compensation_plan(
 ) -> int:
     """Build a separately approvable plan from persisted compensation metadata."""
 
+    require_persistent_state_platform()
     original = _load_plan(plan_path)
     raw = json.loads(report_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -4555,6 +4659,8 @@ def _discover(
     data_classification: DataClassification | None,
     output: Path | None,
 ) -> int:
+    if output is not None:
+        require_persistent_state_platform()
     config = IntegrationConfig.from_toml(
         resolve_config_source(integrations_path, "integrations.toml")
     )
@@ -4642,6 +4748,8 @@ def _connect(
 ) -> int:
     """Verify requested read connectors through an ephemeral configuration."""
 
+    if output is not None:
+        require_persistent_state_platform()
     _reject_output_aliases(
         output,
         credentials_file,
@@ -5558,6 +5666,7 @@ def _retain_evidence(
     retention_path: Path | None,
     include_content: bool,
 ) -> int:
+    require_persistent_state_platform()
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise StructuredDataTypeError("retained evidence input must be a JSON object")
@@ -5617,6 +5726,8 @@ def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
 
 
 def _citations(path: Path, *, output: Path | None) -> int:
+    if output is not None:
+        require_persistent_state_platform()
     payload = json.loads(path.read_text(encoding="utf-8"))
     citations = find_citations(payload)
     if not citations:

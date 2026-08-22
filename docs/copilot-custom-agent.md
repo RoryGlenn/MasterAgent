@@ -51,7 +51,11 @@ execution runtime.
    credential can make a selected read unavailable without making
    `install_ready` false. The profile's default `employee` mode exposes only
    installed, reviewed capabilities and keeps write and communication gates
-   off.
+   off. The report also names the selected platform backends. On Windows,
+   imports, help/version, deployment readiness, and configuration-only
+   `doctor --require-level install` remain available; any stateful capability
+   whose secure backend is absent fails with `runtime_defect` and does not use
+   a weaker fallback.
 
 For a non-mutating first interaction, say so explicitly: “Inspect the
 repository without changing or installing anything.” MasterAgent will answer

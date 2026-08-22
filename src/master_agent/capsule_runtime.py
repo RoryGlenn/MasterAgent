@@ -8,11 +8,9 @@ verified compensation.
 
 from __future__ import annotations
 
-import grp
 import hashlib
 import json
 import os
-import pwd
 import shutil
 import signal
 import stat
@@ -48,12 +46,19 @@ from master_agent.models import (
     VerificationResult,
     freeze_json_mapping,
 )
+from master_agent.platform_runtime import (
+    get_capsule_isolation_backend,
+    get_process_supervision_backend,
+    get_secure_filesystem_backend,
+)
 from master_agent.resource_limits import measure_json_resources
 
 WORKER_PROTOCOL = "master-agent/capsule-worker@1"
 VALIDATION_SCHEMA = "master-agent/capsule-validation@1"
 SANDBOX_VALIDATION_SCHEMA = "master-agent/capsule-sandbox-validation@1"
-_WORKER_PATH = Path(__file__).with_name("capsule_worker.py")
+_WORKER_PATH = (
+    Path(__file__).with_name("platform_runtime") / "posix" / "capsule_worker.py"
+)
 _MAX_WORKER_RESPONSE_OVERHEAD = 4_096
 
 
@@ -86,7 +91,16 @@ class CapsuleWorker:
         require_os_sandbox: bool = True,
         bubblewrap: str | None = None,
     ) -> None:
-        selected = bubblewrap if bubblewrap is not None else shutil.which("bwrap")
+        get_process_supervision_backend()
+        get_secure_filesystem_backend()
+        explicit_bubblewrap = bool(bubblewrap)
+        if require_os_sandbox or explicit_bubblewrap:
+            get_capsule_isolation_backend()
+        selected = (
+            bubblewrap
+            if explicit_bubblewrap
+            else (shutil.which("bwrap") if require_os_sandbox else None)
+        )
         try:
             self._bubblewrap = Path(selected).resolve(strict=True) if selected else None
         except OSError as error:
@@ -709,7 +723,8 @@ def _validate_worker_artifact(path: Path, *, executable: bool) -> None:
     failures: list[str] = []
     if not stat.S_ISREG(metadata.st_mode):
         failures.append("not_regular")
-    if metadata.st_uid not in {0, os.geteuid()}:
+    filesystem = get_secure_filesystem_backend()
+    if metadata.st_uid not in {0, filesystem.effective_user_id()}:
         failures.append("untrusted_owner")
     if metadata.st_nlink != 1:
         failures.append("multiple_links")
@@ -730,20 +745,12 @@ def _group_write_is_owner_private(metadata: os.stat_result) -> bool:
 
     if not stat.S_IMODE(metadata.st_mode) & stat.S_IWGRP:
         return True
-    if metadata.st_uid != os.geteuid():
+    if metadata.st_uid != get_secure_filesystem_backend().effective_user_id():
         return False
-    try:
-        owner = pwd.getpwuid(metadata.st_uid).pw_name
-        group = grp.getgrgid(metadata.st_gid)
-        members = set(group.gr_mem)
-        members.update(
-            account.pw_name
-            for account in pwd.getpwall()
-            if account.pw_gid == metadata.st_gid
-        )
-    except (KeyError, OSError):
-        return False
-    return members <= {owner}
+    return get_secure_filesystem_backend().group_is_private_to_owner(
+        owner_id=metadata.st_uid,
+        group_id=metadata.st_gid,
+    )
 
 
 def _classify_worker_launch_failure(

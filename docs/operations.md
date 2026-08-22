@@ -7,6 +7,16 @@ reviewed mode, configuration locations, a dedicated private state root, and an
 exact installed-capability allowlist. It never contains credentials, approval
 secrets, or provider content and does not grant authority by itself.
 
+On Windows, package import, help/version, deployment readiness, and the bounded
+absent-profile result from `doctor --require-level install` are supported before
+the native secure-state backends are complete. Doctor may report that a profile
+entry is absent without reading it; an existing or explicit profile requires
+`secure_filesystem` and is rejected before open or parse while that backend is
+unavailable. `setup` requires secure filesystem, cross-process locking, and
+atomic publication/recovery. An `execute` plan should proceed only when every
+contract its route needs is available in the report's `platform_runtime`
+section. The command fails closed rather than using a weaker backend.
+
 1. Run `master-agent setup` once for the selected profile. This prepares only
    owner-private local paths and does not contact a provider.
 2. Run `master-agent doctor`. Treat `install_ready`, `read_ready`,
@@ -37,7 +47,8 @@ Employee failures are categorized for a useful next action:
   that is not available;
 - `blocked_policy`: catalog, governance, policy, source-of-truth, approval, or
   an effect gate denied the request; and
-- `runtime_defect`: installed code or local runtime state failed unexpectedly.
+- `runtime_defect`: a required secure platform backend is unavailable, or
+  installed code or local runtime state failed unexpectedly.
 
 Do not repair `unsupported_capability` from employee mode. Capability work
 belongs in a separate trusted developer change. Generated effects stay
@@ -165,6 +176,8 @@ than retained evidence bytes.
 
 All `evidence-prune` execution remains unavailable on Windows until native
 filesystem identity, locking, and atomic-state guarantees are implemented.
+Windows retention preview, apply, and orphan repair remain unavailable under
+that same boundary.
 Pruning enforces the expiration already recorded in each sidecar; it does not
 make or change legal-hold decisions. Confirm that the selected root is eligible
 under the organization's retention and legal-hold policy before apply.

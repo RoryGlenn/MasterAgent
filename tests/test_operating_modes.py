@@ -33,6 +33,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.operating import install_organization_profile
+from master_agent.platform_runtime import platform_runtime_status
 from tests.fakes import ScriptedTransport
 
 _APPROVAL_SECRET = "operating-approval-secret-" + "a" * 32
@@ -145,7 +146,164 @@ class OperatingModeCliTests(unittest.TestCase):
             self.assertTrue(payload["levels"]["read_ready"])
             self.assertTrue(payload["levels"]["draft_ready"])
             self.assertFalse(payload["levels"]["enterprise_ready"])
+            self.assertEqual(
+                payload["platform_runtime"],
+                platform_runtime_status().to_dict(),
+            )
             live_registry.assert_not_called()
+
+    def test_windows_doctor_reports_absent_profile_without_reading_bytes(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            profile = root / "missing-organization-profile.toml"
+            with (
+                patch(
+                    "master_agent.platform_runtime.factory.sys.platform",
+                    "win32",
+                ),
+                patch(
+                    "master_agent.cli._load_active_organization_profile"
+                ) as load_profile,
+                patch(
+                    "master_agent.cli.require_persistent_state_platform"
+                ) as persistent_preflight,
+                patch("master_agent.config_sources.os.open") as open_file,
+            ):
+                status, stdout, stderr = _run_cli(
+                    [
+                        "doctor",
+                        "--profile",
+                        str(profile),
+                        "--require-level",
+                        "draft",
+                    ]
+                )
+            remaining = tuple(root.iterdir())
+
+        self.assertEqual(status, 2, stderr)
+        self.assertIn(
+            "platform runtime: windows (windows-unavailable)",
+            stdout,
+        )
+        self.assertIn(
+            "secure_filesystem: unavailable (windows-unavailable)",
+            stdout,
+        )
+        self.assertIn("install_ready: True", stdout)
+        self.assertIn("read_ready: False", stdout)
+        self.assertIn("draft_ready: False", stdout)
+        self.assertIn("missing_organization_setup", stdout)
+        load_profile.assert_not_called()
+        persistent_preflight.assert_not_called()
+        open_file.assert_not_called()
+        self.assertEqual(remaining, ())
+
+    def test_windows_doctor_rejects_existing_profile_before_reading_bytes(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            profile = _setup_default(root)
+            with (
+                patch(
+                    "master_agent.platform_runtime.factory.sys.platform",
+                    "win32",
+                ),
+                patch("master_agent.config_sources.os.open") as open_file,
+            ):
+                status, stdout, stderr = _run_cli(
+                    [
+                        "doctor",
+                        "--profile",
+                        str(profile),
+                        "--require-level",
+                        "install",
+                    ]
+                )
+
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout, "")
+        self.assertEqual(
+            stderr,
+            "error: runtime_defect: organization profile could not be loaded safely: "
+            "native windows secure_filesystem backend is not implemented\n",
+        )
+        open_file.assert_not_called()
+
+    def test_doctor_marks_ca_and_token_file_reads_as_filesystem_backed(self) -> None:
+        cases = (
+            (
+                "github.public_repository.list",
+                "MASTER_AGENT_ENTERPRISE_CA_BUNDLE",
+                False,
+            ),
+            (
+                "microsoft.identity.read",
+                "MASTER_AGENT_GRAPH_TOKEN_FILE",
+                True,
+            ),
+        )
+        for capability, environment_name, expects_missing_auth in cases:
+            with self.subTest(capability=capability), TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                profile = _install_profile(root, capabilities=(capability,))
+                selected_file = root / "selected-trust-file"
+                selected_file.write_text(
+                    "selected but never trusted\n", encoding="utf-8"
+                )
+                selected_file.chmod(0o600)
+                output = root / "doctor.json"
+                with (
+                    patch.dict(
+                        os.environ,
+                        {environment_name: str(selected_file)},
+                        clear=True,
+                    ),
+                    patch(
+                        "master_agent.cli.platform_runtime_status",
+                        return_value=platform_runtime_status("win32"),
+                    ),
+                    patch("master_agent.operating.capture_ca_bundle") as capture_bundle,
+                    patch(
+                        "master_agent.operating.create_ssl_context"
+                    ) as create_context,
+                    patch("master_agent.cli._write_json") as write_json,
+                    redirect_stdout(StringIO()),
+                ):
+                    status = cli_module._doctor(
+                        profile_path=profile,
+                        require_level="read",
+                        output=output,
+                    )
+
+                self.assertEqual(status, 2)
+                payload = write_json.call_args.args[1]
+                selected = next(
+                    item
+                    for item in payload["capabilities"]
+                    if item["capability"] == capability
+                )
+                self.assertFalse(selected["read_ready"])
+                issues = selected["issues"]
+                self.assertTrue(
+                    any(
+                        issue["category"] == "runtime_defect"
+                        and "secure_filesystem" in issue["message"]
+                        for issue in issues
+                    )
+                )
+                self.assertEqual(
+                    any(
+                        issue["category"] == "missing_user_authentication"
+                        for issue in issues
+                    ),
+                    expects_missing_auth,
+                )
+                self.assertFalse(output.exists())
+                capture_bundle.assert_not_called()
+                create_context.assert_not_called()
 
     def test_doctor_detects_missing_private_state_without_recreating_it(self) -> None:
         with TemporaryDirectory() as raw:

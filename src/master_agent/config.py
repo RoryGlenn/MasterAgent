@@ -27,6 +27,7 @@ from master_agent.oauth import (
     RestrictedTokenFileProvider,
     TokenProvider,
 )
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 from master_agent.trust_store import CaBundleSnapshot, capture_ca_bundle
 
 _PLACEHOLDER_PROVIDER_HOSTS = frozenset({"example.atlassian.net"})
@@ -276,6 +277,7 @@ class ConnectorConfig:
 
         ca_bundle: Path | None = None
         if self.ca_bundle_env and source.get(self.ca_bundle_env):
+            require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
             selected = Path(source[self.ca_bundle_env]).expanduser()
             try:
                 ca_bundle = selected.resolve(strict=True)

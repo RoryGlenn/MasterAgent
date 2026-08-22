@@ -22,6 +22,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.retention import (
     RetentionConfig,
     write_retained_json,
@@ -210,6 +211,7 @@ def render_communication_context_package(
 ) -> CommunicationContextArtifacts:
     """Render retained JSON evidence, Markdown, and an integrity manifest."""
 
+    require_persistent_state_platform()
     output_dir.mkdir(parents=True, exist_ok=True)
     payloads = [
         dict(action.result.after)

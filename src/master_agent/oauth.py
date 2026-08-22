@@ -22,6 +22,11 @@ from typing import Any, Protocol
 
 from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.http import HttpTransport, SafeHttpClient
+from master_agent.platform_runtime import (
+    PlatformContract,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +151,7 @@ class RestrictedTokenFileProvider:
     """Read an explicitly created, permission-restricted token JSON file."""
 
     def __init__(self, path: Path) -> None:
+        require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         selected = path.expanduser()
         absolute = selected if selected.is_absolute() else Path.cwd() / selected
         self._path = absolute.parent.resolve(strict=True) / absolute.name
@@ -400,6 +406,7 @@ def write_token_file(path: Path, token: AccessToken) -> Path:
     prefer an organization-approved secret manager instead.
     """
 
+    require_persistent_state_platform()
     selected = path.expanduser()
     resolved = selected if selected.is_absolute() else Path.cwd() / selected
     resolved.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -611,6 +618,7 @@ def _token_from_response(
 def _read_restricted_token_file(path: Path) -> str:
     """Read a bounded regular token file without following symbolic links."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     resolved = selected if selected.is_absolute() else Path.cwd() / selected
     try:

@@ -38,6 +38,12 @@ from master_agent.config_sources import (
 )
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import ChangePlan, RiskLevel
+from master_agent.platform_runtime import (
+    PlatformContract,
+    PlatformRuntimeStatus,
+    platform_runtime_status,
+    require_persistent_state_platform,
+)
 from master_agent.trust_store import capture_ca_bundle, create_ssl_context
 
 ORGANIZATION_PROFILE_SCHEMA = "master-agent/organization-profile@1"
@@ -549,6 +555,7 @@ class OperatingReadinessReport:
     profile_fingerprint: str
     profile_source: Path
     capabilities: tuple[CapabilityReadiness, ...]
+    platform_runtime: PlatformRuntimeStatus
     enterprise_blocker: str = (
         "enterprise readiness requires the organization trust controls tracked by #113"
     )
@@ -610,6 +617,7 @@ class OperatingReadinessReport:
             "mode": str(self.mode),
             "profile_fingerprint": self.profile_fingerprint,
             "profile_source": os.fspath(self.profile_source),
+            "platform_runtime": self.platform_runtime.to_dict(),
             "levels": {
                 str(ReadinessLevel.INSTALL): self.install_ready,
                 str(ReadinessLevel.READ): self.read_ready,
@@ -675,6 +683,7 @@ def install_organization_profile(
     result, workspace, or artifact.
     """
 
+    require_persistent_state_platform()
     snapshot = _profile_snapshot(source)
     target = _absolute_path(destination or default_organization_profile_path())
     if target.name in {"", ".", ".."} or target == Path(target.anchor):
@@ -739,6 +748,7 @@ def _validate_existing_profile_file(path: Path, expected: bytes) -> None:
 def provision_organization_state(profile: OrganizationProfile) -> OperatingStatePaths:
     """Create only the private state and run-container directories."""
 
+    require_persistent_state_platform()
     state_root = _ensure_private_directory(profile.state_root)
     runs_root = _ensure_private_directory(state_root / "runs")
     return OperatingStatePaths(state_root=state_root, runs_root=runs_root)
@@ -757,6 +767,7 @@ def allocate_operating_run(
     them.
     """
 
+    require_persistent_state_platform()
     state = provision_organization_state(profile)
     attempts = 1 if run_id is not None else 8
     selected: str | None = None
@@ -809,6 +820,7 @@ def validate_operating_plan(
     """
 
     issues: list[OperatingIssue] = []
+    selected_platform_status = platform_runtime_status()
     if plan.execution_context is not None:
         if plan.execution_context.plugins:
             issues.append(
@@ -861,6 +873,7 @@ def validate_operating_plan(
                 policy_blocked_capabilities=policy_blocked_capabilities,
                 runtime_capabilities=runtime_capabilities,
                 token_files_are_unverified=False,
+                platform_status=selected_platform_status,
             )
         )
         allowed, reason = catalog.validate_action(action)
@@ -917,6 +930,9 @@ def assess_operating_readiness(
     authenticated_capabilities: AbstractSet[str] = frozenset(),
     policy_blocked_capabilities: AbstractSet[str] = frozenset(),
     runtime_capabilities: AbstractSet[str] | None = None,
+    state_backed_read_capabilities: AbstractSet[str] = frozenset(),
+    filesystem_backed_read_capabilities: AbstractSet[str] = frozenset(),
+    platform_status: PlatformRuntimeStatus | None = None,
 ) -> OperatingReadinessReport:
     """Assess offline capability readiness without probing providers."""
 
@@ -927,6 +943,7 @@ def assess_operating_readiness(
         raise ConfigurationError("operating readiness request exceeds 512 capabilities")
     if len(requested) != len(set(requested)):
         raise ConfigurationError("operating readiness capabilities must be unique")
+    selected_platform_status = platform_status or platform_runtime_status()
     readiness: list[CapabilityReadiness] = []
     for capability in sorted(requested):
         _validate_capability_name(capability)
@@ -960,6 +977,14 @@ def assess_operating_readiness(
                 )
             )
             continue
+        filesystem_backed_read = capability in filesystem_backed_read_capabilities or (
+            definition.risk is RiskLevel.READ_ONLY
+            and _definition_uses_filesystem_trust(
+                definition,
+                integrations=integrations,
+                environ=environ,
+            )
+        )
         availability = _definition_availability_issues(
             definition,
             profile=profile,
@@ -969,8 +994,30 @@ def assess_operating_readiness(
             policy_blocked_capabilities=policy_blocked_capabilities,
             runtime_capabilities=runtime_capabilities,
             token_files_are_unverified=True,
+            platform_status=selected_platform_status,
         )
         issues.extend(availability)
+        required_platform_contracts = _readiness_platform_contracts(
+            definition,
+            state_backed_read=capability in state_backed_read_capabilities,
+            filesystem_backed_read=filesystem_backed_read,
+        )
+        unavailable_platform_contracts = selected_platform_status.unavailable(
+            required_platform_contracts
+        )
+        if unavailable_platform_contracts:
+            unavailable = ", ".join(
+                f"{item.contract} ({item.reason})"
+                for item in unavailable_platform_contracts
+            )
+            issues.append(
+                _issue(
+                    OperatingFailureCategory.RUNTIME_DEFECT,
+                    "required native platform runtime contracts are unavailable: "
+                    f"{unavailable}",
+                    capability,
+                )
+            )
         install_ready = bool(
             runtime_capabilities is None or capability in runtime_capabilities
         )
@@ -1000,7 +1047,43 @@ def assess_operating_readiness(
         profile_fingerprint=profile.fingerprint,
         profile_source=profile.source_path,
         capabilities=tuple(readiness),
+        platform_runtime=selected_platform_status,
     )
+
+
+def _readiness_platform_contracts(
+    definition: CapabilityDefinition,
+    *,
+    state_backed_read: bool,
+    filesystem_backed_read: bool,
+) -> tuple[PlatformContract, ...]:
+    """Return native contracts needed by one capability's operating route."""
+
+    required: set[PlatformContract] = set()
+    if filesystem_backed_read:
+        required.add(PlatformContract.SECURE_FILESYSTEM)
+    if (
+        state_backed_read
+        or definition.risk is RiskLevel.LOCAL_GENERATION
+        or definition.risk not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+    ):
+        required.update(
+            {
+                PlatformContract.SECURE_FILESYSTEM,
+                PlatformContract.CROSS_PROCESS_LOCKING,
+                PlatformContract.ATOMIC_PUBLICATION_RECOVERY,
+            }
+        )
+    if definition.authentication == "local_git":
+        required.update(
+            {
+                PlatformContract.SECURE_FILESYSTEM,
+                PlatformContract.CROSS_PROCESS_LOCKING,
+                PlatformContract.PROCESS_SUPERVISION,
+                PlatformContract.TRUSTED_GIT,
+            }
+        )
+    return tuple(contract for contract in PlatformContract if contract in required)
 
 
 def _definition_availability_issues(
@@ -1013,6 +1096,7 @@ def _definition_availability_issues(
     policy_blocked_capabilities: AbstractSet[str],
     runtime_capabilities: AbstractSet[str] | None,
     token_files_are_unverified: bool,
+    platform_status: PlatformRuntimeStatus,
 ) -> tuple[OperatingIssue, ...]:
     capability = definition.name
     issues: list[OperatingIssue] = []
@@ -1151,8 +1235,19 @@ def _definition_availability_issues(
             )
         )
         return _deduplicate_issues(issues)
+    ca_bundle_selected = bool(
+        connector.ca_bundle_env and source.get(connector.ca_bundle_env, "")
+    )
+    secure_filesystem_available = platform_status.supports(
+        PlatformContract.SECURE_FILESYSTEM
+    )
+    readiness_target = (
+        replace(connector, ca_bundle_env=None)
+        if ca_bundle_selected and not secure_filesystem_available
+        else connector
+    )
     try:
-        _base_url, ca_bundle = connector.resolve_execution_target(source)
+        _base_url, ca_bundle = readiness_target.resolve_execution_target(source)
         if ca_bundle is not None:
             create_ssl_context(capture_ca_bundle(ca_bundle).data)
     except ConfigurationError as error:
@@ -1256,6 +1351,27 @@ def _definition_availability_issues(
             )
         )
     return _deduplicate_issues(issues)
+
+
+def _definition_uses_filesystem_trust(
+    definition: CapabilityDefinition,
+    *,
+    integrations: IntegrationConfig | None,
+    environ: Mapping[str, str] | None,
+) -> bool:
+    """Return whether a read consumes a configured file-backed trust input."""
+
+    if integrations is None:
+        return False
+    connector = integrations.connectors.get(_connector_system(definition.target_system))
+    if connector is None:
+        return False
+    source = environ if environ is not None else {}
+    ca_bundle_selected = bool(
+        connector.ca_bundle_env and source.get(connector.ca_bundle_env, "")
+    )
+    oauth_flow = str(connector.extra.get("oauth_flow", "environment")).strip()
+    return ca_bundle_selected or oauth_flow == "token_file"
 
 
 def _token_file_authentication_unavailable(

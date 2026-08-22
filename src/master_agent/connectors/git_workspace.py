@@ -28,10 +28,23 @@ from master_agent.models import (
     RiskLevel,
     VerificationResult,
 )
+from master_agent.platform_runtime import (
+    PlatformContract,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _MAX_INDEX_BYTES = 128 * 1024 * 1024
 _MAX_BLOB_BYTES = 128 * 1024 * 1024
+
+
+def _require_git_mutation_platform() -> None:
+    """Require native state, process, and Git contracts before repository use."""
+
+    require_persistent_state_platform()
+    require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
+    require_platform_contract(PlatformContract.TRUSTED_GIT)
 
 
 class _LockedRepositoryIndex:
@@ -542,6 +555,7 @@ class GitWorkspaceConnector(CompensatingConnector):
         timeout_seconds: float = 60.0,
         allow_file_remotes: bool = False,
     ) -> None:
+        _require_git_mutation_platform()
         self._workspace_root = workspace_root.expanduser().resolve()
         if not self._workspace_root.is_dir():
             raise ConnectorError("workspace_root must be an existing directory")

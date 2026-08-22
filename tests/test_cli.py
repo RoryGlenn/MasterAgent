@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from master_agent import __version__
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.cli import (
     _atlassian_credential_compatibility,
@@ -41,6 +42,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.platform_runtime import platform_runtime_status
 from master_agent.provider_egress import (
     ProviderDataRoute,
     bind_provider_data_egress,
@@ -88,6 +90,20 @@ class _DirectReadGitHubConnector(ReadOnlyConnector):
 
 class CliTests(unittest.TestCase):
     """Verify CLI boundaries that protect live credentials and operators."""
+
+    def test_version_option_reports_the_installed_package_version(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+        with (
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(["--version"])
+
+        self.assertEqual(stopped.exception.code, 0)
+        self.assertEqual(stdout.getvalue(), f"master-agent {__version__}\n")
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_credential_mapping_argument_is_secret_free_and_unambiguous(self) -> None:
         self.assertEqual(
@@ -634,6 +650,57 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             "live connectors: 1 available, 1 credential-ready", stdout.getvalue()
         )
         self.assertIn("PASS connector:github", stdout.getvalue())
+
+    def test_readiness_reports_the_unavailable_windows_backend_without_secrets(
+        self,
+    ) -> None:
+        secret_marker = "windows-readiness-secret-marker"
+        written: list[dict[str, object]] = []
+        stdout = StringIO()
+        stderr = StringIO()
+        with (
+            patch(
+                "master_agent.readiness.platform_runtime_status",
+                return_value=platform_runtime_status("win32"),
+            ),
+            patch.dict(
+                os.environ,
+                {"MASTER_AGENT_GITHUB_TOKEN": secret_marker},
+            ),
+            patch(
+                "master_agent.cli._write_json",
+                side_effect=lambda _path, payload: written.append(payload),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            status = main(["readiness", "--output", "not-published.json"])
+
+        self.assertEqual(status, 0, stderr.getvalue())
+        rendered = stdout.getvalue()
+        self.assertIn(
+            "platform runtime: windows (windows-unavailable)",
+            rendered,
+        )
+        for contract in (
+            "secure_filesystem",
+            "cross_process_locking",
+            "atomic_publication_recovery",
+            "process_supervision",
+            "trusted_git",
+            "capsule_isolation",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(
+                    f"{contract}: unavailable (windows-unavailable)",
+                    rendered,
+                )
+        self.assertEqual(len(written), 1)
+        self.assertEqual(
+            written[0]["platform_runtime"],
+            platform_runtime_status("win32").to_dict(),
+        )
+        self.assertNotIn(secret_marker, rendered)
 
     def test_readiness_parses_selected_provider_egress_check(self) -> None:
         with private_temporary_directory() as directory:

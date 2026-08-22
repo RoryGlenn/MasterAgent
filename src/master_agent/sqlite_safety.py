@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import os
 import secrets
@@ -17,6 +16,14 @@ from threading import RLock
 
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import (
+    LockMode,
+    PlatformContract,
+    get_cross_process_locking_backend,
+    get_secure_filesystem_backend,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 _DIGEST_BYTES = 32
 _DIGEST_HEX_LENGTH = _DIGEST_BYTES * 2
@@ -119,6 +126,7 @@ class PinnedSQLiteDatabase:
         *,
         parent_directory: PinnedDirectory | None = None,
     ) -> None:
+        require_persistent_state_platform()
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
         )
@@ -587,6 +595,7 @@ class PinnedSQLiteDatabase:
 def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
     """Open an existing stable generation without creating or modifying it."""
 
+    require_persistent_state_platform()
     absolute = Path(os.path.abspath(os.fspath(path)))
     parent = absolute.parent
     parent_descriptor = _open_trusted_parent(parent, create=False)
@@ -679,6 +688,7 @@ def readonly_snapshot_connection(path: Path) -> Iterator[sqlite3.Connection]:
 def path_entry_exists(path: Path) -> bool:
     """Return whether a directory entry exists, including a broken symlink."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     try:
         path.lstat()
     except FileNotFoundError:
@@ -690,16 +700,19 @@ def path_entry_exists(path: Path) -> bool:
 def _file_lock(descriptor: int, *, exclusive: bool) -> Iterator[None]:
     """Hold an advisory whole-file lock across one snapshot transaction."""
 
-    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    locking = get_cross_process_locking_backend()
     try:
-        fcntl.flock(descriptor, operation)
+        locking.acquire(
+            descriptor,
+            mode=LockMode.EXCLUSIVE if exclusive else LockMode.SHARED,
+        )
     except OSError as error:
         raise ConfigurationError("SQLite state lock could not be acquired") from error
     try:
         yield
     finally:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            locking.release(descriptor)
         except OSError:
             pass
 
@@ -1273,7 +1286,7 @@ def _validated_parent_identity(value: os.stat_result) -> _FileIdentity:
 
     if not stat.S_ISDIR(value.st_mode):
         raise ConfigurationError("SQLite state database parent must be a directory")
-    if value.st_uid != os.getuid():
+    if value.st_uid != get_secure_filesystem_backend().real_user_id():
         raise ConfigurationError(
             "SQLite state database parent must be owned by the current account"
         )
@@ -1309,7 +1322,7 @@ def _validate_regular_owned_single_link(
         raise ConfigurationError(f"{label} must be a regular file")
     if value.st_nlink != 1:
         raise ConfigurationError(f"{label} must have exactly one hard link")
-    if value.st_uid != os.getuid():
+    if value.st_uid != get_secure_filesystem_backend().real_user_id():
         raise ConfigurationError(f"{label} must be owned by the current account")
 
 

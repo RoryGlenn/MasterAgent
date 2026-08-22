@@ -129,8 +129,9 @@ ancestor retention locks, the discovered evidence-parent publication locks, an
 exact descriptor rescan, and a bounded same-filesystem recoverable transaction.
 Retained writers expose and exclusively lock their exact parent before sharing
 existing ancestor retention locks, so publication under a nested parent cannot
-begin during ancestor maintenance. All Windows execution remains gated pending
-equivalent native filesystem guarantees.
+begin during ancestor maintenance. Windows retention preview, apply, and orphan
+repair remain gated pending equivalent native filesystem and atomic-state
+guarantees.
 
 `evidence-repair --apply` uses the same selected-root and ancestor handshake,
 locks every discovered descendant record parent, and rescans before

@@ -24,9 +24,22 @@ from master_agent.models import (
     RiskLevel,
     VerificationResult,
 )
+from master_agent.platform_runtime import (
+    PlatformContract,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 _REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _require_git_mutation_platform() -> None:
+    """Require native state, process, and Git contracts before repository use."""
+
+    require_persistent_state_platform()
+    require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
+    require_platform_contract(PlatformContract.TRUSTED_GIT)
 
 
 class GitBranchPushConnector:
@@ -59,6 +72,7 @@ class GitBranchPushConnector:
         timeout_seconds: float = 120.0,
         allow_file_remotes: bool = False,
     ) -> None:
+        _require_git_mutation_platform()
         root = repository_root.expanduser().resolve()
         if not root.exists() or not root.is_dir():
             raise ConnectorError("repository_root must be an existing directory")
