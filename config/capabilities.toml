@@ -362,7 +362,7 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
-required_scopes = ["Mail.Send"]
+required_scopes = ["Mail.ReadWrite", "Mail.Send"]
 target_resource_types = ["message", "correction_email"]
 parameter_schema = { to = "string_or_string_list", subject = "string", body = "string", cc = "string_or_string_list?", bcc = "string_or_string_list?", content_type = "string?", identity = "string?" }
 description = "Send exact approval-bound Outlook content after provider-draft verification."
@@ -509,7 +509,7 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
-required_scopes = ["ChannelMessage.Send"]
+required_scopes = ["ChannelMessage.Read.All", "ChannelMessage.Send"]
 target_resource_types = ["message"]
 parameter_schema = { team_id = "string", channel_id = "string", parent_message_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Reply with exact approval-bound content in a Teams channel thread."
@@ -519,7 +519,7 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
-required_scopes = ["ChannelMessage.Send"]
+required_scopes = ["ChannelMessage.Read.All", "ChannelMessage.Send"]
 target_resource_types = ["message"]
 parameter_schema = { team_id = "string", channel_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Post exact approval-bound content to a Teams channel."
@@ -544,7 +544,7 @@ enabled = true
 authentication = "delegated"
 risk = "external_communication"
 reversible = false
-required_scopes = ["ChatMessage.Send"]
+required_scopes = ["Chat.Read", "ChatMessage.Send"]
 target_resource_types = ["message"]
 parameter_schema = { chat_id = "string", body = "string", content_type = "string?", identity = "string?" }
 description = "Post exact approval-bound content to an existing Teams chat."

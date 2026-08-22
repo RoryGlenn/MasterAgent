@@ -17,14 +17,17 @@ from unittest.mock import patch
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.cli import (
+    _atlassian_credential_compatibility,
     _bitbucket_repositories,
     _connect,
     _github_repositories,
     _mock_read_registry,
     _parse_credential_mappings,
     _standalone_connector_binding,
+    _with_connector_url_overrides,
     main,
 )
+from master_agent.config import IntegrationConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
 from master_agent.errors import ConfigurationError
 from master_agent.governance import GovernanceProfile
@@ -1410,6 +1413,114 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         self.assertEqual(
             transport.requests[0].headers["Authorization"], f"Basic {expected}"
         )
+
+    def test_scoped_atlassian_gateways_share_email_but_not_product_tokens(
+        self,
+    ) -> None:
+        cloud_id = "11111111-1111-4111-8111-111111111111"
+        with private_temporary_directory() as directory:
+            integrations_path = Path(directory) / "integrations.toml"
+            integrations_path.write_text(
+                f"""
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.atlassian.com/ex/jira/{cloud_id}"
+web_base_url = "https://tenant.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+
+[connectors.confluence]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.atlassian.com/ex/confluence/{cloud_id}"
+web_base_url = "https://tenant.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_CONFLUENCE_USERNAME"
+secret_env = "MASTER_AGENT_CONFLUENCE_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(integrations_path)
+
+        compatibility = _atlassian_credential_compatibility(
+            integrations,
+            configurations={"confluence"},
+        )
+
+        self.assertEqual(
+            compatibility,
+            {"MASTER_AGENT_CONFLUENCE_USERNAME": ("MASTER_AGENT_JIRA_USERNAME")},
+        )
+
+    def test_connector_url_preserves_scoped_gateway_and_sets_browser_root(
+        self,
+    ) -> None:
+        cloud_id = "11111111-1111-4111-8111-111111111111"
+        api_root = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        with private_temporary_directory() as directory:
+            integrations_path = Path(directory) / "integrations.toml"
+            integrations_path.write_text(
+                f"""
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "{api_root}"
+web_base_url = "https://old-tenant.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(integrations_path)
+
+        overridden = _with_connector_url_overrides(
+            integrations,
+            ("jira=https://tenant.atlassian.net/jira/software/projects/ENG",),
+            selected_configurations={"jira"},
+        ).connector("jira")
+
+        self.assertEqual(overridden.base_url, api_root)
+        self.assertEqual(overridden.web_base_url, "https://tenant.atlassian.net")
+
+    def test_connector_url_preserves_resolved_dynamic_scoped_gateway(self) -> None:
+        cloud_id = "11111111-1111-4111-8111-111111111111"
+        api_root = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        with private_temporary_directory() as directory:
+            integrations_path = Path(directory) / "integrations.toml"
+            integrations_path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url_env = "MASTER_AGENT_JIRA_BASE_URL"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            integrations = IntegrationConfig.from_toml(integrations_path)
+
+        with patch.dict(
+            os.environ,
+            {"MASTER_AGENT_JIRA_BASE_URL": api_root},
+            clear=False,
+        ):
+            overridden = _with_connector_url_overrides(
+                integrations,
+                ("jira=https://tenant.atlassian.net/browse/MA-1",),
+                selected_configurations={"jira"},
+            ).connector("jira")
+
+        self.assertIsNone(overridden.base_url)
+        self.assertEqual(overridden.base_url_env, "MASTER_AGENT_JIRA_BASE_URL")
+        self.assertEqual(overridden.web_base_url, "https://tenant.atlassian.net")
 
     def test_connect_does_not_reuse_atlassian_credentials_for_data_center(
         self,

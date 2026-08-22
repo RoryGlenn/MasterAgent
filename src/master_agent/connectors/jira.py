@@ -38,6 +38,7 @@ class JiraConnector(ReadOnlyConnector):
     ) -> None:
         super().__init__(system="jira", capabilities=self._CAPABILITIES)
         self._config = config
+        self._web_base_url = (config.web_base_url or config.base_url).rstrip("/")
         self._client = SafeHttpClient(
             base_url=config.base_url,
             header_provider=config.auth.headers,
@@ -62,7 +63,7 @@ class JiraConnector(ReadOnlyConnector):
         return {
             "reachable": True,
             "deployment": self._config.deployment,
-            "base_url": data.get("baseUrl", self._config.base_url),
+            "base_url": self._web_base_url,
             "version": data.get("version"),
             "deployment_type": data.get("deploymentType"),
             "reference": response.url,
@@ -298,5 +299,5 @@ class JiraConnector(ReadOnlyConnector):
             "blocked": blocked,
             "updated_at": fields.get("updated"),
             "resolved_at": fields.get("resolutiondate"),
-            "web_url": f"{self._config.base_url}/browse/{quote_segment(key)}",
+            "web_url": f"{self._web_base_url}/browse/{quote_segment(key)}",
         }

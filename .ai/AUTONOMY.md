@@ -226,11 +226,13 @@ keys whose provider and field have one clear interpretation. If a key has zero
 or multiple interpretations, ask the operator once what that key represents,
 then retry with `--credential-map FILE_KEY=DECLARED_NAME`. Infer only from key
 names, never secret values, and do not rewrite the credential file. For a
-selected Jira or Confluence Cloud Basic-auth connector, a missing provider-
-specific email or API-token name automatically falls back in memory to the
-other connector's configured Atlassian account pair. An explicit credential
-for the selected connector wins, the related connector stays inactive, and the
-fixed provider probe decides whether the account actually has access.
+selected Jira or Confluence Cloud Basic-auth connector, a missing account email
+may fall back in memory to the other product's configured email. Legacy static
+tenant-root configurations may also reuse one unscoped API-token pair. Scoped
+`api.atlassian.com/ex/{product}/{cloudId}` configurations require an explicit
+token for each product. An explicit selected-product credential wins, the
+related connector stays inactive, and the fixed provider probe decides whether
+the account actually has access.
 
 For a direct user request that already has a plan containing only read-only
 actions for one built-in provider, use the explicit stateless route instead of

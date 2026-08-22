@@ -6,7 +6,8 @@ All HTTP connectors use a constrained client that enforces:
 
 - HTTPS base URLs;
 - no embedded URL credentials;
-- same-origin API requests and pagination;
+- same-origin API requests and pagination, plus exact decoded base-path
+  confinement when a provider shares one gateway origin;
 - cross-origin authenticated redirect rejection;
 - bounded response bytes, pages, items, and timeouts;
 - method allowlists per connector;
@@ -35,17 +36,26 @@ retention rules permit persistence.
 `bitbucket.public_repository.list` similarly constructs only the fixed
 Bitbucket Cloud workspace-repositories endpoint, ignores ambient Bitbucket
 credentials, rejects repositories not explicitly marked public, and uses the
-shared same-origin pagination boundary.
+shared same-origin pagination boundary. Authenticated Cloud API-token
+configuration uses the Atlassian account email; a private legacy app-password
+configuration may retain its explicit username.
 
 `master-agent connect --systems ...` is the provider-neutral readiness path
 when operator-requested access requires authentication. It enables only the
 selected supported read connectors in memory, accepts canonical or strictly
 mapped provider-keyed local credentials, runs each connector's fixed probe,
 and persists no connector or credential changes. Selected Jira/Confluence
-Cloud Basic-auth connectors may reuse the other product's configured Atlassian
-account pair in memory when their own names are absent. `--connector-url`
-normalizes an operator-supplied Atlassian UI URL to the selected tenant origin;
-bind/apply include that origin in the execution context. It is not a
+Cloud Basic-auth connectors may reuse the other product's configured account
+email in memory. Product-specific scoped tokens are never copied across Jira
+and Confluence; legacy tenant-root configurations retain unscoped email/token
+pair compatibility. `--connector-url` normalizes an operator-supplied Atlassian
+UI URL to the selected tenant origin. It sets both roots for a tenant-root
+connector, but only the credential-free `web_base_url` for a scoped gateway, so
+the exact `api.atlassian.com/ex/{product}/{cloudId}` API boundary cannot be
+replaced by a browser URL. Jira constructs browse links from that approved web
+root. Confluence accepts `_links.webui` only when it resolves to the same
+scheme, host, and port, then canonicalizes the link onto the configured web
+authority. Bind/apply include both roots in the execution context. It is not a
 prerequisite for the anonymous GitHub public-user or Bitbucket public-workspace
 repository lists. It is not a generic HTTP surface and does not execute a
 feature action; the agent continues through the typed capability that produces
@@ -141,9 +151,19 @@ The connector tests are intentionally divided by what they prove:
   GitHub administration.
 
 The normal CI matrix runs the offline contracts and discovers the live classes
-in skipped state. The live workflow runs only from the reviewed default branch
-and uses protected GitHub environments so pull-request code never receives
-provider credentials.
+in skipped state. The complete multi-provider workflow is manual-dispatch only,
+runs only from the reviewed default branch, and separates read, effect, and
+administration credentials across protected GitHub environments. Ordinary
+GitHub read/effect coverage uses the job-scoped `github.token`; only the admin
+job receives its separate personal access token and configuration.
+
+Before an effect begins, the harness checks every fixture and gate plus the
+delegated Microsoft token's exact scopes and remaining lifetime. Reversible
+tests record private runner-temporary recovery entries, verify in-process
+compensation, and have a same-job `always()` recovery step. This reduces
+ordinary cleanup gaps but cannot prove that a provider did not commit a request
+whose success response was lost; such indeterminate provider state still needs
+provider-side reconciliation.
 
 See [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md)
 for the covered provider operations, required fixtures, protected environments,

@@ -177,7 +177,7 @@ class CapabilityGovernanceTests(unittest.TestCase):
             resolved_origin="https://graph.microsoft.com",
             authentication_mode="oauth_delegated",
             credential_identity="microsoft:user:42",
-            credential_scopes=("Mail.Send",),
+            credential_scopes=("Mail.ReadWrite", "Mail.Send"),
         )
 
         allowed, reason = catalog.validate_execution(
@@ -191,7 +191,7 @@ class CapabilityGovernanceTests(unittest.TestCase):
         allowed, reason = catalog.validate_execution(
             action,
             connector,
-            replace(binding, credential_scopes=("Mail.Read",)),
+            replace(binding, credential_scopes=("Mail.ReadWrite",)),
             connector_mode="live",
         )
         self.assertFalse(allowed)

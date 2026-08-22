@@ -10,11 +10,11 @@
       "auth_mode": "basic",
       "base_url": "https://api.bitbucket.org/2.0",
       "required_environment": [
-        "MASTER_AGENT_BITBUCKET_USERNAME",
+        "MASTER_AGENT_BITBUCKET_EMAIL",
         "MASTER_AGENT_BITBUCKET_TOKEN"
       ],
       "missing_environment": [
-        "MASTER_AGENT_BITBUCKET_USERNAME",
+        "MASTER_AGENT_BITBUCKET_EMAIL",
         "MASTER_AGENT_BITBUCKET_TOKEN"
       ],
       "capabilities": [],

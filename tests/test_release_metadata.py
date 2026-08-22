@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from scripts.validate_release import (
+    _FIRST_RUN_DOCUMENT_REQUIREMENTS,
     _PUBLIC_READ_DOCUMENT_REQUIREMENTS,
     _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS,
     _validate_copilot_agent,
@@ -71,10 +72,12 @@ class ReleaseMetadataTests(unittest.TestCase):
         for suffix in (
             "/.ai/semantic-router.toml",
             "/.github/workflows/github-actions-live-integration.yml",
+            "/.github/workflows/live-connector-integration.yml",
             "/docs/semantic-index.md",
             "/docs/semantic-router-metrics.md",
             "/scripts/semantic_router.py",
             "/tests/test_semantic_router.py",
+            "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
         ):
             with self.subTest(suffix=suffix):
@@ -464,6 +467,36 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertTrue(
                 any("blanket credential requirement" in error for error in errors)
             )
+
+    def test_release_contract_pins_scoped_atlassian_credential_semantics(self) -> None:
+        autonomy_requirements = _FIRST_RUN_DOCUMENT_REQUIREMENTS[
+            Path(".ai/AUTONOMY.md")
+        ]
+        copilot_requirements = _FIRST_RUN_DOCUMENT_REQUIREMENTS[
+            Path("docs/copilot-custom-agent.md")
+        ]
+        bitbucket_requirements = _PUBLIC_READ_DOCUMENT_REQUIREMENTS[
+            Path("docs/configuration.md")
+        ]
+
+        self.assertIn("may fall back in memory", autonomy_requirements)
+        self.assertIn(
+            "configurations require an explicit",
+            autonomy_requirements,
+        )
+        self.assertIn("token for each product", autonomy_requirements)
+        self.assertIn("may reuse a missing", copilot_requirements)
+        self.assertIn(
+            "configurations require an",
+            copilot_requirements,
+        )
+        self.assertIn("explicit token for each product", copilot_requirements)
+        self.assertIn("Atlassian account email and", bitbucket_requirements)
+        self.assertIn("MASTER_AGENT_BITBUCKET_EMAIL", bitbucket_requirements)
+        self.assertIn(
+            "sends ambient Bitbucket credentials",
+            bitbucket_requirements,
+        )
 
     def test_retention_prune_contract_rejects_preview_only_drift(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

@@ -1,4 +1,4 @@
-disabled             bitbucket    deployment=cloud       missing=MASTER_AGENT_BITBUCKET_USERNAME,MASTER_AGENT_BITBUCKET_TOKEN
+disabled             bitbucket    deployment=cloud       missing=MASTER_AGENT_BITBUCKET_EMAIL,MASTER_AGENT_BITBUCKET_TOKEN
 disabled             confluence   deployment=cloud       missing=MASTER_AGENT_CONFLUENCE_USERNAME,MASTER_AGENT_CONFLUENCE_TOKEN
 disabled             github       deployment=cloud       missing=MASTER_AGENT_GITHUB_TOKEN
 disabled             jira         deployment=cloud       missing=MASTER_AGENT_JIRA_USERNAME,MASTER_AGENT_JIRA_TOKEN

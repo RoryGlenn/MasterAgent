@@ -7,6 +7,7 @@
 - operator-supplied existing token support;
 - restricted token-file writing;
 - token expiry/scope/claim inspection;
+- Microsoft delegated principal attestation through Graph `/me`;
 - capability-governance coverage reports;
 - connector configuration diagnostics that expose variable names, not values;
 - offline provider/classification model-context egress readiness checks;
@@ -53,12 +54,18 @@ master-agent oauth-device-code \
 
 Only an enabled `entra_device_code` profile can run. The operator completes the provider's interactive authentication. The runtime writes the access token to a user-restricted file and prints expiry, not the token.
 
-Microsoft device-code, token-file, and environment bearer tokens remain opaque
-to the approval runtime. They may be acquired and inspected for readiness, but
-cannot be used by live `run --apply` until a Microsoft provider-verified
-principal or trusted credential-broker attestation adapter is implemented. A
-configured identity label and unverified JWT claim parsing are not accepted as
-proof. GitHub bearer tokens are a separate supported flow: the GitHub connector
+Microsoft delegated token-file and environment bearer credentials are
+provider-attested through Graph `/me` at bind and apply time. The immutable user
+object ID and the configured or restricted-token-file effective scopes become
+part of the execution binding; a configured identity label or unverified JWT
+claim parsing is not proof. The credentialed integration matrix additionally
+requires the purpose-specific `microsoft_integration_read` or
+`microsoft_integration_effects` delegated profile and verifies the exact scopes
+and remaining token lifetime before provider work. It has no token refresh
+path, so the full matrix is manual-only. Application credentials do not
+substitute for delegated OneNote reads or normal Teams sends.
+
+GitHub bearer tokens are a separate supported flow: the GitHub connector
 verifies `GET /user` at bind and apply time and binds the returned numeric ID.
 
 ## Real deployment gate

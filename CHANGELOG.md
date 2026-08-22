@@ -1,5 +1,16 @@
 # Changelog
 
+- Harden credentialed connector evidence behind a manual-only, reviewed-
+  default-branch workflow with separate protected read, effect, and GitHub
+  administration credentials; exact delegated Microsoft scope/lifetime and
+  all-fixture preflight; private same-job recovery; and a static workflow
+  contract. Add scoped Atlassian Jira/Confluence gateway roots with exact path
+  confinement and separate credential-free browser roots, keep scoped tokens
+  product-specific while sharing only the account email, and use the Atlassian
+  account email for Bitbucket API tokens. Provider credentials, tenant consent,
+  stable fixtures, dedicated communication targets, enablement variables, and
+  the final approved live run remain deployment work.
+
 - Add progressive employee and trusted developer operating modes, strict
   organization profiles, capability-scoped `doctor` results, safe local
   `setup`, stable employee-facing error categories, and one `execute` front
@@ -85,19 +96,20 @@
   approvers by a Unicode-normalized canonical principal; and support trusted
   timestamp and approval-ID revocation without weakening exact-plan binding.
 
-- Automatically reuse a related Jira/Confluence Cloud account email and API
-  token when the selected connector's dedicated names are absent, without
-  rewriting the credential store or activating the related connector. Add
-  approval-bound `--connector-url SYSTEM=URL` overrides that normalize supplied
-  Atlassian Cloud UI URLs to their validated tenant origins.
+- Automatically reuse a related Jira/Confluence Cloud account email when the
+  selected connector's dedicated name is absent; legacy tenant-root
+  configurations also retain unscoped API-token pair compatibility, while
+  product-specific scoped tokens never cross products. Add approval-bound
+  `--connector-url SYSTEM=URL` overrides that normalize supplied Atlassian
+  Cloud UI URLs to their validated tenant origins.
 
 - Add governed Confluence Cloud space creation with exact provider re-read,
   created-space compensation, and page creation by approved space key.
 
 - Allow explicit one-run credential mappings to select fields from canonical
-  multi-provider stores, enabling safe in-memory Atlassian credential reuse
-  across Jira and Confluence through connection probes and governed bind/apply
-  runs without rewriting private token files.
+  multi-provider stores, enabling safe in-memory Atlassian account-email and
+  legacy unscoped-token reuse across Jira and Confluence through connection
+  probes and governed bind/apply runs without rewriting private token files.
 
 - Add a resumable authenticated-approval handoff. Approval-required plans now
   bind their trust configuration up front, emit private create-only review

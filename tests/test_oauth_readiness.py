@@ -44,6 +44,36 @@ class OAuthReadinessTests(unittest.TestCase):
         rendered = repr(profiles)
         self.assertNotIn("client-secret", rendered)
 
+    def test_live_microsoft_profiles_are_disabled_exact_delegated_grants(
+        self,
+    ) -> None:
+        profiles = OAuthProfiles.from_toml(ROOT / "config/oauth.toml")
+        expected_scopes = {
+            "microsoft_integration_read": (
+                "User.Read",
+                "Mail.Read",
+                "Chat.Read",
+                "Sites.Read.All",
+                "Notes.Read",
+            ),
+            "microsoft_integration_effects": (
+                "User.Read",
+                "Sites.ReadWrite.All",
+                "Mail.ReadWrite",
+                "Mail.Send",
+                "Chat.Read",
+                "ChatMessage.Send",
+            ),
+        }
+
+        for name, scopes in expected_scopes.items():
+            with self.subTest(profile=name):
+                profile = profiles.profile(name)
+                self.assertFalse(profile.enabled)
+                self.assertEqual(profile.flow, OAuthFlow.ENTRA_DEVICE_CODE)
+                self.assertEqual(profile.metadata["identity_mode"], "delegated")
+                self.assertEqual(profile.scopes, scopes)
+
     def test_in_memory_cache_reuses_valid_token(self) -> None:
         token = AccessToken(
             value="secret-token",

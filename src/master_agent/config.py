@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 from master_agent.auth import AuthMode, ResolvedAuth
 from master_agent.config_sources import ConfigSource
@@ -29,6 +30,11 @@ from master_agent.oauth import (
 from master_agent.trust_store import CaBundleSnapshot, capture_ca_bundle
 
 _PLACEHOLDER_PROVIDER_HOSTS = frozenset({"example.atlassian.net"})
+_ATLASSIAN_CLOUD_ID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 
 
 def is_placeholder_provider_url(value: str | None) -> bool:
@@ -73,6 +79,7 @@ class ConnectorConfig:
     auth_mode: AuthMode
     username_env: str | None
     secret_env: str | None
+    web_base_url: str | None = None
     ca_bundle_env: str | None = None
     timeout_seconds: float = 20.0
     max_pages: int = 10
@@ -106,6 +113,7 @@ class ConnectorConfig:
             "auth_mode": str(self.auth_mode),
             "username_env": self.username_env,
             "secret_env": self.secret_env,
+            "web_base_url": self.web_base_url,
             "ca_bundle_env": self.ca_bundle_env,
             "timeout_seconds": self.timeout_seconds,
             "max_pages": self.max_pages,
@@ -219,9 +227,9 @@ class ConnectorConfig:
         base_url = self.effective_base_url(source)
         if base_url:
             try:
-                _validate_base_url(base_url, system=self.system)
-                _validate_provider_origin(
+                _validate_connector_urls(
                     base_url,
+                    web_base_url=self.web_base_url,
                     system=self.system,
                     deployment=self.deployment,
                 )
@@ -259,9 +267,9 @@ class ConnectorConfig:
         base_url = self.effective_base_url(source)
         if not base_url:
             raise ConfigurationError(f"connector {self.system} requires a base URL")
-        _validate_base_url(base_url, system=self.system)
-        _validate_provider_origin(
+        _validate_connector_urls(
             base_url,
+            web_base_url=self.web_base_url,
             system=self.system,
             deployment=self.deployment,
         )
@@ -484,6 +492,7 @@ class ConnectorConfig:
             system=self.system,
             deployment=self.deployment,
             base_url=base_url,
+            web_base_url=(self.web_base_url or base_url).rstrip("/"),
             auth=ResolvedAuth(
                 mode=self.auth_mode,
                 username=username,
@@ -520,6 +529,7 @@ class ResolvedConnectorConfig:
     deployment: DeploymentType
     base_url: str
     auth: ResolvedAuth = field(repr=False)
+    web_base_url: str | None = None
     timeout_seconds: float = 20.0
     max_pages: int = 10
     max_items: int = 200
@@ -643,6 +653,7 @@ _KNOWN_CONNECTOR_KEYS = {
     "deployment",
     "base_url",
     "base_url_env",
+    "web_base_url",
     "auth_mode",
     "username_env",
     "secret_env",
@@ -678,6 +689,7 @@ def _parse_connector(
         auth_mode=auth_mode,
         username_env=_optional_string(raw.get("username_env")),
         secret_env=_optional_string(raw.get("secret_env")),
+        web_base_url=_optional_string(raw.get("web_base_url")),
         ca_bundle_env=_optional_string(raw.get("ca_bundle_env")),
         timeout_seconds=float(raw.get("timeout_seconds", 20.0)),
         max_pages=int(raw.get("max_pages", 10)),
@@ -743,6 +755,38 @@ def _validate_base_url(base_url: str, *, system: str) -> None:
         )
 
 
+def _validate_connector_urls(
+    base_url: str,
+    *,
+    web_base_url: str | None,
+    system: str,
+    deployment: DeploymentType,
+) -> None:
+    """Validate the API destination and any separately approved UI origin."""
+
+    _validate_base_url(base_url, system=system)
+    _validate_provider_origin(
+        base_url,
+        system=system,
+        deployment=deployment,
+    )
+    if web_base_url is not None:
+        _validate_web_base_url(
+            web_base_url,
+            system=system,
+            deployment=deployment,
+        )
+    if (
+        deployment is DeploymentType.CLOUD
+        and system in {"jira", "confluence"}
+        and _is_atlassian_gateway_url(base_url, system=system)
+        and web_base_url is None
+    ):
+        raise ConfigurationError(
+            f"connector {system} Atlassian gateway base URL requires web_base_url"
+        )
+
+
 def _validate_provider_origin(
     base_url: str,
     *,
@@ -755,16 +799,25 @@ def _validate_provider_origin(
         raise ConfigurationError("connector microsoft requires Microsoft Graph Cloud")
     if deployment is not DeploymentType.CLOUD:
         return
-    hostname = (urlparse(base_url).hostname or "").lower().rstrip(".")
+    parsed = urlparse(base_url)
+    hostname = (parsed.hostname or "").casefold()
     valid = True
     if system in {"jira", "confluence"}:
-        valid = hostname.endswith(".atlassian.net") and hostname != "atlassian.net"
+        valid = _is_atlassian_tenant_root(parsed) or _is_atlassian_gateway_url(
+            base_url,
+            system=system,
+        )
     elif system == "bitbucket":
-        valid = hostname == "api.bitbucket.org"
+        valid = (
+            hostname == "api.bitbucket.org"
+            and _explicit_port(parsed) is None
+            and parsed.path in {"/2.0", "/2.0/"}
+            and not parsed.params
+        )
     elif system == "github":
-        valid = hostname == "api.github.com"
+        valid = hostname.rstrip(".") == "api.github.com"
     elif system == "microsoft":
-        valid = hostname in {
+        valid = hostname.rstrip(".") in {
             "graph.microsoft.com",
             "graph.microsoft.us",
             "dod-graph.microsoft.us",
@@ -774,6 +827,63 @@ def _validate_provider_origin(
         raise ConfigurationError(
             f"connector {system} cloud base URL is outside approved provider origins"
         )
+
+
+def _validate_web_base_url(
+    web_base_url: str,
+    *,
+    system: str,
+    deployment: DeploymentType,
+) -> None:
+    """Validate an approval-bound browser URL separately from the API root."""
+
+    _validate_base_url(web_base_url, system=system)
+    if (
+        deployment is DeploymentType.CLOUD
+        and system in {"jira", "confluence"}
+        and not _is_atlassian_tenant_root(urlparse(web_base_url))
+    ):
+        raise ConfigurationError(
+            f"connector {system} web_base_url must be an Atlassian tenant root"
+        )
+
+
+def _is_atlassian_gateway_url(base_url: str, *, system: str) -> bool:
+    parsed = urlparse(base_url)
+    if (
+        (parsed.hostname or "").casefold() != "api.atlassian.com"
+        or _explicit_port(parsed) is not None
+        or parsed.params
+    ):
+        return False
+    match = re.fullmatch(
+        rf"/ex/{re.escape(system)}/({_ATLASSIAN_CLOUD_ID_PATTERN.pattern})/?",
+        parsed.path,
+    )
+    return match is not None
+
+
+def _is_atlassian_tenant_root(parsed: ParseResult) -> bool:
+    hostname = (parsed.hostname or "").casefold()
+    suffix = ".atlassian.net"
+    if (
+        not hostname.endswith(suffix)
+        or hostname == suffix.removeprefix(".")
+        or hostname.endswith(".")
+        or _explicit_port(parsed) is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+    ):
+        return False
+    tenant = hostname[: -len(suffix)]
+    return "." not in tenant and _DNS_LABEL_PATTERN.fullmatch(tenant) is not None
+
+
+def _explicit_port(parsed: ParseResult) -> int | None:
+    try:
+        return parsed.port
+    except ValueError as error:
+        raise ConfigurationError("connector base URL has an invalid port") from error
 
 
 _ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
@@ -791,7 +901,12 @@ _ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
     },
     "bitbucket": {
         "base_url_env": frozenset({"MASTER_AGENT_BITBUCKET_BASE_URL"}),
-        "username_env": frozenset({"MASTER_AGENT_BITBUCKET_USERNAME"}),
+        "username_env": frozenset(
+            {
+                "MASTER_AGENT_BITBUCKET_EMAIL",
+                "MASTER_AGENT_BITBUCKET_USERNAME",
+            }
+        ),
         "secret_env": frozenset({"MASTER_AGENT_BITBUCKET_TOKEN"}),
         "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
         "repository_root_env": frozenset({"MASTER_AGENT_REPOSITORY_ROOT"}),

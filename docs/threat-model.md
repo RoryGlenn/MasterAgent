@@ -177,10 +177,16 @@ Controls:
   ambient-variable collisions, and bind only the canonical path into applied
   execution; non-development environments require an approved secret manager;
 - Jira/Confluence credential fallback is limited to selected Cloud connectors
-  using Basic authentication and copies only the configured Atlassian account
-  email/API-token pair in memory. Explicit target-product names win, the source
-  connector is not activated, and the fixed provider probe remains authoritative
-  for actual product/site access;
+  using Basic authentication. A scoped gateway may reuse only the configured
+  Atlassian account email in memory; product-specific scoped tokens never cross
+  between Jira and Confluence. Legacy tenant-root configurations retain the
+  unscoped email/API-token pair compatibility. Explicit target-product names
+  win, the source connector is not activated, and the fixed provider probe
+  remains authoritative for actual product/site access;
+- credentialed integration jobs separate read, effect, and administration
+  secrets across protected environments; ordinary GitHub coverage uses the
+  job-scoped token while only the administration job receives its distinct
+  personal access token and configuration;
 - capability authentication is authoritative: a typed anonymous public-data
   route never resolves or forwards an ambient credential and cannot be silently
   upgraded to a broader authenticated route;
@@ -280,6 +286,15 @@ Controls:
 - `compensation_failed` state and manual escalation;
 - no claim of distributed transactions.
 
+The manual credentialed integration workflow adds a test-harness recovery
+layer: every compensatable provider result is written immediately to a bounded
+mode-`0600` journal under `RUNNER_TEMP`, normal `finally` cleanup verifies the
+compensation independently, and a same-job `always()` step replays residual
+entries. The journal is never uploaded. This catches ordinary test failures;
+it cannot prove whether a provider committed an operation when the success
+response was lost before a recovery entry existed. That state remains
+indeterminate and requires provider-side reconciliation.
+
 ### Unsafe rollback
 
 A rollback may destroy human changes made after the agent action.
@@ -310,6 +325,9 @@ Controls:
 - environment/secret-store references only in TOML;
 - secrets excluded from `repr`;
 - restricted token files and no refresh-token persistence;
+- privilege-specific protected-environment secrets for credentialed live jobs;
+- bounded runner-temporary recovery journals with mode `0600`, no credential
+  values, and no artifact upload;
 - URL credentials prohibited;
 - queries/fragments stripped from evidence/error URLs;
 - audit content minimization;
@@ -322,10 +340,16 @@ A provider response may redirect to an attacker-controlled host or temporary dow
 Controls:
 
 - HTTPS and same-origin authenticated requests;
-- operator-supplied Jira/Confluence Cloud URLs are reduced to an HTTPS
-  `atlassian.net` tenant origin; embedded credentials, nondefault ports, and
-  unselected connectors are rejected, and the result is approval-bound for
-  live execution;
+- operator-supplied Jira/Confluence Cloud URLs are reduced to an exact HTTPS
+  single-label `atlassian.net` tenant origin; embedded credentials, explicit
+  default `:443` is normalized away, while nondefault ports and unselected
+  connectors are rejected, and the result is approval-bound for live
+  execution;
+- Jira and Confluence scoped-token API roots require the exact
+  `api.atlassian.com/ex/{product}/{cloudId}` form plus a separately allowlisted,
+  credential-free tenant `web_base_url`; decoded request, response, redirect,
+  and pagination paths cannot leave the captured product/cloud-ID prefix even
+  when the origin is unchanged;
 - authenticated cross-origin redirects blocked;
 - SharePoint download host suffix allowlist;
 - no Graph Authorization header on temporary download URLs;
@@ -417,6 +441,12 @@ Controls:
 - disabled defaults;
 - local-only/draft-only delivery modes;
 - no arbitrary plan generation from retrieved content.
+
+The complete credentialed provider matrix is not recurring automation. It has
+only a manual-dispatch trigger, is bound to reviewed default-branch code, and
+keeps repository enablement variables absent or false until every protected
+environment, credential, fixture, reviewer, and restriction is ready. A static
+workflow contract test guards that boundary.
 
 ### Audit/evidence tampering
 

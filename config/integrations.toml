@@ -7,6 +7,8 @@
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
+# Browser references are kept separate from a scoped-token API gateway root.
+web_base_url = "https://example.atlassian.net"
 auth_mode = "basic" # basic | bearer | none
 username_env = "MASTER_AGENT_JIRA_USERNAME"
 secret_env = "MASTER_AGENT_JIRA_TOKEN"
@@ -23,6 +25,7 @@ write_enabled = false
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
+web_base_url = "https://example.atlassian.net"
 auth_mode = "basic"
 username_env = "MASTER_AGENT_CONFLUENCE_USERNAME"
 secret_env = "MASTER_AGENT_CONFLUENCE_TOKEN"
@@ -41,7 +44,9 @@ deployment = "cloud" # cloud | data_center
 # Cloud API root. For Data Center, use the server/context root.
 base_url = "https://api.bitbucket.org/2.0"
 auth_mode = "basic"
-username_env = "MASTER_AGENT_BITBUCKET_USERNAME"
+# Atlassian API tokens use the account email; legacy app-password deployments
+# may select a different username_env in their private configuration.
+username_env = "MASTER_AGENT_BITBUCKET_EMAIL"
 secret_env = "MASTER_AGENT_BITBUCKET_TOKEN"
 ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
 timeout_seconds = 20
@@ -81,9 +86,9 @@ base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "oauth_delegated" # oauth_delegated | oauth_application | bearer
 # Recommended local delegated mode: run `master-agent oauth-device-code`, then
 # point this environment variable at the resulting mode-0600 token file.
-# This opaque flow cannot be used by `run --apply` until a trusted principal-
-# attestation adapter is implemented. Use client_credentials for governed
-# application execution; the tenant/client pair is bound automatically.
+# Delegated execution is provider-attested through Graph `/me`. Use
+# client_credentials only for capabilities that explicitly permit application
+# identity; the tenant/client pair is bound automatically.
 oauth_flow = "token_file" # token_file | environment | client_credentials
 token_file_env = "MASTER_AGENT_GRAPH_TOKEN_FILE"
 secret_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN"
@@ -91,7 +96,7 @@ token_expires_at_env = "MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT"
 tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
 client_id_env = "MASTER_AGENT_ENTRA_APP_CLIENT_ID"
 client_secret_env = "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET"
-scopes = ["https://graph.microsoft.com/.default"]
+scopes = ["User.Read", "Mail.Read", "Chat.Read", "Sites.Read.All", "Notes.Read"]
 ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
 timeout_seconds = 20
 max_pages = 16

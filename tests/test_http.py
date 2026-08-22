@@ -2,8 +2,9 @@
 
 import socket
 import unittest
+from http.client import HTTPMessage
 from unittest.mock import MagicMock, patch
-from urllib.request import ProxyHandler
+from urllib.request import ProxyHandler, Request
 
 from master_agent.errors import (
     AuthenticationError,
@@ -15,6 +16,7 @@ from master_agent.http import (
     SafeHttpClient,
     UrllibTransport,
     _PinnedHTTPSConnection,
+    _SameOriginRedirectHandler,
     http_action_budget,
 )
 from tests.fakes import ExpectedRequest, QueueTransport, ScriptedTransport
@@ -53,6 +55,111 @@ class SafeHttpClientTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ConnectorHttpError, "outside"):
             client.request_json("GET", "https://attacker.test/data")
+        self.assertEqual(transport.requests, [])
+
+    def test_atlassian_gateway_relative_url_stays_under_product_and_cloud(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            f"/ex/jira/{cloud_id}/rest/api/3/issue/MA-1",
+            {"key": "MA-1"},
+        )
+        client = SafeHttpClient(
+            base_url=f"https://api.atlassian.com/ex/jira/{cloud_id}",
+            transport=transport,
+        )
+
+        value, _ = client.request_json("GET", "rest/api/3/issue/MA-1")
+
+        self.assertEqual(value, {"key": "MA-1"})
+
+    def test_same_origin_sibling_api_paths_are_rejected_before_transport(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        other_cloud_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        base_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        targets = (
+            f"https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/api/v2/pages/1",
+            f"https://api.atlassian.com/ex/jira/{other_cloud_id}/rest/api/3/issue/MA-1",
+            "https://api.atlassian.com/oauth/token/accessible-resources",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                transport = ScriptedTransport()
+                client = SafeHttpClient(base_url=base_url, transport=transport)
+                with self.assertRaisesRegex(ConnectorHttpError, "outside"):
+                    client.request_json("GET", target)
+                self.assertEqual(transport.requests, [])
+
+    def test_relative_and_encoded_path_traversal_are_rejected(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        base_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        targets = (
+            "../../../oauth/token/accessible-resources",
+            "%2e%2e/%2e%2e/confluence/other",
+            "%252e%252e/%252e%252e/confluence/other",
+            "rest/api/3/issue/..%2f..%2f..%2fconfluence/other",
+            "rest/api/3/issue/..;ignored/other",
+            "rest\\..\\confluence",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                transport = ScriptedTransport()
+                client = SafeHttpClient(base_url=base_url, transport=transport)
+                with self.assertRaisesRegex(ConnectorHttpError, "unsafe|outside"):
+                    client.request_json("GET", target)
+                self.assertEqual(transport.requests, [])
+
+    def test_transport_response_must_remain_under_base_path(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        transport = QueueTransport(
+            ExpectedRequest(
+                "GET",
+                "/ex/jira/",
+                {"key": "MA-1"},
+                response_url=(
+                    "https://api.atlassian.com/ex/confluence/"
+                    f"{cloud_id}/wiki/api/v2/pages/1"
+                ),
+            )
+        )
+        client = SafeHttpClient(
+            base_url=f"https://api.atlassian.com/ex/jira/{cloud_id}",
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorHttpError, "response outside"):
+            client.request_json("GET", "rest/api/3/issue/MA-1")
+
+    def test_redirect_handler_rejects_same_origin_scope_escape(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        base_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"
+        handler = _SameOriginRedirectHandler(allowed_base_url=base_url)
+        request = Request(f"{base_url}/rest/api/3/issue/MA-1")
+
+        with self.assertRaisesRegex(ConnectorHttpError, "configured URL scope"):
+            handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                HTTPMessage(),
+                f"https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/api/v2",
+            )
+
+    def test_bitbucket_client_rejects_same_origin_legacy_api_path(self) -> None:
+        transport = ScriptedTransport()
+        client = SafeHttpClient(
+            base_url="https://api.bitbucket.org/2.0",
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorHttpError, "outside"):
+            client.request_json(
+                "GET",
+                "https://api.bitbucket.org/1.0/repositories/acme/widget",
+            )
+
         self.assertEqual(transport.requests, [])
 
     def test_authentication_error_does_not_expose_token_or_query(self) -> None:
