@@ -57,9 +57,9 @@ class WindowsProcessContractTests(unittest.TestCase):
         self.addCleanup(self._restore_environment, previous)
 
         result = self.backend.run(
-            executable=Path("/runtime/python.exe"),
+            executable=Path.cwd() / "runtime" / "python.exe",
             arguments=("-c", "print('ok')"),
-            cwd=Path("/work"),
+            cwd=Path.cwd() / "work",
             environment={"PYTHONHASHSEED": "0"},
             inherited_handles=(41, 43),
             timeout_seconds=2,
@@ -85,9 +85,9 @@ class WindowsProcessContractTests(unittest.TestCase):
 
     def test_inputs_fail_closed_before_native_launch(self) -> None:
         common: dict[str, Any] = {
-            "executable": Path("/runtime/python.exe"),
+            "executable": Path.cwd() / "runtime" / "python.exe",
             "arguments": (),
-            "cwd": Path("/work"),
+            "cwd": Path.cwd() / "work",
             "environment": {},
             "timeout_seconds": 2,
             "cpu_seconds": 1,
@@ -154,18 +154,21 @@ class NativeWindowsProcessTests(unittest.TestCase):
         max_processes: int = 4,
         max_output_bytes: int = 4096,
     ) -> ProcessExecutionResult:
-        return self.backend.run(
-            executable=self.executable,
-            arguments=("-I", "-c", source, *arguments),
-            cwd=self.cwd,
-            environment=environment or {"PYTHONIOENCODING": "utf-8"},
-            inherited_handles=inherited_handles,
-            timeout_seconds=timeout_seconds,
-            cpu_seconds=10,
-            memory_bytes=memory_bytes,
-            max_processes=max_processes,
-            max_output_bytes=max_output_bytes,
-        )
+        try:
+            return self.backend.run(
+                executable=self.executable,
+                arguments=("-I", "-c", source, *arguments),
+                cwd=self.cwd,
+                environment=environment or {"PYTHONIOENCODING": "utf-8"},
+                inherited_handles=inherited_handles,
+                timeout_seconds=timeout_seconds,
+                cpu_seconds=10,
+                memory_bytes=memory_bytes,
+                max_processes=max_processes,
+                max_output_bytes=max_output_bytes,
+            )
+        except ProcessSupervisionError as error:
+            self.fail(f"{error}; native_error_code={error.native_error_code}")
 
     def test_runtime_reports_native_backend_and_minimal_environment(self) -> None:
         runtime = build_windows_runtime()

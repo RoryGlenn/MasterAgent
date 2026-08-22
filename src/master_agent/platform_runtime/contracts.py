@@ -45,10 +45,17 @@ class ProcessExitReason(StrEnum):
 class ProcessSupervisionError(ConfigurationError):
     """A supervised process could not be launched or controlled safely."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, native_error_code: int | None = None) -> None:
         if not reason or reason != reason.strip() or len(reason) > 80:
             raise ValueError("process supervision reason is invalid")
+        if native_error_code is not None and (
+            isinstance(native_error_code, bool)
+            or not isinstance(native_error_code, int)
+            or native_error_code < 0
+        ):
+            raise ValueError("native process error code is invalid")
         self.reason = reason
+        self.native_error_code = native_error_code
         super().__init__(f"process supervision failed: {reason}")
 
 

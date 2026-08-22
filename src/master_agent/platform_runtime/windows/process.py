@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import subprocess
 import sys
 import threading
 from collections.abc import Mapping, Sequence
@@ -445,7 +444,7 @@ class CtypesWindowsProcessApi:
                 inherited_handles=child_handles,
             )
             command_line = ctypes.create_unicode_buffer(
-                subprocess.list2cmdline((os.fspath(executable), *arguments))
+                _windows_command_line((os.fspath(executable), *arguments))
             )
             environment_block = ctypes.create_unicode_buffer(
                 "\x00".join(f"{key}={value}" for key, value in environment.items())
@@ -469,7 +468,10 @@ class CtypesWindowsProcessApi:
                 ctypes.byref(startup.startup_info),
                 ctypes.byref(process_info),
             ):
-                raise ProcessSupervisionError("launch_failed")
+                raise ProcessSupervisionError(
+                    "launch_failed",
+                    native_error_code=_last_error(),
+                )
             process_created = True
             if not self._kernel.AssignProcessToJobObject(job, process_info.process):
                 raise ProcessSupervisionError("job_assignment_failed")
@@ -856,6 +858,14 @@ def _build_minimal_environment(
 def _last_error() -> int:
     getter = getattr(ctypes, "get_last_error", None)
     return int(getter()) if getter is not None else 0
+
+
+def _windows_command_line(arguments: Sequence[str]) -> str:
+    """Encode argv using the documented Microsoft C runtime parsing rules."""
+
+    import subprocess
+
+    return subprocess.list2cmdline(tuple(arguments))
 
 
 def _handle_value(handle: object) -> int:
