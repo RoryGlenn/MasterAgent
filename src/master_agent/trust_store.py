@@ -10,7 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from master_agent.errors import ConfigurationError
-from master_agent.platform_runtime import PlatformContract, require_platform_contract
+from master_agent.platform_runtime import (
+    PlatformContract,
+    get_secure_filesystem_backend,
+    require_platform_contract,
+)
 
 _MAX_CA_BUNDLE_BYTES = 4 * 1024 * 1024
 
@@ -28,6 +32,32 @@ def capture_ca_bundle(path: Path) -> CaBundleSnapshot:
     """Capture one stable, bounded regular file without following its final link."""
 
     require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        selected = path.expanduser()
+        if not selected.is_absolute():
+            selected = Path.cwd() / selected
+        try:
+            resolved, data, _identity = backend.read_restricted_file(
+                selected,
+                _MAX_CA_BUNDLE_BYTES,
+                require_private=False,
+            )
+        except OSError as error:
+            raise ConfigurationError(
+                "connector CA bundle could not be captured safely"
+            ) from error
+        return CaBundleSnapshot(
+            path=resolved,
+            data=data,
+            sha256=hashlib.sha256(data).hexdigest(),
+        )
     try:
         resolved = path.expanduser().resolve(strict=True)
         path_metadata = resolved.lstat()

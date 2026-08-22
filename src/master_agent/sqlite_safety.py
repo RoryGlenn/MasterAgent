@@ -689,6 +689,7 @@ def path_entry_exists(path: Path) -> bool:
     """Return whether a directory entry exists, including a broken symlink."""
 
     require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
     try:
         path.lstat()
     except FileNotFoundError:

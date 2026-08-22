@@ -14,7 +14,11 @@ from typing import Any
 
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
-from master_agent.platform_runtime import PlatformContract, require_platform_contract
+from master_agent.platform_runtime import (
+    PlatformContract,
+    get_secure_filesystem_backend,
+    require_platform_contract,
+)
 
 _MAX_STORE_BYTES = 1024 * 1024
 _MAX_CREDENTIALS = 64
@@ -29,6 +33,12 @@ def canonical_credential_store_path(path: Path) -> Path:
     selected = path.expanduser()
     if not selected.is_absolute():
         raise ConfigurationError("--credentials-file must be an absolute path")
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            validate_windows_drive_path,
+        )
+
+        return Path(validate_windows_drive_path(selected).canonical)
     return selected.resolve(strict=False)
 
 
@@ -144,6 +154,27 @@ def _read_restricted_file(path: Path) -> tuple[Path, bytes]:
     require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     canonical = canonical_credential_store_path(path)
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        try:
+            observed_path, payload, _identity = backend.read_restricted_file(
+                canonical,
+                _MAX_STORE_BYTES,
+                require_private=True,
+            )
+        except (ConfigurationError, OSError) as error:
+            raise ConfigurationError(
+                "credential store could not be opened safely"
+            ) from error
+        if observed_path != canonical:
+            raise ConfigurationError("credential store path changed while opening")
+        return canonical, payload
     try:
         parent = PinnedDirectory.open(selected.parent)
     except ConfigurationError as error:

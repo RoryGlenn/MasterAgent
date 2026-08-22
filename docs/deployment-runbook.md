@@ -88,10 +88,13 @@ master-agent doctor --require-level install
 `enterprise_ready` are independent. Do not treat an installed profile as
 provider authentication, effect approval, or production certification.
 Inspect the additive `platform_runtime` object as a separate prerequisite: it
-names every selected backend and unavailable secure contract. On Windows,
-`doctor --require-level install` is usable for configuration diagnosis before
-native state backends exist, but `setup` and stateful deployment remain blocked
-until their exact contracts are available.
+names every selected backend and unavailable secure contract. Native Windows
+selects retained-handle filesystem/ACL validation and `LockFileEx`, so trusted
+configuration diagnosis can read approved local paths. A focused Windows 11
+ARM job exercises that boundary through a non-administrator local account.
+`setup` and stateful deployment remain blocked until atomic publication and
+their other exact contracts are available. Do not treat those focused tests as
+full enterprise or release-host certification.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:

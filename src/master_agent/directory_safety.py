@@ -8,10 +8,14 @@ import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
-from typing import Self
+from typing import Any, Self, cast
 
 from master_agent.errors import ConfigurationError
-from master_agent.platform_runtime import get_secure_filesystem_backend
+from master_agent.platform_runtime import (
+    FilesystemObjectKind,
+    PlatformObjectIdentity,
+    get_secure_filesystem_backend,
+)
 
 _MAX_DIRECTORY_DEPTH = 64
 _MINIMUM_INHERITED_DESCRIPTOR = 3
@@ -51,6 +55,17 @@ class DirectoryIdentity:
             "owner": self.owner,
             "mode": self.mode,
         }
+
+    def to_platform_object_identity(self) -> PlatformObjectIdentity:
+        """Return the exact versioned POSIX approval identity."""
+
+        return PlatformObjectIdentity.from_posix(
+            kind=FilesystemObjectKind.DIRECTORY,
+            device=self.device,
+            inode=self.inode,
+            owner=self.owner,
+            mode=self.mode,
+        )
 
 
 class PinnedDirectory:
@@ -97,7 +112,7 @@ class PinnedDirectory:
         *,
         create: bool = False,
         mode: int = 0o700,
-        expected_identity: DirectoryIdentity | None = None,
+        expected_identity: DirectoryIdentity | PlatformObjectIdentity | None = None,
         require_private: bool = True,
     ) -> PinnedDirectory:
         """Open and pin one preexisting canonical directory path.
@@ -107,10 +122,29 @@ class PinnedDirectory:
         policy to the pinned identity and every descriptor-relative child.
         """
 
-        get_secure_filesystem_backend()
-
         if create:
             raise ConfigurationError("runtime directories must exist before approval")
+        if os.name == "nt":
+            return cast(
+                PinnedDirectory,
+                _WindowsPinnedDirectory.open_native(
+                    path,
+                    expected_identity=expected_identity,
+                    require_private=require_private,
+                ),
+            )
+        get_secure_filesystem_backend()
+        if isinstance(expected_identity, PlatformObjectIdentity):
+            if expected_identity.platform != "posix":
+                raise ConfigurationError(
+                    "runtime directory identity platform differs from this host"
+                )
+            expected_identity = DirectoryIdentity(
+                device=cast(int, expected_identity.device),
+                inode=cast(int, expected_identity.inode),
+                owner=cast(int, expected_identity.owner),
+                mode=cast(int, expected_identity.mode),
+            )
         selected = path.expanduser()
         if not selected.is_absolute():
             selected = Path.cwd() / selected
@@ -174,6 +208,12 @@ class PinnedDirectory:
         """Return the final directory identity suitable for approval binding."""
 
         return self._identities[-1]
+
+    @property
+    def object_identity(self) -> PlatformObjectIdentity:
+        """Return the exact versioned native identity for approval binding."""
+
+        return self.identity.to_platform_object_identity()
 
     @property
     def closed(self) -> bool:
@@ -262,12 +302,23 @@ class PinnedDirectory:
         *,
         create: bool = False,
         mode: int = 0o700,
-        expected_identity: DirectoryIdentity | None = None,
+        expected_identity: DirectoryIdentity | PlatformObjectIdentity | None = None,
     ) -> PinnedDirectory:
         """Pin a bounded preexisting no-follow path beneath this one."""
 
         if create:
             raise ConfigurationError("runtime directories must exist before approval")
+        if isinstance(expected_identity, PlatformObjectIdentity):
+            if expected_identity.platform != "posix":
+                raise ConfigurationError(
+                    "runtime child identity platform differs from this host"
+                )
+            expected_identity = DirectoryIdentity(
+                device=cast(int, expected_identity.device),
+                inode=cast(int, expected_identity.inode),
+                owner=cast(int, expected_identity.owner),
+                mode=cast(int, expected_identity.mode),
+            )
         child = Path(relative)
         if (
             child.is_absolute()
@@ -372,6 +423,219 @@ def pin_directory(
     if isinstance(value, PinnedDirectory):
         return value.duplicate()
     return PinnedDirectory.open(value, create=create)
+
+
+class _WindowsPinnedDirectory(PinnedDirectory):
+    """Expose a native retained Windows handle chain through the common pin API."""
+
+    def __init__(self, native: Any, *, require_private: bool) -> None:
+        self._native = native
+        self._require_private = require_private
+
+    @classmethod
+    def open_native(
+        cls,
+        path: Path,
+        *,
+        expected_identity: DirectoryIdentity | PlatformObjectIdentity | None,
+        require_private: bool,
+    ) -> _WindowsPinnedDirectory:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsObjectIdentity,
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        native_expected: WindowsObjectIdentity | None = None
+        if isinstance(expected_identity, DirectoryIdentity):
+            raise ConfigurationError(
+                "runtime directory identity platform differs from this host"
+            )
+        if expected_identity is not None:
+            native_expected = _windows_native_identity(expected_identity)
+        try:
+            native = backend.pin_directory(
+                path,
+                require_private=require_private,
+                expected_identity=native_expected,
+            )
+        except OSError as error:
+            raise ConfigurationError(
+                "runtime directory could not be opened safely"
+            ) from error
+        return cls(native, require_private=require_private)
+
+    @property
+    def path(self) -> Path:
+        return cast(Path, self._native.path)
+
+    @property
+    def identity(self) -> DirectoryIdentity:
+        raise ConfigurationError("POSIX directory identity is unavailable on Windows")
+
+    @property
+    def object_identity(self) -> PlatformObjectIdentity:
+        return _platform_identity_from_windows(self._native.identity)
+
+    @property
+    def closed(self) -> bool:
+        return cast(bool, self._native.closed)
+
+    def fileno(self) -> int:
+        raise ConfigurationError(
+            "POSIX descriptor-relative directory access is unavailable on Windows"
+        )
+
+    def duplicate_fd(self) -> int:
+        return self.fileno()
+
+    def duplicate_descriptor_chain(self) -> tuple[int, ...]:
+        self.fileno()
+        return ()  # pragma: no cover - fileno always raises.
+
+    def duplicate(self) -> PinnedDirectory:
+        self.validate()
+        return type(self)(
+            self._native.duplicate(),
+            require_private=self._require_private,
+        )
+
+    def pin_child(
+        self,
+        relative: Path | str,
+        *,
+        create: bool = False,
+        mode: int = 0o700,
+        expected_identity: DirectoryIdentity | PlatformObjectIdentity | None = None,
+    ) -> PinnedDirectory:
+        del mode
+        if create:
+            raise ConfigurationError("runtime directories must exist before approval")
+        if isinstance(expected_identity, DirectoryIdentity):
+            raise ConfigurationError(
+                "runtime child identity platform differs from this host"
+            )
+        child = Path(relative)
+        if (
+            child.is_absolute()
+            or not child.parts
+            or any(part in {"", ".", ".."} for part in child.parts)
+        ):
+            raise ConfigurationError(
+                "runtime child directory must be a normalized relative path"
+            )
+        current = cast(_WindowsPinnedDirectory, self.duplicate())
+        try:
+            for index, part in enumerate(child.parts):
+                try:
+                    native_child = current._native.pin_child(
+                        part,
+                        kind="directory",
+                        require_private=(
+                            self._require_private and index == len(child.parts) - 1
+                        ),
+                    )
+                except OSError as error:
+                    raise ConfigurationError(
+                        "runtime child directory could not be opened safely"
+                    ) from error
+                following = type(self)(
+                    native_child,
+                    require_private=self._require_private,
+                )
+                current.close()
+                current = following
+            if (
+                expected_identity is not None
+                and current.object_identity != expected_identity
+            ):
+                raise ConfigurationError(
+                    "runtime child directory differs from the approved identity"
+                )
+            return current
+        except BaseException:
+            current.close()
+            raise
+
+    def validate(self) -> None:
+        self._native.validate()
+
+    def close(self) -> None:
+        self._native.close()
+
+    def list_children(self) -> tuple[str, ...]:
+        """Return validated immediate child names without following aliases."""
+
+        return cast(tuple[str, ...], self._native.list_children())
+
+    def read_child_bytes(
+        self,
+        relative: Path | str,
+        *,
+        max_bytes: int,
+        require_private: bool = True,
+    ) -> tuple[Path, bytes, PlatformObjectIdentity]:
+        """Pin and bounded-read one exact immediate Windows file child."""
+
+        child = Path(relative)
+        if child.is_absolute() or len(child.parts) != 1:
+            raise ConfigurationError(
+                "runtime file child must be one normalized relative component"
+            )
+        native_child = self._native.pin_child(
+            child.name,
+            kind="file",
+            require_private=require_private,
+        )
+        with native_child:
+            payload = cast(bytes, native_child.read_bytes(max_bytes))
+            return (
+                cast(Path, native_child.path),
+                payload,
+                _platform_identity_from_windows(native_child.identity),
+            )
+
+
+def _platform_identity_from_windows(native: Any) -> PlatformObjectIdentity:
+    from master_agent.platform_runtime.windows.filesystem import WindowsObjectKind
+
+    kind = native.kind
+    return PlatformObjectIdentity.from_windows(
+        kind=(
+            FilesystemObjectKind.DIRECTORY
+            if kind is WindowsObjectKind.DIRECTORY
+            else FilesystemObjectKind.FILE
+        ),
+        volume_serial=cast(str, native.volume_serial_hex),
+        file_id=cast(str, native.file_id_hex),
+        owner_sid=cast(str, native.owner_sid),
+        dacl_sha256=cast(str, native.dacl_sha256),
+        trust_policy_sha256=cast(str, native.trust_policy_sha256),
+    )
+
+
+def _windows_native_identity(identity: PlatformObjectIdentity) -> Any:
+    from master_agent.platform_runtime.windows.filesystem import (
+        WindowsObjectIdentity,
+        WindowsObjectKind,
+    )
+
+    if identity.platform != "windows":
+        raise ConfigurationError(
+            "runtime directory identity platform differs from this host"
+        )
+    if identity.kind is not FilesystemObjectKind.DIRECTORY:
+        raise ConfigurationError("runtime directory identity kind is invalid")
+    return WindowsObjectIdentity(
+        volume_serial_number=int(cast(str, identity.volume_serial), 16),
+        file_id=bytes.fromhex(cast(str, identity.file_id)),
+        owner_sid=cast(str, identity.owner_sid),
+        dacl_sha256=cast(str, identity.dacl_sha256),
+        trust_policy_sha256=cast(str, identity.trust_policy_sha256),
+        kind=WindowsObjectKind.DIRECTORY,
+    )
 
 
 def _open_directory_component(

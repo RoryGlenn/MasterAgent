@@ -73,7 +73,7 @@ unsafe surfaces remain deliberately non-routable.
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
 | Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; Windows supports package import, help/version, and offline configuration diagnostics while native state, process, Git, capsule, and hosted-certification routes remain planned |
+| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation and `LockFileEx`, while atomic state, process, Git, capsule, and hosted certification remain planned |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -280,7 +280,7 @@ Neither command contacts a workplace provider. Missing credentials for an
 optional provider are reported under that provider's read or effect level; they
 do not make `install_ready` false.
 
-### Windows startup and configuration diagnostics
+### Windows partial native runtime
 
 The Windows surface is deliberately useful before every native security
 backend is complete. From PowerShell, an installed wheel supports package
@@ -296,20 +296,32 @@ py -3.12 -m venv .venv
 ```
 
 These commands initialize no workplace connector and do not claim that a
-stateful operation is available. The `platform_runtime` report names the
-selected backend and the `secure_filesystem`, `cross_process_locking`,
-`atomic_publication_recovery`, `process_supervision`, `trusted_git`, and
-`capsule_isolation` contracts. Until a required native Windows backend is
-implemented, the dependent readiness level stays false with `runtime_defect`
-and execution stops instead of using a weaker compatibility path.
+stateful operation is available. Native Windows selects
+`windows-native-partial`: retained Win32 handles, volume/file identity, owner
+SID and effective-DACL validation provide `secure_filesystem`, while
+`windows-lockfileex` provides `cross_process_locking`. Trusted bounded reads of
+local configuration, credentials, token files, CA bundles, approval requests,
+capsules, and plugin distributions can use that filesystem boundary. It
+rejects UNC/device namespaces, reparse or cloud objects, unsafe names,
+unsupported volumes, and untrusted writers of selected targets rather than
+using pathname-only or POSIX emulation. Retained system ancestors may permit
+only unrelated child creation; deletion, metadata, ACL, owner, generic-write,
+and replacement authority remain rejected and policy-bound.
+
+The `platform_runtime` report also names `atomic_publication_recovery`,
+`process_supervision`, `trusted_git`, and `capsule_isolation`; those contracts
+remain unavailable. Setup, retention, persistent state, and any dependent
+readiness level therefore stay false with `runtime_defect` and execution stops
+instead of using a weaker compatibility path.
 On POSIX hosts, capsule isolation is also reported precisely: Linux selects
 the bubblewrap implementation only when a trusted executable is available and
 otherwise reports the contract unavailable; macOS reports it unavailable until
 a native executable-containment backend exists.
 Reading an existing or explicitly selected organization profile is a protected
-filesystem operation. Before the native Windows secure-filesystem backend
-exists, `doctor` reports the absent-profile setup state but rejects a present
-profile before opening or parsing its bytes.
+filesystem operation. Native Windows reads it only through the retained-handle
+and ACL boundary. Organization-managed trusted-writer policy remains a later
+deployment feature; the current default admits only the effective user and
+fixed operating-system administration principals.
 
 ## Progressive employee workflow
 

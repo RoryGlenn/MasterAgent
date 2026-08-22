@@ -8,6 +8,7 @@ import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -30,6 +31,7 @@ from master_agent.execution_context import (
 )
 from master_agent.models import (
     AgentAction,
+    Approval,
     AuthoritySource,
     ChangePlan,
     ConnectorExecutionBinding,
@@ -46,6 +48,107 @@ from tests.helpers import private_temporary_directory
 
 class ExecutionContextTests(unittest.TestCase):
     """Verify approvals cover runtime destinations and trust roots."""
+
+    def test_windows_runtime_path_is_lexical_before_native_pin(self) -> None:
+        selected = MagicMock(spec=Path)
+        selected.expanduser.return_value = selected
+        selected.is_absolute.return_value = True
+        validated = MagicMock(canonical=r"C:\MasterAgent\state")
+        windows_os = MagicMock()
+        windows_os.name = "nt"
+
+        with (
+            patch.object(execution_context_module, "os", windows_os),
+            patch(
+                "master_agent.platform_runtime.windows.filesystem."
+                "validate_windows_drive_path",
+                return_value=validated,
+            ) as validate_path,
+        ):
+            observed = execution_context_module._canonical_path(selected)
+
+        self.assertEqual(observed, r"C:\MasterAgent\state")
+        validate_path.assert_called_once_with(selected)
+        selected.resolve.assert_not_called()
+
+    def test_legacy_posix_runtime_path_round_trip_preserves_fingerprint_shape(
+        self,
+    ) -> None:
+        payload = {
+            "name": "audit.parent",
+            "path": "/var/lib/master-agent",
+            "anchor_path": "/var/lib/master-agent",
+            "device": 7,
+            "inode": 11,
+            "owner": 501,
+            "mode": 0o700,
+        }
+
+        binding = RuntimePathExecutionBinding.from_dict(payload)
+
+        self.assertIsNone(binding.object_identity)
+        self.assertEqual(binding.to_dict(), payload)
+        self.assertEqual(binding.platform_identity.object_key, ("posix", "7", "11"))
+
+    def test_runtime_path_rejects_non_object_native_identity(self) -> None:
+        payload = {
+            "name": "audit.parent",
+            "path": "/var/lib/master-agent",
+            "anchor_path": "/var/lib/master-agent",
+            "device": 7,
+            "inode": 11,
+            "owner": 501,
+            "mode": 0o700,
+            "object_identity": "attacker-controlled-shape",
+        }
+
+        with self.assertRaisesRegex(ValidationError, "object identity is invalid"):
+            RuntimePathExecutionBinding.from_dict(payload)
+
+    def test_windows_operating_plan_and_approval_use_native_private_reads(
+        self,
+    ) -> None:
+        plan = _plan()
+        now = datetime.now(UTC)
+        approval = Approval(
+            plan_fingerprint=plan.fingerprint,
+            approved_action_ids=(plan.actions[0].action_id,),
+            approved_by="operator@example.test",
+            issuer="master-agent-test",
+            tenant="example.test",
+            roles=("approver",),
+            issued_at=now,
+            expires_at=now + timedelta(minutes=5),
+            key_id="test-key",
+            signature="test-signature",
+        )
+        plan_payload = json.dumps(plan.to_dict()).encode("utf-8")
+        approval_payload = json.dumps(approval.to_dict()).encode("utf-8")
+        backend = MagicMock()
+        backend.read_restricted_file.side_effect = (
+            (Path("C:/approved/plan.json"), plan_payload, object()),
+            (Path("C:/approved/approval.json"), approval_payload, object()),
+        )
+
+        with (
+            patch.object(cli_module, "_uses_native_windows_paths", return_value=True),
+            patch.object(
+                cli_module,
+                "get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+        ):
+            observed_plan = cli_module._load_operating_plan(Path("/approved/plan.json"))
+            observed_approval = cli_module._load_operating_approval(
+                Path("/approved/approval.json")
+            )
+
+        self.assertEqual(observed_plan, plan)
+        self.assertEqual(observed_approval, approval)
+        self.assertEqual(backend.read_restricted_file.call_count, 2)
+        for call in backend.read_restricted_file.call_args_list:
+            self.assertEqual(call.args[1], cli_module.MAX_PLAN_BYTES + 1)
+            self.assertTrue(call.kwargs["require_private"])
 
     def test_connector_url_override_is_normalized_and_approval_bound(self) -> None:
         with private_temporary_directory() as directory:
@@ -1444,6 +1547,63 @@ scopes = ["Mail.Send", "User.Read"]
             self.assertTrue((runtime_root / "artifacts/jira-draft.json").is_file())
             self.assertTrue((runtime_root / "results/report.json").is_file())
 
+    def test_apply_accepts_legacy_posix_runtime_identity_shape(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            runtime_root = root / "runtime"
+            _mkdir_private(
+                runtime_root / "state",
+                runtime_root / "artifacts",
+                runtime_root / "workspaces",
+                runtime_root / "results",
+            )
+            plan_path = root / "plan.json"
+            plan_path.write_text(
+                json.dumps(_draft_plan().to_dict()),
+                encoding="utf-8",
+            )
+            bound_path = root / "bound.json"
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(runtime_root / "state/audit.sqlite3"),
+                "--draft-output-dir",
+                str(runtime_root / "artifacts"),
+                "--workspace-root",
+                str(runtime_root / "workspaces"),
+                "--result-json",
+                str(runtime_root / "results/report.json"),
+            ]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+
+            legacy_payload = json.loads(bound_path.read_text(encoding="utf-8"))
+            runtime = legacy_payload["execution_context"]["runtime"]
+            for collection in ("runtime_paths", "publication_roots"):
+                for binding in runtime[collection]:
+                    binding.pop("object_identity")
+            bound_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+            with redirect_stdout(io.StringIO()):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 0)
+            self.assertTrue((runtime_root / "state/audit.sqlite3").is_file())
+            self.assertTrue((runtime_root / "artifacts/jira-draft.json").is_file())
+            self.assertTrue((runtime_root / "results/report.json").is_file())
+
     def test_binding_rejects_aliased_writable_runtime_directories(self) -> None:
         scenarios = {
             "audit-artifact": ("shared/audit.sqlite3", "shared", "results/report.json"),
@@ -1523,6 +1683,11 @@ scopes = ["Mail.Send", "User.Read"]
                 anchor_path=str(root / "different-spelling"),
                 device=audit_binding.device,
                 inode=audit_binding.inode,
+                object_identity=replace(
+                    artifact_binding.object_identity,
+                    device=audit_binding.device,
+                    inode=audit_binding.inode,
+                ),
             )
             with self.assertRaisesRegex(ValidationError, "identities.*distinct"):
                 replace(

@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 from master_agent.capabilities import CapabilityDefinition
@@ -42,6 +42,9 @@ from master_agent.platform_runtime import (
     require_platform_contract,
 )
 from master_agent.resource_limits import measure_json_resources
+
+if TYPE_CHECKING:
+    from master_agent.platform_runtime.windows.filesystem import PinnedWindowsPath
 
 CAPSULE_SCHEMA = "master-agent/capability-capsule@1"
 CAPSULE_SPEC_SCHEMA = "master-agent/capability-capsule-spec@1"
@@ -433,11 +436,58 @@ class CapsuleBundle:
         """Read an owner-controlled, symlink-free generated bundle."""
 
         require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+        if os.name == "nt":
+            from master_agent.platform_runtime.windows.filesystem import (
+                WindowsSecureFilesystemBackend,
+            )
+
+            backend = get_secure_filesystem_backend()
+            if not isinstance(backend, WindowsSecureFilesystemBackend):
+                raise ConfigurationError(
+                    "native Windows secure filesystem is unavailable"
+                )
+            try:
+                with backend.pin_directory(root, require_private=True) as pinned:
+                    return cls._from_windows_directory(pinned)
+            except ConfigurationError:
+                raise
+            except OSError as error:
+                raise ConfigurationError("capsule directory is unavailable") from error
         descriptor = _open_private_directory(root)
         try:
             return cls._from_descriptor(descriptor)
         finally:
             os.close(descriptor)
+
+    @classmethod
+    def _from_windows_directory(
+        cls,
+        directory: PinnedWindowsPath,
+    ) -> CapsuleBundle:
+        """Read the fixed artifact set from one retained native Windows pin."""
+
+        spec = CapsuleSpec.from_dict(
+            _decode_json(_read_windows_regular(directory, "capsule.json"))
+        )
+        return cls(
+            spec=spec,
+            source=_read_windows_regular(directory, "program.py"),
+            dependency_lock=_decode_json(
+                _read_windows_regular(directory, "dependencies.lock.json")
+            ),
+            sbom=_decode_json(_read_windows_regular(directory, "sbom.cdx.json")),
+            test_suite=_decode_json(_read_windows_regular(directory, "tests.json")),
+            verification_contract=_decode_json(
+                _read_windows_regular(directory, "verification.json")
+            ),
+            compensation_contract=_decode_json(
+                _read_windows_regular(directory, "compensation.json")
+            ),
+            third_party_notices=_read_windows_regular(
+                directory,
+                "THIRD_PARTY_NOTICES.md",
+            ).decode("utf-8"),
+        )
 
     @classmethod
     def _from_descriptor(cls, descriptor: int) -> CapsuleBundle:
@@ -1527,6 +1577,24 @@ def _read_regular_at(directory_fd: int, name: str) -> bytes:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def _read_windows_regular(directory: PinnedWindowsPath, name: str) -> bytes:
+    """Read one fixed bundle artifact through its retained Windows handle."""
+
+    from master_agent.platform_runtime.windows.filesystem import WindowsObjectKind
+
+    try:
+        with directory.pin_child(
+            name,
+            kind=WindowsObjectKind.FILE,
+            require_private=True,
+        ) as artifact:
+            return artifact.read_bytes(_MAX_BUNDLE_FILE_BYTES)
+    except ConfigurationError:
+        raise
+    except OSError as error:
+        raise ConfigurationError("capsule artifact could not be read safely") from error
 
 
 def _write_private_at(directory_fd: int, name: str, payload: bytes) -> None:

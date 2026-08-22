@@ -18,6 +18,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
+from master_agent.platform_runtime.contracts import (
+    FilesystemObjectKind,
+    PlatformObjectIdentity,
+)
 from master_agent.resource_limits import (
     MAX_ACTION_DEPENDENCIES,
     MAX_ACTION_PARAMETER_BYTES,
@@ -453,6 +457,7 @@ class RuntimePathExecutionBinding:
     inode: int
     owner: int
     mode: int
+    object_identity: PlatformObjectIdentity | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -469,19 +474,40 @@ class RuntimePathExecutionBinding:
             raise ValidationError(
                 f"runtime path execution binding {self.name} must pin its exact path"
             )
-        if min(self.device, self.inode, self.owner, self.mode) < 0:
+        identity = self.object_identity
+        if identity is None:
+            try:
+                identity = PlatformObjectIdentity.from_posix(
+                    kind=FilesystemObjectKind.DIRECTORY,
+                    device=self.device,
+                    inode=self.inode,
+                    owner=self.owner,
+                    mode=self.mode,
+                )
+            except ValueError as error:
+                raise ValidationError(
+                    f"runtime path execution binding {self.name} identity is invalid"
+                ) from error
+        if identity.kind is not FilesystemObjectKind.DIRECTORY:
             raise ValidationError(
-                f"runtime path execution binding {self.name} identity is invalid"
+                f"runtime path execution binding {self.name} must identify a directory"
             )
-        if self.mode > 0o7777:
+        if identity.platform == "posix":
+            legacy = (self.device, self.inode, self.owner, self.mode)
+            native = (identity.device, identity.inode, identity.owner, identity.mode)
+            if legacy != native:
+                raise ValidationError(
+                    f"runtime path execution binding {self.name} POSIX identity drifted"
+                )
+        elif (self.device, self.inode, self.owner, self.mode) != (0, 0, 0, 0):
             raise ValidationError(
-                f"runtime path execution binding {self.name} mode is invalid"
+                f"runtime path execution binding {self.name} mixes native identities"
             )
 
-    def to_dict(self) -> dict[str, str | int]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the path binding."""
 
-        return {
+        payload: dict[str, Any] = {
             "name": self.name,
             "path": self.path,
             "anchor_path": self.anchor_path,
@@ -490,10 +516,24 @@ class RuntimePathExecutionBinding:
             "owner": self.owner,
             "mode": self.mode,
         }
+        if self.object_identity is not None:
+            payload["object_identity"] = self.object_identity.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> RuntimePathExecutionBinding:
         """Parse a path binding."""
+
+        raw_identity = data.get("object_identity")
+        try:
+            if "object_identity" not in data:
+                identity = None
+            elif isinstance(raw_identity, Mapping):
+                identity = PlatformObjectIdentity.from_dict(raw_identity)
+            else:
+                raise TypeError("runtime path object identity is not an object")
+        except (TypeError, ValueError) as error:
+            raise ValidationError("runtime path object identity is invalid") from error
 
         return cls(
             name=str(data["name"]),
@@ -503,7 +543,30 @@ class RuntimePathExecutionBinding:
             inode=int(data.get("inode", -1)),
             owner=int(data.get("owner", -1)),
             mode=int(data.get("mode", -1)),
+            object_identity=identity,
         )
+
+    def _identity(self) -> PlatformObjectIdentity:
+        """Return an explicit native identity or a legacy exact POSIX view."""
+
+        if self.object_identity is not None:
+            return self.object_identity
+        try:
+            return PlatformObjectIdentity.from_posix(
+                kind=FilesystemObjectKind.DIRECTORY,
+                device=self.device,
+                inode=self.inode,
+                owner=self.owner,
+                mode=self.mode,
+            )
+        except ValueError as error:  # pragma: no cover - guarded in __post_init__.
+            raise ValidationError("runtime path object identity is invalid") from error
+
+    @property
+    def platform_identity(self) -> PlatformObjectIdentity:
+        """Return the exact native identity, including legacy POSIX bindings."""
+
+        return self._identity()
 
 
 @dataclass(frozen=True, slots=True)
@@ -590,7 +653,7 @@ class RuntimeExecutionBinding:
                 "runtime path identities must exactly cover selected writable roots"
             )
         writable_identities = [
-            (item.device, item.inode)
+            item._identity().object_key
             for item in runtime_paths
             if item.name in {"audit.parent", "artifact.root", "result.parent"}
         ]

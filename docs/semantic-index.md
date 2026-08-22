@@ -27,7 +27,7 @@ Use this generated index as the first discovery hop after loading minimum author
 | `windows-capsules` — Windows AppContainer capsule isolation | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows capsule isolation`, `windows.capsule isolation`, `windows appcontainer capsule isolation` |
 | `windows-certification` — Windows hosted certification | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows certification`, `windows.certification`, `windows hosted certification` |
 | `windows-credentials` — Windows Credential Manager and DPAPI | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows credentials`, `windows.credentials`, `windows credential manager and dpapi` |
-| `windows-filesystem` — Windows filesystem identity and ACL backend | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows filesystem`, `windows.filesystem`, `windows filesystem identity and acl backend` |
+| `windows-filesystem` — Windows filesystem identity and ACL backend | released | `master-agent` | [`specs/current/runtime/MA-WINDOWS-FILESYSTEM-001.md`](../specs/current/runtime/MA-WINDOWS-FILESYSTEM-001.md), [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | [`src/master_agent/platform_runtime/windows/native.py`](../src/master_agent/platform_runtime/windows/native.py), [`src/master_agent/platform_runtime/windows/filesystem.py`](../src/master_agent/platform_runtime/windows/filesystem.py), [`src/master_agent/platform_runtime/windows/locking.py`](../src/master_agent/platform_runtime/windows/locking.py), [`src/master_agent/platform_runtime/windows/runtime.py`](../src/master_agent/platform_runtime/windows/runtime.py) | [`tests/test_windows_platform_runtime.py`](../tests/test_windows_platform_runtime.py) | `packaging-release`, `platform-runtime` | `windows filesystem`, `windows.filesystem`, `windows filesystem identity and acl backend` |
 | `windows-git` — Windows native Git isolation | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows git isolation`, `windows.git isolation`, `windows native git isolation` |
 | `windows-process` — Windows Job Object process supervision | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows process supervision`, `windows.process supervision`, `windows job object process supervision` |
 
@@ -45,9 +45,9 @@ The parent owns the complete registry. Each child receives only its parent, scop
 
 ## Exact ownership coverage
 
-- `production_modules`: 112 exact entries
-- `tests`: 85 exact entries
-- `current_requirements`: 21 exact entries
+- `production_modules`: 116 exact entries
+- `tests`: 86 exact entries
+- `current_requirements`: 22 exact entries
 - `configurations`: 31 exact entries
 - `cli_commands`: 34 exact entries
 - `capabilities`: 82 exact entries

@@ -270,7 +270,12 @@ class ReleaseMetadataTests(unittest.TestCase):
         job = workflow[start:end]
 
         for required in (
-            "runs-on: windows-latest",
+            "runs-on: windows-11-arm",
+            "architecture: arm64",
+            "New-LocalUser",
+            "Add-LocalGroupMember -SID $usersSid -Member $user",
+            "Start-Job",
+            "native Windows tests received an administrator token",
             "import master_agent; import master_agent.cli; import master_agent.readiness",
             "--help",
             "--version",
@@ -278,7 +283,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             "--require-level install",
             "--require-level draft",
             "--require-level effect",
-            "windows-unavailable",
+            "tests.test_windows_platform_runtime",
+            "windows-native-partial",
+            "windows-handle-acl-filesystem",
+            "windows-lockfileex",
             "secure_filesystem",
             "capsule_isolation",
         ):

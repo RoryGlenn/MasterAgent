@@ -78,7 +78,7 @@ REQUIRED_PLATFORM_CAPABILITIES: Final = (
     "windows.capsule_isolation",
     "windows.certification",
 )
-REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = (
+REQUIRED_WINDOWS_PLATFORM_CAPABILITIES: Final = (
     "windows.filesystem",
     "windows.atomic_state_retention",
     "windows.credentials",
@@ -86,6 +86,11 @@ REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = (
     "windows.git_isolation",
     "windows.capsule_isolation",
     "windows.certification",
+)
+REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
+    capability
+    for capability in REQUIRED_WINDOWS_PLATFORM_CAPABILITIES
+    if capability != "windows.filesystem"
 )
 REQUIRED_AGENT_PROFILES: Final = {
     "master-agent": ("profile", ".github/agents/MasterAgent.agent.md"),
@@ -1320,6 +1325,7 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
         "governed_applied_run": "src/master_agent/orchestrator.py",
         "advisory_sdk": "scripts/advisory_subagent.py",
         "specification_lifecycle": "scripts/specs.py",
+        "windows.filesystem": ("src/master_agent/platform_runtime/windows/runtime.py"),
     }
     shipped_owner_ids: list[str] = []
     for capability, implementation_path in shipped_platform_contracts.items():
@@ -1343,18 +1349,22 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
     if len(set(shipped_owner_ids)) != len(shipped_platform_contracts):
         errors.append("released platform capabilities must have distinct route owners")
     windows_owners: list[str] = []
-    for capability in REQUIRED_PLANNED_PLATFORM_CAPABILITIES:
+    for capability in REQUIRED_WINDOWS_PLATFORM_CAPABILITIES:
         platform_owner_id = ownership["platform_capabilities"].get(capability)
         if platform_owner_id is None:
             continue
         windows_owners.append(platform_owner_id)
+    for capability in REQUIRED_PLANNED_PLATFORM_CAPABILITIES:
+        platform_owner_id = ownership["platform_capabilities"].get(capability)
+        if platform_owner_id is None:
+            continue
         platform_route = manifest.routes_by_id.get(platform_owner_id)
         if platform_route is not None and platform_route.lifecycle != "planned":
             errors.append(
                 f"platform capability {capability} must remain planned, "
                 f"not {platform_route.lifecycle}"
             )
-    if len(set(windows_owners)) != len(REQUIRED_PLANNED_PLATFORM_CAPABILITIES):
+    if len(set(windows_owners)) != len(REQUIRED_WINDOWS_PLATFORM_CAPABILITIES):
         errors.append("Windows platform capabilities must have distinct route owners")
     return errors
 

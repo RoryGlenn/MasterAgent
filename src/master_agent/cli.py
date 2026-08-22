@@ -127,6 +127,7 @@ from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
     get_cross_process_locking_backend,
+    get_secure_filesystem_backend,
     platform_runtime_status,
     require_persistent_state_platform,
     require_platform_contract,
@@ -6170,6 +6171,26 @@ def _read_operating_private_payload(path: Path, *, label: str) -> bytes:
         selected = Path.cwd() / selected
     if selected.name in {"", ".", ".."}:
         raise ConfigurationError(f"{label} path is invalid")
+    if _uses_native_windows_paths():
+        backend = get_secure_filesystem_backend()
+        reader = getattr(backend, "read_restricted_file", None)
+        if not callable(reader):
+            raise ConfigurationError(f"secure {label} snapshots are unavailable")
+        try:
+            _, payload, _ = reader(
+                selected,
+                MAX_PLAN_BYTES + 1,
+                require_private=True,
+            )
+        except OSError as error:
+            raise ConfigurationError(f"{label} could not be opened safely") from error
+        if not isinstance(payload, bytes):
+            raise ConfigurationError(f"secure {label} snapshot is invalid")
+        if len(payload) > MAX_PLAN_BYTES:
+            raise ValidationError(
+                f"{label} exceeds the {MAX_PLAN_BYTES}-byte file limit"
+            )
+        return payload
     nonblocking = getattr(os, "O_NONBLOCK", 0)
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     if not nonblocking or not no_follow:
@@ -6215,6 +6236,12 @@ def _read_operating_private_payload(path: Path, *, label: str) -> bytes:
         if descriptor >= 0:
             os.close(descriptor)
     return payload
+
+
+def _uses_native_windows_paths() -> bool:
+    """Return whether protected CLI inputs require the Win32 path adapter."""
+
+    return os.name == "nt"
 
 
 def _operating_plan_file_identity(

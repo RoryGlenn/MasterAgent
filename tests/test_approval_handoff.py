@@ -10,7 +10,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent.approval_handoff import load_approval_request
 from master_agent.cli import main
@@ -32,6 +32,38 @@ _BOB_SECRET = "bob-approval-secret-" + "b" * 32
 
 class ApprovalHandoffTests(unittest.TestCase):
     """Exercise the complete missing-approval, sign, and resume user flow."""
+
+    def test_request_loader_uses_native_windows_private_bounded_read(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        request_path = Path("/synthetic/request.json")
+        backend = WindowsSecureFilesystemBackend(_api=Mock())
+        windows_os = Mock()
+        windows_os.name = "nt"
+        with (
+            patch("master_agent.approval_handoff.os", windows_os),
+            patch(
+                "master_agent.approval_handoff.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch.object(
+                backend,
+                "read_restricted_file",
+                return_value=(request_path, b"{", Mock()),
+            ) as read_request,
+            patch("master_agent.approval_handoff.PinnedDirectory.open") as posix_open,
+            self.assertRaisesRegex(ValidationError, "valid UTF-8 JSON"),
+        ):
+            load_approval_request(request_path)
+
+        read_request.assert_called_once_with(
+            request_path,
+            8 * 1024 * 1024,
+            require_private=True,
+        )
+        posix_open.assert_not_called()
 
     @unittest.skipUnless(
         os.name == "posix"

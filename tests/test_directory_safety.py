@@ -9,7 +9,9 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
+from master_agent import directory_safety
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 
@@ -18,6 +20,45 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PinnedDirectoryTests(unittest.TestCase):
     """Exercise identity, replacement, and descriptor-lifetime boundaries."""
+
+    def test_windows_native_open_and_child_errors_are_bounded(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.pin_directory.side_effect = OSError("native open failure")
+        with (
+            patch.object(
+                directory_safety,
+                "get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "runtime directory could not be opened safely",
+            ),
+        ):
+            directory_safety._WindowsPinnedDirectory.open_native(
+                Path(r"C:\MasterAgent\state"),
+                expected_identity=None,
+                require_private=True,
+            )
+
+        native = Mock()
+        duplicate = Mock()
+        native.duplicate.return_value = duplicate
+        duplicate.pin_child.side_effect = OSError("native child failure")
+        pinned = directory_safety._WindowsPinnedDirectory(
+            native,
+            require_private=True,
+        )
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "runtime child directory could not be opened safely",
+        ):
+            pinned.pin_child("child")
+        duplicate.close.assert_called_once_with()
 
     def test_identity_and_duplicate_remain_valid_after_original_closes(self) -> None:
         with TemporaryDirectory() as directory:

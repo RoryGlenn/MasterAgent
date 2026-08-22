@@ -9,15 +9,49 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent import sqlite_safety
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import (
+    PlatformCapabilityUnavailable,
+    PlatformContract,
+)
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 
 
 class SQLiteSafetyTests(unittest.TestCase):
     """Exercise descriptor, hardlink, and transaction failure boundaries."""
+
+    def test_path_probe_requires_atomic_state_before_touching_path(self) -> None:
+        path = Mock(spec=Path)
+        observed: list[PlatformContract] = []
+
+        def require(contract: PlatformContract) -> None:
+            observed.append(contract)
+            if contract is PlatformContract.ATOMIC_PUBLICATION_RECOVERY:
+                raise PlatformCapabilityUnavailable(
+                    "native windows atomic_publication_recovery backend "
+                    "is not implemented"
+                )
+
+        with (
+            patch(
+                "master_agent.sqlite_safety.require_platform_contract",
+                side_effect=require,
+            ),
+            self.assertRaises(PlatformCapabilityUnavailable),
+        ):
+            sqlite_safety.path_entry_exists(path)
+
+        self.assertEqual(
+            observed,
+            [
+                PlatformContract.SECURE_FILESYSTEM,
+                PlatformContract.ATOMIC_PUBLICATION_RECOVERY,
+            ],
+        )
+        path.lstat.assert_not_called()
 
     def test_keyboard_interrupt_is_rolled_back_before_a_later_commit(self) -> None:
         with TemporaryDirectory() as directory:

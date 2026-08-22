@@ -6,7 +6,7 @@ import hashlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent.config_sources import (
     ConfigSnapshot,
@@ -115,6 +115,37 @@ class PackagedConfigSnapshotTests(unittest.TestCase):
                 "packaged default configuration exceeds the 4 MiB limit",
             ):
                 _resolve_packaged(default_root, "policy.toml")
+
+    def test_windows_missing_explicit_configuration_is_bounded(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.read_restricted_file.side_effect = FileNotFoundError("missing")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        selected = Path("/missing/policy.toml")
+
+        with (
+            patch("master_agent.config_sources.os", windows_os),
+            patch(
+                "master_agent.config_sources.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch("master_agent.config_sources.require_platform_contract"),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "explicit configuration not found",
+            ),
+        ):
+            resolve_config_source(selected, "policy.toml")
+
+        backend.read_restricted_file.assert_called_once_with(
+            selected,
+            _MAX_CONFIG_BYTES,
+            require_private=False,
+        )
 
 
 def _resolve_packaged(root: Path, filename: str) -> ConfigSnapshot:
