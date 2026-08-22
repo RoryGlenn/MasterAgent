@@ -216,15 +216,22 @@ Controls:
 - explicit native sources remove same-name ambient values using Windows
   case-insensitive comparison and diagnose names only, while duplicate implicit
   sources and case variants fail closed;
+- Windows supervised commands use an explicit executable and argument vector,
+  create the root process suspended, admit only selected inheritable handles,
+  assign a kill-on-close Job Object before resume, and apply process CPU-time,
+  process/job memory, and active-process limits across descendants. The child
+  starts from a Windows-directory baseline instead of caller environment,
+  stdout and stderr share one retention budget, and timeouts terminate the
+  complete job;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows native filesystem/locking/atomic-state/credential-storage and existing
-  POSIX behavior receive separate regression coverage, while the remaining Windows backend
-  routes remain planned.
+- Windows native filesystem, locking, atomic-state, credential-storage, process
+  supervision, and existing POSIX behavior receive separate regression
+  coverage, while the remaining Windows backend routes remain planned.
 
 ### Excessive permissions
 
@@ -639,9 +646,10 @@ Controls:
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
 - the native Windows filesystem/locking/atomic-state tranche is not full
-  runtime certification: operations still remain unavailable where process,
-  Git, capsule isolation, credential-broker, or certification contracts are
-  absent. Expiration quarantine intentionally retains orphaned bytes until an
+  runtime certification even with credential storage and process supervision:
+  operations still remain unavailable where Git, capsule isolation,
+  credential-broker, or certification contracts are absent. Expiration
+  quarantine intentionally retains orphaned bytes until an
   operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;

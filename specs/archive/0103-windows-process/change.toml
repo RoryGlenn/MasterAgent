@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0103-windows-process"
+title = "Native Windows Job Object process supervision"
+status = "archived"
+github_issue = 103
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WINDOWS-PROCESS-001"
+destination = "runtime/MA-WINDOWS-PROCESS-001.md"
+source = "current/MA-WINDOWS-PROCESS-001.md"

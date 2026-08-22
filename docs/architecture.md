@@ -134,9 +134,12 @@ backend is certified. Native Windows selects `windows-native-partial` with
 `windows-handle-acl-filesystem`, `windows-lockfileex`, and
 `windows-handle-atomic-state`. Its
 `windows-credential-manager-current-user-dpapi` service provides exact Generic
-Credential Manager entries and current-user DPAPI documents; process
-supervision, trusted Git, and capsule isolation retain bounded unavailable
-entries. A non-Windows host that
+Credential Manager entries and current-user DPAPI documents. Its
+`windows-job-object` process backend launches explicit executables suspended,
+assigns bounded CPU, memory, process-count, and kill-on-close limits before
+resuming, inherits only selected handles and a minimal environment, and shares
+one output budget across stdout and stderr. Trusted Git and capsule isolation
+retain bounded unavailable entries. A non-Windows host that
 explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
@@ -179,8 +182,8 @@ Credential Manager stores one bounded UTF-8 value per declared name beneath a
 reviewed `MasterAgent/` namespace. Connector configuration binds the non-secret
 provider and target, while values stay in the trusted in-memory credential
 snapshot. The common platform, native Windows filesystem, Windows atomic-state,
-and Windows credential routes are released; the other four Windows
-implementation and hosted-certification routes remain planned.
+Windows credential, and Windows process routes are released; the other three
+Windows implementation and hosted-certification routes remain planned.
 
 ## Repository discovery topology
 
@@ -227,8 +230,9 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-The common platform-runtime, Windows-filesystem, and Windows atomic-state
-routes are released, while the other five Windows routes remain `planned`; a generated index cannot present
+The common platform-runtime, Windows-filesystem, Windows atomic-state, Windows
+credential, and Windows process routes are released, while the other three
+Windows routes remain `planned`; a generated index cannot present
 those native backends or hosted certification as released until their own
 implementation changes advance the manifest under validation.
 

@@ -18,10 +18,14 @@ select current-user Credential Manager or a current-user DPAPI document through
 reviewed, non-secret configuration. DPAPI state contains only a bounded
 ciphertext envelope and uses the atomic backend. Same-name ambient variables
 are reported by name and ignored for that explicit source; ambiguous implicit
-case variants fail closed.
+case variants fail closed. The native `process_supervision` contract is
+available through `windows-job-object`: it runs only a fixed absolute
+executable, starts from a minimal environment, inherits selected handles, and
+applies whole-tree CPU-time, memory, process-count, timeout, and output bounds.
+It is not a shell or general command capability.
 An `execute` plan should proceed only when every contract its route needs is
-available in the report's `platform_runtime` section; process supervision,
-trusted Git, and capsule isolation remain separate fail-closed gates.
+available in the report's `platform_runtime` section; trusted Git and capsule
+isolation remain separate fail-closed gates.
 
 1. Run `master-agent setup` once for the selected profile. This prepares only
    owner-private local paths and does not contact a provider.

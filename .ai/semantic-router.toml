@@ -340,14 +340,14 @@ agent = "master-agent"
 [[routes]]
 id = "windows-process"
 title = "Windows Job Object process supervision"
-lifecycle = "planned"
+lifecycle = "released"
 summary = "Windows Job Object subprocess limits and supervision."
-authority = ["specs/current/runtime/MA-PLATFORM-001.md", "docs/implementation-roadmap.md"]
-implementation = []
+authority = ["specs/current/runtime/MA-WINDOWS-PROCESS-001.md", "specs/current/runtime/MA-PLATFORM-001.md", "docs/implementation-roadmap.md"]
+implementation = ["src/master_agent/platform_runtime/windows/process.py"]
 configuration = []
-tests = []
-release_gates = []
-dependencies = ["platform-runtime"]
+tests = ["tests/test_windows_process.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release", "platform-runtime"]
 aliases = ["windows process supervision", "windows.process supervision", "windows job object process supervision"]
 agent = "master-agent"
 
@@ -487,6 +487,7 @@ agent = "master-agent"
 "src/master_agent/platform_runtime/windows/filesystem.py" = "windows-filesystem"
 "src/master_agent/platform_runtime/windows/locking.py" = "windows-filesystem"
 "src/master_agent/platform_runtime/windows/native.py" = "windows-filesystem"
+"src/master_agent/platform_runtime/windows/process.py" = "windows-process"
 "src/master_agent/platform_runtime/windows/runtime.py" = "windows-filesystem"
 "src/master_agent/platform_runtime/posix/git.py" = "platform-runtime"
 "src/master_agent/platform_runtime/posix/locking.py" = "platform-runtime"
@@ -604,6 +605,7 @@ agent = "master-agent"
 "tests/test_windows_credential_cli.py" = "windows-credentials"
 "tests/test_windows_credentials.py" = "windows-credentials"
 "tests/test_windows_platform_runtime.py" = "windows-filesystem"
+"tests/test_windows_process.py" = "windows-process"
 "tests/test_write_connectors.py" = "governed-applied-run"
 
 [ownership.current_requirements]
@@ -624,6 +626,7 @@ agent = "master-agent"
 "specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md" = "windows-atomic-state"
 "specs/current/runtime/MA-WINDOWS-CREDENTIALS-001.md" = "windows-credentials"
 "specs/current/runtime/MA-WINDOWS-FILESYSTEM-001.md" = "windows-filesystem"
+"specs/current/runtime/MA-WINDOWS-PROCESS-001.md" = "windows-process"
 "specs/current/security/MA-ADVISORY-001.md" = "agent-topology"
 "specs/current/security/MA-ADVISORY-002.md" = "agent-topology"
 "specs/current/security/MA-ADVISORY-003.md" = "agent-topology"
