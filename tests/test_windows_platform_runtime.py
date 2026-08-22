@@ -136,7 +136,7 @@ class _FakeFilesystemApi:
         self.protected_paths: set[str] = set()
         self.created_sddl: list[str] = []
         self.flushed: list[int] = []
-        self.open_calls: list[tuple[str, bool, bool]] = []
+        self.open_calls: list[tuple[str, bool, bool, bool]] = []
         self.closed: set[int] = set()
         self.delete_on_close: set[int] = set()
         self._next_handle = 100
@@ -157,7 +157,14 @@ class _FakeFilesystemApi:
             filesystem_flags=0x8,
         )
 
-    def open_path(self, path: str, *, directory: bool, readable: bool) -> int:
+    def open_path(
+        self,
+        path: str,
+        *,
+        directory: bool,
+        readable: bool,
+        writable: bool = False,
+    ) -> int:
         known = path in self.directories or path in self.content
         if not known:
             raise FileNotFoundError(path)
@@ -165,7 +172,7 @@ class _FakeFilesystemApi:
         self._next_handle += 1
         self._paths[handle] = path
         self._positions[handle] = 0
-        self.open_calls.append((path, directory, readable))
+        self.open_calls.append((path, directory, readable, writable))
         return handle
 
     def close_handle(self, handle: int) -> None:
@@ -667,6 +674,48 @@ assert 'msvcrt' not in sys.modules
         self.assertEqual(api.write_file(0x1234, b"payload"), 7)
         self.assertEqual(calls, [(0x1234, b"payload", 7, None)])
 
+    def test_native_flushable_directory_open_requests_write_data(self) -> None:
+        desired_access: list[int] = []
+
+        def create_file(
+            _path: str,
+            access: int,
+            _share: int,
+            _security: object | None,
+            _creation: int,
+            _flags: int,
+            _template: object | None,
+        ) -> int:
+            desired_access.append(access)
+            return 0x1234
+
+        api = object.__new__(NativeWindowsApi)
+        api._kernel32 = SimpleNamespace(
+            CreateFileW=create_file,
+            GetFileType=lambda _handle: windows_native._FILE_TYPE_DISK,
+            SetHandleInformation=lambda *_args: 1,
+            CloseHandle=lambda _handle: 1,
+        )
+        self.assertEqual(
+            api.open_path(
+                r"C:\Secure",
+                directory=True,
+                readable=False,
+                writable=True,
+            ),
+            0x1234,
+        )
+        self.assertEqual(
+            api.open_path(
+                r"C:\Secure",
+                directory=True,
+                readable=False,
+            ),
+            0x1234,
+        )
+        self.assertNotEqual(desired_access[0] & windows_native._FILE_WRITE_DATA, 0)
+        self.assertEqual(desired_access[1] & windows_native._FILE_WRITE_DATA, 0)
+
     def test_native_directory_flush_uses_the_retained_file_object(self) -> None:
         calls: list[int] = []
 
@@ -1113,11 +1162,12 @@ class WindowsPinnedPathTests(unittest.TestCase):
         self.assertEqual(
             api.open_calls[:3],
             [
-                ("C:\\", True, False),
-                ("C:\\Secure", True, False),
-                ("C:\\Secure\\note.txt", False, True),
+                ("C:\\", True, False, False),
+                ("C:\\Secure", True, False, False),
+                ("C:\\Secure\\note.txt", False, True, False),
             ],
         )
+        self.assertIn(("C:\\Secure", True, False, True), api.open_calls)
 
     def test_windows_ordinal_names_preserve_sharp_s_and_ss_as_distinct(self) -> None:
         api = _FakeFilesystemApi()

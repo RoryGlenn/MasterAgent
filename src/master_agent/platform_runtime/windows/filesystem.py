@@ -372,6 +372,7 @@ class _WindowsFilesystemApi(Protocol):
         *,
         directory: bool,
         readable: bool,
+        writable: bool = False,
     ) -> int: ...
 
     def close_handle(self, handle: int) -> None: ...
@@ -937,6 +938,10 @@ class PinnedWindowsPath:
                         child_path.canonical,
                         directory=selected_kind is WindowsObjectKind.DIRECTORY,
                         readable=selected_kind is WindowsObjectKind.FILE,
+                        writable=(
+                            selected_kind is WindowsObjectKind.DIRECTORY
+                            and require_private
+                        ),
                     ),
                 )
                 duplicated.append(child)
@@ -1853,7 +1858,16 @@ class WindowsSecureFilesystemBackend:
             )
             root_handle = WindowsHandle(
                 api,
-                api.open_path(selected.root, directory=True, readable=False),
+                api.open_path(
+                    selected.root,
+                    directory=True,
+                    readable=False,
+                    writable=(
+                        target_is_directory
+                        and require_private
+                        and not selected.components
+                    ),
+                ),
             )
             handles.append(root_handle)
             root_snapshot, root_identity = _admit_open_handle(
@@ -1910,6 +1924,9 @@ class WindowsSecureFilesystemBackend:
                         prefixes[index],
                         directory=expected_directory,
                         readable=is_target and not target_is_directory,
+                        writable=(
+                            is_target and target_is_directory and require_private
+                        ),
                     ),
                 )
                 handles.append(child)

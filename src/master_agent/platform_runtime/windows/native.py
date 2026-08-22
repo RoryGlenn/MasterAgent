@@ -324,6 +324,7 @@ class NativeWindowsApi:
         *,
         directory: bool,
         readable: bool,
+        writable: bool = False,
     ) -> int:
         """Open a path without following its final reparse point or sharing delete."""
 
@@ -331,6 +332,8 @@ class NativeWindowsApi:
         desired_access = (
             _GENERIC_READ if readable else _READ_CONTROL | _FILE_READ_ATTRIBUTES
         )
+        if writable:
+            desired_access |= _FILE_WRITE_DATA
         if directory:
             desired_access |= _FILE_TRAVERSE
         raw_handle = self._kernel32.CreateFileW(

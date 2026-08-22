@@ -100,8 +100,15 @@ class _AtomicFilesystemApi:
             raise AssertionError(root)
         return NativeWindowsVolume(3, 0x123, "NTFS", 255, 0x8)
 
-    def open_path(self, path: str, *, directory: bool, readable: bool) -> int:
-        del readable
+    def open_path(
+        self,
+        path: str,
+        *,
+        directory: bool,
+        readable: bool,
+        writable: bool = False,
+    ) -> int:
+        del readable, writable
         selected = self._objects[self._lookup(path)]
         if selected.is_directory != directory:
             if selected.is_directory:
