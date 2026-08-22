@@ -33,6 +33,7 @@ checks; this does not relax publication rules for other output paths.
 | `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector, target, credential, path, or gate arguments |
 | `run` | Evaluate a plan or execute an approved, manifest-bound plan | No provider side effect without `--apply`; live apply is governed by every catalog, policy, approval, connector, and runtime gate |
 | `plugins` | Inventory connector entry-point metadata without importing plugin code | Optional local JSON output; never executes plugin code |
+| `capability-import` | Inspect a versioned declarative custom-agent export and classify its abilities against the typed catalog | Read-only local inspection; optional restricted JSON preview; never executes imported source or changes the catalog |
 | `readiness` | Validate governance, configuration, OAuth, permissions, implemented production adapters, and optional provider/classification egress readiness | Offline; optional local JSON output; `--egress-check` performs no network request |
 | `oauth-device-code` | Run an enabled Microsoft delegated device-code flow | Performs Microsoft authentication requests and writes a mode-`0600` token file |
 | `draft-package` | Generate the Phase 3 review package | Local create-only artifacts and audit state; no provider access |

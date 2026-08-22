@@ -13,7 +13,7 @@
 | OneNote | Microsoft Graph Cloud-only (`deployment = "cloud"`); delegated | notebooks, sections, pages, page content | HTML/proposal | disabled pending exact DOM proof | read content is re-read; no write connector is registered | disabled |
 | PowerPoint | local `python-pptx` | — | `.pptx` generation | publishing disabled with SharePoint replacement | local file digest | available locally |
 | Git workspace | local Git identity | repository preconditions | branch and patch plan | disabled until every metadata transaction is descriptor-bound | no live mutation connector is registered | unavailable |
-| Capability capsule | signed immutable local capsule | dependency-free pure reads | dependency-free deterministic local generation | provider/side-effect capsules blocked | deterministic sandbox replay; signed receipt; no compensation for pure output | test/local promotion only |
+| Custom-agent import / capability capsule | read-only declarative export; signed immutable local capsule after explicit selection | compatibility preview; promoted dependency-free pure reads | compatibility preview; promoted dependency-free deterministic local generation | provider/side-effect capsules, raw agents, and recursive imports blocked | exact source digest; independent promotion; deterministic sandbox replay; signed receipt; no compensation for pure output | preview and test/local promotion only |
 | Connector plugin | metadata-only entry-point inventory | — | — | disabled | raw entry points are not capsule-compatible; dependent worker filesystem remains future work | never executed |
 
 ## Hard exclusions
@@ -26,6 +26,8 @@
 - No arbitrary shell capability exists.
 - No provider/network, side-effect, or third-party-dependent capsule is
   executable through the demonstrated pure worker.
+- No custom-agent preview executes imported source or transfers credentials,
+  identity, approval, trust, hooks, plugins, background access, or recursion.
 - Generated code cannot approve, review, publish, or enable itself.
 - No force push or protected-branch write exists.
 - No standalone destructive Git worktree restore exists.

@@ -77,6 +77,12 @@ contract, separately reviewed, signed, and promoted. Any provider access,
 side effect, or third-party runtime dependency still fails before connector
 construction. See [`capability-capsules.md`](capability-capsules.md).
 
+The declarative custom-agent import format is another input to that same
+quarantine boundary, not a plugin loader. Its preview can describe one embedded
+pure capsule and its dependencies, but it rejects raw plugin entry points,
+hooks, networks, recursive agents, and inherited authority. It therefore does
+not convert an installed connector distribution automatically.
+
 ## Required governance work
 
 Before a provider or dependent plugin capability can run:

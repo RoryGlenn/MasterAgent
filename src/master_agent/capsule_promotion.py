@@ -118,6 +118,42 @@ class CapabilityPromotionService:
             now=now,
         )
         self._store.install(bundle, quarantined, trust=self._trust)
+        return self.promote_quarantined(bundle, quarantined, now=now)
+
+    def promote_quarantined(
+        self,
+        bundle: CapsuleBundle,
+        quarantined: CapsuleManifest,
+        *,
+        now: datetime | None = None,
+    ) -> PromotionResult:
+        """Promote an exact already-installed quarantine through every gate."""
+
+        if quarantined.state is not CapsuleState.QUARANTINED:
+            raise ConfigurationError(
+                "existing capsule promotion must start from quarantine"
+            )
+        if self._authorities[CapsuleRole.PUBLISHER].subject != bundle.spec.publisher:
+            raise ConfigurationError(
+                "capsule publisher identity differs from its authority"
+            )
+        installed = self._store.load_bundle(
+            quarantined.spec.capability_id,
+            quarantined.spec.version,
+        )
+        if installed != bundle:
+            raise ConfigurationError(
+                "installed quarantined capsule differs from the selected bundle"
+            )
+        chain = self._store.manifests(
+            quarantined.spec.capability_id,
+            quarantined.spec.version,
+            trust=self._trust,
+        )
+        if not chain or chain[-1] != quarantined:
+            raise ConfigurationError(
+                "selected quarantine is not the latest installed capsule state"
+            )
         evidence = self._validator.validate(bundle)
         tested = advance_manifest(
             quarantined,
@@ -175,6 +211,24 @@ class CapabilityPromotionService:
             validation=evidence,
         )
 
+    def disable(
+        self,
+        manifest: CapsuleManifest,
+        *,
+        now: datetime | None = None,
+    ) -> CapsuleManifest:
+        """Disable an enabled capsule by appending signed deprecation."""
+
+        disabled = advance_manifest(
+            manifest,
+            CapsuleState.DEPRECATED,
+            authority=self._authorities[CapsuleRole.PUBLISHER],
+            trust=self._trust,
+            now=now,
+        )
+        self._store.append_manifest(disabled, trust=self._trust)
+        return disabled
+
     def revoke(
         self,
         manifest: CapsuleManifest,
@@ -192,3 +246,13 @@ class CapabilityPromotionService:
         )
         self._store.append_manifest(revoked, trust=self._trust)
         return revoked
+
+    def remove(
+        self,
+        manifest: CapsuleManifest,
+        *,
+        now: datetime | None = None,
+    ) -> CapsuleManifest:
+        """Remove future routing by revocation while retaining immutable history."""
+
+        return self.revoke(manifest, now=now)
