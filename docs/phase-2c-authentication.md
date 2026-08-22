@@ -9,6 +9,7 @@
 - token expiry/scope/claim inspection;
 - capability-governance coverage reports;
 - connector configuration diagnostics that expose variable names, not values;
+- offline provider/classification model-context egress readiness checks;
 - explicit read-only live probes.
 
 This phase governs capabilities that require authentication. A capability
@@ -22,6 +23,11 @@ forward a credential; `github.public_repository.list` and
 mkdir -p "$HOME/.master-agent/MasterAgent"
 chmod 700 "$HOME/.master-agent" "$HOME/.master-agent/MasterAgent"
 master-agent readiness \
+  --integrations /trusted/config/integrations.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --egress-check jira:internal \
   --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
@@ -29,6 +35,13 @@ Readiness performs no network calls. A safe unconnected installation may be
 `ready=true` while warning that available connectors are inactive until their
 credentials are supplied. The human-readable CLI output makes that state
 explicit as `live connectors: 5 available, 0 credential-ready`.
+
+That permissive credential warning applies to ordinary readiness. A selected
+`--egress-check PROVIDER:CLASSIFICATION` still makes no network call, but it
+fails unless the selected connector is present and enabled, required credential
+names are available, its principal-attestation and feature gates are usable,
+and the current destination, model tenancy, classification, audit sink, and DLP
+availability permit at least one ephemeral or audited route.
 
 ## Device code
 
@@ -60,4 +73,7 @@ use of an authenticated capability, administrators must review:
 - token lifetime and storage;
 - Atlassian authentication type;
 - internal CA roots and proxy requirements;
+- model destination and tenancy;
+- source-data environment and explicit provider-data classifications;
+- route-specific audit and DLP availability;
 - audit and retention obligations.

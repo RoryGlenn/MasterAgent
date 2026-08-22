@@ -9,6 +9,61 @@ security_owner = "unassigned"
 retention_owner = "unassigned"
 production_approved = false
 
+[model_context]
+destination = "local-operator-or-approved-agent"
+model_tenancy = "nonproduction-development"
+source_data_environment = "nonproduction"
+dlp_adapter = "none"
+development_default_classification = "internal"
+
+[[model_context.rules]]
+name = "approved-low-sensitivity"
+providers = ["*"]
+capabilities = ["*"]
+data_classifications = ["public", "internal"]
+destinations = ["local-operator-or-approved-agent"]
+model_tenancies = ["nonproduction-development"]
+routes = ["ephemeral", "audited"]
+handling = "allow"
+audit_required = false
+dlp_required = false
+redacted_fields = []
+allowed_fields = ["*"]
+max_items = 1000
+max_output_bytes = 4194304
+
+[[model_context.rules]]
+name = "deny-confidential-by-default"
+providers = ["*"]
+capabilities = ["*"]
+data_classifications = ["confidential"]
+destinations = ["local-operator-or-approved-agent"]
+model_tenancies = ["nonproduction-development"]
+routes = ["ephemeral", "audited"]
+handling = "deny"
+audit_required = false
+dlp_required = false
+redacted_fields = []
+allowed_fields = ["*"]
+max_items = 100
+max_output_bytes = 1048576
+
+[[model_context.rules]]
+name = "deny-restricted-by-default"
+providers = ["*"]
+capabilities = ["*"]
+data_classifications = ["restricted"]
+destinations = ["local-operator-or-approved-agent"]
+model_tenancies = ["nonproduction-development"]
+routes = ["ephemeral", "audited"]
+handling = "deny"
+audit_required = false
+dlp_required = false
+redacted_fields = []
+allowed_fields = ["*"]
+max_items = 100
+max_output_bytes = 1048576
+
 [[rules]]
 pattern = "*.read"
 owner = "platform-owner"

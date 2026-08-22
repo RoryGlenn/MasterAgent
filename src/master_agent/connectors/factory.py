@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import ConnectorConfig, IntegrationConfig
@@ -78,6 +79,7 @@ def build_live_connectors(
     artifact_root: Path | None = None,
     artifact_directory: PinnedDirectory | None = None,
     approved_execution_context: ExecutionContext | None = None,
+    captured_executions: tuple[CapturedConnectorExecution, ...] | None = None,
 ) -> tuple[Connector, ...]:
     """Construct available live connectors selected for this operation.
 
@@ -109,6 +111,9 @@ def build_live_connectors(
     approved_execution_context
         Optional plan-bound live identity. When supplied, every captured
         connector destination and CA snapshot must match it exactly.
+    captured_executions
+        Optional already-attested immutable targets. Probe routes use these to
+        construct clients from the same endpoint and CA snapshot they bind.
 
     Returns
     -------
@@ -119,20 +124,36 @@ def build_live_connectors(
     source = dict(environ if environ is not None else os.environ)
     selected = set(_READ_SYSTEMS) | {"repository"} if systems is None else set(systems)
     connectors: list[Connector] = []
-    captured = capture_connector_executions(
-        config,
-        environ=source,
-        systems=selected,
-        require_trusted_principal=approved_execution_context is not None,
-        principal_transport=transport,
-    )
+    if captured_executions is None:
+        captured = capture_connector_executions(
+            config,
+            environ=source,
+            systems=selected,
+            require_trusted_principal=approved_execution_context is not None,
+            principal_transport=transport,
+        )
+    else:
+        captured = tuple(captured_executions)
+        _verify_supplied_captured_executions(config, captured, selected)
     if approved_execution_context is not None:
         _verify_approved_execution_context(
             config,
             captured,
             approved_execution_context,
         )
-    targets = {item.binding.system: item.target for item in captured}
+    missing_resolved = sorted(
+        item.binding.system for item in captured if item.resolved is None
+    )
+    if missing_resolved:
+        raise ConfigurationError(
+            "live connector construction requires captured credentials for: "
+            + ", ".join(missing_resolved)
+        )
+    resolved_configs = {
+        item.binding.system: item.resolved
+        for item in captured
+        if item.resolved is not None
+    }
 
     if include_writes:
         for unresolved in config.connectors.values():
@@ -155,11 +176,7 @@ def build_live_connectors(
             continue
         if name not in {"jira", "confluence", "bitbucket", "github", "microsoft"}:
             continue
-        resolved = unresolved.resolve(
-            source,
-            auth_transport=transport,
-            execution_target=targets[unresolved.system],
-        )
+        resolved = resolved_configs[unresolved.system]
 
         if name == "jira" and "jira" in selected:
             connectors.append(JiraConnector(resolved, transport=transport))
@@ -270,6 +287,7 @@ def build_live_registry(
     artifact_root: Path | None = None,
     artifact_directory: PinnedDirectory | None = None,
     approved_execution_context: ExecutionContext | None = None,
+    captured_executions: tuple[CapturedConnectorExecution, ...] | None = None,
 ) -> ConnectorRegistry:
     """Build a registry containing explicitly scoped live connectors."""
 
@@ -285,6 +303,7 @@ def build_live_registry(
         artifact_root=artifact_root,
         artifact_directory=artifact_directory,
         approved_execution_context=approved_execution_context,
+        captured_executions=captured_executions,
     ):
         registry.register(connector)
     return registry
@@ -408,3 +427,88 @@ def _verify_approved_execution_context(
             f"captured connector {system} {detail} differs from the approved "
             "execution context"
         )
+
+
+def _verify_supplied_captured_executions(
+    config: IntegrationConfig,
+    captured: tuple[CapturedConnectorExecution, ...],
+    selected: set[str],
+) -> None:
+    """Require supplied immutable targets to match the selected config exactly."""
+
+    expected = {
+        item.system: item
+        for item in config.connectors.values()
+        if item.enabled and _connector_is_selected(item.system, selected)
+    }
+    observed = {item.binding.system: item for item in captured}
+    if observed.keys() != expected.keys() or len(observed) != len(captured):
+        raise ConfigurationError(
+            "captured connector set differs from selected integration configuration"
+        )
+    for system, item in observed.items():
+        configured = expected[system]
+        target = item.target
+        binding = item.binding
+        resolved = item.resolved
+        ca_bundle = target.ca_bundle
+        if item.config != configured:
+            detail = "configuration"
+        elif target.system != system or target.config_identity != configured.identity:
+            detail = "target identity"
+        elif binding.config_identity_sha256 != target.config_identity:
+            detail = "config identity"
+        elif binding.deployment != str(configured.deployment):
+            detail = "deployment"
+        elif binding.resolved_base_url != target.base_url:
+            detail = "base URL"
+        elif binding.resolved_origin != _captured_origin(target.base_url):
+            detail = "origin"
+        elif binding.authentication_mode != str(configured.auth_mode):
+            detail = "authentication mode"
+        elif resolved is None:
+            detail = "resolved credentials"
+        elif resolved.system != system or resolved.base_url != target.base_url:
+            detail = "resolved target"
+        elif str(resolved.auth.mode) != binding.authentication_mode:
+            detail = "resolved authentication mode"
+        elif resolved.config_identity != binding.config_identity_sha256:
+            detail = "resolved config identity"
+        elif (str(resolved.ca_bundle) if resolved.ca_bundle is not None else None) != (
+            str(ca_bundle.path) if ca_bundle is not None else None
+        ):
+            detail = "resolved CA path"
+        elif resolved.ca_bundle_sha256 != (
+            ca_bundle.sha256 if ca_bundle is not None else None
+        ):
+            detail = "resolved CA digest"
+        elif binding.ca_bundle_path != (
+            str(ca_bundle.path) if ca_bundle is not None else None
+        ):
+            detail = "CA path"
+        elif binding.ca_bundle_sha256 != (
+            ca_bundle.sha256 if ca_bundle is not None else None
+        ):
+            detail = "CA digest"
+        else:
+            continue
+        raise ConfigurationError(
+            f"captured connector {system} {detail} differs from its immutable target"
+        )
+
+
+def _captured_origin(base_url: str) -> str:
+    """Return the normalized origin represented by a captured base URL."""
+
+    parsed = urlsplit(base_url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError(
+            "captured connector has an invalid base URL"
+        ) from error
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None and not (parsed.scheme.lower() == "https" and port == 443):
+        rendered_host = f"{rendered_host}:{port}"
+    return f"{parsed.scheme.lower()}://{rendered_host}"

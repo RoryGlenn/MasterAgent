@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from master_agent.audit import AuditLog, IdempotencyClaimState
+from master_agent.audit import AuditLog, IdempotencyClaimState, implemented_audit_sink
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.connectors.base import (
@@ -18,9 +18,11 @@ from master_agent.connectors.base import (
     IdempotencyRecordingConnector,
     IdempotencyVerifyingConnector,
 )
+from master_agent.connectors.mock import MockConnector
 from master_agent.errors import (
     ConfigurationError,
     ConnectorError,
+    MasterAgentError,
     PreEffectError,
     StructuredDataTypeError,
     ValidationError,
@@ -39,10 +41,18 @@ from master_agent.models import (
     Approval,
     ChangePlan,
     CompensationMode,
+    ConnectorExecutionBinding,
     ExecutionResult,
     RiskLevel,
 )
 from master_agent.policy import PolicyEngine
+from master_agent.provider_egress import (
+    ProviderDataEgressBinding,
+    ProviderDataRoute,
+    bind_provider_data_egress,
+    provider_result_audit_summary,
+    sanitize_provider_result,
+)
 from master_agent.registry import ConnectorRegistry
 
 
@@ -56,6 +66,7 @@ class ActionReport:
     message: str
     result: ExecutionResult | None = None
     compensation: ExecutionResult | None = None
+    egress: ProviderDataEgressBinding | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the action report."""
@@ -69,6 +80,7 @@ class ActionReport:
             "compensation": (
                 self.compensation.to_dict() if self.compensation is not None else None
             ),
+            "egress": self.egress.to_dict() if self.egress is not None else None,
         }
 
     @classmethod
@@ -77,10 +89,13 @@ class ActionReport:
 
         result_data = data.get("result")
         compensation_data = data.get("compensation")
+        egress_data = data.get("egress")
         if result_data is not None and not isinstance(result_data, Mapping):
             raise ValueError("action report result must be an object or null")
         if compensation_data is not None and not isinstance(compensation_data, Mapping):
             raise ValueError("action report compensation must be an object or null")
+        if egress_data is not None and not isinstance(egress_data, Mapping):
+            raise ValueError("action report egress must be an object or null")
         return cls(
             action_id=UUID(str(data["action_id"])),
             capability=str(data["capability"]),
@@ -94,6 +109,11 @@ class ActionReport:
             compensation=(
                 ExecutionResult.from_dict(compensation_data)
                 if isinstance(compensation_data, Mapping)
+                else None
+            ),
+            egress=(
+                ProviderDataEgressBinding.from_dict(egress_data)
+                if isinstance(egress_data, Mapping)
                 else None
             ),
         )
@@ -374,6 +394,7 @@ class WorkflowOrchestrator:
             result: ExecutionResult | None = None
             claim_token: str | None = None
             http_budget: HttpActionBudget | None = None
+            egress: ProviderDataEgressBinding | None = None
             try:
                 connector = self._connectors.resolve(
                     action.target.system,
@@ -402,6 +423,41 @@ class WorkflowOrchestrator:
                         dry_run=dry_run,
                     )
                     continue
+                try:
+                    egress = self._provider_data_egress_binding(
+                        plan,
+                        action,
+                        connector,
+                    )
+                except ConfigurationError as error:
+                    report = ActionReport(
+                        action_id=action.action_id,
+                        capability=action.capability,
+                        state=ActionState.PROHIBITED,
+                        message=str(error),
+                    )
+                    reports.append(report)
+                    state_by_id[action.action_id] = report.state
+                    self._record_action(run_id, plan, action, report)
+                    abort_remaining = self._maybe_compensate(
+                        run_id=run_id,
+                        plan=plan,
+                        reports=reports,
+                        executed=side_effects_may_have_occurred,
+                        dry_run=dry_run,
+                    )
+                    continue
+                if egress is not None:
+                    self._audit.record(
+                        run_id=run_id,
+                        plan_id=plan.plan_id,
+                        action_id=action.action_id,
+                        event_type="provider_data_egress_authorized",
+                        payload={
+                            "egress": egress.to_dict(),
+                            "egress_fingerprint": egress.fingerprint,
+                        },
+                    )
                 http_budget = connector_http_action_budget(connector)
                 if _uses_idempotency(action):
                     claim = self._audit.claim_action(
@@ -687,12 +743,51 @@ class WorkflowOrchestrator:
                         result=result,
                     )
                 else:
+                    recheck_error: ConfigurationError | None = None
+                    if egress is not None:
+                        try:
+                            execution_ok, execution_reason = (
+                                self._validate_execution_contract(
+                                    plan,
+                                    action,
+                                    connector,
+                                )
+                            )
+                            if not execution_ok:
+                                raise ConfigurationError(execution_reason)
+                            rechecked = self._provider_data_egress_binding(
+                                plan,
+                                action,
+                                connector,
+                            )
+                            if (
+                                rechecked is None
+                                or rechecked.fingerprint != egress.fingerprint
+                            ):
+                                raise ConfigurationError(
+                                    "provider-data egress binding changed before "
+                                    "result return"
+                                )
+                            result = sanitize_provider_result(result, egress)
+                        except ConfigurationError as error:
+                            recheck_error = error
                     report = ActionReport(
                         action_id=action.action_id,
                         capability=action.capability,
-                        state=ActionState.VERIFIED,
-                        message=verification.message,
-                        result=result,
+                        state=(
+                            ActionState.FAILED
+                            if recheck_error is not None
+                            else ActionState.VERIFIED
+                        ),
+                        message=(
+                            "provider-data egress binding changed before result return"
+                            if recheck_error is not None
+                            else "provider read independently verified"
+                            if egress is not None
+                            else verification.message
+                        ),
+                        result=None if recheck_error is not None else result,
+                        egress=egress,
                     )
                     if _uses_idempotency(action):
                         self._audit.complete_action(
@@ -786,12 +881,12 @@ class WorkflowOrchestrator:
                     result=result,
                 )
             except (
-                ConnectorError,
                 KeyError,
+                MasterAgentError,
                 OSError,
+                OverflowError,
                 RuntimeError,
                 TypeError,
-                ValidationError,
                 ValueError,
             ) as error:  # Connector boundary preserves partial state.
                 outcome_persisted = self._persist_idempotency_outcome(
@@ -821,6 +916,19 @@ class WorkflowOrchestrator:
                     result=result,
                 )
 
+            if egress is not None and report.state is not ActionState.VERIFIED:
+                report = ActionReport(
+                    action_id=report.action_id,
+                    capability=report.capability,
+                    state=report.state,
+                    message=(
+                        "provider read failed after egress authorization: "
+                        f"{report.state}"
+                    ),
+                    result=None,
+                    compensation=None,
+                    egress=egress,
+                )
             reports.append(report)
             state_by_id[action.action_id] = report.state
             self._record_action(run_id, plan, action, report)
@@ -907,13 +1015,43 @@ class WorkflowOrchestrator:
             if context is not None and context.runtime is not None
             else "live"
         )
+        definition = self._capabilities.definition(action.capability)
+        provider_backed = definition.authentication != "local"
+        if (
+            provider_backed
+            and connector_mode == "mock"
+            and type(connector) is not MockConnector
+        ):
+            return False, "mock execution context requires a MockConnector"
+        if (
+            provider_backed
+            and connector_mode == "live"
+            and type(connector) is MockConnector
+        ):
+            return False, "live execution context cannot use a MockConnector"
+        binding = self._execution_connector_binding(plan, action)
+        return self._capabilities.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode=connector_mode,
+        )
+
+    def _execution_connector_binding(
+        self,
+        plan: ChangePlan,
+        action: AgentAction,
+    ) -> ConnectorExecutionBinding | None:
+        """Return the connector identity approved for one action, if present."""
+
+        context = plan.execution_context
         binding_system = (
             "microsoft"
             if action.target.system
             in {"microsoft", "sharepoint", "outlook", "teams", "onenote"}
             else action.target.system
         )
-        binding = next(
+        return next(
             (
                 item
                 for item in (context.connectors if context is not None else ())
@@ -921,10 +1059,51 @@ class WorkflowOrchestrator:
             ),
             None,
         )
-        return self._capabilities.validate_execution(
-            action,
-            connector,
-            binding,
+
+    def _provider_data_egress_binding(
+        self,
+        plan: ChangePlan,
+        action: AgentAction,
+        connector: Connector,
+    ) -> ProviderDataEgressBinding | None:
+        """Bind a provider read independently of capability model-call flags."""
+
+        if action.risk is not RiskLevel.READ_ONLY:
+            return None
+        if self._capabilities is None:
+            if type(connector) is MockConnector:
+                return None
+            raise ConfigurationError(
+                "provider reads require capability and governance policy"
+            )
+        definition = self._capabilities.definition(action.capability)
+        if definition.authentication == "local":
+            return None
+        if self._governance is None:
+            raise ConfigurationError(
+                "provider reads require capability and governance policy"
+            )
+        if self._governance.model_context is None:
+            raise ConfigurationError(
+                "provider reads require configured model-context policy"
+            )
+        connector_mode = (
+            "mock"
+            if type(connector) is MockConnector
+            else "local"
+            if definition.authentication == "local"
+            else "live"
+        )
+        audit_available = (
+            implemented_audit_sink(self._governance.audit_sink) is not None
+        )
+        return bind_provider_data_egress(
+            policy=self._governance.model_context,
+            action=action,
+            definition=definition,
+            connector_binding=self._execution_connector_binding(plan, action),
+            route=ProviderDataRoute.AUDITED,
+            audit_available=audit_available,
             connector_mode=connector_mode,
         )
 
@@ -1113,7 +1292,6 @@ class WorkflowOrchestrator:
     ) -> None:
         payload: dict[str, object] = {
             "capability": action.capability,
-            "target": action.target.uri,
             "risk": action.risk,
             "authority_source": action.authority_source,
             "state": report.state,
@@ -1122,8 +1300,26 @@ class WorkflowOrchestrator:
                 default_code=f"action_{report.state}",
             ),
         }
+        governed_read = bool(
+            action.risk is RiskLevel.READ_ONLY
+            and self._governance is not None
+            and self._governance.model_context is not None
+        )
+        if report.egress is not None or governed_read:
+            payload["target_sha256"] = hashlib.sha256(
+                action.target.uri.encode("utf-8")
+            ).hexdigest()
+        if report.egress is not None:
+            payload["egress"] = report.egress.to_dict()
+            payload["egress_fingerprint"] = report.egress.fingerprint
+        elif not governed_read:
+            payload["target"] = action.target.uri
         if report.result is not None:
-            payload["result"] = result_audit_summary(report.result)
+            payload["result"] = (
+                provider_result_audit_summary(report.result, report.egress)
+                if report.egress is not None
+                else result_audit_summary(report.result)
+            )
         if report.compensation is not None:
             payload["compensation"] = result_audit_summary(report.compensation)
         if extra:

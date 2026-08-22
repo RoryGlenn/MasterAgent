@@ -39,7 +39,10 @@ runs:
 This route evaluates `github.public_repository.list`, calls GitHub's fixed
 public-user repository endpoint, independently re-reads the result, and never
 loads or sends a token. It rejects `--credentials-file` and non-public
-visibility. The agent must not search for a credential or attest an unrelated
+visibility. The trusted classification is `public`; before access, the runtime
+authorizes the active model destination and tenancy, and before return it
+revalidates that binding and emits only a schema-bound sanitized terminal
+result. The shortcut does not persist provider data. The agent must not search for a credential or attest an unrelated
 authenticated GitHub user for this request.
 
 ## Supply a credential for account-visible data
@@ -87,6 +90,9 @@ That command enables GitHub only in memory, verifies the provider-returned
 numeric user identity, evaluates `github.repository.list` through catalog,
 governance, and policy, lists visible repositories, independently re-reads the
 result, and leaves persistent connector settings and credentials unchanged.
+Account-visible repositories are classified `internal` and cross the same
+destination/tenancy, exact-schema, redaction, and byte-limit boundary as the
+anonymous public route.
 
 For a connectivity check without listing repositories, the agent uses:
 
@@ -110,8 +116,9 @@ Other useful requests include:
 - “Read pull request #27 and summarize its status.”
 - “Read PR #27, then check CI for its head commit.”
 
-MasterAgent keeps GitHub disabled in checked-in and packaged configuration. A
-direct GitHub read request authorizes only the minimum ephemeral read path for
+MasterAgent keeps the GitHub connector available but inactive until a command
+selects it; availability alone neither loads credentials nor opens a provider
+connection. A direct GitHub read request authorizes only the minimum ephemeral read path for
 that goal; it does not enable GitHub writes, administration, or persistent
 access. Mutation plans require the runtime, generic, and granular gates plus an
 exact approval; administration requires two distinct approvers.

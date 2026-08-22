@@ -562,3 +562,237 @@ parameter_schema = { recipient_type = "string", recipient_id = "string", body = 
 enabled = true
 authentication = "microsoft_graph_teams"
 risk = "read_only"
+
+# Exact normalized provider envelopes enforced at the model-context boundary.
+# `query` is intentionally omitted from returned context. The shared read-only
+# connector evidence/security/citation envelope is bound by the runtime.
+
+[read_result_contracts."bitbucket.build_status.read"]
+schema = "master-agent/bitbucket-build-status@1"
+resources = { statuses = "object_list", summary = "object" }
+metadata = ["system", "deployment", "commit", "returned", "source_urls"]
+
+[read_result_contracts."bitbucket.instance.read"]
+schema = "master-agent/bitbucket-instance@1"
+resources = { instance = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."bitbucket.public_repository.list"]
+schema = "master-agent/bitbucket-public-repositories@1"
+resources = { repositories = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."bitbucket.pull_request.diffstat"]
+schema = "master-agent/bitbucket-diffstat@1"
+resources = { changes = "object_list", summary = "object" }
+metadata = ["system", "deployment", "pull_request_id", "returned", "source_urls"]
+
+[read_result_contracts."bitbucket.pull_request.read"]
+schema = "master-agent/bitbucket-pull-request@1"
+resources = { pull_request = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."bitbucket.pull_request.search"]
+schema = "master-agent/bitbucket-pull-requests@1"
+resources = { pull_requests = "object_list" }
+metadata = ["system", "deployment", "repository", "returned", "source_urls"]
+
+[read_result_contracts."bitbucket.repository.read"]
+schema = "master-agent/bitbucket-repository@1"
+resources = { repository = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."confluence.page.read"]
+schema = "master-agent/confluence-page@1"
+resources = { page = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."confluence.page.search"]
+schema = "master-agent/confluence-pages@1"
+resources = { pages = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."github.checks.read"]
+schema = "master-agent/github-checks@1"
+resources = { checks = "object_list", head_sha = "value", summary = "object" }
+metadata = ["system", "deployment", "repository", "ref", "returned", "source_urls"]
+
+[read_result_contracts."github.public_repository.list"]
+schema = "master-agent/github-public-repositories@1"
+resources = { repositories = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."github.pull_request.read"]
+schema = "master-agent/github-pull-request@1"
+resources = { pull_request = "object" }
+metadata = ["system", "deployment", "repository", "source_urls"]
+
+[read_result_contracts."github.pull_request.search"]
+schema = "master-agent/github-pull-requests@1"
+resources = { pull_requests = "object_list" }
+metadata = ["system", "deployment", "repository", "returned", "source_urls"]
+
+[read_result_contracts."github.repository.list"]
+schema = "master-agent/github-repositories@1"
+resources = { repositories = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."github.repository.read"]
+schema = "master-agent/github-repository@1"
+resources = { repository = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."identity.identifier.resolve"]
+schema = "master-agent/identity-identifier@1"
+resources = { identifier = "value", person = "object" }
+metadata = ["system", "target_system", "retention", "source_urls"]
+
+[read_result_contracts."identity.person.list"]
+schema = "master-agent/identity-people@1"
+resources = { people = "object_list" }
+metadata = ["system", "returned", "retention", "source_urls"]
+
+[read_result_contracts."identity.person.resolve"]
+schema = "master-agent/identity-person@1"
+resources = { person = "object" }
+metadata = ["system", "retention", "source_urls"]
+
+[read_result_contracts."jira.issue.read"]
+schema = "master-agent/jira-issue@1"
+resources = { issue = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."jira.issue.search"]
+schema = "master-agent/jira-issues@1"
+resources = { issues = "object_list" }
+metadata = ["system", "deployment", "total", "returned", "source_urls"]
+
+[read_result_contracts."jira.server.info"]
+schema = "master-agent/jira-server@1"
+resources = { reachable = "value", base_url = "value", version = "value", deployment_type = "value" }
+metadata = ["deployment"]
+
+[read_result_contracts."microsoft.identity.read"]
+schema = "master-agent/microsoft-identity@1"
+resources = { identity = "object" }
+metadata = ["system", "retention", "source_urls"]
+
+[read_result_contracts."microsoft.identity.search"]
+schema = "master-agent/microsoft-identities@1"
+resources = { users = "object_list" }
+metadata = ["system", "returned", "retention", "source_urls"]
+
+[read_result_contracts."onenote.notebook.list"]
+schema = "master-agent/onenote-notebooks@1"
+resources = { notebooks = "object_list" }
+metadata = ["system", "identity", "returned", "retention", "source_urls"]
+
+[read_result_contracts."onenote.page.list"]
+schema = "master-agent/onenote-pages@1"
+resources = { pages = "object_list" }
+metadata = ["system", "identity", "returned", "retention", "source_urls"]
+
+[read_result_contracts."onenote.page.read"]
+schema = "master-agent/onenote-page@1"
+resources = { page = "object" }
+metadata = ["system", "identity", "retention", "source_urls"]
+
+[read_result_contracts."onenote.section.list"]
+schema = "master-agent/onenote-sections@1"
+resources = { sections = "object_list" }
+metadata = ["system", "identity", "returned", "retention", "source_urls"]
+
+[read_result_contracts."outlook.attachment.list"]
+schema = "master-agent/outlook-attachments@1"
+resources = { attachments = "object_list" }
+metadata = ["system", "identity", "message_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."outlook.attachment.text.read"]
+schema = "master-agent/outlook-text-attachment@1"
+resources = { attachment = "object", content = "value", content_excerpt = "value" }
+metadata = ["system", "identity", "message_id", "retention", "source_urls"]
+
+[read_result_contracts."outlook.mail_folder.list"]
+schema = "master-agent/outlook-mail-folders@1"
+resources = { folders = "object_list" }
+metadata = ["system", "identity", "parent_folder_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."outlook.message.read"]
+schema = "master-agent/outlook-message@1"
+resources = { message = "object" }
+metadata = ["system", "identity", "retention", "source_urls"]
+
+[read_result_contracts."outlook.message.search"]
+schema = "master-agent/outlook-messages@1"
+resources = { messages = "object_list" }
+metadata = ["system", "identity", "folder_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."sharepoint.drive.children"]
+schema = "master-agent/sharepoint-drive-items@1"
+resources = { items = "object_list" }
+metadata = ["system", "drive_id", "parent_item_id", "returned", "source_urls"]
+
+[read_result_contracts."sharepoint.drive.list"]
+schema = "master-agent/sharepoint-drives@1"
+resources = { drives = "object_list" }
+metadata = ["system", "site_id", "returned", "source_urls"]
+
+[read_result_contracts."sharepoint.file.metadata.read"]
+schema = "master-agent/sharepoint-file-metadata@1"
+resources = { file = "object" }
+metadata = ["system", "source_urls"]
+
+[read_result_contracts."sharepoint.file.text.read"]
+schema = "master-agent/sharepoint-text-file@1"
+resources = { file = "object", content = "value", content_excerpt = "value" }
+metadata = ["system", "source_urls"]
+
+[read_result_contracts."sharepoint.site.read"]
+schema = "master-agent/sharepoint-site@1"
+resources = { site = "object" }
+metadata = ["system", "source_urls"]
+
+[read_result_contracts."sharepoint.site.search"]
+schema = "master-agent/sharepoint-sites@1"
+resources = { sites = "object_list" }
+metadata = ["system", "returned", "source_urls"]
+
+[read_result_contracts."teams.channel.list"]
+schema = "master-agent/teams-channels@1"
+resources = { channels = "object_list" }
+metadata = ["system", "team_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."teams.channel.message.list"]
+schema = "master-agent/teams-channel-messages@1"
+resources = { messages = "object_list" }
+metadata = ["system", "team_id", "channel_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."teams.channel.message.read"]
+schema = "master-agent/teams-channel-message@1"
+resources = { message = "object" }
+metadata = ["system", "team_id", "channel_id", "retention", "source_urls"]
+
+[read_result_contracts."teams.channel.message.replies.list"]
+schema = "master-agent/teams-channel-message-replies@1"
+resources = { messages = "object_list" }
+metadata = ["system", "team_id", "channel_id", "parent_message_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."teams.chat.list"]
+schema = "master-agent/teams-chats@1"
+resources = { chats = "object_list" }
+metadata = ["system", "identity", "returned", "members_may_be_truncated", "retention", "source_urls"]
+
+[read_result_contracts."teams.chat.message.list"]
+schema = "master-agent/teams-chat-messages@1"
+resources = { messages = "object_list" }
+metadata = ["system", "chat_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."teams.chat.message.read"]
+schema = "master-agent/teams-chat-message@1"
+resources = { message = "object" }
+metadata = ["system", "chat_id", "retention", "source_urls"]
+
+[read_result_contracts."teams.team.list"]
+schema = "master-agent/teams-teams@1"
+resources = { teams = "object_list" }
+metadata = ["system", "identity", "returned", "retention", "source_urls"]

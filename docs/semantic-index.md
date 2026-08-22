@@ -47,11 +47,16 @@ The normal execution path is:
    [`canonical.py`](../src/master_agent/canonical.py), and
    [`policy.py`](../src/master_agent/policy.py) decide whether each action is
    catalogued, governed, canonical, enabled, and approved.
-6. [`orchestrator.py`](../src/master_agent/orchestrator.py) orders dependencies,
+6. [`provider_egress.py`](../src/master_agent/provider_egress.py) preauthorizes
+   every provider-read route against the trusted classification, destination,
+   tenancy, output contract, and resource limits before provider content access.
+7. [`orchestrator.py`](../src/master_agent/orchestrator.py) orders dependencies,
    reserves idempotency keys, dispatches through
    [`registry.py`](../src/master_agent/registry.py), verifies results, and
    compensates eligible earlier actions after a failure.
-7. Typed connectors perform the bounded operation. Results flow through
+8. Typed connectors perform the bounded operation. Verified provider reads are
+   rebound and sanitized by `provider_egress.py`; content-free records and any
+   separately authorized retention then flow through
    [`audit.py`](../src/master_agent/audit.py),
    [`evidence.py`](../src/master_agent/evidence.py),
    [`retention.py`](../src/master_agent/retention.py), and
@@ -81,6 +86,7 @@ registry, policy, and orchestrator path above.
 | Change the private approval request, signing handoff, or exact-run resume flow | [`approval_handoff.py`](../src/master_agent/approval_handoff.py), [`cli.py`](../src/master_agent/cli.py) | [`test_approval_handoff.py`](../tests/test_approval_handoff.py), [`cli-reference.md`](cli-reference.md), [`operations.md`](operations.md) |
 | Bind an approved plan to runtime state and prevent path, identity, credential, or configuration substitution | [`execution_context.py`](../src/master_agent/execution_context.py), [`config_sources.py`](../src/master_agent/config_sources.py), [`directory_safety.py`](../src/master_agent/directory_safety.py), [`trust_store.py`](../src/master_agent/trust_store.py) | [`test_execution_context.py`](../tests/test_execution_context.py), [`test_config_sources.py`](../tests/test_config_sources.py), [`test_directory_safety.py`](../tests/test_directory_safety.py) |
 | Load provider configuration, make a stateless direct read, connect ephemerally, or diagnose deployment readiness | [`cli.py`](../src/master_agent/cli.py), [`direct_read.py`](../src/master_agent/direct_read.py), [`config.py`](../src/master_agent/config.py), [`readiness.py`](../src/master_agent/readiness.py), [`discovery.py`](../src/master_agent/discovery.py) | [`test_cli.py`](../tests/test_cli.py), [`test_direct_read.py`](../tests/test_direct_read.py), [`test_config.py`](../tests/test_config.py), [`test_config_and_discovery.py`](../tests/test_config_and_discovery.py), [`test_discovery.py`](../tests/test_discovery.py), [`configuration.md`](configuration.md), [`cli-reference.md`](cli-reference.md) |
+| Change provider-data classification, destination/tenancy policy, egress binding, exact read-result projection, sanitization, or byte/item limits | [`provider_egress.py`](../src/master_agent/provider_egress.py), [`capabilities.py`](../src/master_agent/capabilities.py), [`governance.py`](../src/master_agent/governance.py) | [`test_provider_egress.py`](../tests/test_provider_egress.py), [`test_direct_read.py`](../tests/test_direct_read.py), [`test_discovery.py`](../tests/test_discovery.py), [`configuration.md`](configuration.md), [`threat-model.md`](threat-model.md) |
 | Resolve canonical or provider-keyed credentials and Microsoft OAuth | [`auth.py`](../src/master_agent/auth.py), [`credentials.py`](../src/master_agent/credentials.py), [`oauth.py`](../src/master_agent/oauth.py), [`oauth_config.py`](../src/master_agent/oauth_config.py) | [`test_credentials.py`](../tests/test_credentials.py), [`test_oauth_flows.py`](../tests/test_oauth_flows.py), [`test_oauth_readiness.py`](../tests/test_oauth_readiness.py), [`phase-2c-authentication.md`](phase-2c-authentication.md) |
 | Register or select connectors | [`registry.py`](../src/master_agent/registry.py), [`connectors/factory.py`](../src/master_agent/connectors/factory.py), [`connectors/base.py`](../src/master_agent/connectors/base.py) | [`test_registry.py`](../tests/test_registry.py), [`test_registry_capabilities.py`](../tests/test_registry_capabilities.py), [`test_factory_gates.py`](../tests/test_factory_gates.py) |
 | Add bounded provider HTTP behavior | [`http.py`](../src/master_agent/http.py), [`connectors/utils.py`](../src/master_agent/connectors/utils.py), [`connectors/microsoft_graph.py`](../src/master_agent/connectors/microsoft_graph.py) | [`test_http.py`](../tests/test_http.py), [`test_http_lifecycle_budget.py`](../tests/test_http_lifecycle_budget.py), [`live-connectors.md`](live-connectors.md) |
@@ -122,6 +128,7 @@ provider content, determine which connector can receive an action.
 | User-visible outcome | Plan builder and renderer | Configuration and tests |
 |---|---|---|
 | Verify any selected supported provider connection without persistent enablement | `connect` in [`cli.py`](../src/master_agent/cli.py), backed by [`discovery.py`](../src/master_agent/discovery.py) and provider probes | [`config/integrations.toml`](../config/integrations.toml), [`test_cli.py`](../tests/test_cli.py), [`test_discovery.py`](../tests/test_discovery.py) |
+| Check one provider/classification against active connector and model-context policy without network access | `readiness --egress-check PROVIDER:CLASSIFICATION` in [`cli.py`](../src/master_agent/cli.py), backed by [`readiness.py`](../src/master_agent/readiness.py) | [`config/governance.toml`](../config/governance.toml), [`test_oauth_readiness.py`](../tests/test_oauth_readiness.py), [`cli-reference.md`](cli-reference.md) |
 | List public repositories in a specified Bitbucket Cloud workspace without credentials | `bitbucket-repositories --workspace` in [`cli.py`](../src/master_agent/cli.py), backed by [`connectors/bitbucket.py`](../src/master_agent/connectors/bitbucket.py) | [`config/capabilities.toml`](../config/capabilities.toml), [`test_cli.py`](../tests/test_cli.py), [`test_atlassian_connectors.py`](../tests/test_atlassian_connectors.py) |
 | List public repositories owned by a specified GitHub user without credentials | `github-repositories --username` in [`cli.py`](../src/master_agent/cli.py), backed by [`connectors/github.py`](../src/master_agent/connectors/github.py) | [`config/capabilities.toml`](../config/capabilities.toml), [`test_cli.py`](../tests/test_cli.py), [`test_github_connector.py`](../tests/test_github_connector.py) |
 | List repositories visible to the authenticated GitHub user | `github-repositories` in [`cli.py`](../src/master_agent/cli.py), backed by [`connectors/github.py`](../src/master_agent/connectors/github.py) | [`config/capabilities.toml`](../config/capabilities.toml), [`test_cli.py`](../tests/test_cli.py), [`test_github_connector.py`](../tests/test_github_connector.py) |
@@ -140,6 +147,7 @@ suite and add an adversarial test for a newly reachable edge case.
 | A mutated plan invalidates approval; retrieved content never grants authority | [`models.py`](../src/master_agent/models.py), [`policy.py`](../src/master_agent/policy.py) | [`test_policy.py`](../tests/test_policy.py), [`test_runtime_hardening.py`](../tests/test_runtime_hardening.py) |
 | Capability, governance, provider, and runtime gates all fail closed | [`capabilities.py`](../src/master_agent/capabilities.py), [`governance.py`](../src/master_agent/governance.py), [`connectors/factory.py`](../src/master_agent/connectors/factory.py) | [`test_capability_governance.py`](../tests/test_capability_governance.py), [`test_factory_gates.py`](../tests/test_factory_gates.py) |
 | External requests are HTTPS, same-origin, budgeted, and secret-safe | [`http.py`](../src/master_agent/http.py) | [`test_http.py`](../tests/test_http.py), [`test_http_lifecycle_budget.py`](../tests/test_http_lifecycle_budget.py) |
+| Every provider-read return route is authorized before access, rebound before return, exact-schema projected, recursively sanitized, item/byte bounded, and content-free in audit | [`provider_egress.py`](../src/master_agent/provider_egress.py), [`direct_read.py`](../src/master_agent/direct_read.py), [`orchestrator.py`](../src/master_agent/orchestrator.py), [`discovery.py`](../src/master_agent/discovery.py), [`cli.py`](../src/master_agent/cli.py) | [`test_provider_egress.py`](../tests/test_provider_egress.py), [`test_direct_read.py`](../tests/test_direct_read.py), [`test_discovery.py`](../tests/test_discovery.py), [`test_audit_safety.py`](../tests/test_audit_safety.py) |
 | Provider writes are compared with the exact approved post-state and independently re-read | Provider write connector plus [`orchestrator.py`](../src/master_agent/orchestrator.py) | [`test_write_connectors.py`](../tests/test_write_connectors.py), [`test_communications_write.py`](../tests/test_communications_write.py) |
 | Evidence bodies are persisted only under an explicit retention rule | [`retention.py`](../src/master_agent/retention.py), [`audit.py`](../src/master_agent/audit.py) | [`test_retention.py`](../tests/test_retention.py), [`test_audit_safety.py`](../tests/test_audit_safety.py) |
 | Paths, files, Git state, and SQLite state remain bound to reviewed identities across races | [`directory_safety.py`](../src/master_agent/directory_safety.py), [`connectors/git_sandbox.py`](../src/master_agent/connectors/git_sandbox.py), [`sqlite_safety.py`](../src/master_agent/sqlite_safety.py) | [`test_directory_safety.py`](../tests/test_directory_safety.py), [`test_git_connectors.py`](../tests/test_git_connectors.py), [`test_sqlite_safety.py`](../tests/test_sqlite_safety.py) |
@@ -157,9 +165,11 @@ change is incomplete until both copies are updated and
 
 The configuration files have distinct responsibilities:
 
-- `capabilities.toml`: typed executable surface and risk metadata.
+- `capabilities.toml`: typed executable surface, risk metadata, and exact
+  versioned read-result schemas/resource/metadata contracts.
 - `governance.toml`: owner, environment, classification, approval, and enabled
-  constraints for every capability.
+  constraints plus the active model-context destination, tenancy, handling,
+  audit, DLP, and provider-data egress rules.
 - `policy.toml`: risk defaults and absolute runtime prohibitions.
 - `integrations.toml`: provider endpoints, environment-variable references,
   deployment types, and granular live gates.

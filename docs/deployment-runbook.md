@@ -8,6 +8,11 @@ Replace the example organization, security owner, retention owner, system owners
 
 Start with `development`, then `non_production`. Do not set `production_approved = true` before non-production contract validation and security review.
 
+Review `[model_context]` at the same time. Name the exact destination that will
+receive provider results, the model tenancy, whether source data is production
+or nonproduction, and the classifications that each route may carry. Do not use
+the packaged development placeholders for an organization deployment.
+
 ## 3. Select provider deployments
 
 For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS API root. For Microsoft, select the correct Graph national-cloud root and capability-specific identity mode. The built-in Teams send connector is delegated-only; any Teams bot must be implemented and approved as a separate connector.
@@ -32,6 +37,8 @@ master-agent readiness \
   --governance /trusted/config/governance.toml \
   --oauth /trusted/config/oauth.toml \
   --identities /trusted/config/identities.toml \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --egress-check jira:internal \
   --output "$HOME/.master-agent/MasterAgent/readiness.json"
 ```
 
@@ -39,6 +46,9 @@ Resolve every error and review every warning. `ready: True` validates the
 selected configuration; also confirm that the available and credential-ready
 connector counts match the intended deployment. Omitting the configuration
 arguments validates the packaged safe defaults, not files in the current checkout.
+The selected egress check is still offline, but it additionally requires a
+usable connector/credential configuration and an allowed route for the active
+destination, tenancy, classification, audit sink, and DLP implementation.
 
 ## 6. Validate read-only access
 
@@ -47,7 +57,9 @@ Select and probe one read connector at a time:
 ```bash
 master-agent discover \
   --integrations /trusted/config/integrations.toml \
+  --governance /trusted/config/governance.toml \
   --systems jira \
+  --data-classification internal \
   --probe
 ```
 
@@ -56,6 +68,13 @@ one built-in provider can run through `run --direct-read`, which keeps the
 verified read session in memory. Use the manifest-bound `run --apply` route for
 every provider effect; the legacy weekly-status and communication-context
 package commands are disabled.
+
+The classification is trusted operator input, not a value inferred from the
+provider response. Outside development it is mandatory for every live probe;
+development may omit it only when the model-context policy explicitly selects
+a nonproduction default. A policy denial occurs before principal attestation,
+connector construction, or provider content access. Successful probes return a
+fixed content-minimized digest envelope rather than provider-specific details.
 
 For a specified GitHub user's public repositories, validate the anonymous typed
 route directly instead of running an authenticated connection probe:
@@ -151,6 +170,10 @@ Before production:
   the distribution-provided `bwrap-userns-restrict` profile; do not disable the
   host-wide `kernel.apparmor_restrict_unprivileged_userns` control;
 - install and register a typed external, tamper-resistant audit-sink adapter;
+- replace the model-context destination, tenancy, source-data environment, and
+  classification rules with reviewed organization values;
+- verify which routes require audit and DLP. The shipped runtime has no
+  centralized DLP adapter, so DLP-required provider data remains denied;
 - use an approved secret manager for every credentialed capability;
 - keep capability-capsule production promotion disabled until bubblewrap, a
   production credential/OAuth adapter, authenticated exact-plan approvals, and

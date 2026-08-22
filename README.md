@@ -117,6 +117,10 @@ The catalog contains **82 typed capabilities**:
   Compensation runs only where a typed adapter can enforce its precondition.
 - **Prompt-injection boundary:** retrieved messages, pages, issues, notes,
   attachments, and source are untrusted data.
+- **Provider-data return boundary:** every provider read is classified and
+  approved for the configured model destination and tenancy before provider
+  content is requested. The same binding is rechecked before a schema-bound,
+  minimized, size-limited copy is returned.
 - **Constrained networking and source control:** no arbitrary HTTP, arbitrary
   shell, force push, protected-branch write, or autonomous merge path exists.
 - **Evidence discipline:** normal audit records store bounded metadata and
@@ -279,6 +283,19 @@ master-agent readiness \
   --oauth config/oauth.toml
 ```
 
+To check one planned provider/classification against the active model-context
+destination and tenancy without making a network request, also supply its
+credential source and selector:
+
+```bash
+master-agent readiness \
+  --integrations config/integrations.toml \
+  --capabilities config/capabilities.toml \
+  --governance config/governance.toml \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --egress-check jira:internal
+```
+
 Inspect available connectors without activating them:
 
 ```bash
@@ -295,6 +312,7 @@ Probe or connect only the systems needed for the requested operation:
 ```bash
 master-agent connect \
   --systems jira,confluence,github \
+  --data-classification internal \
   --credentials-file /absolute/path/to/private-credentials.json
 ```
 
@@ -304,6 +322,7 @@ for one invocation without changing persistent configuration:
 ```bash
 master-agent connect \
   --systems confluence \
+  --data-classification internal \
   --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
   --credentials-file /absolute/path/to/private-credentials.json
 ```
@@ -324,9 +343,11 @@ master-agent run direct-read-plan.json \
 
 This mode builds one live typed read connector in memory, checks the plan and
 connector binding, and independently re-reads the provider result. It prints a
-bounded terminal result and does not create an audit database, runtime
+policy-sanitized, schema-bound terminal result and content-free egress metadata,
+and does not create an audit database, runtime
 manifest, draft artifact, or result file. The plan must have direct-user
-authority, one provider, and no approval-required action; plugin, capsule,
+authority, one provider, an explicit `data_classification` on every serialized
+read action, and no approval-required action; plugin, capsule,
 write, send, administrative, and scheduled work is rejected. Provider effects
 still use the bound `run --apply` workflow below.
 
@@ -341,10 +362,13 @@ master-agent bitbucket-repositories --workspace WORKSPACE
 
 These commands route through `github.public_repository.list` and
 `bitbucket.public_repository.list`, ignore ambient provider credentials, bound
-the response, and independently verify that returned repositories are public.
+the response, classify it as `public`, and independently verify that returned
+repositories are public. They use the same provider-data return boundary as
+other reads and print the sanitized result without persisting provider data.
 
 Use the authenticated `master-agent github-repositories` path only for “my
-repositories,” private repositories, or other account-visible data.
+repositories,” private repositories, or other account-visible data. That route
+classifies the result as `internal` and applies the same boundary.
 
 ## Exact-plan approval and execution
 
@@ -424,8 +448,8 @@ creating another runtime planner or authorization layer. See
 
 | File | Purpose |
 |---|---|
-| `config/capabilities.toml` | Executable capability, target, parameter, authentication, scope, version, and reversibility contracts |
-| `config/governance.toml` | Owners, environments, classifications, and approval tiers |
+| `config/capabilities.toml` | Executable capability contracts plus exact versioned read-result schemas, resource fields, and fixed metadata |
+| `config/governance.toml` | Owners, environments, classifications, approval tiers, and model-context destination, tenancy, handling, audit, and DLP rules |
 | `config/policy.toml` | Runtime risk policy and hard prohibitions |
 | `config/integrations.toml` | Provider endpoints, credential references, and granular live gates |
 | `config/oauth.toml` | OAuth profiles and required scopes |

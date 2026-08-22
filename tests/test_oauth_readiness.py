@@ -12,8 +12,15 @@ from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.governance import EnvironmentKind, GovernanceProfile
 from master_agent.identity import IdentityRegistry
+from master_agent.models import DataClassification
 from master_agent.oauth import AccessToken, InMemoryTokenCache, StaticTokenProvider
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
+from master_agent.provider_egress import (
+    ModelContextRule,
+    ProviderDataEgressPolicy,
+    ProviderDataHandling,
+    ProviderDataRoute,
+)
 from master_agent.readiness import assess_readiness
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +68,24 @@ class OAuthReadinessTests(unittest.TestCase):
             any("available but inactive" in item for item in report.warnings)
         )
         self.assertFalse(any("principal" in item for item in report.errors))
+
+    def test_ordinary_readiness_does_not_require_provider_egress_policy(self) -> None:
+        governance = replace(
+            GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+            model_context=None,
+        )
+        report = assess_readiness(
+            catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+            governance=governance,
+            integrations=IntegrationConfig.from_toml(ROOT / "config/integrations.toml"),
+            oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+            environ={},
+        )
+
+        self.assertTrue(report.ready, report.errors)
+        self.assertFalse(
+            any(check["name"] == "model_context_policy" for check in report.checks)
+        )
 
     def test_microsoft_delegated_principal_adapter_is_ready_without_network(
         self,
@@ -134,6 +159,192 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             "github_authenticated_user",
         )
         self.assertNotIn("opaque-token", str(report.to_dict()))
+
+    def test_selected_internal_provider_egress_is_ready_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://example.atlassian.net"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={},
+                egress_checks=(("jira", DataClassification.INTERNAL),),
+            )
+
+        check = next(
+            item
+            for item in report.checks
+            if item["name"] == "provider_data_egress:jira:internal"
+        )
+        self.assertTrue(report.ready, report.errors)
+        self.assertTrue(check["passed"])
+        self.assertTrue(check["ephemeral_allowed"])
+        self.assertEqual(check["destination"], "local-operator-or-approved-agent")
+
+    def test_selected_confidential_provider_egress_is_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://example.atlassian.net"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={},
+                egress_checks=(("jira", DataClassification.CONFIDENTIAL),),
+            )
+
+        check = next(
+            item
+            for item in report.checks
+            if item["name"] == "provider_data_egress:jira:confidential"
+        )
+        self.assertFalse(report.ready)
+        self.assertFalse(check["passed"])
+        self.assertIn("denies provider data", check["reason"])
+
+    def test_denied_egress_does_not_inspect_environment_or_tokens(self) -> None:
+        class TrackingEnvironment(dict[str, str]):
+            def __init__(self) -> None:
+                super().__init__({"MASTER_AGENT_GITHUB_TOKEN": "secret-canary"})
+                self.reads: list[str] = []
+
+            def get(self, key: str, default: str | None = None) -> str | None:
+                self.reads.append(key)
+                return super().get(key, default)
+
+        class ForbiddenTokens(dict[str, AccessToken]):
+            def items(self) -> object:
+                raise AssertionError("denied readiness must not inspect tokens")
+
+        environ = TrackingEnvironment()
+        report = assess_readiness(
+            catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+            governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+            integrations=IntegrationConfig.from_toml(ROOT / "config/integrations.toml"),
+            oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+            environ=environ,
+            tokens=ForbiddenTokens(),
+            egress_checks=(("github", DataClassification.CONFIDENTIAL),),
+        )
+
+        self.assertFalse(report.ready)
+        self.assertEqual(environ.reads, [])
+
+    def test_selected_egress_requires_ready_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={},
+                egress_checks=(("github", DataClassification.INTERNAL),),
+            )
+
+        check = next(
+            item
+            for item in report.checks
+            if item["name"] == "provider_data_egress:github:internal"
+        )
+        self.assertFalse(report.ready)
+        self.assertFalse(check["credential_ready"])
+        self.assertIn("MASTER_AGENT_GITHUB_TOKEN", check["reason"])
+
+    def test_selected_egress_recognizes_narrow_probe_contract(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        governance = replace(
+            governance,
+            model_context=ProviderDataEgressPolicy(
+                destination="approved-agent",
+                model_tenancy="approved-tenant",
+                source_data_environment="nonproduction",
+                dlp_adapter="none",
+                development_default_classification=DataClassification.INTERNAL,
+                rules=(
+                    ModelContextRule(
+                        name="jira-probe-only",
+                        providers=("jira",),
+                        capabilities=("jira.connection.probe",),
+                        data_classifications=frozenset({DataClassification.INTERNAL}),
+                        destinations=frozenset({"approved-agent"}),
+                        model_tenancies=frozenset({"approved-tenant"}),
+                        routes=frozenset({ProviderDataRoute.EPHEMERAL}),
+                        handling=ProviderDataHandling.ALLOW,
+                        audit_required=False,
+                        dlp_required=False,
+                        redacted_fields=frozenset(),
+                        allowed_fields=frozenset({"*"}),
+                        max_items=1,
+                        max_output_bytes=4096,
+                    ),
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://example.atlassian.net"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=governance,
+                integrations=IntegrationConfig.from_toml(path),
+                oauth_profiles=OAuthProfiles.from_toml(ROOT / "config/oauth.toml"),
+                environ={},
+                egress_checks=(("jira", DataClassification.INTERNAL),),
+            )
+
+        check = next(
+            item
+            for item in report.checks
+            if item["name"] == "provider_data_egress:jira:internal"
+        )
+        self.assertTrue(check["passed"], report.errors)
+        self.assertEqual(check["approved_capabilities"], ["jira.connection.probe"])
 
     def test_enabled_profile_reports_only_variable_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

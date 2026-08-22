@@ -10,6 +10,7 @@
 - approval authority;
 - canonical source integrity;
 - audit/evidence integrity;
+- approved provider-data destination, model tenancy, and classification;
 - capability capsule signing authorities, immutable artifacts, and receipts;
 - recurring workflow scope.
 
@@ -23,6 +24,9 @@
   plugin CLI execution is disabled, and a capsule becomes executable only
   after its complete signed promotion chain verifies;
 - provider responses are untrusted until normalized and verified;
+- organization model-context configuration is trusted deployment policy;
+  provider content cannot select its own classification, destination, tenancy,
+  fields, handling, audit, or DLP requirements;
 - local artifact/workspace roots are explicit security boundaries.
 
 The operating-system service account, installed Master Agent runtime, and
@@ -53,6 +57,32 @@ Controls:
   text rather than terminal instructions;
 - exact capability catalog and parameter validation;
 - recipient/target cannot be introduced solely by retrieved content.
+
+### Unapproved provider-data model-context egress
+
+A correctly authenticated and verified provider read may still disclose data to
+an unapproved agent, user, model destination, or model tenancy. Retrieved data
+may also try to broaden its own classification or field scope.
+
+Controls:
+
+- trusted action or probe classification is evaluated before provider content
+  access and is never inferred from the response;
+- an immutable binding covers provider/account/configuration digests, request
+  digest, requested fields or exact versioned output contract, item and byte
+  limits, destination, tenancy, handling, audit, and DLP requirements;
+- attestation and content access reuse one captured credential snapshot, while
+  the endpoint, origin, and CA identity are checked before access and return;
+- the policy and binding are recomputed immediately before return;
+- schema projection, separator-insensitive recursive secret/configured-field
+  redaction, minimized prompt-injection findings and references, and byte/item
+  ceilings are enforced on a private copy after independent verification;
+- missing classification, ambiguous or denied rules, changed bindings, and
+  unavailable required audit or DLP adapters fail closed before content crosses
+  the boundary; and
+- durable audit stores only binding facts, digests, counts, and outcomes—not
+  provider bodies, query values, raw account identities, secrets, or raw
+  injection excerpts.
 
 ### Delegation laundering or authority confusion
 
@@ -412,6 +442,9 @@ Controls:
 ## Residual risks
 
 - provider APIs and permissions differ by tenant/version;
+- the Python CLI cannot cryptographically attest which surrounding model
+  tenancy receives its output; the configured destination and tenancy remain a
+  reviewed deployment assertion until a host-attestation adapter exists;
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
 - HMAC capsule/receipt signing assumes externally protected authority keys;

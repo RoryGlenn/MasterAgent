@@ -24,16 +24,16 @@ each invocation; commands never create the parent or overwrite prior output.
 | `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector, target, credential, path, or gate arguments |
 | `run` | Evaluate a plan or execute an approved, manifest-bound plan | No provider side effect without `--apply`; live apply is governed by every catalog, policy, approval, connector, and runtime gate |
 | `plugins` | Inventory connector entry-point metadata without importing plugin code | Optional local JSON output; never executes plugin code |
-| `readiness` | Validate governance, configuration, OAuth, permissions, and implemented production adapters | Offline; optional local JSON output |
+| `readiness` | Validate governance, configuration, OAuth, permissions, implemented production adapters, and optional provider/classification egress readiness | Offline; optional local JSON output; `--egress-check` performs no network request |
 | `oauth-device-code` | Run an enabled Microsoft delegated device-code flow | Performs Microsoft authentication requests and writes a mode-`0600` token file |
 | `draft-package` | Generate the Phase 3 review package | Local create-only artifacts and audit state; no provider access |
 | `compensation-plan` | Build a separately reviewable compensation plan from an original plan and run report | Writes only the selected local plan |
 | `recurring-status` | Inspect registered schedules and due state | No provider access; may mark expired claims in an existing configured SQLite state database and can write optional local JSON output |
 | `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
-| `discover` | Inspect connector configuration | Offline unless `--probe`; setup gaps are reported without failing ordinary discovery, while `--require-ready` makes them a nonzero readiness failure |
-| `connect` | Enable selected supported read connectors in memory and verify access | Fixed bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
-| `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit bounded read-only GitHub requests; selects only the GitHub read connector and never edits credentials or persistent configuration |
-| `bitbucket-repositories` | List a Bitbucket Cloud workspace's public repositories anonymously with `--workspace` | Explicit bounded read-only Bitbucket requests; selects no credentials and never edits persistent configuration |
+| `discover` | Inspect connector configuration | Offline unless `--probe`; live probes require a model-context classification or the configured development/nonproduction default |
+| `connect` | Enable selected supported read connectors in memory and verify access | Fixed, classified, bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
+| `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit schema-bound GitHub read returned only to the terminal; persisted `--output` is rejected |
+| `bitbucket-repositories` | List a Bitbucket Cloud workspace's public repositories anonymously with `--workspace` | Explicit schema-bound Bitbucket read returned only to the terminal; persisted `--output` is rejected |
 | `weekly-status-plan` | Build a read-only weekly-status plan | Writes only the selected local plan |
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
@@ -75,7 +75,8 @@ actions. It always builds a live `ReadOnlyConnector`, even though ordinary
 provider request, it validates the catalog, governance, policy,
 source-of-truth rules, plan origin, and direct-read shape. It then attests the
 selected connector identity and scope, retains one transport budget across the
-read and independent verification, and renders a bounded, terminal-safe result.
+read and independent verification, revalidates the immutable provider-data
+binding, and renders a schema-bound, policy-sanitized, terminal-safe result.
 
 The route accepts an explicit integrations path, credential file or mapping,
 and supported connector URL override for its one selected provider. It never
@@ -85,6 +86,48 @@ retention options, identity/workspace paths, plugins, and non-default state
 paths. A plan with a non-read action, non-direct authority, registered workflow,
 persisted execution context, multiple providers, or an approval requirement is
 rejected before provider dispatch. Use the applied route for every effect.
+
+Every serialized read action must include `data_classification`. The direct
+route binds that value together with provider/account/configuration digests,
+request parameters, exact requested fields or catalog output schema, item and
+byte limits, model destination, tenancy, handling, audit, and DLP requirements.
+It returns content-free egress metadata, not a second verification body.
+
+## Provider-data egress controls
+
+Use a selected offline readiness check before enabling workplace reads:
+
+```bash
+master-agent readiness \
+  --integrations /trusted/config/integrations.toml \
+  --capabilities /trusted/config/capabilities.toml \
+  --governance /trusted/config/governance.toml \
+  --credentials-file /absolute/path/to/private-credentials.json \
+  --egress-check jira:internal
+```
+
+`--egress-check PROVIDER:CLASSIFICATION` may be repeated. It performs no network
+request, but the selected check passes only when the connector is configured
+and enabled, required credential names are available, principal attestation and
+provider feature gates are usable, and at least one matching `ephemeral` or
+`audited` policy route is permitted for the active destination and tenancy.
+
+`discover --probe` and `connect` accept
+`--data-classification public|internal|confidential|restricted`. Omitting it is
+valid only for a development profile whose model-context policy explicitly
+sets a default for nonproduction source data. A successful probe returns the
+fixed `master-agent/provider-probe@1` envelope containing `reachable` and
+`result_sha256`; provider-specific identity, version, URL, and response fields
+do not cross the return boundary.
+
+All direct, applied, probe, and repository-shortcut reads are authorized before
+provider content access and rebound before return. The runtime removes query
+envelopes, recursively redacts secret-key and configured fields, minimizes raw
+prompt-injection details and references, enforces exact catalog result fields,
+item limits, and serialized byte limits, and emits only content-free audit and
+egress facts. The GitHub and Bitbucket repository shortcuts deliberately reject
+`--output`; use the manifest-bound audited route when approved persistence is
+required.
 
 An approval-required plan must include `--approval-authorities` during
 `bind-context`; adding a trust configuration after review would change the

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
 from master_agent.config_sources import ConfigSource
 from master_agent.connectors.base import CompensatingConnector, Connector
@@ -54,6 +56,34 @@ _PARAMETER_TYPES = frozenset(
     }
 )
 _PROVIDER_PRECONDITIONS = frozenset({"none", "if_match", "version"})
+_READ_RESULT_RESOURCE_TYPES = frozenset({"object", "object_list", "value"})
+READ_RESULT_CROSSCUT_FIELDS = frozenset(
+    {"schema", "evidence", "security", "citations", "citation_ids"}
+)
+READ_RESULT_OMITTED_FIELDS = frozenset({"query"})
+READ_RESULT_RESERVED_FIELDS = READ_RESULT_CROSSCUT_FIELDS | READ_RESULT_OMITTED_FIELDS
+_READ_RESULT_RESERVED_IDENTITIES = frozenset(
+    field_name.replace("_", "") for field_name in READ_RESULT_RESERVED_FIELDS
+)
+
+
+def normalize_read_result_field_name(value: str) -> str:
+    """Normalize one result field for reserved-name comparisons."""
+
+    snake = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", value)
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", snake)
+    snake = re.sub(r"[^\w]+", "_", snake, flags=re.UNICODE)
+    return re.sub(r"_+", "_", snake).strip("_").casefold()
+
+
+def is_reserved_read_result_field_name(value: str) -> bool:
+    """Return whether a field is a case, separator, camel, or acronym alias."""
+
+    normalized = normalize_read_result_field_name(value)
+    return (
+        normalized in READ_RESULT_RESERVED_FIELDS
+        or normalized.replace("_", "") in _READ_RESULT_RESERVED_IDENTITIES
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +112,10 @@ class CapabilityDefinition:
         Exact target identity contract.
     parameter_schema
         Closed top-level parameter names and primitive type descriptors.
+    read_result_schema, read_result_resources, read_result_metadata
+        Versioned normalized provider-result envelope. Resource descriptors are
+        ``object``, ``object_list``, or ``value`` and drive exact field
+        projection at the model-context return boundary.
     max_input_bytes, max_output_bytes
         Required per-action input and generated-artifact byte ceilings for
         local-generation capabilities; prohibited for live capabilities.
@@ -102,6 +136,9 @@ class CapabilityDefinition:
     target_system: str = ""
     target_resource_types: tuple[str, ...] = ()
     parameter_schema: Mapping[str, str] = field(default_factory=dict)
+    read_result_schema: str = ""
+    read_result_resources: Mapping[str, str] = field(default_factory=dict)
+    read_result_metadata: tuple[str, ...] = ()
     max_input_bytes: int | None = None
     max_output_bytes: int | None = None
     uses_external_model: bool = False
@@ -148,6 +185,65 @@ class CapabilityDefinition:
                     f"capability {self.name} has unsupported parameter type: "
                     f"{parameter}={descriptor}"
                 )
+        result_schema = self.read_result_schema.strip()
+        result_resources = dict(self.read_result_resources)
+        result_metadata = tuple(sorted(set(self.read_result_metadata)))
+        if result_schema or result_resources or result_metadata:
+            if self.risk is not RiskLevel.READ_ONLY:
+                raise ConfigurationError(
+                    f"non-read capability {self.name} must not declare a read result contract"
+                )
+            if (
+                not result_schema
+                or len(result_schema) > 256
+                or "@" not in result_schema
+            ):
+                raise ConfigurationError(
+                    f"capability {self.name} requires a versioned read_result_schema"
+                )
+            if (
+                any(not character.isprintable() for character in result_schema)
+                or result_schema != result_schema.strip()
+            ):
+                raise ConfigurationError(
+                    f"capability {self.name} has an invalid read_result_schema"
+                )
+            if not result_resources:
+                raise ConfigurationError(
+                    f"capability {self.name} requires read_result_resources"
+                )
+            for resource, descriptor in result_resources.items():
+                if not resource.strip() or resource != resource.strip():
+                    raise ConfigurationError(
+                        f"capability {self.name} has an invalid read result resource"
+                    )
+                if descriptor not in _READ_RESULT_RESOURCE_TYPES:
+                    raise ConfigurationError(
+                        f"capability {self.name} has unsupported read result resource: "
+                        f"{resource}={descriptor}"
+                    )
+            if any(
+                not item.strip() or item != item.strip() for item in result_metadata
+            ):
+                raise ConfigurationError(
+                    f"capability {self.name} has invalid read result metadata"
+                )
+            overlap = set(result_resources) & set(result_metadata)
+            if overlap:
+                raise ConfigurationError(
+                    f"capability {self.name} read result fields overlap: "
+                    + ", ".join(sorted(overlap))
+                )
+            reserved = {
+                field_name
+                for field_name in set(result_resources) | set(result_metadata)
+                if is_reserved_read_result_field_name(field_name)
+            }
+            if reserved:
+                raise ConfigurationError(
+                    f"capability {self.name} read result fields are reserved: "
+                    + ", ".join(sorted(reserved))
+                )
         if self.enabled and self.risk is not RiskLevel.READ_ONLY:
             if not resource_types:
                 raise ConfigurationError(
@@ -193,6 +289,13 @@ class CapabilityDefinition:
         object.__setattr__(self, "target_system", target_system)
         object.__setattr__(self, "target_resource_types", resource_types)
         object.__setattr__(self, "parameter_schema", MappingProxyType(schema))
+        object.__setattr__(self, "read_result_schema", result_schema)
+        object.__setattr__(
+            self,
+            "read_result_resources",
+            MappingProxyType(result_resources),
+        )
+        object.__setattr__(self, "read_result_metadata", result_metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +336,17 @@ class CapabilityCatalog:
         table = raw.get("capabilities", {})
         if not isinstance(table, Mapping):
             raise ConfigurationError("[capabilities] must be a TOML table")
+        result_contracts = raw.get("read_result_contracts", {})
+        if not isinstance(result_contracts, Mapping):
+            raise ConfigurationError("[read_result_contracts] must be a TOML table")
+        orphan_contracts = sorted(
+            str(key) for key in result_contracts if key not in table
+        )
+        if orphan_contracts:
+            raise ConfigurationError(
+                "read result contracts reference unknown capabilities: "
+                + ", ".join(orphan_contracts)
+            )
 
         parsed: dict[str, CapabilityDefinition] = {}
         for name, value in table.items():
@@ -271,6 +385,45 @@ class CapabilityCatalog:
                 raise ConfigurationError(
                     f"capability {name} parameter_schema must be a string table"
                 )
+            contract = result_contracts.get(name, {})
+            if not isinstance(contract, Mapping):
+                raise ConfigurationError(
+                    f"read result contract must be a table: {name}"
+                )
+            unknown_contract_keys = sorted(
+                str(key)
+                for key in contract
+                if key not in {"schema", "resources", "metadata"}
+            )
+            if unknown_contract_keys:
+                raise ConfigurationError(
+                    f"read result contract {name} has unknown keys: "
+                    + ", ".join(unknown_contract_keys)
+                )
+            read_result_resources = contract.get(
+                "resources",
+                value.get("read_result_resources", {}),
+            )
+            if not isinstance(read_result_resources, Mapping) or not all(
+                isinstance(key, str)
+                and key.strip()
+                and isinstance(item, str)
+                and item.strip()
+                for key, item in read_result_resources.items()
+            ):
+                raise ConfigurationError(
+                    f"capability {name} read_result_resources must be a string table"
+                )
+            read_result_metadata = contract.get(
+                "metadata",
+                value.get("read_result_metadata", []),
+            )
+            if not isinstance(read_result_metadata, list) or not all(
+                isinstance(item, str) and item.strip() for item in read_result_metadata
+            ):
+                raise ConfigurationError(
+                    f"capability {name} read_result_metadata must be a list of strings"
+                )
             definition = CapabilityDefinition(
                 name=str(name),
                 enabled=_strict_bool(
@@ -292,6 +445,13 @@ class CapabilityCatalog:
                 parameter_schema={
                     str(key): str(item) for key, item in parameter_schema.items()
                 },
+                read_result_schema=str(
+                    contract.get("schema", value.get("read_result_schema", ""))
+                ),
+                read_result_resources={
+                    str(key): str(item) for key, item in read_result_resources.items()
+                },
+                read_result_metadata=tuple(str(item) for item in read_result_metadata),
                 max_input_bytes=_optional_positive_int(
                     value.get("max_input_bytes"),
                     f"capability {name} max_input_bytes",
@@ -319,14 +479,19 @@ class CapabilityCatalog:
                 f"capability is not registered in the catalog: {capability}"
             ) from error
 
-    def validate_action(self, action: AgentAction) -> tuple[bool, str]:
+    def validate_action(
+        self,
+        action: AgentAction,
+        *,
+        require_enabled: bool = True,
+    ) -> tuple[bool, str]:
         """Validate an action against the executable catalog contract."""
 
         try:
             definition = self.definition(action.capability)
         except ValidationError as error:
             return False, str(error)
-        if not definition.enabled:
+        if require_enabled and not definition.enabled:
             return False, f"capability is disabled by catalog: {action.capability}"
         if definition.risk is not action.risk:
             return (
@@ -420,6 +585,15 @@ class CapabilityCatalog:
                     False,
                     f"resolved connector configuration drifted for {action.capability}",
                 )
+            endpoint_error = _connector_execution_binding_error(
+                runtime_config,
+                binding,
+            )
+            if endpoint_error is not None:
+                return (
+                    False,
+                    f"resolved connector {endpoint_error} for {action.capability}",
+                )
         if observed_mode not in allowed_modes:
             return (
                 False,
@@ -490,6 +664,9 @@ class CapabilityCatalog:
                     "target_system": item.target_system,
                     "target_resource_types": list(item.target_resource_types),
                     "parameter_schema": dict(item.parameter_schema),
+                    "read_result_schema": item.read_result_schema,
+                    "read_result_resources": dict(item.read_result_resources),
+                    "read_result_metadata": list(item.read_result_metadata),
                     "max_input_bytes": item.max_input_bytes,
                     "max_output_bytes": item.max_output_bytes,
                     "uses_external_model": item.uses_external_model,
@@ -504,6 +681,63 @@ def _strict_bool(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigurationError(f"{name} must be a boolean")
     return value
+
+
+def _connector_execution_binding_error(
+    runtime_config: Any,
+    binding: ConnectorExecutionBinding,
+) -> str | None:
+    """Return endpoint or CA drift against one captured execution binding."""
+
+    base_url = getattr(runtime_config, "base_url", None)
+    if not isinstance(base_url, str) or not base_url:
+        return "has no resolved provider endpoint"
+    if base_url != binding.resolved_base_url:
+        return "endpoint drifted from its execution binding"
+    try:
+        parsed = urlsplit(binding.resolved_base_url)
+        port = parsed.port
+    except ValueError:
+        return "execution binding has an invalid provider endpoint"
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return "execution binding has an invalid provider endpoint"
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None and port != 443:
+        rendered_host = f"{rendered_host}:{port}"
+    if binding.resolved_origin != f"https://{rendered_host}":
+        return "origin drifted from its execution binding"
+    runtime_ca = getattr(runtime_config, "ca_bundle", None)
+    runtime_ca_path = str(runtime_ca) if runtime_ca is not None else None
+    runtime_ca_sha256 = getattr(runtime_config, "ca_bundle_sha256", None)
+    if (
+        runtime_ca_path != binding.ca_bundle_path
+        or runtime_ca_sha256 != binding.ca_bundle_sha256
+    ):
+        return "CA identity drifted from its execution binding"
+    return None
+
+
+def validate_connector_execution_binding(
+    connector: Connector,
+    binding: ConnectorExecutionBinding,
+) -> tuple[bool, str]:
+    """Validate a live connector's endpoint and CA against a captured binding."""
+
+    error = _connector_execution_binding_error(
+        getattr(connector, "_config", None),
+        binding,
+    )
+    if error is not None:
+        return False, f"resolved connector {error}"
+    return True, "resolved connector endpoint and CA match the execution binding"
 
 
 def _optional_positive_int(value: Any, name: str) -> int | None:
