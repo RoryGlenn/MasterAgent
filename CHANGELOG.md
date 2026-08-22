@@ -1,5 +1,19 @@
 # Changelog
 
+- Add the native Windows filesystem and locking tranche. On native Windows 11,
+  `windows-native-partial` now binds trusted paths to retained Win32 handles,
+  volume/file IDs, owner SIDs, DACL and trust-policy digests; performs bounded
+  restricted reads and exclusive protected create-only publication; and
+  provides shared/exclusive `LockFileEx` locking. Unsafe
+  namespaces, reparse/cloud objects, unsupported volumes, permission drift, and
+  replacement fail closed. A separately digested ancestor policy permits only
+  unrelated child creation on retained system roots while continuing to reject
+  deletion, metadata, ACL, owner, generic-write, and target mutation authority.
+  Approval bindings now carry a versioned POSIX or Windows object identity
+  without breaking existing POSIX payloads. Atomic
+  state, retention, process, Git, capsule isolation, organization trust-profile
+  integration, and full hosted certification remain separately gated.
+
 - Add deterministic cross-platform runtime contracts for secure filesystem,
   cross-process locking, atomic publication/recovery, process supervision,
   trusted Git, and capsule isolation. Platform-neutral package and CLI imports
@@ -10,8 +24,9 @@
   credentials, connectors, or provider access. Existing POSIX filesystem,
   locking, atomic-state, process, and Git semantics remain unchanged; Linux
   reports bubblewrap capsule isolation only when a trusted executable is
-  selected and otherwise reports that contract unavailable, as does macOS. All
-  seven native Windows implementation/certification routes remain planned.
+  selected and otherwise reports that contract unavailable, as does macOS.
+  The Windows filesystem route is now released; the other six native Windows
+  implementation/certification routes remain planned.
 
 - Harden credentialed connector evidence behind a manual-only, reviewed-
   default-branch workflow with separate protected read, effect, and GitHub

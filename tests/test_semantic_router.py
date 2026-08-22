@@ -555,9 +555,9 @@ class SemanticRouterTests(unittest.TestCase):
 
         self.assertTrue(any("repository path is unsafe" in error for error in errors))
 
-    def test_planned_windows_lifecycle_cannot_claim_release(self) -> None:
-        marker = 'id = "windows-filesystem"\ntitle = "Windows filesystem identity and ACL backend"\nlifecycle = "planned"'
-        replacement = marker.replace('lifecycle = "planned"', 'lifecycle = "released"')
+    def test_released_windows_filesystem_lifecycle_cannot_regress(self) -> None:
+        marker = 'id = "windows-filesystem"\ntitle = "Windows filesystem identity and ACL backend"\nlifecycle = "released"'
+        replacement = marker.replace('lifecycle = "released"', 'lifecycle = "planned"')
         self._rewrite(
             ".ai/semantic-router.toml",
             lambda value: value.replace(marker, replacement, 1),
@@ -566,7 +566,7 @@ class SemanticRouterTests(unittest.TestCase):
         _manifest, errors = self._manifest_and_errors()
 
         self.assertIn(
-            "platform capability windows.filesystem must remain planned, not released",
+            "platform capability windows.filesystem must be released, not planned",
             errors,
         )
 

@@ -19,18 +19,24 @@ import sys
 import sysconfig
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib import machinery, metadata
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from master_agent.config_sources import ConfigSource
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
-from master_agent.platform_runtime import require_persistent_state_platform
+from master_agent.platform_runtime import (
+    get_secure_filesystem_backend,
+    require_persistent_state_platform,
+)
 from master_agent.registry import ConnectorRegistry
+
+if TYPE_CHECKING:
+    from master_agent.platform_runtime.windows.filesystem import PinnedWindowsPath
 
 CONNECTOR_ENTRY_POINT_GROUP = "master_agent.connectors"
 PLUGIN_LOCK_SCHEMA = "master-agent/plugins@1"
@@ -414,32 +420,66 @@ def _hash_distribution(
     try:
         root_path = _distribution_root(distribution)
         aggregate = 0
-        with PinnedDirectory.open(root_path, require_private=False) as root:
-            owner = root.identity.owner
-            if owner not in {os.geteuid(), 0} or root.identity.mode & stat.S_IWOTH:
+        if os.name == "nt":
+            from master_agent.platform_runtime.windows.filesystem import (
+                WindowsSecureFilesystemBackend,
+            )
+
+            backend = get_secure_filesystem_backend()
+            if not isinstance(backend, WindowsSecureFilesystemBackend):
                 raise ConfigurationError(
-                    "connector plugin distribution root is not owner-controlled"
+                    "native Windows secure filesystem is unavailable"
                 )
-            for relative_text, relative in selected:
-                destination: Path | None = None
-                if snapshot_root is not None:
-                    destination = snapshot_root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                digest, total = _hash_distribution_artifact(
-                    root,
-                    relative,
-                    expected_owner=owner,
-                    remaining_bytes=_MAX_DISTRIBUTION_BYTES - aggregate,
-                    destination=destination,
-                )
-                aggregate += total
-                manifest.append(
-                    {
-                        "path": relative_text,
-                        "size": total,
-                        "sha256": digest,
-                    }
-                )
+            with backend.pin_directory(
+                root_path,
+                require_private=False,
+            ) as windows_root:
+                for relative_text, relative in selected:
+                    destination: Path | None = None
+                    if snapshot_root is not None:
+                        destination = snapshot_root / relative
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                    digest, total = _hash_windows_distribution_artifact(
+                        windows_root,
+                        relative,
+                        remaining_bytes=_MAX_DISTRIBUTION_BYTES - aggregate,
+                        destination=destination,
+                    )
+                    aggregate += total
+                    manifest.append(
+                        {
+                            "path": relative_text,
+                            "size": total,
+                            "sha256": digest,
+                        }
+                    )
+        else:
+            with PinnedDirectory.open(root_path, require_private=False) as root:
+                owner = root.identity.owner
+                if owner not in {os.geteuid(), 0} or root.identity.mode & stat.S_IWOTH:
+                    raise ConfigurationError(
+                        "connector plugin distribution root is not owner-controlled"
+                    )
+                for relative_text, relative in selected:
+                    destination = None
+                    if snapshot_root is not None:
+                        destination = snapshot_root / relative
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                    digest, total = _hash_distribution_artifact(
+                        root,
+                        relative,
+                        expected_owner=owner,
+                        remaining_bytes=_MAX_DISTRIBUTION_BYTES - aggregate,
+                        destination=destination,
+                    )
+                    aggregate += total
+                    manifest.append(
+                        {
+                            "path": relative_text,
+                            "size": total,
+                            "sha256": digest,
+                        }
+                    )
     except ConfigurationError:
         raise
     except (OSError, TypeError, ValueError) as error:
@@ -660,6 +700,72 @@ def _hash_distribution_artifact(
             os.close(file_fd)
         for descriptor in reversed(directory_fds):
             os.close(descriptor)
+
+
+def _hash_windows_distribution_artifact(
+    root: PinnedWindowsPath,
+    relative: Path,
+    *,
+    remaining_bytes: int,
+    destination: Path | None,
+) -> tuple[str, int]:
+    """Hash one native-handle-pinned Windows distribution artifact."""
+
+    from master_agent.platform_runtime.windows.filesystem import (
+        WindowsObjectKind,
+        WindowsPathSecurityError,
+    )
+
+    if remaining_bytes < 0:
+        raise ConfigurationError(
+            "connector plugin distribution exceeds the 128 MiB limit"
+        )
+    read_limit = min(_MAX_ARTIFACT_BYTES, remaining_bytes)
+    try:
+        with ExitStack() as stack:
+            parent = root
+            for part in relative.parts[:-1]:
+                parent = stack.enter_context(
+                    parent.pin_child(
+                        part,
+                        kind=WindowsObjectKind.DIRECTORY,
+                        require_private=False,
+                    )
+                )
+            artifact = stack.enter_context(
+                parent.pin_child(
+                    relative.name,
+                    kind=WindowsObjectKind.FILE,
+                    require_private=False,
+                )
+            )
+            try:
+                payload = artifact.read_bytes(read_limit)
+            except WindowsPathSecurityError as error:
+                if str(error) != "pinned Windows file exceeds the bounded read limit":
+                    raise
+                if remaining_bytes < _MAX_ARTIFACT_BYTES:
+                    raise ConfigurationError(
+                        "connector plugin distribution exceeds the 128 MiB limit"
+                    ) from error
+                raise ConfigurationError(
+                    "connector plugin artifact exceeds the 32 MiB limit"
+                ) from error
+            if destination is not None:
+                with destination.open("xb") as destination_handle:
+                    written = destination_handle.write(payload)
+                    if written != len(payload):
+                        raise ConfigurationError(
+                            "connector plugin artifact snapshot was incomplete"
+                        )
+            root.validate()
+            return hashlib.sha256(payload).hexdigest(), len(payload)
+    except ConfigurationError:
+        raise
+    except OSError as error:
+        raise ConfigurationError(
+            "connector plugin distribution contains an unsafe artifact"
+        ) from error
 
 
 def _validate_distribution_directory(

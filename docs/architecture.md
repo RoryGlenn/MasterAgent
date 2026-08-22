@@ -129,8 +129,11 @@ executable is available and otherwise reports that contract unavailable. macOS
 reports
 `capsule_isolation` unavailable because owner/group artifact trust is a secure-
 filesystem property, not OS worker containment, and no native macOS isolation
-backend is certified. Windows uses `windows-unavailable` until a native
-contract replaces each unavailable entry; an unrecognized host uses
+backend is certified. Native Windows selects `windows-native-partial` with
+`windows-handle-acl-filesystem` and `windows-lockfileex`; atomic publication,
+process supervision, trusted Git, and capsule isolation retain bounded
+unavailable entries. A non-Windows host that explicitly inspects Windows uses
+`windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
 
 An operation selects its exact contract immediately before use. Selection
@@ -145,13 +148,23 @@ macOS capsule execution also fails closed instead of treating account-private
 artifact checks as executable isolation.
 
 Windows therefore has a deliberately split status. Package import, command
-help/version, deployment readiness, and the absent-profile install diagnosis
-are supported. Reading a present profile requires `secure_filesystem`; it fails
-before open or parse while that backend is unavailable. A stateful capability
-remains unavailable when any contract it requires reports unavailable, and its
-readiness issue is `runtime_defect`.
-The released common platform route supplies this contract only; the seven
-native Windows implementation and hosted-certification routes remain planned.
+help/version, deployment readiness, and install diagnosis are supported.
+Protected read paths use a chain of retained non-delete-share Win32 handles,
+fixed-volume file identity, owner SID and effective-DACL policy, and bounded
+handle reads. Retained immutable ancestors may grant unrelated child creation,
+as normal Windows system roots do, but delete-child, metadata, generic-write,
+ACL, owner, and replacement authority remain forbidden; selected targets keep
+the stricter writer/private policy. Approval bindings serialize the exact
+versioned Windows identity and policy digest and compare them again at
+execution. The filesystem backend can also publish a new private file only
+with an explicit protected DACL, bounded write/flush and readback, namespace
+revalidation, and exact-created-identity cleanup; it cannot replace an existing
+name or satisfy crash recovery. A stateful capability
+remains unavailable when atomic publication or another required contract
+reports unavailable, and
+its readiness issue is `runtime_defect`. The common platform and native
+Windows-filesystem routes are released; the other six Windows implementation
+and hosted-certification routes remain planned.
 
 ## Repository discovery topology
 
@@ -198,10 +211,10 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-The common platform-runtime route is released, while seven separate native
-Windows routes remain `planned`; a generated index cannot present those native
-backends or hosted certification as released until their own implementation
-changes advance the manifest under validation.
+The common platform-runtime and Windows-filesystem routes are released, while
+the other six Windows routes remain `planned`; a generated index cannot present
+those native backends or hosted certification as released until their own
+implementation changes advance the manifest under validation.
 
 ## Principal components
 

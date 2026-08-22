@@ -23,6 +23,7 @@ from master_agent.oauth import (
 from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
+    get_secure_filesystem_backend,
     platform_runtime_status,
     require_platform_contract,
 )
@@ -123,11 +124,30 @@ class OAuthProfile:
             if not source.get(name):
                 errors.append(f"environment variable {name} is missing")
         if self.flow is OAuthFlow.RESTRICTED_FILE and self.token_file is not None:
-            filesystem = (platform_status or platform_runtime_status()).contract_status(
-                PlatformContract.SECURE_FILESYSTEM
+            selected_platform = platform_status or platform_runtime_status()
+            filesystem = selected_platform.contract_status(
+                PlatformContract.SECURE_FILESYSTEM,
             )
             if not filesystem.available:
                 errors.append(f"token file cannot be inspected: {filesystem.reason}")
+            elif selected_platform.platform == "windows":
+                from master_agent.platform_runtime.windows.filesystem import (
+                    WindowsSecureFilesystemBackend,
+                )
+
+                try:
+                    backend = get_secure_filesystem_backend()
+                    if not isinstance(backend, WindowsSecureFilesystemBackend):
+                        raise ConfigurationError(
+                            "native Windows secure filesystem is unavailable"
+                        )
+                    selected = self.token_file.expanduser()
+                    if not selected.is_absolute():
+                        selected = Path.cwd() / selected
+                    with backend.pin_file(selected, require_private=True):
+                        pass
+                except (ConfigurationError, OSError):
+                    errors.append("token file cannot be inspected safely")
             elif not self.token_file.expanduser().is_file():
                 errors.append(f"token file does not exist: {self.token_file}")
         return tuple(dict.fromkeys(errors))

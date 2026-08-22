@@ -188,6 +188,8 @@ class AdvisoryPathScope:
         """Resolve and minimize one explicit repository-relative route scope."""
 
         require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+        require_platform_contract(PlatformContract.TRUSTED_GIT)
+        require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
         root = repository_root.expanduser().resolve(strict=True)
         if not root.is_dir():
             raise CopilotScopeRejected("advisory repository root is not a directory")
@@ -1922,6 +1924,8 @@ class CopilotSdkAdvisoryWorker:
         profile_inventory: AgentInventory,
     ) -> None:
         require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+        require_platform_contract(PlatformContract.TRUSTED_GIT)
+        require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
         self._root = repository_root.resolve()
         self._scope = scope
         self._reuse_client = reuse_client

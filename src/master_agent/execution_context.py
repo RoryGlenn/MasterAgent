@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Self
+from typing import Self, cast
 from urllib.parse import urlsplit
 
 from master_agent.config import (
@@ -20,7 +20,7 @@ from master_agent.config import (
 from master_agent.config_sources import ConfigSource
 from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.microsoft import MicrosoftIdentityConnector
-from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
+from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
 from master_agent.models import (
@@ -34,7 +34,11 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.oauth import StaticTokenProvider
-from master_agent.platform_runtime import PlatformContract, require_platform_contract
+from master_agent.platform_runtime import (
+    PlatformContract,
+    PlatformObjectIdentity,
+    require_platform_contract,
+)
 from master_agent.plugins import PluginDescriptor
 
 
@@ -576,6 +580,12 @@ def _canonical_path(path: Path | None) -> str | None:
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            validate_windows_drive_path,
+        )
+
+        return validate_windows_drive_path(selected).canonical
     return str(selected.resolve(strict=False))
 
 
@@ -654,16 +664,18 @@ def _capture_runtime_path(
             f"runtime directory must already exist and be private: {name}"
         ) from error
     try:
-        identity: DirectoryIdentity = anchor.identity
+        object_identity = anchor.object_identity
+        device, inode, owner, mode = _legacy_runtime_identity(object_identity)
         return CapturedRuntimePath(
             binding=RuntimePathExecutionBinding(
                 name=name,
                 path=str(target),
                 anchor_path=str(anchor.path),
-                device=identity.device,
-                inode=identity.inode,
-                owner=identity.owner,
-                mode=identity.mode,
+                device=device,
+                inode=inode,
+                owner=owner,
+                mode=mode,
+                object_identity=object_identity,
             ),
             publication=publication,
             _anchor=anchor,
@@ -694,26 +706,33 @@ def _capture_approved_runtime_path(
         raise ConfigurationError(
             f"approved runtime directory does not pin its exact path: {name}"
         )
-    expected = DirectoryIdentity(
-        device=approved.device,
-        inode=approved.inode,
-        owner=approved.owner,
-        mode=approved.mode,
-    )
+    expected = approved.platform_identity
     anchor = PinnedDirectory.open(
         Path(approved.path),
         expected_identity=expected,
     )
     try:
+        observed = anchor.object_identity
+        if observed != expected:
+            raise ConfigurationError(
+                f"approved runtime directory identity changed: {name}"
+            )
+        device, inode, owner, mode = _legacy_runtime_identity(observed)
         return CapturedRuntimePath(
             binding=RuntimePathExecutionBinding(
                 name=name,
                 path=target_value,
                 anchor_path=str(anchor.path),
-                device=expected.device,
-                inode=expected.inode,
-                owner=expected.owner,
-                mode=expected.mode,
+                device=device,
+                inode=inode,
+                owner=owner,
+                mode=mode,
+                # Preserve the approved wire shape so pre-native POSIX plans
+                # remain byte-for-byte comparable after their identities have
+                # still been checked through the current platform contract.
+                object_identity=(
+                    observed if approved.object_identity is not None else None
+                ),
             ),
             publication=publication,
             _anchor=anchor,
@@ -721,6 +740,21 @@ def _capture_approved_runtime_path(
     except BaseException:
         anchor.close()
         raise
+
+
+def _legacy_runtime_identity(
+    identity: PlatformObjectIdentity,
+) -> tuple[int, int, int, int]:
+    """Return legacy POSIX fields or zero placeholders for native Windows."""
+
+    if identity.platform == "windows":
+        return 0, 0, 0, 0
+    return (
+        cast(int, identity.device),
+        cast(int, identity.inode),
+        cast(int, identity.owner),
+        cast(int, identity.mode),
+    )
 
 
 def _strict_extra_bool(extra: Mapping[str, object], key: str) -> bool:

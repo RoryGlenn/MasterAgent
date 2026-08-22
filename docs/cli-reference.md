@@ -118,16 +118,16 @@ a trusted executable is selected and otherwise reports it unavailable. macOS
 also reports `capsule_isolation` unavailable; its owner/group artifact checks
 belong to `secure_filesystem` and do not certify executable containment.
 
-On Windows, package imports, `--help`, `--version`, `readiness`, and the bounded
-absent-profile result from `doctor --require-level install` remain usable before
-the native security backends are complete. That doctor result may test only
-whether the selected profile entry exists; it does not open or parse profile
-bytes. An existing or explicit profile requires `secure_filesystem` and fails
-with `runtime_defect` before its bytes are read while that contract is
-unavailable. `install_ready` therefore describes the neutral installation
-surface, not permission to inspect protected configuration. A read, draft,
-effect, or enterprise level that depends on an unavailable contract stays
-false; execution never falls back to a weaker backend.
+On native Windows, package imports, `--help`, `--version`, `readiness`, and
+`doctor --require-level install` use the partial native runtime. Existing or
+explicit profiles and other restricted read inputs are opened through retained
+Win32 handles only after local-volume, object-identity, owner-SID, and
+effective-DACL validation. The filesystem and locking contracts are available;
+atomic publication, process, Git, and capsule isolation remain unavailable.
+`install_ready` therefore describes the neutral installation surface, not
+permission to persist state. A read, draft, effect, or enterprise level that
+depends on an unavailable contract stays false; execution never falls back to
+a weaker backend.
 
 The report is also content-free: it confirms only that a delegated token-file
 reference is configured and nonblank; it does not inspect, open, or parse the

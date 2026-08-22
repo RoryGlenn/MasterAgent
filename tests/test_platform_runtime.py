@@ -18,9 +18,11 @@ from typing import cast
 from unittest.mock import Mock, patch
 
 from master_agent.platform_runtime import (
+    FilesystemObjectKind,
     LockMode,
     PlatformCapabilityUnavailable,
     PlatformContract,
+    PlatformObjectIdentity,
     get_platform_runtime,
     platform_runtime_status,
     require_persistent_state_platform,
@@ -36,6 +38,74 @@ PRE_PLATFORM_RUNTIME_WORKER_SHA256 = (
 
 class PlatformRuntimeTests(unittest.TestCase):
     """Keep native selection complete, inspectable, and fail closed."""
+
+    def test_platform_object_identity_round_trips_without_native_coercion(self) -> None:
+        posix = PlatformObjectIdentity.from_posix(
+            kind=FilesystemObjectKind.DIRECTORY,
+            device=7,
+            inode=11,
+            owner=501,
+            mode=0o700,
+        )
+        windows = PlatformObjectIdentity.from_windows(
+            kind=FilesystemObjectKind.FILE,
+            volume_serial="a1b2c3d4",
+            file_id="0123456789abcdef0123456789abcdef",
+            owner_sid="S-1-5-21-123-456-789-1001",
+            dacl_sha256="1" * 64,
+            trust_policy_sha256="2" * 64,
+        )
+
+        self.assertEqual(PlatformObjectIdentity.from_dict(posix.to_dict()), posix)
+        self.assertEqual(PlatformObjectIdentity.from_dict(windows.to_dict()), windows)
+        self.assertEqual(posix.object_key, ("posix", "7", "11"))
+        self.assertEqual(
+            windows.object_key,
+            ("windows", "a1b2c3d4", "0123456789abcdef0123456789abcdef"),
+        )
+        self.assertNotIn("device", windows.to_dict())
+        self.assertNotIn("owner_sid", posix.to_dict())
+
+    def test_platform_object_identity_rejects_mixed_or_malformed_payloads(self) -> None:
+        with self.assertRaisesRegex(ValueError, "mixes native payloads"):
+            PlatformObjectIdentity(
+                platform="windows",
+                kind=FilesystemObjectKind.DIRECTORY,
+                device=1,
+                volume_serial="1",
+                file_id="0" * 32,
+                owner_sid="S-1-5-18",
+                dacl_sha256="1" * 64,
+                trust_policy_sha256="2" * 64,
+            )
+        malformed = {
+            "schema": "master-agent/platform-object-identity@1",
+            "platform": "windows",
+            "kind": "directory",
+            "windows": {
+                "volume_serial": "1",
+                "file_id": "ABC",
+                "owner_sid": "S-1-5-18",
+                "dacl_sha256": "1" * 64,
+                "trust_policy_sha256": "2" * 64,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "file identity"):
+            PlatformObjectIdentity.from_dict(malformed)
+        valid_windows = PlatformObjectIdentity.from_windows(
+            kind=FilesystemObjectKind.DIRECTORY,
+            volume_serial="1",
+            file_id="0" * 32,
+            owner_sid="S-1-5-18",
+            dacl_sha256="1" * 64,
+            trust_policy_sha256="2" * 64,
+        )
+        mixed = {
+            **valid_windows.to_dict(),
+            "posix": {"device": 1, "inode": 2, "owner": 3, "mode": 0o700},
+        }
+        with self.assertRaisesRegex(ValueError, "shape"):
+            PlatformObjectIdentity.from_dict(mixed)
 
     def test_advisory_and_capsule_state_preflight_before_creation(self) -> None:
         from master_agent.advisory_budget import AdvisoryBudgetStore
@@ -2041,6 +2111,25 @@ class PlatformRuntimeTests(unittest.TestCase):
                     f"^{expected}$",
                 ):
                     require_platform_contract(contract, "win32")
+
+    def test_native_windows_host_selects_lazy_partial_runtime_builder(self) -> None:
+        from master_agent.platform_runtime.factory import _runtime_for_identity
+
+        expected = Mock()
+        _runtime_for_identity.cache_clear()
+        self.addCleanup(_runtime_for_identity.cache_clear)
+        with (
+            patch("master_agent.platform_runtime.factory.sys.platform", "win32"),
+            patch("master_agent.platform_runtime.factory._HOST_PLATFORM", "win32"),
+            patch(
+                "master_agent.platform_runtime.windows.runtime.build_windows_runtime",
+                return_value=expected,
+            ) as build_windows,
+        ):
+            observed = get_platform_runtime()
+
+        self.assertIs(observed, expected)
+        build_windows.assert_called_once_with()
 
     def test_unknown_platform_never_falls_back_or_echoes_input(self) -> None:
         status = platform_runtime_status("secret-platform-value")

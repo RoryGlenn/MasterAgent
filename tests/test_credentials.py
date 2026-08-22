@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from master_agent import credentials as credentials_module
 from master_agent.credentials import CredentialStoreSnapshot
 from master_agent.errors import ConfigurationError
 from tests.helpers import private_temporary_directory
@@ -16,6 +17,44 @@ _SECRET = "credential-store-secret-canary"
 
 
 class CredentialStoreTests(unittest.TestCase):
+    def test_windows_native_open_error_is_bounded(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.read_restricted_file.side_effect = OSError("native failure")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        selected = Path("/missing/credentials.json")
+        canonical = Path(r"C:\MasterAgent\credentials.json")
+
+        with (
+            patch.object(credentials_module, "os", windows_os),
+            patch.object(
+                credentials_module,
+                "canonical_credential_store_path",
+                return_value=canonical,
+            ),
+            patch.object(
+                credentials_module,
+                "get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch.object(credentials_module, "require_platform_contract"),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "credential store could not be opened safely",
+            ),
+        ):
+            CredentialStoreSnapshot.load(selected, allowed_names=(_NAME,))
+
+        backend.read_restricted_file.assert_called_once_with(
+            canonical,
+            1024 * 1024,
+            require_private=True,
+        )
+
     def test_valid_store_is_redacted_and_overlays_environment(self) -> None:
         with private_temporary_directory() as directory:
             path = _write_store(Path(directory), {_NAME: _SECRET})

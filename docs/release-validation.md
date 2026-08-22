@@ -21,11 +21,13 @@ handling, and independent verification.
   Python 3.12, 3.13, and 3.14.
 - Package imports, CLI entry points, generated artifacts, and checked-in
   examples are validated against the current source.
-- A hosted Windows isolated installed-package job imports `master_agent`,
-  `master_agent.cli`, and `master_agent.readiness`; exercises `--help`,
-  `--version`, deployment `readiness`, and configuration-only
-  `doctor --require-level install`; validates the platform report; and proves
-  unavailable stateful readiness fails closed.
+- A hosted Windows 11 ARM isolated installed-package job imports
+  `master_agent`, `master_agent.cli`, and `master_agent.readiness`; runs the
+  native retained-handle/ACL and `LockFileEx` tests through a fresh local
+  standard-user account; asserts the workstation build and non-administrator
+  token without skipping; exercises `--help`, `--version`, deployment
+  `readiness`, and `doctor --require-level install`; validates the partial
+  platform report; and proves unavailable stateful readiness fails closed.
 
 ### Behavioral specifications
 
@@ -63,8 +65,11 @@ handling, and independent verification.
   reports bubblewrap only when a trusted executable is selected and otherwise
   reports that contract unavailable; macOS also reports it unavailable rather
   than
-  treating owner/group artifact trust as executable containment. Existing
-  certified POSIX behavior remains covered.
+  treating owner/group artifact trust as executable containment. Native
+  Windows reports retained-handle filesystem/ACL and `LockFileEx` available,
+  proves exclusive protected create/write/revalidation/cleanup, keeps the other
+  four contracts unavailable, and receives focused native adversarial coverage.
+  Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
 - All 82 typed capabilities have governance coverage.
@@ -124,8 +129,9 @@ handling, and independent verification.
   changed paths, affected route contracts, and any unmapped path.
 - The topology is hub-and-spoke: the parent sees the complete registry;
   specialists see only their own profile and selected route. The common
-  platform-runtime route is released; the seven native Windows routes remain
-  distinctly planned until separately implemented and certified.
+  platform-runtime and Windows-filesystem routes are released; the other six
+  native Windows routes remain distinctly planned until separately implemented
+  and certified.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay
@@ -216,10 +222,9 @@ handling, and independent verification.
 - The source archive includes workflow definitions—including
   `.github/workflows/live-connector-integration.yml`—`.ai/DOCS_AGENT.md`, and
   the tests that validate them.
-- The wheel and source archive include the platform-runtime package and the
-  Windows startup/configuration contract tests; the hosted job installs the
-  package into an isolated virtual environment, then exercises it outside the
-  checkout.
+- The wheel and source archive include the platform-runtime package and native
+  Windows filesystem/locking tests; the hosted job installs the package into an
+  isolated virtual environment, then exercises it outside the checkout.
 
 ### Optional live sandbox validation
 

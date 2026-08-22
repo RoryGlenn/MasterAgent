@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -9,11 +11,16 @@ import unittest
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
+from typing import Self
 from unittest.mock import patch
 
 from master_agent import plugins
 from master_agent.connectors.mock import MockConnector
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime.windows.filesystem import (
+    WindowsObjectKind,
+    WindowsSecureFilesystemBackend,
+)
 from master_agent.plugins import (
     CONNECTOR_ENTRY_POINT_GROUP,
     PluginLock,
@@ -47,7 +54,69 @@ class _FakeDistribution:
 
     def locate_file(self, relative: object) -> Path:
         self.locate_calls.append(str(relative))
-        return self.root / relative
+        return self.root / str(relative)
+
+
+class _FakeWindowsDistributionPin:
+    """Minimal retained-pin tree for Windows distribution hashing tests."""
+
+    def __init__(
+        self,
+        payloads: dict[tuple[str, ...], bytes],
+        *,
+        path: tuple[str, ...] = (),
+        pin_calls: list[tuple[tuple[str, ...], str, object, bool]] | None = None,
+        read_limits: list[int] | None = None,
+        validated: list[tuple[str, ...]] | None = None,
+        closed: list[tuple[str, ...]] | None = None,
+    ) -> None:
+        self._payloads = payloads
+        self._path = path
+        self.pin_calls = pin_calls if pin_calls is not None else []
+        self.read_limits = read_limits if read_limits is not None else []
+        self.validated = validated if validated is not None else []
+        self.closed = closed if closed is not None else []
+
+    def pin_child(
+        self,
+        name: str,
+        *,
+        kind: object,
+        require_private: bool,
+    ) -> _FakeWindowsDistributionPin:
+        self.pin_calls.append((self._path, name, kind, require_private))
+        return _FakeWindowsDistributionPin(
+            self._payloads,
+            path=(*self._path, name),
+            pin_calls=self.pin_calls,
+            read_limits=self.read_limits,
+            validated=self.validated,
+            closed=self.closed,
+        )
+
+    def read_bytes(self, max_bytes: int) -> bytes:
+        self.read_limits.append(max_bytes)
+        payload = self._payloads[self._path]
+        if len(payload) > max_bytes:
+            raise ConfigurationError("fake pinned artifact exceeds its read limit")
+        return payload
+
+    def validate(self) -> None:
+        self.validated.append(self._path)
+
+    def close(self) -> None:
+        self.closed.append(self._path)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        self.close()
 
 
 class PluginTests(unittest.TestCase):
@@ -157,6 +226,71 @@ class PluginTests(unittest.TestCase):
         self.assertNotEqual(before.artifact_sha256, after.artifact_sha256)
         self.assertNotEqual(before.identity_sha256, after.identity_sha256)
         self.assertEqual(entry.load_count, 0)
+
+    def test_windows_distribution_hash_uses_retained_native_child_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            distribution = _FakeDistribution(
+                name="master-agent-windows-test",
+                version="1.0.0",
+                root=root,
+                files=("package/plugin.py",),
+            )
+            artifact = b"SAFE = True\n"
+            pinned = _FakeWindowsDistributionPin({("package", "plugin.py"): artifact})
+            backend = WindowsSecureFilesystemBackend()
+            artifacts = (("package/plugin.py", Path("package", "plugin.py")),)
+
+            with (
+                patch.object(
+                    backend,
+                    "pin_directory",
+                    return_value=pinned,
+                ) as pin_directory,
+                patch("master_agent.plugins.os.name", "nt"),
+                patch.object(
+                    plugins,
+                    "get_secure_filesystem_backend",
+                    return_value=backend,
+                ),
+                patch.object(plugins, "_distribution_root", return_value=root),
+            ):
+                observed = plugins._hash_distribution(
+                    distribution,
+                    snapshot_root=None,
+                    artifacts=artifacts,
+                )
+
+            manifest = [
+                {
+                    "path": "package/plugin.py",
+                    "size": len(artifact),
+                    "sha256": hashlib.sha256(artifact).hexdigest(),
+                }
+            ]
+            expected = hashlib.sha256(
+                json.dumps(
+                    manifest,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(observed, expected)
+            pin_directory.assert_called_once_with(root, require_private=False)
+            self.assertEqual(
+                pinned.pin_calls,
+                [
+                    ((), "package", WindowsObjectKind.DIRECTORY, False),
+                    (("package",), "plugin.py", WindowsObjectKind.FILE, False),
+                ],
+            )
+            self.assertEqual(pinned.read_limits, [plugins._MAX_ARTIFACT_BYTES])
+            self.assertEqual(pinned.validated, [()])
+            self.assertEqual(
+                pinned.closed,
+                [("package", "plugin.py"), ("package",), ()],
+            )
 
     def test_unsafe_inventory_paths_fail_before_any_lookup_or_read(self) -> None:
         unsafe_paths = (

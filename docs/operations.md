@@ -7,15 +7,15 @@ reviewed mode, configuration locations, a dedicated private state root, and an
 exact installed-capability allowlist. It never contains credentials, approval
 secrets, or provider content and does not grant authority by itself.
 
-On Windows, package import, help/version, deployment readiness, and the bounded
-absent-profile result from `doctor --require-level install` are supported before
-the native secure-state backends are complete. Doctor may report that a profile
-entry is absent without reading it; an existing or explicit profile requires
-`secure_filesystem` and is rejected before open or parse while that backend is
-unavailable. `setup` requires secure filesystem, cross-process locking, and
-atomic publication/recovery. An `execute` plan should proceed only when every
-contract its route needs is available in the report's `platform_runtime`
-section. The command fails closed rather than using a weaker backend.
+On native Windows, package import, help/version, deployment readiness, and
+`doctor --require-level install` use the partial native runtime. Existing or
+explicit profiles are read only after retained-handle, local-volume,
+object-identity, owner-SID, and DACL validation. `setup` still requires secure
+filesystem, cross-process locking, and atomic publication/recovery, so it stays
+blocked until the atomic backend is available. An `execute` plan should proceed
+only when every contract its route needs is available in the report's
+`platform_runtime` section. The command fails closed rather than using a weaker
+backend.
 
 1. Run `master-agent setup` once for the selected profile. This prepares only
    owner-private local paths and does not contact a provider.

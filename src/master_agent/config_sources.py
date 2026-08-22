@@ -18,7 +18,11 @@ from pathlib import Path
 from typing import IO, BinaryIO, Literal, overload
 
 from master_agent.errors import ConfigurationError
-from master_agent.platform_runtime import PlatformContract, require_platform_contract
+from master_agent.platform_runtime import (
+    PlatformContract,
+    get_secure_filesystem_backend,
+    require_platform_contract,
+)
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 
@@ -140,6 +144,29 @@ def _trusted_explicit_file(path: Path) -> ConfigSnapshot:
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        try:
+            canonical, payload, _identity = backend.read_restricted_file(
+                selected,
+                _MAX_CONFIG_BYTES,
+                require_private=False,
+            )
+        except FileNotFoundError as error:
+            raise ConfigurationError(
+                f"explicit configuration not found: {selected}"
+            ) from error
+        except OSError as error:
+            raise ConfigurationError(
+                "explicit configuration could not be opened safely"
+            ) from error
+        return ConfigSnapshot(display_path=canonical, payload=payload)
     try:
         parent = selected.parent.resolve(strict=True)
         parent_before = parent.lstat()

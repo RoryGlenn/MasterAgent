@@ -279,16 +279,31 @@ class ConnectorConfig:
         if self.ca_bundle_env and source.get(self.ca_bundle_env):
             require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
             selected = Path(source[self.ca_bundle_env]).expanduser()
-            try:
-                ca_bundle = selected.resolve(strict=True)
-            except OSError as error:
-                raise ConfigurationError(
-                    f"connector {self.system} CA bundle does not exist: {selected}"
-                ) from error
-            if not ca_bundle.is_file():
-                raise ConfigurationError(
-                    f"connector {self.system} CA bundle does not exist: {selected}"
+            if os.name == "nt":
+                from master_agent.platform_runtime.windows.filesystem import (
+                    WindowsPathSecurityError,
+                    validate_windows_drive_path,
                 )
+
+                if not selected.is_absolute():
+                    selected = Path.cwd() / selected
+                try:
+                    ca_bundle = Path(validate_windows_drive_path(selected).canonical)
+                except WindowsPathSecurityError as error:
+                    raise ConfigurationError(
+                        f"connector {self.system} CA bundle path is unsafe"
+                    ) from error
+            else:
+                try:
+                    ca_bundle = selected.resolve(strict=True)
+                except OSError as error:
+                    raise ConfigurationError(
+                        f"connector {self.system} CA bundle does not exist: {selected}"
+                    ) from error
+                if not ca_bundle.is_file():
+                    raise ConfigurationError(
+                        f"connector {self.system} CA bundle does not exist: {selected}"
+                    )
         return base_url.rstrip("/"), ca_bundle
 
     def capture_execution_target(

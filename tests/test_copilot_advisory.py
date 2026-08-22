@@ -14,7 +14,7 @@ import types
 import unittest
 import zlib
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent.advisory import (
     AdvisoryBroker,
@@ -48,6 +48,10 @@ from master_agent.copilot_advisory import (
     repository_state_binding,
     repository_state_digest,
 )
+from master_agent.platform_runtime import (
+    PlatformCapabilityUnavailable,
+    PlatformContract,
+)
 
 
 class _ApproveOnce:
@@ -72,6 +76,60 @@ class _FakeToolResult:
 class _Data:
     def __init__(self, content: str) -> None:
         self.content = content
+
+
+class AdvisoryPlatformGateTests(unittest.TestCase):
+    """Keep Windows advisory paths behind the still-unavailable contracts."""
+
+    def test_path_entrypoints_gate_before_posix_resolution(self) -> None:
+        for blocking_contract in (
+            PlatformContract.TRUSTED_GIT,
+            PlatformContract.PROCESS_SUPERVISION,
+        ):
+            for entrypoint in ("scope", "worker"):
+                with self.subTest(
+                    blocking_contract=blocking_contract,
+                    entrypoint=entrypoint,
+                ):
+                    root = Mock(spec=Path)
+                    observed: list[PlatformContract] = []
+
+                    def require(
+                        contract: PlatformContract,
+                        expected_block: PlatformContract = blocking_contract,
+                        calls: list[PlatformContract] = observed,
+                    ) -> None:
+                        calls.append(contract)
+                        if contract is expected_block:
+                            raise PlatformCapabilityUnavailable(
+                                f"native windows {contract} backend is not implemented"
+                            )
+
+                    with (
+                        patch(
+                            "master_agent.copilot_advisory.require_platform_contract",
+                            side_effect=require,
+                        ),
+                        self.assertRaises(PlatformCapabilityUnavailable),
+                    ):
+                        if entrypoint == "scope":
+                            AdvisoryPathScope.bind(root, ("src",))
+                        else:
+                            CopilotSdkAdvisoryWorker(
+                                root,
+                                expected_repository_digest="0" * 64,
+                                profile_inventory=Mock(),
+                            )
+
+                    expected = [
+                        PlatformContract.SECURE_FILESYSTEM,
+                        PlatformContract.TRUSTED_GIT,
+                    ]
+                    if blocking_contract is PlatformContract.PROCESS_SUPERVISION:
+                        expected.append(PlatformContract.PROCESS_SUPERVISION)
+                    self.assertEqual(observed, expected)
+                    root.expanduser.assert_not_called()
+                    root.resolve.assert_not_called()
 
 
 class _Response:

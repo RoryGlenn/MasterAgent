@@ -11,7 +11,10 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Self
+from unittest.mock import patch
 
+from master_agent import capsules as capsule_module
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
@@ -54,10 +57,159 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import WorkflowOrchestrator
+from master_agent.platform_runtime.windows.filesystem import (
+    WindowsObjectKind,
+    WindowsSecureFilesystemBackend,
+)
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.receipts import ReceiptSigner
 from master_agent.registry import ConnectorRegistry
 from tests.helpers import private_temporary_directory
+
+
+class _FakeWindowsBundlePin:
+    """Minimal retained-pin seam for the platform-neutral bundle reader."""
+
+    def __init__(
+        self,
+        payloads: Mapping[str, bytes],
+        *,
+        payload: bytes | None = None,
+        pin_calls: list[tuple[str, object, bool]] | None = None,
+        read_limits: list[int] | None = None,
+    ) -> None:
+        self._payloads = payloads
+        self._payload = payload
+        self.pin_calls = pin_calls if pin_calls is not None else []
+        self.read_limits = read_limits if read_limits is not None else []
+        self.closed = False
+
+    def pin_child(
+        self,
+        name: str,
+        *,
+        kind: object,
+        require_private: bool,
+    ) -> _FakeWindowsBundlePin:
+        self.pin_calls.append((name, kind, require_private))
+        return _FakeWindowsBundlePin(
+            self._payloads,
+            payload=self._payloads[name],
+            pin_calls=self.pin_calls,
+            read_limits=self.read_limits,
+        )
+
+    def read_bytes(self, max_bytes: int) -> bytes:
+        self.read_limits.append(max_bytes)
+        if self._payload is None:
+            raise AssertionError("bundle root cannot be read as a file")
+        if len(self._payload) > max_bytes:
+            raise ConfigurationError("fake pinned artifact exceeds its read limit")
+        return self._payload
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        self.close()
+
+
+class CapsuleBundleWindowsReadTests(unittest.TestCase):
+    """Exercise the Windows secure-filesystem capsule read adapter."""
+
+    def test_native_directory_and_artifact_open_errors_are_bounded(self) -> None:
+        root = Path("/missing/capsule")
+        backend = WindowsSecureFilesystemBackend()
+        with (
+            patch.object(
+                backend,
+                "pin_directory",
+                side_effect=OSError("native directory failure"),
+            ),
+            patch("master_agent.capsules.os.name", "nt"),
+            patch.object(capsule_module, "require_platform_contract"),
+            patch.object(
+                capsule_module,
+                "get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "capsule directory is unavailable",
+            ),
+        ):
+            CapsuleBundle.from_directory(root)
+
+        pinned = _FakeWindowsBundlePin({})
+        with (
+            patch.object(
+                pinned,
+                "pin_child",
+                side_effect=OSError("native artifact failure"),
+            ),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "capsule artifact could not be read safely",
+            ),
+        ):
+            capsule_module._read_windows_regular(pinned, "capsule.json")
+
+    def test_bundle_reader_uses_retained_windows_child_pins(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            bundle = _bundle()
+            _write_bundle(root, bundle)
+            payloads = {
+                name: (root / name).read_bytes()
+                for name in (
+                    "capsule.json",
+                    "program.py",
+                    "dependencies.lock.json",
+                    "sbom.cdx.json",
+                    "tests.json",
+                    "verification.json",
+                    "compensation.json",
+                    "THIRD_PARTY_NOTICES.md",
+                )
+            }
+            pinned = _FakeWindowsBundlePin(payloads)
+            backend = WindowsSecureFilesystemBackend()
+
+            with (
+                patch.object(
+                    backend,
+                    "pin_directory",
+                    return_value=pinned,
+                ) as pin_directory,
+                patch("master_agent.capsules.os.name", "nt"),
+                patch.object(capsule_module, "require_platform_contract"),
+                patch.object(
+                    capsule_module,
+                    "get_secure_filesystem_backend",
+                    return_value=backend,
+                ),
+            ):
+                observed = CapsuleBundle.from_directory(root)
+
+            self.assertEqual(observed.artifact_sha256, bundle.artifact_sha256)
+            pin_directory.assert_called_once_with(root, require_private=True)
+            self.assertEqual(
+                pinned.pin_calls,
+                [(name, WindowsObjectKind.FILE, True) for name in payloads],
+            )
+            self.assertTrue(pinned.closed)
+            self.assertEqual(
+                pinned.read_limits,
+                [capsule_module._MAX_BUNDLE_FILE_BYTES] * len(payloads),
+            )
 
 
 class CapabilityCapsuleTests(unittest.TestCase):

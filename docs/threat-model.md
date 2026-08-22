@@ -186,14 +186,26 @@ Controls:
   bubblewrap backend only when a trusted executable is available and otherwise
   reports the contract unavailable; macOS reports the contract unavailable
   rather than treating owner-private group membership as a sandbox;
+- native Windows filesystem trust retains every opened ancestor and leaf
+  handle without delete sharing, binds volume/file identity plus owner/DACL and
+  trust-policy digests, rejects unsafe namespaces, reparse/cloud objects and
+  unsupported volumes, and revalidates before and after bounded reads. Its
+  ancestor policy permits only unrelated child creation while rejecting
+  delete-child, metadata, generic-write, ACL, owner, and replacement rights;
+- Windows create-only publication attaches a protected DACL during exclusive
+  creation, bounds and flushes the write, reads back and revalidates the same
+  identity, and cleans up only the exact file created by the failed attempt;
+- Windows whole-file shared and exclusive locks use `LockFileEx`, while atomic
+  publication and every higher incomplete contract remain unavailable;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows startup/configuration and existing POSIX behavior receive separate
-  regression coverage, while native Windows backend routes remain planned.
+- Windows native filesystem/locking and existing POSIX behavior receive
+  separate regression coverage, while the remaining Windows backend routes
+  remain planned.
 
 ### Excessive permissions
 
@@ -575,12 +587,12 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- the common Windows import and configuration-diagnostics boundary is not
-  native runtime certification: stateful operations remain unavailable where
-  secure filesystem, locking, atomic publication/recovery, process, Git, or
-  capsule contracts are absent. Native Windows retention preview, apply, and
-  orphan repair remain unavailable; expiration quarantine intentionally retains
-  orphaned bytes until an operator reviews and removes them;
+- the native Windows filesystem/locking tranche is not full runtime
+  certification: stateful operations remain unavailable where atomic
+  publication/recovery, process, Git, or capsule contracts are absent. Native
+  Windows retention preview, apply, and orphan repair remain unavailable;
+  expiration quarantine intentionally retains orphaned bytes until an operator
+  reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;
 - provider acceptance does not guarantee human receipt or downstream interpretation;

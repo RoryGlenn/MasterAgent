@@ -24,6 +24,7 @@ from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.platform_runtime import (
     PlatformContract,
+    get_secure_filesystem_backend,
     require_persistent_state_platform,
     require_platform_contract,
 )
@@ -154,7 +155,11 @@ class RestrictedTokenFileProvider:
         require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         selected = path.expanduser()
         absolute = selected if selected.is_absolute() else Path.cwd() / selected
-        self._path = absolute.parent.resolve(strict=True) / absolute.name
+        self._path = (
+            absolute
+            if os.name == "nt"
+            else absolute.parent.resolve(strict=True) / absolute.name
+        )
 
     def get_token(self) -> AccessToken:
         """Read the token file after enforcing restrictive POSIX permissions."""
@@ -621,6 +626,26 @@ def _read_restricted_token_file(path: Path) -> str:
     require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     resolved = selected if selected.is_absolute() else Path.cwd() / selected
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise AuthenticationError("native Windows secure filesystem is unavailable")
+        try:
+            _canonical, payload, _identity = backend.read_restricted_file(
+                resolved,
+                1024 * 1024,
+                require_private=True,
+            )
+        except (ConfigurationError, OSError) as error:
+            raise AuthenticationError("token file could not be read safely") from error
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AuthenticationError("token file is not valid UTF-8") from error
     try:
         parent = resolved.parent.resolve(strict=True)
         parent_before = parent.lstat()

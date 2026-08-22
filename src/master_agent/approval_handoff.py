@@ -23,6 +23,7 @@ from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import AgentAction, ChangePlan, ExecutionContext
 from master_agent.platform_runtime import (
     PlatformContract,
+    get_secure_filesystem_backend,
     require_persistent_state_platform,
     require_platform_contract,
 )
@@ -480,8 +481,27 @@ def load_approval_request(path: Path) -> ApprovalRequest:
         selected = Path.cwd() / selected
     if selected.name in {"", ".", ".."}:
         raise ConfigurationError("approval request path is invalid")
-    with PinnedDirectory.open(selected.parent) as directory:
-        payload = _read_restricted_bytes(directory, selected.name)
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = get_secure_filesystem_backend()
+        if not isinstance(backend, WindowsSecureFilesystemBackend):
+            raise ConfigurationError("native Windows secure filesystem is unavailable")
+        try:
+            _canonical, payload, _identity = backend.read_restricted_file(
+                selected,
+                _MAX_REQUEST_BYTES,
+                require_private=True,
+            )
+        except (ConfigurationError, OSError) as error:
+            raise ConfigurationError(
+                "approval request could not be opened safely"
+            ) from error
+    else:
+        with PinnedDirectory.open(selected.parent) as directory:
+            payload = _read_restricted_bytes(directory, selected.name)
     try:
         raw = json.loads(payload, object_pairs_hook=_unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:

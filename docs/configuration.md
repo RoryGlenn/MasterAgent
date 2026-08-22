@@ -45,6 +45,18 @@ must still be installed in `capabilities.toml` and pass governance, policy,
 source-of-truth, provider, credential, approval, verification, compensation,
 retention, and audit checks.
 
+On native Windows, explicit configuration, organization profiles, restricted
+token and credential files, and connector CA bundles are read through retained
+Win32 handles after local-volume, stable file-ID, owner-SID, and effective-DACL
+validation. UNC/device paths, reparse or cloud objects, unsafe names,
+unsupported filesystems, and untrusted write authority on selected targets
+fail closed. An immutable retained ancestor may permit unrelated child
+creation, but never child deletion, metadata, generic-write, ACL, owner, or
+replacement authority. The exact ancestor/target policy is approval-bound. The
+default trust policy admits only the effective user and fixed operating-system
+administration principals; organization-managed SID allowlists are not enabled
+until their separate trust-profile change is complete.
+
 The packaged `local-default` profile is `employee`/`live`, keeps writes and
 communications off, and lists only anonymous public repository reads and
 reviewed local-generation capabilities. Its empty `[configuration]` table uses

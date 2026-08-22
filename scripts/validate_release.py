@@ -358,7 +358,7 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     ),
     Path("docs/implementation-roadmap.md"): (
         "Complete on POSIX; native Windows retention preview/apply/repair gated",
-        "native Windows secure filesystem/ACL, locking, atomic state and retention",
+        "native Windows filesystem/ACL and locking tranche is implemented",
     ),
     Path("docs/operations.md"): (
         "repeat the apply command under the same root",
@@ -377,7 +377,7 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     Path("docs/threat-model.md"): (
         "every discovered evidence-parent",
         "broad, path-based, or unvalidated recursive evidence deletion",
-        "common Windows import and configuration-diagnostics boundary is not",
+        "native Windows filesystem/locking tranche is not full runtime",
         "orphan repair remain unavailable",
     ),
 }

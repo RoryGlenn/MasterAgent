@@ -88,13 +88,14 @@ jobs:
         run: python scripts/validate_release.py
 
   windows-startup:
-    name: Windows installed-package startup
-    runs-on: windows-latest
+    name: Windows 11 native filesystem and startup
+    runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
+          architecture: arm64
           cache: pip
       - name: Install the package in an isolated runtime
         shell: pwsh
@@ -110,6 +111,126 @@ jobs:
           }
           "MASTER_AGENT_WINDOWS_PYTHON=$runtimePython" | Out-File -FilePath $env:GITHUB_ENV -Append
           "MASTER_AGENT_WINDOWS_CLI=$runtimeCli" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Run native filesystem and locking tests as a standard user
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $userName = "MasterAgentStandard"
+          $account = "$env:COMPUTERNAME\$userName"
+          $passwordText = "Ma9!" + [Guid]::NewGuid().ToString("N")
+          $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
+          $credential = [PSCredential]::new($account, $password)
+          $testRoot = "C:\MasterAgentStandardTests"
+          $job = $null
+
+          function Invoke-CheckedIcacls {
+            param([string[]] $IcaclsArguments)
+            & icacls.exe @IcaclsArguments | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+              throw "icacls failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          try {
+            $user = New-LocalUser `
+              -Name $userName `
+              -Password $password `
+              -AccountNeverExpires `
+              -PasswordNeverExpires `
+              -UserMayNotChangePassword
+            $usersSid = [Security.Principal.SecurityIdentifier]::new(
+              "S-1-5-32-545"
+            )
+            Add-LocalGroupMember -SID $usersSid -Member $user
+            if (-not (
+              Get-LocalGroupMember -SID $usersSid |
+                Where-Object { $_.SID -eq $user.SID }
+            )) {
+              throw "native Windows test account is not a member of Users"
+            }
+            if (
+              Get-LocalGroupMember -Group "Administrators" |
+                Where-Object { $_.SID -eq $user.SID }
+            ) {
+              throw "native Windows tests must not run with an administrator token"
+            }
+
+            New-Item -ItemType Directory -Path $testRoot | Out-Null
+            Invoke-CheckedIcacls @($testRoot, "/inheritance:r")
+            Invoke-CheckedIcacls @($testRoot, "/setowner", $account)
+            Invoke-CheckedIcacls @(
+              $testRoot,
+              "/grant:r",
+              "${account}:(OI)(CI)(F)",
+              "*S-1-5-18:(OI)(CI)(F)",
+              "*S-1-5-32-544:(OI)(CI)(F)"
+            )
+            Invoke-CheckedIcacls @(
+              $env:GITHUB_WORKSPACE,
+              "/grant",
+              "${account}:(OI)(CI)(RX)",
+              "/T",
+              "/C",
+              "/Q"
+            )
+            $runtimeRoot = Split-Path `
+              (Split-Path $env:MASTER_AGENT_WINDOWS_PYTHON -Parent) `
+              -Parent
+            Invoke-CheckedIcacls @(
+              $runtimeRoot,
+              "/grant",
+              "${account}:(OI)(CI)(RX)",
+              "/T",
+              "/C",
+              "/Q"
+            )
+
+            $job = Start-Job `
+              -Credential $credential `
+              -WorkingDirectory $env:GITHUB_WORKSPACE `
+              -ScriptBlock {
+                param($Python, $Workspace, $TemporaryRoot)
+                $ErrorActionPreference = "Stop"
+                $env:TEMP = $TemporaryRoot
+                $env:TMP = $TemporaryRoot
+                $env:PYTHONPATH = Join-Path $Workspace "src"
+                $env:PYTHONDONTWRITEBYTECODE = "1"
+                $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+                $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+                if (
+                  $principal.IsInRole(
+                    [Security.Principal.WindowsBuiltInRole]::Administrator
+                  )
+                ) {
+                  throw "native Windows tests received an administrator token"
+                }
+                & $Python -m unittest -v tests.test_windows_platform_runtime
+                if ($LASTEXITCODE -ne 0) {
+                  throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
+                }
+              } `
+              -ArgumentList @(
+                $env:MASTER_AGENT_WINDOWS_PYTHON,
+                $env:GITHUB_WORKSPACE,
+                $testRoot
+              )
+            $job | Wait-Job -Timeout 900 | Out-Null
+            Receive-Job -Job $job
+            if ($job.State -ne "Completed") {
+              throw "standard-user native Windows test job ended in state $($job.State)"
+            }
+            if ($job.ChildJobs[0].JobStateInfo.Reason) {
+              throw $job.ChildJobs[0].JobStateInfo.Reason
+            }
+          }
+          finally {
+            if ($null -ne $job) {
+              Stop-Job -Job $job -ErrorAction SilentlyContinue
+              Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            }
+            Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - name: Prove startup and config-only readiness outside the source tree
         shell: pwsh
         run: |
@@ -140,20 +261,24 @@ jobs:
             throw "install-level doctor failed with exit code $LASTEXITCODE"
           }
 
-          $contracts = @(
-            "secure_filesystem",
-            "cross_process_locking",
+          $unavailableContracts = @(
             "atomic_publication_recovery",
             "process_supervision",
             "trusted_git",
             "capsule_isolation"
           )
           foreach ($report in @($readinessOutput, $doctorOutput)) {
-            if ($report -notmatch "platform runtime: windows \(windows-unavailable\)") {
-              throw "platform runtime did not report the unavailable Windows backend"
+            if ($report -notmatch 'platform runtime: windows \(windows-native-partial\)') {
+              throw "platform runtime did not report the partial native Windows backend"
             }
-            foreach ($contractName in $contracts) {
-              if ($report -notmatch "$contractName`: unavailable \(windows-unavailable\)") {
+            if ($report -notmatch 'secure_filesystem: available \(windows-handle-acl-filesystem\)') {
+              throw "platform runtime did not report the native Windows filesystem"
+            }
+            if ($report -notmatch 'cross_process_locking: available \(windows-lockfileex\)') {
+              throw "platform runtime did not report native Windows locking"
+            }
+            foreach ($contractName in $unavailableContracts) {
+              if ($report -notmatch "$contractName`: unavailable \(windows-native-partial\)") {
                 throw "platform runtime did not fail closed for $contractName"
               }
             }

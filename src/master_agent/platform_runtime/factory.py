@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sys
 from functools import lru_cache
+from typing import Final
 
 from master_agent.platform_runtime.contracts import (
     CapsuleIsolationBackend,
     CrossProcessLockingBackend,
+    PlatformCapabilityUnavailable,
     PlatformContract,
     PlatformContractStatus,
     PlatformRuntime,
@@ -15,6 +17,8 @@ from master_agent.platform_runtime.contracts import (
     ProcessSupervisionBackend,
     SecureFilesystemBackend,
 )
+
+_HOST_PLATFORM: Final = sys.platform
 
 
 def get_platform_runtime(
@@ -93,19 +97,25 @@ def get_capsule_isolation_backend(
     ).require_capsule_isolation()
 
 
-def _normalize_platform(value: str) -> tuple[str, str, bool]:
-    """Return normalized identity, backend ID, and POSIX-selection flag."""
+def _normalize_platform(value: str) -> tuple[str, str, bool, bool]:
+    """Return normalized identity, backend ID, and native-selection flags."""
 
     normalized = (
         value.casefold() if isinstance(value, str) and value == value.strip() else ""
     )
     if normalized in {"linux", "linux2"}:
-        return "linux", "posix-linux", True
+        return "linux", "posix-linux", True, False
     if normalized == "darwin":
-        return "macos", "posix-macos", True
+        return "macos", "posix-macos", True, False
     if normalized in {"win32", "cygwin", "msys"}:
-        return "windows", "windows-unavailable", False
-    return "unsupported", "unsupported", False
+        native_windows = normalized == "win32" and _HOST_PLATFORM == "win32"
+        return (
+            "windows",
+            "windows-native-partial" if native_windows else "windows-unavailable",
+            False,
+            native_windows,
+        )
+    return "unsupported", "unsupported", False, False
 
 
 @lru_cache(maxsize=32)
@@ -113,6 +123,7 @@ def _runtime_for_identity(
     platform: str,
     backend: str,
     posix: bool,
+    native_windows: bool,
     capsule_executable: str | None,
 ) -> PlatformRuntime:
     """Load only the selected native backend and cache its immutable result."""
@@ -133,6 +144,19 @@ def _runtime_for_identity(
             backend=backend,
             capsule_executable=capsule_executable,
         )
+    if platform == "windows" and native_windows:
+        try:
+            from master_agent.platform_runtime.windows.runtime import (
+                build_windows_runtime,
+            )
+
+            return build_windows_runtime()
+        except (ImportError, PlatformCapabilityUnavailable):
+            return _unavailable_runtime(
+                platform=platform,
+                backend="windows-unavailable",
+                reason="native Windows runtime backend is unavailable",
+            )
     if platform == "windows":
         return _unavailable_runtime(
             platform=platform,

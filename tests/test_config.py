@@ -3,16 +3,91 @@
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from master_agent.auth import AuthMode, ResolvedAuth
-from master_agent.config import IntegrationConfig
+from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
 from master_agent.config_sources import resolve_config_source
 from master_agent.errors import ConfigurationError
+from master_agent.trust_store import capture_ca_bundle
 from tests.helpers import private_temporary_directory
 
 
 class IntegrationConfigTests(unittest.TestCase):
     """Verify secret references, validation, and resolution."""
+
+    def test_windows_ca_target_is_lexical_until_native_capture(self) -> None:
+        connector = ConnectorConfig(
+            system="jira",
+            enabled=True,
+            deployment=DeploymentType.CLOUD,
+            base_url="https://example.atlassian.net",
+            base_url_env=None,
+            auth_mode=AuthMode.NONE,
+            username_env=None,
+            secret_env=None,
+            ca_bundle_env="CA_BUNDLE",
+        )
+        selected = Mock(spec=Path)
+        selected.expanduser.return_value = selected
+        selected.is_absolute.return_value = True
+        canonical = Path("/synthetic/windows-ca.pem")
+        validated = Mock(canonical=r"C:\Trust\enterprise-ca.pem")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        with (
+            patch("master_agent.config.os", windows_os),
+            patch(
+                "master_agent.config.Path",
+                side_effect=(selected, canonical),
+            ),
+            patch(
+                "master_agent.platform_runtime.windows.filesystem."
+                "validate_windows_drive_path",
+                return_value=validated,
+            ) as validate_path,
+            patch("master_agent.config.require_platform_contract"),
+        ):
+            base_url, ca_bundle = connector.resolve_execution_target(
+                {"CA_BUNDLE": r"C:\Trust\enterprise-ca.pem"}
+            )
+
+        self.assertEqual(base_url, "https://example.atlassian.net")
+        self.assertEqual(ca_bundle, canonical)
+        validate_path.assert_called_once_with(selected)
+        selected.resolve.assert_not_called()
+        selected.is_file.assert_not_called()
+
+    def test_windows_ca_native_open_error_is_bounded(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.read_restricted_file.side_effect = OSError("native failure")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        selected = Path("/missing/enterprise-ca.pem")
+
+        with (
+            patch("master_agent.trust_store.os", windows_os),
+            patch(
+                "master_agent.trust_store.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch("master_agent.trust_store.require_platform_contract"),
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "connector CA bundle could not be captured safely",
+            ),
+        ):
+            capture_ca_bundle(selected)
+
+        backend.read_restricted_file.assert_called_once_with(
+            selected,
+            4 * 1024 * 1024,
+            require_private=False,
+        )
 
     def test_repository_config_parses_without_resolving_secrets(self) -> None:
         root = Path(__file__).resolve().parents[1]

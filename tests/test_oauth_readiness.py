@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+from master_agent import oauth as oauth_module
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
+from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.governance import EnvironmentKind, GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import DataClassification
-from master_agent.oauth import AccessToken, InMemoryTokenCache, StaticTokenProvider
-from master_agent.oauth_config import OAuthFlow, OAuthProfiles
+from master_agent.oauth import (
+    AccessToken,
+    InMemoryTokenCache,
+    RestrictedTokenFileProvider,
+    StaticTokenProvider,
+)
+from master_agent.oauth_config import OAuthFlow, OAuthProfile, OAuthProfiles
+from master_agent.platform_runtime import PlatformContract
 from master_agent.provider_egress import (
     ModelContextRule,
     ProviderDataEgressPolicy,
@@ -28,6 +38,100 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class OAuthReadinessTests(unittest.TestCase):
     """Exercise safe token lifecycle and readiness reporting."""
+
+    def test_windows_native_token_open_error_is_bounded(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.read_restricted_file.side_effect = OSError("native failure")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        selected = Path("/missing/token.json")
+
+        with (
+            patch.object(oauth_module, "os", windows_os),
+            patch.object(
+                oauth_module,
+                "get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch.object(oauth_module, "require_platform_contract"),
+        ):
+            provider = RestrictedTokenFileProvider(selected)
+            with self.assertRaisesRegex(
+                AuthenticationError,
+                "token file could not be read safely",
+            ):
+                provider.get_token()
+
+        backend.read_restricted_file.assert_called_once_with(
+            selected,
+            1024 * 1024,
+            require_private=True,
+        )
+
+    def test_windows_restricted_file_readiness_uses_private_native_pin(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        token_file = Mock(spec=Path)
+        token_file.expanduser.return_value = token_file
+        token_file.is_absolute.return_value = True
+        profile = OAuthProfile(
+            name="restricted",
+            provider="microsoft_graph",
+            flow=OAuthFlow.RESTRICTED_FILE,
+            scopes=("User.Read",),
+            token_file=token_file,
+            enabled=True,
+        )
+        filesystem = Mock(available=True, reason=None)
+        platform_status = Mock(platform="windows")
+        platform_status.contract_status.return_value = filesystem
+        backend = WindowsSecureFilesystemBackend(_api=Mock())
+
+        with (
+            patch(
+                "master_agent.oauth_config.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch.object(
+                backend,
+                "pin_file",
+                return_value=nullcontext(Mock()),
+            ) as pin_file,
+        ):
+            self.assertEqual(
+                profile.readiness_errors({}, platform_status=platform_status),
+                (),
+            )
+
+        platform_status.contract_status.assert_called_once_with(
+            PlatformContract.SECURE_FILESYSTEM
+        )
+        pin_file.assert_called_once_with(token_file, require_private=True)
+        token_file.is_file.assert_not_called()
+
+        unsafe_detail = r"C:\Private\secret-token.json"
+        with (
+            patch(
+                "master_agent.oauth_config.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch.object(
+                backend,
+                "pin_file",
+                side_effect=ConfigurationError(unsafe_detail),
+            ),
+        ):
+            errors = profile.readiness_errors({}, platform_status=platform_status)
+
+        self.assertEqual(errors, ("token file cannot be inspected safely",))
+        self.assertNotIn(unsafe_detail, " ".join(errors))
+        token_file.is_file.assert_not_called()
 
     def test_profiles_load_disabled_without_credentials(self) -> None:
         profiles = OAuthProfiles.from_toml(ROOT / "config/oauth.toml")

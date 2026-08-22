@@ -5,8 +5,9 @@
 The v1 governed core, provider contracts, bounded advisory profiles, capability
 capsule path, native behavioral specification lifecycle, and audience-aware
 documentation completion gate are implemented. A common platform-runtime
-contract now keeps imports and configuration diagnostics platform neutral while
-native Windows security backends remain separately planned. Release-hardening gates keep
+contract now keeps imports and configuration diagnostics platform neutral. The
+native Windows filesystem/ACL and locking tranche is implemented while the
+remaining Windows security backends stay separately planned. Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
 execution, native Windows retention preview/apply/repair, raw plugin execution, and
 unsafe provider mutations non-routable.
@@ -14,7 +15,7 @@ unsafe provider mutations non-routable.
 | Area | Software status | Operational status |
 |---|---|---|
 | Progressive user workflow | Complete | Install a reviewed organization profile; local installation, selected reads, governed effects, and enterprise deployment report independent readiness |
-| Platform runtime | Common contract complete; existing POSIX behavior preserved; native Windows backends planned | Windows supports imports, help/version, and offline configuration diagnostics; stateful operations remain unavailable until every required native contract exists |
+| Platform runtime | Common contract and native Windows filesystem/locking complete; existing POSIX behavior preserved; remaining Windows backends planned | Windows supports trusted bounded reads and locks; setup and stateful operations remain unavailable until atomic publication and every route-specific contract exist |
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
@@ -65,8 +66,8 @@ absent.
 - readiness exposes stable `platform`, `backend`, and per-contract availability
   for secure filesystem, cross-process locking, atomic publication/recovery,
   process supervision, trusted Git, and capsule isolation;
-- help, version, deployment readiness, and install-level progressive doctor
-  run on Windows before native stateful backends are complete;
+- help, version, deployment readiness, install-level progressive doctor, and
+  trusted bounded file reads use the partial native Windows runtime;
 - a dependent operation fails with a bounded `runtime_defect` before protected
   state, credentials, connector construction, provider access, or effects when
   its exact backend is unavailable;
@@ -75,8 +76,9 @@ absent.
 - existing POSIX filesystem, locking, atomic-state, process, and Git semantics
   remain covered; Linux capsule isolation identifies a selected trusted
   bubblewrap executable or reports that independent contract unavailable, as
-  does macOS; every native Windows route
-  stays planned until its own implementation and evidence are complete.
+  does macOS; Windows filesystem/locking has native evidence, while each
+  remaining Windows route stays planned until its own implementation and
+  evidence are complete.
 
 ### Phase 1 — governed runtime
 
@@ -227,10 +229,10 @@ absent.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- native Windows secure filesystem/ACL, locking, atomic state and retention,
-  including preview/apply/orphan repair, plus credentials, process supervision,
-  Git isolation, capsule isolation, and hosted certification behind the
-  released common platform contract;
+- native Windows atomic state and retention, including
+  preview/apply/orphan repair, plus credential brokers, process supervision,
+  Git isolation, capsule isolation, organization trust-profile integration,
+  and hosted certification behind the released filesystem/locking boundary;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
 - production credential-broker and external receipt/audit adapters;
