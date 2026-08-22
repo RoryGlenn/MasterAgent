@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0132-capsule-promotion-bindings"
+title = "Bind capsule promotion environment and worker identity"
+status = "archived"
+github_issue = 132
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-CAPABILITY-IMPORT-001"
+destination = "runtime/MA-CAPABILITY-IMPORT-001.md"
+source = "current/MA-CAPABILITY-IMPORT-001.md"

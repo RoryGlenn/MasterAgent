@@ -360,6 +360,12 @@ class CapsuleValidator:
         self._worker = worker
         self._license_policy = license_policy
 
+    @property
+    def worker_sha256(self) -> str:
+        """Return the exact worker identity used to produce validation evidence."""
+
+        return self._worker.identity_sha256
+
     def validate(self, bundle: CapsuleBundle) -> CapsuleValidation:
         """Return deterministic evidence only after every validation passes."""
 
