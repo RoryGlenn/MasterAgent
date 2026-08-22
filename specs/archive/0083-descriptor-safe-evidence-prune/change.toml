@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0083-descriptor-safe-evidence-prune"
+title = "Enable descriptor-safe expired-evidence deletion"
+status = "archived"
+github_issue = 83
+created = "2026-08-21"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-RETENTION-001"
+destination = "security/MA-RETENTION-001.md"
+source = "current/MA-RETENTION-001.md"

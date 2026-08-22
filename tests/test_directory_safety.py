@@ -52,6 +52,28 @@ class PinnedDirectoryTests(unittest.TestCase):
                 os.close(descriptor)
                 duplicate.close()
 
+    def test_duplicate_descriptor_chain_remains_owned_after_pin_closes(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory)
+            pinned = PinnedDirectory.open(path)
+            descriptors = pinned.duplicate_descriptor_chain()
+            try:
+                self.assertEqual(len(descriptors), len(pinned.path.parts))
+                self.assertTrue(
+                    all(stat.S_ISDIR(os.fstat(value).st_mode) for value in descriptors)
+                )
+                self.assertTrue(pinned.identity.matches(os.fstat(descriptors[-1])))
+
+                pinned.close()
+
+                self.assertTrue(
+                    all(stat.S_ISDIR(os.fstat(value).st_mode) for value in descriptors)
+                )
+            finally:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                pinned.close()
+
     def test_replacing_final_directory_is_rejected(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -201,6 +223,7 @@ class PinnedDirectoryTests(unittest.TestCase):
                 pinned.validate,
                 pinned.fileno,
                 pinned.duplicate_fd,
+                pinned.duplicate_descriptor_chain,
                 pinned.duplicate,
             ):
                 with (

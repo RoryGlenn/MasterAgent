@@ -879,7 +879,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     prune = subparsers.add_parser(
         "evidence-prune",
-        help="preview expired evidence; destructive apply is disabled",
+        help="preview or explicitly delete validated expired evidence",
     )
     prune.add_argument("--root", type=Path, default=Path(".master-agent"))
     prune.add_argument("--apply", action="store_true")

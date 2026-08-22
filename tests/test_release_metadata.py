@@ -12,12 +12,14 @@ from unittest.mock import patch
 
 from scripts.validate_release import (
     _PUBLIC_READ_DOCUMENT_REQUIREMENTS,
+    _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS,
     _validate_copilot_agent,
     _validate_demo_powerpoint,
     _validate_demo_readiness,
     _validate_file_hygiene,
     _validate_first_run_contract,
     _validate_public_read_contract,
+    _validate_retention_prune_contract,
     _validate_supply_chain,
     validate_archive,
     validate_project,
@@ -415,6 +417,38 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(checks, [])
             self.assertTrue(
                 any("blanket credential requirement" in error for error in errors)
+            )
+
+    def test_retention_prune_contract_rejects_preview_only_drift(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source_root / relative).read_bytes())
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_retention_prune_contract(root, checks, errors)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(checks), 1)
+
+            operations = root / "docs/operations.md"
+            operations.write_text(
+                operations.read_text(encoding="utf-8")
+                + "\nEvidence expiry deletion remains preview-only.\n",
+                encoding="utf-8",
+            )
+            checks = []
+            errors = []
+
+            _validate_retention_prune_contract(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertTrue(
+                any("stale preview-only claim" in error for error in errors)
             )
 
     def test_demo_readiness_count_must_match_capability_catalog(self) -> None:

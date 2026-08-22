@@ -201,6 +201,30 @@ class PinnedDirectory:
                 os.close(descriptor)
                 raise
 
+    def duplicate_descriptor_chain(self) -> tuple[int, ...]:
+        """Return validated caller-owned descriptors from filesystem root to leaf."""
+
+        with self._lock:
+            self.validate()
+            descriptors: list[int] = []
+            try:
+                for source, identity in zip(
+                    self._descriptors,
+                    self._identities,
+                    strict=True,
+                ):
+                    descriptor = _duplicate_descriptor(source)
+                    descriptors.append(descriptor)
+                    if not identity.matches(os.fstat(descriptor)):
+                        raise ConfigurationError(
+                            "runtime directory changed while its descriptor chain "
+                            "was duplicated"
+                        )
+                return tuple(descriptors)
+            except BaseException:
+                _close_descriptor_values(descriptors)
+                raise
+
     def duplicate(self) -> PinnedDirectory:
         """Return an independently owned duplicate of the full descriptor chain."""
 

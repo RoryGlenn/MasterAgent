@@ -30,6 +30,47 @@ send, and recurring-schedule gates remain disabled.
 | workflow TOML files | exact registered task inputs |
 | `recurring.toml` | disabled schedules and workflow allowlists |
 
+## Retention and expiry
+
+`retention.toml` determines the persistence mode and time to live (TTL) when
+evidence is first written. The selected creation time, expiration time,
+persistence decision, digest, and sibling evidence filename are stored in the
+mode-`0600` retention sidecar. Changing `retention.toml` later does not
+silently recalculate or shorten an existing record's expiration.
+
+`evidence-prune` therefore accepts an evidence root, not a retention
+configuration path. It validates the complete persisted sidecar and deletes a
+pair only when that recorded expiration is at or before the current time.
+Preview is the default. On POSIX, explicit `--apply` uses the pinned root,
+an exclusive selected-root retention lock, shared existing owner-controlled
+ancestor retention locks, the discovered evidence-parent publication locks, an
+exact descriptor rescan, and a bounded same-filesystem recoverable transaction.
+Retained writers expose and exclusively lock their exact parent before sharing
+existing ancestor retention locks, so publication under a nested parent cannot
+begin during ancestor maintenance. All Windows execution remains gated pending
+equivalent native filesystem guarantees.
+
+`evidence-repair --apply` uses the same selected-root and ancestor handshake,
+locks every discovered descendant record parent, and rescans before
+classification or quarantine. It refuses an active child publication even
+when the manifest is already visible but its evidence sibling is not.
+
+The selected-root publication controls are also referred to as the root and discovered evidence-parent locks.
+
+Interrupted transaction recovery is scoped to the exact root that created the
+transaction. An ancestor scan reports a nonempty nested `.retention-prune`
+directory and performs no new deletion; recover the child root first, then
+repeat the ancestor operation.
+
+Use an owner-controlled root containing retained evidence pairs and their
+MasterAgent maintenance state. Any discovered sidecar with a missing or
+malformed referenced evidence member, unsafe identity, scan truncation, or
+concurrent change makes apply fail closed. Other unreferenced regular files are
+not classified as prune candidates. Retention configuration does not encode or
+adjudicate legal holds; deployments must keep held evidence outside an
+apply-eligible boundary or otherwise prevent the operation under their approved
+policy.
+
 ## Credentials
 
 TOML contains environment-variable **names**, never secret values. The runtime rejects credentials embedded in URLs and redacts query strings from errors.

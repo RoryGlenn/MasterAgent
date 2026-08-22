@@ -38,7 +38,7 @@ each invocation; commands never create the parent or overwrite prior output.
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
 | `retain-evidence` | Persist evidence under the selected retention rule | Local create-only evidence and sidecar output; never contacts a provider |
-| `evidence-prune` | Preview expired evidence | Read-only preview; `--apply` is disabled before traversal or deletion |
+| `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; on POSIX, `--apply` locks the pinned root and discovered evidence parents, descriptor-rescans, and recoverably deletes only complete validated expired pairs; all Windows execution is capability-gated |
 | `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; `--apply` recoverably moves exact descriptor-validated identities into a private same-filesystem quarantine |
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
@@ -214,3 +214,19 @@ must satisfy the ownership, permission, and identity checks described in
 Provider mutation is available only through an exact, manifest-bound
 `run --apply`. The direct workflow commands retained for compatibility do not
 offer an alternate execution path.
+
+## Evidence expiration maintenance
+
+`evidence-prune` accepts one owner-controlled retention root. Preview and apply
+use a bounded descriptor-relative scan, reject symlinks and unsafe file or
+directory identities, validate the exact sidecar schema and evidence digest,
+and report candidates in deterministic sidecar order. Apply additionally
+acquires the root and every discovered evidence-parent retention lock, repeats
+the exact scan, and refuses mutation if the tree changed or any validation was
+incomplete.
+
+Deletion is limited to an evidence file and its canonical sibling
+`*.retention.json` sidecar. A private `.retention-prune` transaction binds both
+inodes so an interrupted apply can be completed or rolled back by a later
+apply. Preview reports a pending transaction without changing it. Do not edit
+or remove this internal transaction state manually.

@@ -112,14 +112,15 @@ class RetentionTests(unittest.TestCase):
             self.assertTrue(evidence.exists())
             self.assertTrue(sidecar.exists())
 
-            with self.assertRaisesRegex(ConfigurationError, "pruning is disabled"):
-                purge_expired_evidence(
-                    root,
-                    now=created + timedelta(hours=73),
-                    dry_run=False,
-                )
-            self.assertTrue(evidence.exists())
-            self.assertTrue(sidecar.exists())
+            applied = purge_expired_evidence(
+                root,
+                now=created + timedelta(hours=73),
+                dry_run=False,
+            )
+            self.assertEqual(applied.errors, ())
+            self.assertEqual(applied.removed_files, preview.removed_files)
+            self.assertFalse(evidence.exists())
+            self.assertFalse(sidecar.exists())
 
     def test_metadata_only_rule_rejects_content_persistence(self) -> None:
         config = RetentionConfig.from_toml(ROOT / "config/retention.toml")

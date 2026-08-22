@@ -40,6 +40,12 @@ tamper-resistant audit sink and isolated or broker-attested credentials; local
 SQLite is a development boundary, not protection from a compromised service
 account.
 
+Retention hierarchy locks provide cooperative concurrency for MasterAgent
+processes within that service-account boundary. They use only restricted
+retention lock files in eligible owner-controlled directories, not raw public
+ancestor directory locks, and remain subject to the same trusted-service-
+account availability assumption as the other local lock state.
+
 ## Threats and controls
 
 ### Prompt injection and instruction laundering
@@ -388,7 +394,21 @@ Controls:
 - mode-`0600` same-directory staging, fsync, create-only manifest-first
   publication, and transaction-owned rollback;
 - descriptor-relative, no-follow orphan detection and recoverable quarantine;
-- expiry deletion remains preview-only;
+- bounded descriptor-relative expiration planning beneath one pinned root;
+- an exclusive exact-parent publication lock followed by shared existing
+  owner-controlled ancestor retention locks, paired with the same
+  selected-root/ancestor maintenance handshake;
+- deterministic acquisition of the selected-root and every discovered evidence-parent
+  retention lock, followed by an exact identity-bound rescan;
+- the same descendant-parent lock discovery and rescan before orphan
+  classification or quarantine, including partial child-first publication;
+- exact schema, timestamp, persistence, sibling, digest, owner, mode, file type,
+  single-link, and bounded-size validation before new expiration deletion;
+- create-only hard-link staging of each pair in a bounded content-free
+  same-filesystem transaction, with descriptor-bound completion or rollback
+  after interruption, an absent-source-parent fsync barrier before staged-link
+  cleanup, exact-root reporting for pending nested transactions, and apply-only
+  normalization of stricter owner-only internal directory/lock/marker modes;
 - production readiness that requires an implemented typed external,
   tamper-resistant audit sink rather than trusting a configured product name.
 
@@ -434,7 +454,7 @@ Controls:
 - capsule third-party runtime dependencies in the current pure worker;
 - local Git patch, branch, commit, and push execution;
 - non-manifest weekly-status, communication-context, and recurring execution;
-- destructive recursive evidence pruning;
+- broad, path-based, or unvalidated recursive evidence deletion;
 - automatic Teams attachment download;
 - autonomous external communication from recurring workflows;
 - automatic refresh-token persistence.
@@ -454,8 +474,9 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- expiry deletion is preview-only; quarantine intentionally retains orphaned
-  bytes until an operator reviews and removes them;
+- native Windows expiration execution remains unavailable pending equivalent
+  filesystem and atomic-state guarantees; quarantine intentionally retains
+  orphaned bytes until an operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;
 - provider acceptance does not guarantee human receipt or downstream interpretation;
