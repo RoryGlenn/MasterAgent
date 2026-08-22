@@ -348,7 +348,7 @@ class CtypesWindowsProcessApi:
             wintypes.DWORD,
             ctypes.c_void_p,
             wintypes.LPCWSTR,
-            ctypes.POINTER(_StartupInfoW),
+            ctypes.POINTER(_StartupInfoExW),
             ctypes.POINTER(_ProcessInformation),
         )
         kernel.CreateProcessW.restype = wintypes.BOOL
@@ -437,7 +437,7 @@ class CtypesWindowsProcessApi:
                 *inherited_handles,
             )
             self._validate_inheritable_handles(child_handles)
-            startup, attribute_list = self._build_startup(
+            startup, attribute_list, _attribute_handles = self._build_startup(
                 stdin=stdin,
                 stdout=stdout_write_owned,
                 stderr=stderr_write_owned,
@@ -465,7 +465,7 @@ class CtypesWindowsProcessApi:
                 flags,
                 ctypes.cast(environment_block, ctypes.c_void_p),
                 os.fspath(cwd),
-                ctypes.byref(startup.startup_info),
+                ctypes.byref(startup),
                 ctypes.byref(process_info),
             ):
                 raise ProcessSupervisionError(
@@ -635,7 +635,7 @@ class CtypesWindowsProcessApi:
         stdout: wintypes.HANDLE,
         stderr: wintypes.HANDLE,
         inherited_handles: tuple[int, ...],
-    ) -> tuple[_StartupInfoExW, Any]:
+    ) -> tuple[_StartupInfoExW, Any, Any]:
         size = ctypes.c_size_t()
         self._kernel.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
         if _last_error() != _ERROR_INSUFFICIENT_BUFFER or size.value == 0:
@@ -664,7 +664,7 @@ class CtypesWindowsProcessApi:
         startup.startup_info.stdout = stdout
         startup.startup_info.stderr = stderr
         startup.attribute_list = ctypes.cast(storage, ctypes.c_void_p)
-        return startup, storage
+        return startup, storage, handle_array
 
     def _validate_inheritable_handles(self, handles: tuple[int, ...]) -> None:
         for handle in handles:
