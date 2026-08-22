@@ -18,8 +18,8 @@ send, and recurring-schedule gates remain disabled.
 
 | File | Responsibility |
 |---|---|
-| `capabilities.toml` | public typed capability surface |
-| `governance.toml` | organization owners, environments, classifications, approval tiers |
+| `capabilities.toml` | public typed capability surface and exact read-result contracts |
+| `governance.toml` | organization owners, environments, classifications, approval tiers, and model-context egress policy |
 | `policy.toml` | risk defaults and hard prohibitions |
 | `integrations.toml` | endpoints, environment-variable references, provider gates |
 | `oauth.toml` | token acquisition profiles and requested scopes |
@@ -188,6 +188,7 @@ read systems and runs their fixed bounded probes:
 ```bash
 master-agent connect \
   --systems jira,confluence,bitbucket,github,microsoft,sharepoint,outlook,teams,onenote \
+  --data-classification internal \
   --credentials-file /absolute/path/to/private-credentials.json \
   --output /absolute/path/to/private-connection-report.json
 ```
@@ -202,6 +203,7 @@ Jira or Confluence page/site URL without editing configuration:
 ```bash
 master-agent connect \
   --systems confluence \
+  --data-classification internal \
   --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
   --credentials-file /absolute/path/to/private-credentials.json
 ```
@@ -231,6 +233,15 @@ client-credentials authentication from the available declared values in that
 order. OneNote read access is enabled only in the in-memory overlay when
 OneNote is explicitly selected.
 
+`connect` and `discover --probe` authorize probe output through the provider-data
+model-context policy before principal attestation or connector construction.
+Pass `--data-classification public|internal|confidential|restricted`. Only the
+development profile may omit it, and only when `[model_context]` declares a
+default while `source_data_environment = "nonproduction"`. Non-development
+profiles reject an omitted classification. Successful probe output is reduced
+to `master-agent/provider-probe@1` with only `reachable` and `result_sha256`,
+plus a separate content-free egress binding.
+
 ## Direct read-only sessions
 
 Use `master-agent run PLAN --direct-read` when a direct user request already
@@ -249,11 +260,18 @@ loading credentials or constructing a connector, the command rejects plans
 that are not direct-user, single-provider, read-only, approval-free, and
 unbound to a workflow, execution context, plugin, or capsule. It then resolves
 one selected typed `ReadOnlyConnector`, validates its identity, scope, and
-fixed endpoint, executes the bounded read, and independently re-reads it.
+fixed endpoint, executes the bounded read, and independently re-reads it. Every
+serialized read action must state `data_classification`; the command authorizes
+that classification, destination, tenancy, field/schema contract, and limits
+before credentials or provider access, then revalidates the same immutable
+binding before returning a sanitized copy.
 
 An optional `--credentials-file`, `--credential-map`, or supported
 `--connector-url` is used only for that session. Direct reads print a bounded
-terminal result and do not create a runtime directory, audit or idempotency
+terminal result and content-free egress metadata. Results are projected through
+the catalog's exact versioned schema, recursively stripped of secret-key and
+configured redacted fields, and rejected if they exceed the bound size. Direct
+reads do not create a runtime directory, audit or idempotency
 record, approval artifact, draft artifact, or result file. Effects—including
 writes, sends, administration, deletion, merge, and recurring work—must use
 the normal bound `run --apply` path and retain its approval and state checks.
@@ -339,7 +357,47 @@ Replace placeholder owners such as `unassigned` and `example-organization` befor
 - an implemented typed adapter for an external, tamper-resistant audit sink;
 - an approved secret manager;
 - explicit external-model policy;
+- reviewed model-context destination, tenancy, source-data environment, and
+  provider-data classification rules;
 - rules covering every enabled capability.
+
+### Provider-data model-context policy
+
+`[model_context]` governs provider data crossing from a connector into an
+agent, user, or model context. It is independent of
+`[organization].external_model_policy`: the latter applies to capabilities that
+invoke an external model themselves, while `[model_context]` applies to every
+provider-read return path whether or not the connector calls a model.
+
+The top-level table is strict. It requires `destination`, `model_tenancy`,
+`source_data_environment` (`nonproduction` or `production`), `dlp_adapter`, and
+one or more `[[model_context.rules]]`. The optional
+`development_default_classification` is used only for trusted probes in a
+development profile backed by explicitly nonproduction source data. Unknown or
+misspelled keys fail configuration loading.
+
+Every rule must declare all of these fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | Unique operator-facing rule name |
+| `providers`, `capabilities` | Exact names or glob patterns to match |
+| `data_classifications` | `public`, `internal`, `confidential`, or `restricted` |
+| `destinations`, `model_tenancies` | Allowed active return destination and tenancy |
+| `routes` | `ephemeral`, `audited`, or both |
+| `handling` | `allow`, `redact`, or `deny` |
+| `audit_required`, `dlp_required` | Required executable controls, not declarations of intent |
+| `redacted_fields`, `allowed_fields` | Recursive removals and allowed resource projection; `*` must stand alone |
+| `max_items`, `max_output_bytes` | Positive result ceilings |
+
+The uniquely most-specific matching rule wins; an equally specific tie, no
+match, `deny`, missing required audit, or unavailable DLP fails closed.
+`ephemeral` routes never satisfy `audit_required`. Any allowed confidential or
+restricted rule must use only `audited`, require audit, and enumerate fields
+instead of using `*`. The shipped runtime has no centralized DLP adapter, so a
+rule with `dlp_required = true` is currently denied. Collection capabilities
+also require an explicit positive action `limit` no greater than the rule's
+`max_items`.
 
 ## Canonical-source extractors
 
@@ -380,6 +438,13 @@ wrong types, target-system substitutions, and target-resource substitutions are
 rejected before policy evaluation. At live execution the runtime also enforces
 the catalog authentication class, approval-bound effective principal, granted
 `required_scopes`, and the compensation interface promised by `reversible`.
+
+Every `read_only` capability has a matching top-level
+`[read_result_contracts."CAPABILITY"]` entry with an exact `schema`, resource
+field descriptors (`object`, `object_list`, or scalar `value`), and fixed
+non-content `metadata`. Provider query envelopes are intentionally omitted at
+the return boundary. Unknown fields, wrong schemas or resource shapes, and
+missing bound resource fields fail closed before data is returned.
 
 Every `local_generation` capability must also declare positive
 `max_input_bytes` and `max_output_bytes` values. Input quotas may not exceed

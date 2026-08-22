@@ -10,6 +10,9 @@
    principal and must not resolve one. Plugin identities may be bound for
    review, but raw plugin execution remains disabled. An enabled pure capsule
    must contribute its complete signed identity to the same execution context.
+   Before any provider-read attestation or content request, also preflight the
+   action's explicit classification against the reviewed model-context
+   destination, tenancy, output contract, limits, audit, and DLP rule.
 3. Bind the explicit approval-authority configuration before any plan whose
    policy or governance tier requires human approval. Binding does not read its
    secret.
@@ -61,6 +64,10 @@ the request JSON as approval.
   connector enforces the exact post-state as an atomic mutation precondition.
   A separate read followed by an unconditional write/delete is not sufficient.
 - For sent communications, create a separate correction plan.
+- For a provider-data egress denial, preserve the content-free rule/binding
+  metadata and compare the classification, destination, tenancy, policy
+  fingerprint, limits, audit sink, and DLP adapter. Do not retain or paste the
+  denied provider body while diagnosing it.
 - For advanced branches or edited resources, do not force rollback; escalate to the system owner.
 
 ## Rotation and expiry
@@ -88,3 +95,6 @@ Track:
 - capsule promotion/deprecation/revocation transitions, worker identity drift,
   run checkpoints, signed-receipt export failures, and readiness-gate changes;
 - capability/governance configuration changes.
+- provider-data egress denials and binding/policy-fingerprint changes;
+- model destination or tenancy drift, exceeded item/byte limits, redaction or
+  exact-schema failures, and unavailable required audit/DLP adapters.

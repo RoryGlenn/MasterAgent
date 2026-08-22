@@ -51,6 +51,35 @@ repository lists. It is not a generic HTTP surface and does not execute a
 feature action; the agent continues through the typed capability that produces
 the requested outcome.
 
+### Provider-data return boundary
+
+Connector normalization and independent verification establish what a provider
+returned; they do not by themselves authorize that data to enter an agent,
+human, or model context. One shared boundary covers stateless direct reads,
+audited orchestrator reads, `discover`/`connect` probes, and the GitHub and
+Bitbucket repository shortcuts.
+
+Before provider content is requested, the boundary approves the trusted data
+classification against the configured destination, model tenancy, route,
+handling, audit, and DLP rule. It binds that decision to the action, request
+parameters, provider origin/account/configuration digests, requested fields or
+versioned catalog output contract, item limit, and byte limit. Principal
+attestation may supply the account digest only after a no-I/O policy/shape
+preflight has passed. Attestation and content requests reuse the same captured
+credential snapshot, and the exact endpoint, origin, and CA identity are
+checked before content access and before return.
+
+After the connector independently re-reads the provider result, the runtime
+recomputes the same binding. Only then does it project the exact schema and
+resource fields, omit query envelopes and duplicate verification content,
+recursively redact standard secret keys and configured field names, minimize
+prompt-injection findings and references using one separator-insensitive field
+identity, and enforce the bound item and byte
+ceilings. Applied reads record only binding facts, digests, counts, and outcomes
+in audit state. Ephemeral routes persist no provider result. A missing or changed
+binding, unavailable required audit/DLP adapter, wrong schema, extra or missing
+resource field, or oversized result fails closed.
+
 ## Mutation connectors
 
 Mutation connectors are not extensions of the read connector's arbitrary request surface. They expose narrowly typed capability names and validate required fields, risk, approval intent, effective principal/scopes, identity mode, resource path, size, branch prefix, expected version, or expected commit before network or Git side effects. A modifying provider route is enabled only when its write carries a provider-side conditional precondition.

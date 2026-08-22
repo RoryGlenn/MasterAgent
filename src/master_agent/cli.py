@@ -25,13 +25,18 @@ from master_agent.approval_handoff import (
     write_restricted_json,
 )
 from master_agent.approvals import HmacApprovalAuthenticator
-from master_agent.audit import AuditLog
+from master_agent.audit import AuditLog, implemented_audit_sink
 from master_agent.auth import AuthMode
 from master_agent.canonical import SourceOfTruthRegistry
-from master_agent.capabilities import CapabilityCatalog
+from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
-from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
+from master_agent.config import (
+    ConnectorConfig,
+    DeploymentType,
+    IntegrationConfig,
+    ResolvedExecutionTarget,
+)
 from master_agent.config_sources import ConfigSource, resolve_config_source
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.bitbucket import BitbucketConnector
@@ -55,7 +60,11 @@ from master_agent.direct_read import (
     preflight_direct_read_plan,
 )
 from master_agent.directory_safety import PinnedDirectory
-from master_agent.discovery import DiscoveryStatus, discover_integrations
+from master_agent.discovery import (
+    DiscoveryStatus,
+    discover_integrations,
+    preflight_probe_provider_egress,
+)
 from master_agent.errors import (
     ConfigurationError,
     MasterAgentError,
@@ -78,6 +87,7 @@ from master_agent.models import (
     Approval,
     AuthoritySource,
     ChangePlan,
+    ConnectorExecutionBinding,
     DataClassification,
     ResourceRef,
     RiskLevel,
@@ -92,7 +102,14 @@ from master_agent.plugins import (
     resolve_locked_plugin_descriptors,
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
-from master_agent.readiness import assess_readiness
+from master_agent.provider_egress import (
+    ProviderDataRoute,
+    preflight_provider_data_egress,
+)
+from master_agent.readiness import (
+    assess_readiness,
+    provider_data_egress_policy_denials,
+)
 from master_agent.recurring import (
     RecurringConfig,
     RecurringRunner,
@@ -263,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 oauth_path=args.oauth,
                 identities_path=args.identities,
                 credentials_file=args.credentials_file,
+                egress_checks=tuple(args.egress_check),
                 output=args.output,
             )
         if args.command == "oauth-device-code":
@@ -304,6 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 probe=args.probe,
                 require_ready=args.require_ready,
                 systems=_parse_systems(args.systems),
+                data_classification=args.data_classification,
                 output=args.output,
             )
         if args.command == "connect":
@@ -314,6 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 credential_mappings=tuple(args.credential_map),
                 connector_urls=tuple(args.connector_url),
                 systems=_parse_systems(args.systems) or set(),
+                data_classification=args.data_classification,
                 output=args.output,
             )
         if args.command == "github-repositories":
@@ -638,6 +658,16 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--oauth", type=Path, default=None)
     readiness.add_argument("--identities", type=Path, default=None)
     readiness.add_argument("--credentials-file", type=Path)
+    readiness.add_argument(
+        "--egress-check",
+        action="append",
+        default=[],
+        metavar="PROVIDER:CLASSIFICATION",
+        help=(
+            "offline-check whether one provider/data class can use the active "
+            "model destination and tenancy"
+        ),
+    )
     readiness.add_argument("--output", type=Path)
 
     oauth_device = subparsers.add_parser(
@@ -710,6 +740,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     discover.add_argument("--systems")
+    discover.add_argument(
+        "--data-classification",
+        type=DataClassification,
+        choices=tuple(DataClassification),
+        help=(
+            "classify live probe output; development may use the explicitly "
+            "configured nonproduction default"
+        ),
+    )
     discover.add_argument("--output", type=Path)
 
     connect = subparsers.add_parser(
@@ -740,6 +779,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="normalize an operator-supplied Atlassian Cloud URL in memory",
     )
     connect.add_argument("--systems", required=True)
+    connect.add_argument(
+        "--data-classification",
+        type=DataClassification,
+        choices=tuple(DataClassification),
+        help=(
+            "classify live probe output; development may use the explicitly "
+            "configured nonproduction default"
+        ),
+    )
     connect.add_argument("--output", type=Path)
 
     github_repositories = subparsers.add_parser(
@@ -957,13 +1005,6 @@ def _bind_context(
     plan = _load_plan(plan_path)
     integrations_source = resolve_config_source(integrations_path, "integrations.toml")
     integrations = IntegrationConfig.from_toml(integrations_source)
-    live_systems = _live_systems_for_plan(plan, integrations)
-    configurations = _configuration_names_for_systems(live_systems)
-    integrations = _with_connector_url_overrides(
-        integrations,
-        connector_urls,
-        selected_configurations=configurations,
-    )
     configuration_sources = _execution_configuration_sources(
         approval_authorities=approval_authorities,
         retention_path=retention_path,
@@ -974,6 +1015,22 @@ def _bind_context(
         governance_path=governance_path,
     )
     governance = GovernanceProfile.from_toml(configuration_sources["governance"])
+    capability_catalog = CapabilityCatalog.from_toml(
+        configuration_sources["capabilities"]
+    )
+    _preflight_applied_provider_reads(
+        plan=plan,
+        catalog=capability_catalog,
+        governance=governance,
+        enforce_non_provider=connector_mode == "live",
+    )
+    live_systems = _live_systems_for_plan(plan, integrations)
+    configurations = _configuration_names_for_systems(live_systems)
+    integrations = _with_connector_url_overrides(
+        integrations,
+        connector_urls,
+        selected_configurations=configurations,
+    )
     if approval_authorities is None and _plan_requires_authenticated_approval(
         plan,
         policy_source=configuration_sources["policy"],
@@ -1348,13 +1405,6 @@ def _run(
             integrations_path, "integrations.toml"
         )
         integration_config = IntegrationConfig.from_toml(integrations_source)
-        live_systems = _live_systems_for_plan(plan, integration_config)
-        configurations = _configuration_names_for_systems(live_systems)
-        integration_config = _with_connector_url_overrides(
-            integration_config,
-            connector_urls,
-            selected_configurations=configurations,
-        )
         approved_context = plan.execution_context
         if approved_context is None or approved_context.runtime is None:
             raise ConfigurationError(
@@ -1364,6 +1414,19 @@ def _run(
             approved_context.runtime.credential_file, credentials_file
         )
         governance = GovernanceProfile.from_toml(configuration_sources["governance"])
+        _preflight_applied_provider_reads(
+            plan=plan,
+            catalog=capability_catalog,
+            governance=governance,
+            enforce_non_provider=connector_mode == "live",
+        )
+        live_systems = _live_systems_for_plan(plan, integration_config)
+        configurations = _configuration_names_for_systems(live_systems)
+        integration_config = _with_connector_url_overrides(
+            integration_config,
+            connector_urls,
+            selected_configurations=configurations,
+        )
         credential_store = _load_credential_store(
             credentials_file,
             integrations=integration_config,
@@ -1494,7 +1557,7 @@ def _run(
                 environ=execution_environ,
             )
         if connector_mode == "mock":
-            connectors = _mock_registry()
+            connectors = _mock_read_registry(plan, capability_catalog)
             register_draft_connectors(
                 connectors,
                 artifact_directory,
@@ -1673,6 +1736,56 @@ def _run(
         return 0 if report.successful else 2
 
 
+def _preflight_applied_provider_reads(
+    *,
+    plan: ChangePlan,
+    catalog: CapabilityCatalog,
+    governance: GovernanceProfile,
+    enforce_non_provider: bool,
+) -> None:
+    """Authorize applied read shapes before connector identity or content I/O."""
+
+    validated: list[tuple[AgentAction, CapabilityDefinition]] = []
+    for action in plan.actions:
+        definition = catalog.definition(action.capability)
+        provider_read = (
+            definition.risk is RiskLevel.READ_ONLY
+            and definition.authentication != "local"
+        )
+        catalog_allowed, catalog_reason = catalog.validate_action(
+            action,
+            require_enabled=provider_read or enforce_non_provider,
+        )
+        if not catalog_allowed:
+            raise ConfigurationError(catalog_reason)
+        if provider_read or enforce_non_provider:
+            governance_allowed, governance_reason = governance.validate_action(action)
+            if not governance_allowed:
+                raise ConfigurationError(governance_reason)
+        validated.append((action, definition))
+    reads = tuple(
+        (action, definition)
+        for action, definition in validated
+        if definition.risk is RiskLevel.READ_ONLY
+        and definition.authentication != "local"
+    )
+    if not reads:
+        return
+    if governance.model_context is None:
+        raise ConfigurationError(
+            "provider reads require configured model-context policy"
+        )
+    audit_available = implemented_audit_sink(governance.audit_sink) is not None
+    for action, definition in reads:
+        preflight_provider_data_egress(
+            policy=governance.model_context,
+            action=action,
+            definition=definition,
+            route=ProviderDataRoute.AUDITED,
+            audit_available=audit_available,
+        )
+
+
 def _run_direct_read(
     *,
     plan_path: Path,
@@ -1798,6 +1911,7 @@ def _run_direct_read(
             systems=systems,
             include_writes=False,
             include_communications=False,
+            captured_executions=captured,
         )
         connector = registry.resolve(provider, plan.actions[0].capability)
         if not isinstance(connector, ReadOnlyConnector):
@@ -1974,6 +2088,7 @@ def _readiness(
     oauth_path: Path | None,
     identities_path: Path | None,
     credentials_file: Path | None,
+    egress_checks: tuple[str, ...],
     output: Path | None,
 ) -> int:
     """Assess Phase 0/2C configuration without performing network requests."""
@@ -1984,17 +2099,32 @@ def _readiness(
     governance = GovernanceProfile.from_toml(
         resolve_config_source(governance_path, "governance.toml")
     )
-    credential_store = _load_credential_store(
-        credentials_file,
-        integrations=integrations,
+    catalog = CapabilityCatalog.from_toml(
+        resolve_config_source(capabilities_path, "capabilities.toml")
+    )
+    parsed_egress_checks = _parse_egress_checks(egress_checks)
+    # A policy-denied selector is already unusable. Report it conservatively
+    # without opening a credential file or overlaying ambient secret values.
+    # Allowed selectors proceed to the credential-aware readiness assessment.
+    policy_denials = provider_data_egress_policy_denials(
+        catalog=catalog,
         governance=governance,
-        connector_mode="live",
+        integrations=integrations,
+        egress_checks=parsed_egress_checks,
+    )
+    credential_store = (
+        None
+        if policy_denials
+        else _load_credential_store(
+            credentials_file,
+            integrations=integrations,
+            governance=governance,
+            connector_mode="live",
+        )
     )
     configurations = set(integrations.connectors)
     report = assess_readiness(
-        catalog=CapabilityCatalog.from_toml(
-            resolve_config_source(capabilities_path, "capabilities.toml")
-        ),
+        catalog=catalog,
         governance=governance,
         integrations=integrations,
         oauth_profiles=OAuthProfiles.from_toml(
@@ -2003,14 +2133,19 @@ def _readiness(
         identities=IdentityRegistry.from_toml(
             resolve_config_source(identities_path, "identities.toml")
         ),
-        environ=_credential_environment(
-            credential_store,
-            os.environ,
-            compatible_names=_atlassian_credential_compatibility(
-                integrations,
-                configurations=configurations,
-            ),
+        environ=(
+            {}
+            if policy_denials
+            else _credential_environment(
+                credential_store,
+                os.environ,
+                compatible_names=_atlassian_credential_compatibility(
+                    integrations,
+                    configurations=configurations,
+                ),
+            )
         ),
+        egress_checks=parsed_egress_checks,
     )
     payload = report.to_dict()
     print(f"environment: {_terminal_field(report.environment, max_characters=80)}")
@@ -2271,8 +2406,11 @@ def _execute_registered_workflow(
             bitbucket_deployment=integrations.connector("bitbucket").deployment,
         )
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
+        capability_catalog = CapabilityCatalog.from_toml(
+            resolve_config_source(None, "capabilities.toml")
+        )
         if connector_mode == "mock":
-            registry = _mock_read_registry(plan)
+            registry = _mock_read_registry(plan, capability_catalog)
         else:
             registry = build_live_registry(
                 integrations,
@@ -2285,7 +2423,11 @@ def _execute_registered_workflow(
                 workflow.name,
             )
         database = workflow.output_dir / "audit.sqlite3"
-        report = _orchestrator(registry, database).run(plan, dry_run=False)
+        report = _orchestrator(
+            registry,
+            database,
+            capabilities=capability_catalog,
+        ).run(plan, dry_run=False)
         artifacts = render_weekly_status_package(
             report,
             weekly_settings,
@@ -2313,8 +2455,11 @@ def _execute_registered_workflow(
         retention = RetentionConfig.from_toml(workflow.retention_config)
         plan = build_communication_context_plan(context_settings, identities)
         validate_plan_scope(tuple(item.capability for item in plan.actions), workflow)
+        capability_catalog = CapabilityCatalog.from_toml(
+            resolve_config_source(None, "capabilities.toml")
+        )
         if connector_mode == "mock":
-            registry = _mock_read_registry(plan)
+            registry = _mock_read_registry(plan, capability_catalog)
             registry.register(IdentityMapConnector(identities))
         else:
             registry = build_live_registry(
@@ -2325,7 +2470,11 @@ def _execute_registered_workflow(
             registry.register(IdentityMapConnector(identities))
             _require_systems(registry, {"identity", "outlook", "teams"}, workflow.name)
         database = workflow.output_dir / "audit.sqlite3"
-        report = _orchestrator(registry, database).run(plan, dry_run=False)
+        report = _orchestrator(
+            registry,
+            database,
+            capabilities=capability_catalog,
+        ).run(plan, dry_run=False)
         context_artifacts = render_communication_context_package(
             report,
             context_settings,
@@ -2343,20 +2492,28 @@ def _execute_registered_workflow(
     raise ValueError(f"unsupported recurring workflow kind: {workflow.kind}")
 
 
-def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
-    """Build deterministic schema-shaped mock resources for a read-only plan."""
+def _mock_read_registry(
+    plan: ChangePlan,
+    catalog: CapabilityCatalog,
+) -> ConnectorRegistry:
+    """Build one exact schema-shaped mock connector per planned capability."""
 
-    by_system: dict[str, dict[str, dict[str, object]]] = {}
-    capabilities: dict[str, set[str]] = {}
+    grouped: dict[tuple[str, str], dict[str, dict[str, object]]] = {}
     for action in plan.actions:
-        if action.target.system == "identity":
-            continue
-        if str(action.risk) != "read_only":
+        if (
+            action.target.system == "identity"
+            or action.risk is RiskLevel.LOCAL_GENERATION
+        ):
             continue
         system = action.target.system
-        capabilities.setdefault(system, set()).add(action.capability)
+        definition = catalog.definition(action.capability)
+        resources = grouped.setdefault((system, action.capability), {})
         version = action.target.expected_version or "1"
-        payload: dict[str, object] = {"version": version}
+        if action.risk is not RiskLevel.READ_ONLY:
+            if action.target.expected_version is not None:
+                resources[action.target.resource_id] = {"version": version}
+            continue
+        payload = _synthetic_mock_read_payload(action, definition)
         if action.capability == "jira.issue.search":
             payload.update(
                 {
@@ -2402,17 +2559,67 @@ def _mock_read_registry(plan: ChangePlan) -> ConnectorRegistry:
             payload.update(
                 {"schema": "master-agent/teams-teams@1", "teams": [], "citations": []}
             )
-        by_system.setdefault(system, {})[action.target.resource_id] = payload
+        resources[action.target.resource_id] = payload
     registry = ConnectorRegistry()
-    for system, resources in sorted(by_system.items()):
+    for (system, capability), resources in sorted(grouped.items()):
         registry.register(
             MockConnector(
                 system,
                 resources,
-                capabilities=capabilities.get(system, set()),
+                capabilities={capability},
             )
         )
     return registry
+
+
+def _synthetic_mock_read_payload(
+    action: AgentAction,
+    definition: CapabilityDefinition,
+) -> dict[str, object]:
+    """Synthesize one harmless payload from the capability's exact contract."""
+
+    if not definition.read_result_schema or not definition.read_result_resources:
+        raise ConfigurationError(
+            f"mock provider read {definition.name} has no read result contract"
+        )
+    payload: dict[str, object] = {"schema": definition.read_result_schema}
+    for name, descriptor in definition.read_result_resources.items():
+        if descriptor == "object":
+            payload[name] = {}
+        elif descriptor == "object_list":
+            payload[name] = []
+        elif descriptor == "value":
+            payload[name] = False if name == "reachable" else "synthetic"
+        else:  # pragma: no cover - catalog construction enforces this invariant.
+            raise ConfigurationError(
+                f"mock provider read {definition.name} has an invalid resource type"
+            )
+    for name in definition.read_result_metadata:
+        if name == "source_urls":
+            payload[name] = []
+        elif name == "retention":
+            payload[name] = {
+                "content_kind": "synthetic",
+                "evidence_type": "mock.provider.read",
+                "persistence_requires_explicit_output": True,
+            }
+        elif name == "repository":
+            payload[name] = {
+                "name": "synthetic",
+                "owner": "synthetic",
+                "slug": "synthetic",
+            }
+        elif name in {"returned", "total"}:
+            payload[name] = 0
+        elif name == "members_may_be_truncated":
+            payload[name] = False
+        elif name == "system":
+            payload[name] = action.target.system
+        elif name == "deployment":
+            payload[name] = "mock"
+        else:
+            payload[name] = "synthetic"
+    return payload
 
 
 def _discover(
@@ -2423,6 +2630,7 @@ def _discover(
     probe: bool,
     require_ready: bool,
     systems: set[str] | None,
+    data_classification: DataClassification | None,
     output: Path | None,
 ) -> int:
     config = IntegrationConfig.from_toml(
@@ -2431,6 +2639,13 @@ def _discover(
     governance = GovernanceProfile.from_toml(
         resolve_config_source(governance_path, "governance.toml")
     )
+    if probe:
+        preflight_probe_provider_egress(
+            config,
+            governance=governance,
+            systems=systems,
+            data_classification=data_classification,
+        )
     credential_store = _load_credential_store(
         credentials_file,
         integrations=config,
@@ -2455,6 +2670,8 @@ def _discover(
         ),
         probe=probe,
         systems=systems,
+        governance=governance,
+        data_classification=data_classification,
     )
     payload = {
         "schema": "master-agent/discovery@1",
@@ -2499,6 +2716,7 @@ def _connect(
     transport: HttpTransport | None = None,
     credential_mappings: tuple[str, ...] = (),
     connector_urls: tuple[str, ...] = (),
+    data_classification: DataClassification | None = None,
 ) -> int:
     """Verify requested read connectors through an ephemeral configuration."""
 
@@ -2542,6 +2760,13 @@ def _connect(
     effective = IntegrationConfig(
         connectors=connectors,
         source_sha256=integrations.source_sha256,
+    )
+
+    preflight_probe_provider_egress(
+        effective,
+        governance=governance,
+        systems=systems,
+        data_classification=data_classification,
     )
 
     related_configurations = _related_atlassian_configurations(
@@ -2630,6 +2855,8 @@ def _connect(
         probe=True,
         transport=transport,
         systems=systems,
+        governance=governance,
+        data_classification=data_classification,
     )
     payload = {
         "schema": "master-agent/connection@1",
@@ -2901,6 +3128,10 @@ def _github_repositories(
     independently re-read the result without changing persistent configuration.
     """
 
+    if output is not None:
+        raise ConfigurationError(
+            "stateless provider shortcuts do not permit persisted output"
+        )
     _reject_output_aliases(output, credentials_file)
     integrations = IntegrationConfig.from_toml(
         resolve_config_source(None, "integrations.toml")
@@ -2933,25 +3164,6 @@ def _github_repositories(
         raise ConfigurationError(
             "GitHub repository visibility must be all, public, or private"
         )
-    if public_username is not None:
-        environ = dict(os.environ)
-    elif credentials_file is not None:
-        if governance.environment is not EnvironmentKind.DEVELOPMENT:
-            raise ConfigurationError(
-                "--credentials-file is restricted to development; use the approved "
-                "secret manager for non-development execution"
-            )
-        store = CredentialStoreSnapshot.load_github_compatible(
-            credentials_file,
-            credential_name=github.secret_env or "MASTER_AGENT_GITHUB_TOKEN",
-        )
-        ambient = {
-            name: value for name, value in os.environ.items() if name not in store.names
-        }
-        environ = store.overlay(ambient)
-    else:
-        environ = dict(os.environ)
-
     if public_username is not None:
         capability = "github.public_repository.list"
         resource_type = "public_repository_collection"
@@ -3018,44 +3230,78 @@ def _github_repositories(
     )
     if not decision.permitted or decision.approval_required:
         raise ConfigurationError(decision.reason)
+    preflight_direct_read_plan(
+        plan=plan,
+        catalog=catalog,
+        governance=governance,
+        policy=policy,
+        sources=SourceOfTruthRegistry(()),
+    )
+
+    if public_username is not None:
+        environ = dict(os.environ)
+    elif credentials_file is not None:
+        if governance.environment is not EnvironmentKind.DEVELOPMENT:
+            raise ConfigurationError(
+                "--credentials-file is restricted to development; use the approved "
+                "secret manager for non-development execution"
+            )
+        store = CredentialStoreSnapshot.load_github_compatible(
+            credentials_file,
+            credential_name=github.secret_env or "MASTER_AGENT_GITHUB_TOKEN",
+        )
+        ambient = {
+            name: value for name, value in os.environ.items() if name not in store.names
+        }
+        environ = store.overlay(ambient)
+    else:
+        environ = dict(os.environ)
 
     selected_github = (
         replace(github, auth_mode=AuthMode.NONE, secret_env=None)
         if public_username is not None
         else github
     )
-    resolved = selected_github.resolve(environ, auth_transport=transport)
+    target = selected_github.capture_execution_target(environ)
+    resolved = selected_github.resolve(
+        environ,
+        auth_transport=transport,
+        execution_target=target,
+    )
     connector = GitHubConnector(resolved, transport=transport)
     principal = None if public_username is not None else connector.attest_principal()
-    result = connector.execute(action)
-    verification = connector.verify(action, result)
-    if not verification.verified:
-        result = connector.execute(action)
-        verification = connector.verify(action, result)
-    if not verification.verified:
-        raise ConfigurationError(
-            "GitHub repositories changed during two verification attempts; retry "
-            "the read"
-        )
-    repositories = list((result.after or {}).get("repositories", []))
-    payload = {
-        **dict(result.after or {}),
-        "verified": True,
+    binding = _standalone_connector_binding(
+        selected_github,
+        target=target,
+        credential_identity=(principal.identity if principal is not None else None),
+        credential_scopes=(principal.scopes if principal is not None else ()),
+    )
+    report = DirectReadSession(
+        catalog=catalog,
+        governance=governance,
+        policy=policy,
+        sources=SourceOfTruthRegistry(()),
+        connector=connector,
+        execution_binding=binding,
+    ).execute(plan)
+    returned = report.actions[0]
+    payload: dict[str, object] = {
+        **dict(returned.payload.to_dict()["data"]),
+        "verified": returned.verification.verified,
+        "egress": returned.egress.to_dict(),
     }
-    if principal is not None:
-        payload["authenticated_user"] = {
-            "login": principal.login,
-            "user_id": principal.user_id,
-            "identity": principal.identity,
-        }
-    else:
+    if principal is None:
         payload["requested_user"] = {
             "login": public_username,
             "access": "anonymous_public",
         }
+    repository_values = payload.get("repositories")
+    repositories = (
+        list(repository_values) if isinstance(repository_values, list) else []
+    )
 
     if principal is not None:
-        print(f"GitHub account: {_terminal_field(principal.login, max_characters=160)}")
+        print("GitHub account: provider identity verified")
     else:
         print(
             "GitHub public user: "
@@ -3090,6 +3336,10 @@ def _bitbucket_repositories(
 ) -> int:
     """List public Bitbucket Cloud workspace repositories anonymously."""
 
+    if output is not None:
+        raise ConfigurationError(
+            "stateless provider shortcuts do not permit persisted output"
+        )
     workspace = workspace.strip()
     if not workspace:
         raise ConfigurationError("Bitbucket workspace must not be empty")
@@ -3155,21 +3405,45 @@ def _bitbucket_repositories(
     )
     if not decision.permitted or decision.approval_required:
         raise ConfigurationError(decision.reason)
+    preflight_direct_read_plan(
+        plan=plan,
+        catalog=catalog,
+        governance=governance,
+        policy=policy,
+        sources=SourceOfTruthRegistry(()),
+    )
 
-    resolved = bitbucket.resolve({}, auth_transport=transport)
+    target = bitbucket.capture_execution_target({})
+    resolved = bitbucket.resolve(
+        {},
+        auth_transport=transport,
+        execution_target=target,
+    )
     connector = BitbucketConnector(resolved, transport=transport)
-    result = connector.execute(action)
-    verification = connector.verify(action, result)
-    if not verification.verified:
-        result = connector.execute(action)
-        verification = connector.verify(action, result)
-    if not verification.verified:
-        raise ConfigurationError(
-            "Bitbucket repositories changed during two verification attempts; retry "
-            "the read"
-        )
-    repositories = list((result.after or {}).get("repositories", []))
-    payload = {**dict(result.after or {}), "verified": True}
+    binding = _standalone_connector_binding(
+        bitbucket,
+        target=target,
+        credential_identity=None,
+        credential_scopes=(),
+    )
+    report = DirectReadSession(
+        catalog=catalog,
+        governance=governance,
+        policy=policy,
+        sources=SourceOfTruthRegistry(()),
+        connector=connector,
+        execution_binding=binding,
+    ).execute(plan)
+    returned = report.actions[0]
+    payload: dict[str, object] = {
+        **dict(returned.payload.to_dict()["data"]),
+        "verified": returned.verification.verified,
+        "egress": returned.egress.to_dict(),
+    }
+    repository_values = payload.get("repositories")
+    repositories = (
+        list(repository_values) if isinstance(repository_values, list) else []
+    )
     safe_workspace = _terminal_field(workspace, max_characters=160)
     print(f"Bitbucket public workspace: {safe_workspace}")
     print(f"Repositories: {len(repositories)}")
@@ -3185,6 +3459,45 @@ def _bitbucket_repositories(
         _write_json(output, payload)
         print(f"wrote {output}")
     return 0
+
+
+def _standalone_connector_binding(
+    config: ConnectorConfig,
+    *,
+    target: ResolvedExecutionTarget,
+    credential_identity: str | None,
+    credential_scopes: tuple[str, ...],
+) -> ConnectorExecutionBinding:
+    """Bind a one-shot provider shortcut before its content request."""
+
+    target_base_url = target.base_url
+    parsed = urlsplit(target_base_url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError(
+            "provider shortcut endpoint has an invalid port"
+        ) from error
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None and port != 443:
+        rendered_host = f"{rendered_host}:{port}"
+    return ConnectorExecutionBinding(
+        system=config.system,
+        deployment=str(config.deployment),
+        config_identity_sha256=target.config_identity,
+        resolved_base_url=target_base_url,
+        resolved_origin=f"https://{rendered_host}",
+        authentication_mode=str(config.auth_mode),
+        credential_identity=credential_identity,
+        credential_scopes=credential_scopes,
+        ca_bundle_path=(
+            str(target.ca_bundle.path) if target.ca_bundle is not None else None
+        ),
+        ca_bundle_sha256=(
+            target.ca_bundle.sha256 if target.ca_bundle is not None else None
+        ),
+    )
 
 
 def _weekly_status_plan(
@@ -3747,6 +4060,36 @@ def _parse_systems(value: str | None) -> set[str] | None:
     if not systems:
         raise ValueError("--systems must contain at least one system")
     return systems
+
+
+def _parse_egress_checks(
+    values: tuple[str, ...],
+) -> tuple[tuple[str, DataClassification], ...]:
+    """Parse content-free readiness selectors."""
+
+    parsed: list[tuple[str, DataClassification]] = []
+    for value in values:
+        provider, separator, raw_classification = value.partition(":")
+        provider = provider.strip()
+        raw_classification = raw_classification.strip()
+        if (
+            not separator
+            or not provider
+            or not raw_classification
+            or ":" in raw_classification
+        ):
+            raise ConfigurationError("--egress-check must use PROVIDER:CLASSIFICATION")
+        try:
+            classification = DataClassification(raw_classification)
+        except ValueError as error:
+            raise ConfigurationError(
+                "--egress-check classification must be public, internal, "
+                "confidential, or restricted"
+            ) from error
+        item = (provider, classification)
+        if item not in parsed:
+            parsed.append(item)
+    return tuple(parsed)
 
 
 if __name__ == "__main__":

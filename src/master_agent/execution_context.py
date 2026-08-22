@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Self
 from urllib.parse import urlsplit
@@ -14,6 +14,7 @@ from master_agent.config import (
     ConnectorConfig,
     IntegrationConfig,
     PrincipalAttestationAdapter,
+    ResolvedConnectorConfig,
     ResolvedExecutionTarget,
 )
 from master_agent.config_sources import ConfigSource
@@ -32,6 +33,7 @@ from master_agent.models import (
     RuntimeExecutionBinding,
     RuntimePathExecutionBinding,
 )
+from master_agent.oauth import StaticTokenProvider
 from master_agent.plugins import PluginDescriptor
 
 
@@ -42,6 +44,7 @@ class CapturedConnectorExecution:
     config: ConnectorConfig
     target: ResolvedExecutionTarget
     binding: ConnectorExecutionBinding
+    resolved: ResolvedConnectorConfig | None = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,21 +93,37 @@ def capture_connector_executions(
     environ: Mapping[str, str] | None = None,
     systems: set[str] | None = None,
     require_trusted_principal: bool = True,
+    include_resolved_credentials: bool = True,
     principal_transport: HttpTransport | None = None,
 ) -> tuple[CapturedConnectorExecution, ...]:
     """Capture selected enabled destinations and trusted principals."""
 
-    source = environ if environ is not None else os.environ
+    source = dict(environ if environ is not None else os.environ)
     captured: list[CapturedConnectorExecution] = []
     for config in integrations.connectors.values():
         if not config.enabled or not _connector_is_selected(config.system, systems):
             continue
         target = config.capture_execution_target(source)
         ca_bundle = target.ca_bundle
+        needs_resolved = include_resolved_credentials or (
+            require_trusted_principal
+            and config.principal_attestation_adapter is not None
+        )
+        resolved = (
+            config.resolve(
+                source,
+                auth_transport=principal_transport,
+                execution_target=target,
+            )
+            if needs_resolved
+            else None
+        )
+        if require_trusted_principal and resolved is not None:
+            resolved = _pin_resolved_authentication(resolved)
         attestation = (
             _credential_attestation(
                 config,
-                target=target,
+                resolved=resolved,
                 environ=source,
                 transport=principal_transport,
             )
@@ -115,6 +134,7 @@ def capture_connector_executions(
             CapturedConnectorExecution(
                 config=config,
                 target=target,
+                resolved=resolved,
                 binding=ConnectorExecutionBinding(
                     system=config.system,
                     deployment=str(config.deployment),
@@ -161,6 +181,7 @@ def build_execution_context(
                 environ=environ,
                 systems=systems,
                 principal_transport=principal_transport,
+                include_resolved_credentials=False,
             )
         )
         if include_connectors
@@ -213,7 +234,7 @@ def _connector_is_selected(system: str, systems: set[str] | None) -> bool:
 def _credential_attestation(
     config: ConnectorConfig,
     *,
-    target: ResolvedExecutionTarget,
+    resolved: ResolvedConnectorConfig | None,
     environ: Mapping[str, str],
     transport: HttpTransport | None,
 ) -> CredentialAttestation:
@@ -221,7 +242,10 @@ def _credential_attestation(
 
     adapter = config.principal_attestation_adapter
     if adapter is PrincipalAttestationAdapter.GITHUB_AUTHENTICATED_USER:
-        resolved = config.resolve(environ, execution_target=target)
+        if resolved is None:  # pragma: no cover - capture invariant.
+            raise ConfigurationError(
+                "GitHub principal attestation requires credentials"
+            )
         github_attested = GitHubConnector(
             resolved,
             transport=transport,
@@ -231,7 +255,10 @@ def _credential_attestation(
             scopes=github_attested.scopes,
         )
     if adapter is PrincipalAttestationAdapter.MICROSOFT_DELEGATED_USER:
-        resolved = config.resolve(environ, execution_target=target)
+        if resolved is None:  # pragma: no cover - capture invariant.
+            raise ConfigurationError(
+                "Microsoft principal attestation requires credentials"
+            )
         microsoft_attested = MicrosoftIdentityConnector(
             resolved,
             transport=transport,
@@ -245,6 +272,24 @@ def _credential_attestation(
             f"connector {config.system} has an unsupported principal adapter"
         )
     return CredentialAttestation(identity=config.credential_identity(environ))
+
+
+def _pin_resolved_authentication(
+    resolved: ResolvedConnectorConfig,
+) -> ResolvedConnectorConfig:
+    """Freeze one token value for attestation and subsequent provider I/O."""
+
+    provider = resolved.auth.token_provider
+    if provider is None:
+        return resolved
+    token = provider.get_token()
+    return replace(
+        resolved,
+        auth=replace(
+            resolved.auth,
+            token_provider=StaticTokenProvider(token),
+        ),
+    )
 
 
 def build_runtime_execution_binding(

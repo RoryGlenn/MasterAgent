@@ -135,10 +135,17 @@ def _bounded_string_bytes(value: str, *, context: str) -> int:
             f"{context} contains a string exceeding the "
             f"{MAX_JSON_STRING_CHARACTERS}-character limit"
         )
+    encoded_length: int | None = None
+    invalid_unicode = False
     try:
-        return len(value.encode("utf-8"))
-    except UnicodeEncodeError as error:
-        raise ValidationError(f"{context} contains invalid Unicode") from error
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        invalid_unicode = True
+    if invalid_unicode or encoded_length is None:
+        # Raise outside the codec handler so attacker-controlled string content
+        # is not retained in exception chaining or the public error object.
+        raise ValidationError(f"{context} contains invalid Unicode")
+    return encoded_length
 
 
 def _integer_characters(value: int) -> int:

@@ -267,6 +267,11 @@ class AgentAction:
         dependencies = data.get("dependencies", [])
         if not isinstance(dependencies, list):
             raise ValidationError("dependencies must be a list")
+        risk = RiskLevel(str(data["risk"]))
+        if risk is RiskLevel.READ_ONLY and "data_classification" not in data:
+            raise ValidationError(
+                "serialized read actions require an explicit data_classification"
+            )
         return cls(
             capability=str(data["capability"]),
             target=ResourceRef(
@@ -280,7 +285,7 @@ class AgentAction:
                 ),
             ),
             parameters=dict(_expect_mapping(data, "parameters")),
-            risk=RiskLevel(str(data["risk"])),
+            risk=risk,
             data_classification=DataClassification(
                 str(data.get("data_classification", DataClassification.INTERNAL))
             ),

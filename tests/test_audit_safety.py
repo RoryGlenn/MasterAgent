@@ -9,18 +9,23 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 from master_agent import sqlite_safety
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
+from master_agent.capabilities import CapabilityCatalog
 from master_agent.connectors.mock import MockConnector
 from master_agent.errors import ConfigurationError, ConnectorError
+from master_agent.governance import GovernanceProfile
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
     ChangePlan,
+    ConnectorExecutionBinding,
+    ExecutionContext,
     ResourceRef,
     RiskLevel,
 )
@@ -128,11 +133,35 @@ class AuditSafetyTests(unittest.TestCase):
             goal="Fail without persisting provider content.",
             actions=(action,),
             created_by="test",
+            execution_context=ExecutionContext(
+                integrations_sha256="b" * 64,
+                connectors=(
+                    ConnectorExecutionBinding(
+                        system="jira",
+                        deployment="cloud",
+                        config_identity_sha256="a" * 64,
+                        resolved_base_url="https://jira.example.test/rest/api/3",
+                        resolved_origin="https://jira.example.test",
+                        authentication_mode="bearer",
+                        credential_identity="jira:user:42",
+                    ),
+                ),
+            ),
         )
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
             registry = ConnectorRegistry()
-            registry.register(ExplodingConnector())  # type: ignore[arg-type]
+            connector = ExplodingConnector()
+            connector._config = SimpleNamespace(  # type: ignore[attr-defined]
+                auth=SimpleNamespace(mode="bearer"),
+                config_identity="a" * 64,
+                base_url="https://jira.example.test/rest/api/3",
+                ca_bundle=None,
+                ca_bundle_sha256=None,
+                max_pages=1,
+                max_response_bytes=4096,
+            )
+            registry.register(connector)  # type: ignore[arg-type]
             report = WorkflowOrchestrator(
                 policy=PolicyEngine(
                     PolicyConfig.from_toml(ROOT / "config/policy.toml")
@@ -142,10 +171,18 @@ class AuditSafetyTests(unittest.TestCase):
                 ),
                 connectors=registry,
                 audit=AuditLog(database),
+                capabilities=CapabilityCatalog.from_toml(
+                    ROOT / "config/capabilities.toml"
+                ),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
             ).run(plan, dry_run=False)
 
             self.assertFalse(report.successful)
-            self.assertIn(secret_text, report.actions[0].message)
+            self.assertNotIn(secret_text, report.actions[0].message)
+            self.assertIn(
+                "provider read failed after egress authorization",
+                report.actions[0].message,
+            )
             raw_database = database.read_bytes()
 
         self.assertNotIn(secret_text.encode("utf-8"), raw_database)

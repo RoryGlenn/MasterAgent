@@ -16,6 +16,7 @@ provider mutations non-routable.
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
 | 2B — Outlook, Teams, identity, citations, and retention | Complete | Contract-tested; authenticated deployment requires approved applications and credentials |
 | 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
+| Provider-data model-context boundary | Complete | Replace development destination/tenancy/classification rules and supply any required external audit or DLP adapters |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
@@ -65,7 +66,10 @@ verification.
 - anonymous public routes never resolve ambient credentials;
 - retrieved content remains untrusted;
 - normalized evidence, citations, and retention are implemented; and
-- live provider probes are explicit rather than automatic.
+- live provider probes are explicit rather than automatic; and
+- every direct, applied, probe, and repository-shortcut provider read is
+  classified and authorized before access, rebound before return, exact-schema
+  sanitized, item/byte bounded, and content-free in audit.
 
 ### Phase 3 — draft-only output
 
@@ -203,7 +207,9 @@ A target organization must still:
 3. obtain administrator consent and assign least-privilege scopes;
 4. satisfy Conditional Access and device or network requirements;
 5. provision a secret manager and external tamper-resistant audit sink;
-6. define data classification, retention, legal hold, and external-model policy;
+6. define provider-data classifications, model destination and tenancy,
+   source-data environment, audited-route and DLP requirements, retention,
+   legal hold, and external-model policy;
 7. replace sample identities, project keys, sites, repositories, recipients,
    and canonical resources;
 8. validate read-only probes in non-production;
@@ -212,3 +218,8 @@ A target organization must still:
 
 The runtime reports this distinction instead of representing contract tests or
 a local demonstration as a successful company deployment.
+
+The CLI cannot cryptographically attest its surrounding model tenancy, and the
+shipped runtime has no centralized DLP adapter. Those remain reviewed deployment
+assertions and organization-provided adapter work, not guarantees implied by the
+completed software boundary.

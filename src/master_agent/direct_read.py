@@ -9,7 +9,6 @@ through an existing typed ``ReadOnlyConnector``.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -21,6 +20,7 @@ from master_agent.connectors.read_only import ReadOnlyConnector
 from master_agent.errors import (
     ConfigurationError,
     ConnectorError,
+    MasterAgentError,
     VerificationError,
 )
 from master_agent.governance import GovernanceProfile
@@ -40,6 +40,14 @@ from master_agent.models import (
     freeze_json_mapping,
 )
 from master_agent.policy import PolicyEngine
+from master_agent.provider_egress import (
+    ProviderDataEgressBinding,
+    ProviderDataRoute,
+    bind_provider_data_egress,
+    preflight_provider_data_egress,
+    sanitize_provider_result,
+    verification_metadata,
+)
 
 _MICROSOFT_PROVIDER_SYSTEMS = frozenset(
     {"microsoft", "sharepoint", "outlook", "teams", "onenote"}
@@ -126,6 +134,7 @@ class DirectReadActionReport:
     message: str
     payload: DirectReadPayload
     verification: DirectReadVerification
+    egress: ProviderDataEgressBinding
 
     def __post_init__(self) -> None:
         """Keep the direct-report terminal state unambiguous."""
@@ -145,6 +154,7 @@ class DirectReadActionReport:
             "message": self.message,
             "payload": self.payload.to_dict(),
             "verification": self.verification.to_dict(),
+            "egress": self.egress.to_dict(),
         }
 
 
@@ -232,6 +242,10 @@ class DirectReadSession:
             raise ConfigurationError(
                 "direct read sessions require a typed ReadOnlyConnector"
             )
+        if not _is_builtin_direct_read_connector(connector):
+            raise ConfigurationError(
+                "direct read sessions require a factory-issued built-in connector"
+            )
         if not isinstance(execution_binding, ConnectorExecutionBinding):
             raise ConfigurationError(
                 "direct read sessions require a typed connector execution binding"
@@ -260,10 +274,14 @@ class DirectReadSession:
             sources=self._sources,
         )
         self._validate_connector_shape(plan, provider)
-        for action in plan.actions:
-            self._validate_execution_contract(action)
+        egress_bindings = tuple(
+            self._validate_execution_contract(action) for action in plan.actions
+        )
 
-        reports = tuple(self._execute_action(action) for action in plan.actions)
+        reports = tuple(
+            self._execute_action(action, egress)
+            for action, egress in zip(plan.actions, egress_bindings, strict=True)
+        )
         return DirectReadReport(
             plan_id=plan.plan_id,
             plan_fingerprint=plan.fingerprint,
@@ -296,7 +314,10 @@ class DirectReadSession:
                     f"selected read connector does not support {action.capability}"
                 )
 
-    def _validate_execution_contract(self, action: AgentAction) -> None:
+    def _validate_execution_contract(
+        self,
+        action: AgentAction,
+    ) -> ProviderDataEgressBinding:
         """Validate the live connector binding after no-I/O plan preflight."""
 
         execution_ok, execution_reason = self._catalog.validate_execution(
@@ -308,8 +329,24 @@ class DirectReadSession:
         if not execution_ok:
             raise ConfigurationError(execution_reason)
         _validate_connector_endpoint(self._connector, self._execution_binding)
+        if self._governance.model_context is None:
+            raise ConfigurationError(
+                "provider reads require configured model-context policy"
+            )
+        return bind_provider_data_egress(
+            policy=self._governance.model_context,
+            action=action,
+            definition=self._catalog.definition(action.capability),
+            connector_binding=self._execution_binding,
+            route=ProviderDataRoute.EPHEMERAL,
+            audit_available=False,
+        )
 
-    def _execute_action(self, action: AgentAction) -> DirectReadActionReport:
+    def _execute_action(
+        self,
+        action: AgentAction,
+        egress: ProviderDataEgressBinding,
+    ) -> DirectReadActionReport:
         """Execute and independently verify one preflighted read action."""
 
         budget = connector_http_action_budget(self._connector)
@@ -317,42 +354,86 @@ class DirectReadSession:
             raise ConfigurationError(
                 "direct read connector is missing a live HTTP action budget"
             )
-        with activate_http_action_budget(budget):
-            result = self._connector.execute(action)
-            _validate_read_result(action, result)
-            snapshot = _copy_execution_result(result)
-            verification = self._connector.verify(
-                action,
-                _copy_execution_result(snapshot),
-            )
-            _validate_verification(action, verification)
+        snapshot: ExecutionResult | None = None
+        verification: VerificationResult | None = None
+        provider_failed = False
+        try:
+            with activate_http_action_budget(budget):
+                result = self._connector.execute(action)
+                _validate_read_result(action, result)
+                snapshot = _copy_execution_result(result)
+                verification = self._connector.verify(
+                    action,
+                    _copy_execution_result(snapshot),
+                )
+                _validate_verification(action, verification)
+        except (
+            KeyError,
+            MasterAgentError,
+            OSError,
+            OverflowError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            provider_failed = True
+        if provider_failed or snapshot is None or verification is None:
+            # Raise outside the provider exception handler so neither __cause__ nor
+            # __context__ retains attacker-controlled provider content.
+            raise ConnectorError("provider read failed after egress authorization")
 
         if not verification.verified:
             raise VerificationError(
-                "direct read did not independently verify "
-                f"{action.capability}: {verification.message}"
+                f"direct read did not independently verify {action.capability}"
             )
         if snapshot.after is None:
             raise ConnectorError("direct read connector returned no payload")
+        rechecked = self._validate_execution_contract(action)
+        if rechecked.fingerprint != egress.fingerprint:
+            raise ConfigurationError(
+                "provider-data egress binding changed before result return"
+            )
+        sanitized: ExecutionResult | None = None
+        sanitized_verification: Mapping[str, Any] | None = None
+        sanitization_failed = False
+        try:
+            sanitized = sanitize_provider_result(snapshot, egress)
+            sanitized_verification = verification_metadata(
+                verification.observed,
+                egress,
+            )
+        except (
+            KeyError,
+            MasterAgentError,
+            OSError,
+            OverflowError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            sanitization_failed = True
+        if sanitization_failed or sanitized is None:
+            # Raise outside the sanitization exception handler so provider-controlled
+            # values cannot survive in exception chaining or caller-visible text.
+            raise ConnectorError("provider read failed after egress authorization")
+        if sanitized.after is None:  # pragma: no cover - snapshot invariant.
+            raise ConnectorError("direct read connector returned no sanitized payload")
 
         return DirectReadActionReport(
             action_id=action.action_id,
             capability=action.capability,
             state=ActionState.VERIFIED,
-            message=verification.message,
+            message="provider read independently verified",
             payload=DirectReadPayload(
-                data=snapshot.after,
-                connector_reference=snapshot.connector_reference,
+                data=sanitized.after,
+                connector_reference=sanitized.connector_reference,
             ),
             verification=DirectReadVerification(
                 verified=verification.verified,
-                observed=(
-                    deepcopy(dict(verification.observed))
-                    if verification.observed is not None
-                    else None
-                ),
-                message=verification.message,
+                observed=sanitized_verification,
+                message="provider read independently verified",
             ),
+            egress=egress,
         )
 
 
@@ -422,6 +503,7 @@ def _validate_unbound_session_shape(plan: ChangePlan) -> str:
     systems = {action.target.system for action in plan.actions}
     if len(systems) != 1:
         raise ConfigurationError("direct read sessions require exactly one provider")
+    provider = next(iter(systems))
     for action in plan.actions:
         if action.risk is not RiskLevel.READ_ONLY:
             raise ConfigurationError(
@@ -435,7 +517,36 @@ def _validate_unbound_session_shape(plan: ChangePlan) -> str:
             raise ConfigurationError(
                 "direct read sessions cannot carry approval-required actions"
             )
-    return next(iter(systems))
+    return provider
+
+
+def _is_builtin_direct_read_connector(connector: ReadOnlyConnector) -> bool:
+    """Return whether the connector is an exact repository-owned implementation."""
+
+    # Import lazily to keep connector construction out of module initialization.
+    from master_agent.connectors.bitbucket import BitbucketConnector
+    from master_agent.connectors.confluence import ConfluenceConnector
+    from master_agent.connectors.github import GitHubConnector
+    from master_agent.connectors.jira import JiraConnector
+    from master_agent.connectors.microsoft import (
+        MicrosoftIdentityConnector,
+        SharePointConnector,
+    )
+    from master_agent.connectors.onenote import OneNoteReadConnector
+    from master_agent.connectors.outlook import OutlookConnector
+    from master_agent.connectors.teams import TeamsConnector
+
+    return type(connector) in {
+        BitbucketConnector,
+        ConfluenceConnector,
+        GitHubConnector,
+        JiraConnector,
+        MicrosoftIdentityConnector,
+        OneNoteReadConnector,
+        OutlookConnector,
+        SharePointConnector,
+        TeamsConnector,
+    }
 
 
 def _validate_unbound_action(
@@ -457,6 +568,17 @@ def _validate_unbound_action(
     if not governance_ok:
         raise ConfigurationError(governance_reason)
     definition = catalog.definition(action.capability)
+    if governance.model_context is None:
+        raise ConfigurationError(
+            "provider reads require configured model-context policy"
+        )
+    preflight_provider_data_egress(
+        policy=governance.model_context,
+        action=action,
+        definition=definition,
+        route=ProviderDataRoute.EPHEMERAL,
+        audit_available=False,
+    )
     external_model_ok, external_model_reason = governance.validate_external_model(
         action,
         definition,

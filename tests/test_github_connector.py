@@ -16,6 +16,7 @@ from master_agent.connectors.factory import build_live_connectors
 from master_agent.connectors.github import GitHubConnector
 from master_agent.discovery import DiscoveryStatus, discover_integrations
 from master_agent.errors import ConfigurationError, ConnectorError, ConnectorHttpError
+from master_agent.governance import GovernanceProfile
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -23,6 +24,8 @@ from master_agent.models import (
     RiskLevel,
 )
 from tests.fakes import ExpectedRequest, QueueTransport
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class GitHubConnectorTests(unittest.TestCase):
@@ -516,7 +519,12 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                 method="GET",
                 url_contains="/user",
                 payload={"login": "RoryGlenn", "id": 42},
-            )
+            ),
+            ExpectedRequest(
+                method="GET",
+                url_contains="/user",
+                payload={"login": "RoryGlenn", "id": 42},
+            ),
         )
         environ = {"MASTER_AGENT_GITHUB_TOKEN": "never-render-this-token"}
 
@@ -539,10 +547,13 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             transport=transport,
             systems={"github"},
             probe=True,
+            governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
         )
         self.assertEqual(records[0].status, DiscoveryStatus.REACHABLE)
-        self.assertEqual(records[0].probe["authenticated_user"], "RoryGlenn")
-        self.assertEqual(records[0].probe["user_id"], 42)
+        self.assertEqual(records[0].probe["schema"], "master-agent/provider-probe@1")
+        self.assertTrue(records[0].probe["reachable"])
+        self.assertIsNotNone(records[0].egress)
+        self.assertNotIn("RoryGlenn", str(records[0].probe))
         self.assertNotIn("never-render-this-token", str(records[0].to_dict()))
         transport.assert_drained()
 

@@ -40,9 +40,9 @@ Capability catalog   Source-of-truth registry
         │      required
         └────────┬─────────┘
                  ▼
-       Workflow orchestrator
+ Workflow orchestrator / direct-read or probe route
                  │
-    dependency order / idempotency
+  dependency order / provider-data preflight
                  │
                  ▼
       capability-specific registry
@@ -51,13 +51,14 @@ Capability catalog   Source-of-truth registry
    ▼             ▼                    ▼
 read connector  draft connector  mutation/send connector
    │             │                    │
-   └─────────────┼────────────────────┘
+   ▼             └──────────┬─────────┘
+independent verification    │
+   │                        │
+egress revalidation         │
+and sanitization            │
+   └─────────────┬──────────┘
                  ▼
-       independent verification
-                 │
-       ┌─────────┴──────────┐
-       ▼                    ▼
- compensation          audit/evidence
+       return / compensation / audit
 ```
 
 Direct GitHub-host advisory invocation is disabled because that surface cannot
@@ -119,6 +120,8 @@ are validated for missing references and cycles.
 - exact target system and allowed resource types;
 - a top-level parameter schema for every enabled side effect;
 - explicit input and output byte quotas for every local-generation capability;
+- an exact versioned result schema, content-bearing resource descriptors, and
+  fixed envelope metadata for every read-only capability;
 - required effective OAuth scopes, expected-version requirements, and the
   provider precondition that makes a modifying write atomic;
 - whether the capability uses an external model;
@@ -170,6 +173,10 @@ selected identities. See
 
 The most specific matching rule wins. Uncovered capabilities fail closed. Dual approval requires two distinct approvers.
 
+The same governance file owns `[model_context]`, which selects the active
+provider-data destination and model tenancy and matches classification-aware
+handling rules independently of whether a capability itself invokes a model.
+
 ### Policy engine
 
 `config/policy.toml` provides hard runtime rules:
@@ -181,6 +188,27 @@ The most specific matching rule wins. Uncovered capabilities fail closed. Dual a
 - merge, deletion, generic permission changes, invitations, protected-branch
   operations, and GitHub administration without provider compare-and-swap are
   denied.
+
+### Provider-data model-context boundary
+
+`provider_egress.py` owns the cross-cutting return boundary for direct reads,
+applied reads, provider probes, and repository-list shortcuts. A no-I/O
+preflight selects one unambiguous rule and validates fields, collection limit,
+route, audit, and DLP availability before principal attestation or connector
+content access. The immutable binding then incorporates connector
+configuration/origin/account digests, action and request fingerprints, the
+exact requested projection or catalog result contract, size limits,
+classification, destination, tenancy, and handling. Attestation and content
+access reuse one captured credential snapshot; the exact endpoint, origin, and
+CA identity are checked before provider access and again before return.
+
+After independent connector verification, the runtime recomputes that binding
+and returns only a private schema-projected, recursively redacted, reference-
+minimized, byte-limited copy. One separator-insensitive identity covers nested
+reserved, secret, configured-redaction, reference, and prompt-finding keys.
+Applied audit records contain binding facts,
+digests, counts, and outcomes only. An ephemeral route creates no provider-data
+state.
 
 ### Source-of-truth registry
 
@@ -224,9 +252,12 @@ before it can become executable.
 read-only actions against exactly one built-in typed provider. It performs the
 same catalog, governance, policy, source-of-truth, credential, connector
 identity/scope, endpoint, response-budget, prompt-injection, and independent
-re-read validation required for typed reads, but holds its binding and report in
-memory. It does not construct the applied runtime's audit, idempotency,
-artifact, approval, result-publication, plugin, or capsule state.
+re-read validation required for typed reads. It additionally authorizes an
+ephemeral provider-data binding before access, recomputes it after verification,
+and returns only the exact-schema sanitized copy plus content-free metadata. It
+holds its binding and report in memory and does not construct the applied
+runtime's audit, idempotency, artifact, approval, result-publication, plugin, or
+capsule state.
 
 The direct executor validates the whole plan before provider setup, uses a
 `ReadOnlyConnector` only, and shares one HTTP budget across each read and its
@@ -242,15 +273,18 @@ The orchestrator:
 1. validates capability and source-of-truth rules;
 2. evaluates approvals;
 3. resolves dependencies;
-4. atomically claims side effects by action fingerprint and records explicit
+4. preauthorizes provider-read egress on the audited route before dispatch;
+5. atomically claims side effects by action fingerprint and records explicit
    pending, completed, failed, or indeterminate outcomes;
-5. executes one typed connector capability;
-6. immediately records `side_effect_may_have_occurred` with content-free result
+6. executes one typed connector capability;
+7. immediately records `side_effect_may_have_occurred` with content-free result
    metadata before invoking verification;
-7. preserves the exact returned result and records an `indeterminate` incident
+8. preserves the exact returned result and records an `indeterminate` incident
    if verification fails or raises;
-8. records the final action state;
-9. compensates reversible actions in reverse order only when the typed
+9. for a verified read, recomputes its binding, sanitizes the private result,
+   and records only content-free egress metadata;
+10. records the final action state;
+11. compensates reversible actions in reverse order only when the typed
    descriptor permits automatic execution and the adapter can enforce an
    atomic post-state precondition.
 
@@ -299,7 +333,11 @@ chunks instead of retaining a second whole-artifact buffer.
 
 ### Audit
 
-The SQLite audit log is tamper-evident through a hash chain. Default audit summaries exclude document/message bodies and secret values. Full evidence is written only through an explicit output/retention path.
+The SQLite audit log is tamper-evident through a hash chain. Provider-read audit
+events contain egress bindings, fingerprints, digests, counts, and outcomes but
+exclude provider bodies, query values, raw account identities, injection
+excerpts, and secrets. Other full evidence is written only through an explicit
+output/retention path.
 
 Capsule runs add an atomic content-free checkpoint state machine and a signed
 terminal receipt. Resume requires the exact plan and capsule-binding digest;

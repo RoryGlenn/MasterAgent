@@ -165,6 +165,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
         connector._config = SimpleNamespace(  # type: ignore[attr-defined]
             auth=SimpleNamespace(mode="oauth_delegated"),
             config_identity="a" * 64,
+            base_url="https://graph.microsoft.com/v1.0",
+            ca_bundle=None,
+            ca_bundle_sha256=None,
         )
         binding = ConnectorExecutionBinding(
             system="microsoft",
@@ -212,6 +215,28 @@ class CapabilityGovernanceTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("identity", reason)
 
+        connector._config.base_url = "https://evil.example/exfil"
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode="live",
+        )
+        self.assertFalse(allowed)
+        self.assertIn("endpoint drifted", reason)
+        connector._config.base_url = binding.resolved_base_url
+
+        connector._config.ca_bundle = Path("/tmp/unapproved-ca.pem")
+        connector._config.ca_bundle_sha256 = "b" * 64
+        allowed, reason = catalog.validate_execution(
+            action,
+            connector,
+            binding,
+            connector_mode="live",
+        )
+        self.assertFalse(allowed)
+        self.assertIn("CA identity drifted", reason)
+
     def test_reversible_metadata_requires_a_compensating_connector(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
         action = AgentAction(
@@ -242,6 +267,9 @@ class CapabilityGovernanceTests(unittest.TestCase):
         connector._config = SimpleNamespace(  # type: ignore[attr-defined]
             auth=SimpleNamespace(mode="bearer"),
             config_identity="a" * 64,
+            base_url="https://api.github.com",
+            ca_bundle=None,
+            ca_bundle_sha256=None,
         )
         allowed, reason = catalog.validate_execution(
             action,

@@ -180,7 +180,12 @@ The runtime does not expose a generic HTTP tool to the planner.
 
 ## Evidence and audit separation
 
-The run report returned to the explicit caller may contain full normalized evidence. The durable audit database stores only:
+The run report returned to the explicit caller contains only the
+policy-sanitized, exact-schema, bounded provider result. Query envelopes,
+duplicate verification bodies, secret-key and organization-configured redacted
+fields, unsafe connector-reference details, and raw prompt-injection excerpts do
+not cross the provider-data return boundary. The durable audit database stores
+only:
 
 - plan fingerprint;
 - goal digest and length;
@@ -197,7 +202,11 @@ no provider-derived evidence.
 
 ## Verification model
 
-Read-only actions are verified with a second API retrieval. The connector compares normalized content digests while ignoring retrieval timestamps and security annotations.
+Read-only actions are verified with a second API retrieval. The connector
+compares normalized content digests while ignoring retrieval timestamps and
+security annotations. Verification happens while the provider body is still
+private; the runtime then recomputes the immutable egress binding, sanitizes one
+copy, and enforces its item and byte limits before return.
 
 A changing resource therefore reports a failed verification rather than being presented as a stable snapshot.
 

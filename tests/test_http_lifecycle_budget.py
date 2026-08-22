@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
+from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.errors import PreEffectError
+from master_agent.governance import (
+    ApprovalTier,
+    EnvironmentKind,
+    GovernanceProfile,
+    GovernanceRule,
+)
 from master_agent.http import SafeHttpClient
 from master_agent.models import (
     ActionState,
@@ -18,6 +26,9 @@ from master_agent.models import (
     ChangePlan,
     CompensationDescriptor,
     CompensationMode,
+    ConnectorExecutionBinding,
+    DataClassification,
+    ExecutionContext,
     ExecutionResult,
     ResourceRef,
     RiskLevel,
@@ -28,6 +39,8 @@ from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
 from tests.fakes import ExpectedRequest, QueueTransport
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class _LifecycleConnector:
     """Synthetic live connector whose every lifecycle phase performs HTTP."""
@@ -36,6 +49,11 @@ class _LifecycleConnector:
         self._config = SimpleNamespace(
             max_pages=max_pages,
             max_response_bytes=4096,
+            auth=SimpleNamespace(mode="bearer"),
+            config_identity="a" * 64,
+            base_url="https://example.test/api",
+            ca_bundle=None,
+            ca_bundle_sha256=None,
         )
         self._client = SafeHttpClient(
             base_url="https://example.test/api",
@@ -145,12 +163,16 @@ class HttpLifecycleBudgetTests(unittest.TestCase):
                     goal="Read with one lifecycle budget.",
                     actions=(action,),
                     created_by="test",
+                    execution_context=_execution_context(),
                 ),
                 dry_run=False,
             )
 
         self.assertEqual(report.actions[0].state, ActionState.INDETERMINATE)
-        self.assertIn("request/page budget", report.actions[0].message)
+        self.assertEqual(
+            report.actions[0].message,
+            "provider read failed after egress authorization: indeterminate",
+        )
         self.assertEqual(len(transport.requests), 1)
 
     def test_compensation_reuses_execute_and_verify_budget(self) -> None:
@@ -174,12 +196,13 @@ class HttpLifecycleBudgetTests(unittest.TestCase):
         )
 
         with TemporaryDirectory() as directory:
-            report = _orchestrator(Path(directory), connector).run(
+            report = _orchestrator(Path(directory), connector, governed=False).run(
                 ChangePlan(
                     goal="Fail after one reversible write.",
                     actions=(first, failed),
                     created_by="test",
                     compensate_on_failure=True,
+                    execution_context=_execution_context(),
                 ),
                 dry_run=False,
             )
@@ -220,6 +243,8 @@ def _action(
 def _orchestrator(
     root: Path,
     connector: _LifecycleConnector,
+    *,
+    governed: bool = True,
 ) -> WorkflowOrchestrator:
     registry = ConnectorRegistry()
     registry.register(connector)
@@ -235,6 +260,61 @@ def _orchestrator(
         sources=SourceOfTruthRegistry(()),
         connectors=registry,
         audit=AuditLog(root / "audit.sqlite3"),
+        capabilities=CapabilityCatalog(
+            {
+                "budget.resource.read": CapabilityDefinition(
+                    name="budget.resource.read",
+                    enabled=True,
+                    authentication="configured_connector",
+                    risk=RiskLevel.READ_ONLY,
+                    read_result_schema="test/budget-resource@1",
+                    read_result_resources={"record": "object"},
+                ),
+                "budget.resource.update": CapabilityDefinition(
+                    name="budget.resource.update",
+                    enabled=True,
+                    authentication="configured_connector",
+                    risk=RiskLevel.REVERSIBLE_WRITE,
+                    reversible=True,
+                    target_resource_types=("resource",),
+                    parameter_schema={"value": "string?"},
+                ),
+            }
+        ),
+        governance=(
+            replace(
+                GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                rules=(
+                    GovernanceRule(
+                        pattern="budget.*",
+                        owner="test-owner",
+                        authentication="configured_connector",
+                        data_classifications=frozenset({DataClassification.INTERNAL}),
+                        approval_tier=ApprovalTier.AUTOMATIC,
+                        environments=frozenset({EnvironmentKind.DEVELOPMENT}),
+                    ),
+                ),
+            )
+            if governed
+            else None
+        ),
+    )
+
+
+def _execution_context() -> ExecutionContext:
+    return ExecutionContext(
+        integrations_sha256="b" * 64,
+        connectors=(
+            ConnectorExecutionBinding(
+                system="budget",
+                deployment="cloud",
+                config_identity_sha256="a" * 64,
+                resolved_base_url="https://example.test/api",
+                resolved_origin="https://example.test",
+                authentication_mode="bearer",
+                credential_identity="budget:user:42",
+            ),
+        ),
     )
 
 

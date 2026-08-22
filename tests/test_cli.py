@@ -3,25 +3,31 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import stat
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from master_agent.capabilities import CapabilityCatalog
 from master_agent.cli import (
     _bitbucket_repositories,
     _connect,
     _github_repositories,
+    _mock_read_registry,
     _parse_credential_mappings,
+    _standalone_connector_binding,
     main,
 )
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
 from master_agent.errors import ConfigurationError
+from master_agent.governance import GovernanceProfile
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -32,6 +38,11 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.provider_egress import (
+    ProviderDataRoute,
+    bind_provider_data_egress,
+    sanitize_provider_result,
+)
 from master_agent.registry import ConnectorRegistry
 from tests.fakes import ScriptedTransport
 from tests.helpers import private_temporary_directory
@@ -60,7 +71,14 @@ class _DirectReadGitHubConnector(ReadOnlyConnector):
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
         del action
         return RetrievedPayload(
-            data={"repositories": [{"full_name": "example/project"}]},
+            data={
+                "schema": "master-agent/github-repositories@1",
+                "system": "github",
+                "deployment": "cloud",
+                "returned": 1,
+                "repositories": [{"full_name": "example/project"}],
+                "source_urls": ["https://api.github.com/user/repos"],
+            },
             connector_reference="https://api.github.com/user/repos",
         )
 
@@ -77,6 +95,74 @@ class CliTests(unittest.TestCase):
             _parse_credential_mappings(("missing-separator",))
         with self.assertRaisesRegex(ConfigurationError, "repeats"):
             _parse_credential_mappings(("key=ONE", "key=TWO"))
+
+    def test_mock_registry_synthesizes_every_provider_read_contract(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        actions = tuple(
+            AgentAction(
+                capability=name,
+                target=ResourceRef(
+                    definition.target_system,
+                    (
+                        definition.target_resource_types[0]
+                        if definition.target_resource_types
+                        else "resource"
+                    ),
+                    "shared-resource-id",
+                ),
+                parameters=(
+                    {"limit": 1}
+                    if any(
+                        kind == "object_list"
+                        for kind in definition.read_result_resources.values()
+                    )
+                    else {}
+                ),
+                risk=RiskLevel.READ_ONLY,
+                data_classification=DataClassification.INTERNAL,
+                authority_source=AuthoritySource.DIRECT_USER,
+                requires_approval=False,
+                idempotency_key=f"mock-contract:{name}",
+                justification="Validate the synthetic read-result contract.",
+            )
+            for name in catalog.enabled_names()
+            for definition in (catalog.definition(name),)
+            if definition.risk is RiskLevel.READ_ONLY
+            and definition.authentication != "local"
+        )
+        plan = ChangePlan(
+            goal="Validate every synthetic provider read contract.",
+            actions=actions,
+            created_by="test",
+        )
+
+        registry = _mock_read_registry(plan, catalog)
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        assert governance.model_context is not None
+
+        for action in actions:
+            definition = catalog.definition(action.capability)
+            with self.subTest(capability=action.capability):
+                result = registry.resolve(
+                    action.target.system,
+                    action.capability,
+                ).execute(action)
+                assert result.after is not None
+                self.assertEqual(result.after["schema"], definition.read_result_schema)
+                self.assertTrue(
+                    set(definition.read_result_resources).issubset(result.after)
+                )
+                binding = bind_provider_data_egress(
+                    policy=governance.model_context,
+                    action=action,
+                    definition=definition,
+                    connector_binding=None,
+                    route=ProviderDataRoute.AUDITED,
+                    audit_available=True,
+                    connector_mode="mock",
+                )
+                sanitized = sanitize_provider_result(result, binding)
+                self.assertIsNotNone(sanitized.after)
 
     def test_connect_rejects_credential_mapping_without_a_file(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "requires --credentials-file"):
@@ -244,6 +330,7 @@ class CliTests(unittest.TestCase):
         )
         registry = ConnectorRegistry()
         registry.register(_DirectReadGitHubConnector())
+        captured = (SimpleNamespace(binding=binding),)
 
         with private_temporary_directory() as directory:
             root = Path(directory)
@@ -260,11 +347,15 @@ class CliTests(unittest.TestCase):
                 with (
                     patch(
                         "master_agent.cli.capture_connector_executions",
-                        return_value=(SimpleNamespace(binding=binding),),
+                        return_value=captured,
                     ) as capture,
                     patch(
                         "master_agent.cli.build_live_registry",
                         return_value=registry,
+                    ) as build_registry,
+                    patch(
+                        "master_agent.direct_read._is_builtin_direct_read_connector",
+                        return_value=True,
                     ),
                     redirect_stdout(stdout),
                     redirect_stderr(stderr),
@@ -280,6 +371,10 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("audit.sqlite3", stdout.getvalue())
             self.assertFalse((root / ".master-agent").exists())
             capture.assert_called_once()
+            self.assertIs(
+                build_registry.call_args.kwargs["captured_executions"],
+                captured,
+            )
 
     def test_direct_read_rejects_effects_before_connector_capture(self) -> None:
         action = AgentAction(
@@ -319,6 +414,131 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("read-only", stderr.getvalue())
         capture.assert_not_called()
+
+    def test_applied_provider_policy_denial_precedes_runtime_access(self) -> None:
+        """Applied reads must fail before credentials, connectors, paths, or audit."""
+
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        assert governance.model_context is not None
+        denied = replace(
+            governance,
+            model_context=replace(
+                governance.model_context,
+                destination="unapproved-agent",
+            ),
+        )
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            bound_path = root / "bound.json"
+            state = root / "state"
+            drafts = root / "drafts"
+            state.mkdir(mode=0o700)
+            drafts.mkdir(mode=0o700)
+            plan_path.write_text(
+                json.dumps(build_weekly_status_plan().to_dict(), default=str),
+                encoding="utf-8",
+            )
+            arguments = [
+                "--connector-mode",
+                "mock",
+                "--database",
+                str(state / "audit.sqlite3"),
+                "--draft-output-dir",
+                str(drafts),
+            ]
+            with redirect_stdout(StringIO()):
+                self.assertEqual(
+                    main(
+                        [
+                            "bind-context",
+                            str(plan_path),
+                            *arguments,
+                            "--output",
+                            str(bound_path),
+                        ]
+                    ),
+                    0,
+                )
+
+            stderr = StringIO()
+            with (
+                patch(
+                    "master_agent.cli.GovernanceProfile.from_toml",
+                    return_value=denied,
+                ),
+                patch("master_agent.cli._load_credential_store") as credentials,
+                patch("master_agent.cli.build_execution_context") as context,
+                patch("master_agent.cli._mock_read_registry") as connectors,
+                patch("master_agent.cli.AuditLog") as audit,
+                redirect_stdout(StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = main(["run", str(bound_path), "--apply", *arguments])
+
+            self.assertEqual(status, 1)
+            self.assertIn("no model-context rule", stderr.getvalue())
+            credentials.assert_not_called()
+            context.assert_not_called()
+            connectors.assert_not_called()
+            audit.assert_not_called()
+            self.assertFalse((state / "audit.sqlite3").exists())
+
+    def test_applied_plan_contract_mismatches_precede_credential_selection(
+        self,
+    ) -> None:
+        plan = build_weekly_status_plan()
+        risk_mismatch = list(plan.actions)
+        risk_mismatch[0] = replace(
+            risk_mismatch[0],
+            risk=RiskLevel.LOCAL_GENERATION,
+        )
+        target_mismatch = list(plan.actions)
+        local_action = target_mismatch[3]
+        target_mismatch[3] = replace(
+            local_action,
+            target=ResourceRef(
+                "github",
+                local_action.target.resource_type,
+                local_action.target.resource_id,
+            ),
+        )
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            for label, actions, expected in (
+                ("risk", risk_mismatch, "risk mismatch"),
+                ("target", target_mismatch, "target system mismatch"),
+            ):
+                with self.subTest(label=label):
+                    plan_path = root / f"{label}.json"
+                    output = root / f"{label}-bound.json"
+                    plan_path.write_text(
+                        json.dumps(
+                            replace(plan, actions=tuple(actions)).to_dict(),
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    stderr = StringIO()
+                    with (
+                        patch("master_agent.cli._load_credential_store") as load,
+                        redirect_stdout(StringIO()),
+                        redirect_stderr(stderr),
+                    ):
+                        status = main(
+                            [
+                                "bind-context",
+                                str(plan_path),
+                                "--output",
+                                str(output),
+                            ]
+                        )
+
+                    self.assertEqual(status, 1)
+                    self.assertIn(expected, stderr.getvalue())
+                    load.assert_not_called()
+                    self.assertFalse(output.exists())
 
     def test_discovery_reports_missing_environment_without_failing_onboarding(
         self,
@@ -412,6 +632,138 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         )
         self.assertIn("PASS connector:github", stdout.getvalue())
 
+    def test_readiness_parses_selected_provider_egress_check(self) -> None:
+        with private_temporary_directory() as directory:
+            config = Path(directory) / "integrations.toml"
+            config.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+base_url = "https://example.atlassian.net"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "readiness",
+                        "--integrations",
+                        str(config),
+                        "--egress-check",
+                        "jira:internal",
+                    ]
+                )
+
+        self.assertEqual(status, 0, stderr.getvalue())
+        self.assertIn("PASS provider_data_egress:jira:internal", stdout.getvalue())
+
+    def test_probe_and_readiness_denials_precede_credential_loading(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            config = root / "integrations.toml"
+            credentials = root / "credentials.json"
+            config.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("master_agent.cli._load_credential_store") as load:
+                status = main(
+                    [
+                        "discover",
+                        "--integrations",
+                        str(config),
+                        "--credentials-file",
+                        str(credentials),
+                        "--systems",
+                        "github",
+                        "--probe",
+                        "--data-classification",
+                        "confidential",
+                    ]
+                )
+                self.assertEqual(status, 1)
+                load.assert_not_called()
+
+            with patch(
+                "master_agent.cli.CredentialStoreSnapshot.load_provider_compatible"
+            ) as load:
+                status = main(
+                    [
+                        "connect",
+                        "--integrations",
+                        str(config),
+                        "--credentials-file",
+                        str(credentials),
+                        "--systems",
+                        "github",
+                        "--data-classification",
+                        "confidential",
+                    ]
+                )
+                self.assertEqual(status, 1)
+                load.assert_not_called()
+
+            with patch("master_agent.cli._load_credential_store") as load:
+                status = main(
+                    [
+                        "readiness",
+                        "--integrations",
+                        str(config),
+                        "--credentials-file",
+                        str(credentials),
+                        "--egress-check",
+                        "github:confidential",
+                    ]
+                )
+                self.assertEqual(status, 2)
+                load.assert_not_called()
+
+    def test_unknown_probe_and_readiness_selectors_do_not_load_credentials(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "credentials.json"
+            with patch("master_agent.cli._load_credential_store") as load:
+                status = main(
+                    [
+                        "discover",
+                        "--credentials-file",
+                        str(credentials),
+                        "--systems",
+                        "unknown-provider",
+                        "--probe",
+                    ]
+                )
+                self.assertEqual(status, 1)
+                load.assert_not_called()
+
+            with patch("master_agent.cli._load_credential_store") as load:
+                status = main(
+                    [
+                        "readiness",
+                        "--credentials-file",
+                        str(credentials),
+                        "--egress-check",
+                        "unknown-provider:internal",
+                    ]
+                )
+                self.assertEqual(status, 2)
+                load.assert_not_called()
+
     def test_packaged_defaults_allow_dry_run_outside_repository(self) -> None:
         """An installed package must not depend on the source-tree config path."""
 
@@ -490,7 +842,6 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             original = json.dumps({"github": token})
             credentials.write_text(original, encoding="utf-8")
             credentials.chmod(0o600)
-            output = root / "repositories.json"
             stdout = StringIO()
             with (
                 patch.dict(
@@ -504,22 +855,14 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                     credentials_file=credentials,
                     limit=100,
                     visibility="all",
-                    output=output,
+                    output=None,
                     transport=transport,
                 )
 
-            payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(credentials.read_text(encoding="utf-8"), original)
-            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
 
         self.assertEqual(status, 0)
-        self.assertEqual(payload["authenticated_user"]["login"], "RoryGlenn")
-        self.assertEqual(
-            payload["repositories"][0]["full_name"],
-            "RoryGlenn/MasterAgent",
-        )
-        self.assertTrue(payload["verified"])
-        self.assertIn("GitHub account: RoryGlenn", stdout.getvalue())
+        self.assertIn("GitHub account: provider identity verified", stdout.getvalue())
         self.assertIn("RoryGlenn/MasterAgent", stdout.getvalue())
         self.assertEqual(len(transport.requests), 3)
         self.assertTrue(
@@ -529,6 +872,52 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             )
         )
         self.assertNotIn(token, stdout.getvalue())
+
+    def test_github_repository_shortcut_binds_custom_ca_snapshot(self) -> None:
+        """One-shot reads bind the captured CA path and digest before content I/O."""
+
+        token = "github-custom-ca-token"
+        ca_bytes = b"CUSTOM TEST CA\n"
+        transport = ScriptedTransport()
+        transport.add_json("GET", "/user", {"login": "RoryGlenn", "id": 42})
+        transport.add_json("GET", "/user/repos", [])
+
+        with private_temporary_directory() as directory:
+            ca_bundle = Path(directory) / "enterprise-ca.pem"
+            ca_bundle.write_bytes(ca_bytes)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "MASTER_AGENT_GITHUB_TOKEN": token,
+                        "MASTER_AGENT_ENTERPRISE_CA_BUNDLE": str(ca_bundle),
+                    },
+                    clear=True,
+                ),
+                patch(
+                    "master_agent.cli._standalone_connector_binding",
+                    wraps=_standalone_connector_binding,
+                ) as build_binding,
+                redirect_stdout(StringIO()),
+            ):
+                status = _github_repositories(
+                    credentials_file=None,
+                    limit=1,
+                    visibility="all",
+                    output=None,
+                    transport=transport,
+                )
+
+        self.assertEqual(status, 0)
+        build_binding.assert_called_once()
+        target = build_binding.call_args.kwargs["target"]
+        self.assertIsNotNone(target.ca_bundle)
+        assert target.ca_bundle is not None
+        self.assertEqual(target.ca_bundle.path, ca_bundle.resolve())
+        self.assertEqual(
+            target.ca_bundle.sha256,
+            hashlib.sha256(ca_bytes).hexdigest(),
+        )
 
     def test_github_repositories_lists_public_user_without_credentials(self) -> None:
         username = "rahul-aravind-opti"
@@ -553,39 +942,27 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         transport = ScriptedTransport()
         transport.add_json("GET", f"/users/{username}/repos", [repository])
 
-        with private_temporary_directory() as directory:
-            output = Path(directory) / "public-repositories.json"
-            stdout = StringIO()
-            with (
-                patch.dict(
-                    os.environ,
-                    {"MASTER_AGENT_GITHUB_TOKEN": ambient_token},
-                    clear=True,
-                ),
-                redirect_stdout(stdout),
-            ):
-                status = _github_repositories(
-                    credentials_file=None,
-                    limit=100,
-                    visibility=None,
-                    output=output,
-                    username=username,
-                    transport=transport,
-                )
-
-            payload = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        stdout = StringIO()
+        with (
+            patch.dict(
+                os.environ,
+                {"MASTER_AGENT_GITHUB_TOKEN": ambient_token},
+                clear=True,
+            ),
+            redirect_stdout(stdout),
+        ):
+            status = _github_repositories(
+                credentials_file=None,
+                limit=100,
+                visibility=None,
+                output=None,
+                username=username,
+                transport=transport,
+            )
 
         self.assertEqual(status, 0)
-        self.assertEqual(payload["requested_user"]["login"], username)
-        self.assertEqual(payload["requested_user"]["access"], "anonymous_public")
-        self.assertEqual(
-            payload["repositories"][0]["full_name"],
-            f"{username}/crossmint-challenge",
-        )
-        self.assertTrue(payload["verified"])
-        self.assertNotIn("authenticated_user", payload)
         self.assertIn(f"GitHub public user: {username}", stdout.getvalue())
+        self.assertIn(f"{username}/crossmint-challenge", stdout.getvalue())
         self.assertEqual(len(transport.requests), 2)
         self.assertTrue(
             all(
@@ -618,6 +995,33 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
                 username="rahul-aravind-opti",
             )
 
+    def test_repository_shortcuts_reject_persisted_output_before_provider_access(
+        self,
+    ) -> None:
+        github_transport = ScriptedTransport()
+        bitbucket_transport = ScriptedTransport()
+        with private_temporary_directory() as directory:
+            output = Path(directory) / "provider-data.json"
+            with self.assertRaisesRegex(ConfigurationError, "persisted output"):
+                _github_repositories(
+                    credentials_file=None,
+                    limit=1,
+                    visibility=None,
+                    output=output,
+                    username="public-user",
+                    transport=github_transport,
+                )
+            with self.assertRaisesRegex(ConfigurationError, "persisted output"):
+                _bitbucket_repositories(
+                    workspace="public-workspace",
+                    limit=1,
+                    output=output,
+                    transport=bitbucket_transport,
+                )
+
+        self.assertEqual(github_transport.requests, [])
+        self.assertEqual(bitbucket_transport.requests, [])
+
     def test_bitbucket_repositories_lists_public_workspace_anonymously(self) -> None:
         workspace = "public-workspace"
         ambient_token = "ambient-bitbucket-token-must-not-be-sent"
@@ -637,36 +1041,28 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             {"values": [repository], "next": None},
         )
 
-        with private_temporary_directory() as directory:
-            output = Path(directory) / "public-repositories.json"
-            stdout = StringIO()
-            with (
-                patch.dict(
-                    os.environ,
-                    {
-                        "MASTER_AGENT_BITBUCKET_TOKEN": ambient_token,
-                        "MASTER_AGENT_BITBUCKET_USERNAME": "ambient-user",
-                    },
-                    clear=True,
-                ),
-                redirect_stdout(stdout),
-            ):
-                status = _bitbucket_repositories(
-                    workspace=workspace,
-                    limit=100,
-                    output=output,
-                    transport=transport,
-                )
-
-            payload = json.loads(output.read_text(encoding="utf-8"))
-            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        stdout = StringIO()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MASTER_AGENT_BITBUCKET_TOKEN": ambient_token,
+                    "MASTER_AGENT_BITBUCKET_USERNAME": "ambient-user",
+                },
+                clear=True,
+            ),
+            redirect_stdout(stdout),
+        ):
+            status = _bitbucket_repositories(
+                workspace=workspace,
+                limit=100,
+                output=None,
+                transport=transport,
+            )
 
         self.assertEqual(status, 0)
-        self.assertEqual(payload["query"]["workspace"], workspace)
-        self.assertEqual(payload["query"]["visibility"], "public")
-        self.assertEqual(payload["repositories"][0]["slug"], "public-project")
-        self.assertTrue(payload["verified"])
         self.assertIn(f"Bitbucket public workspace: {workspace}", stdout.getvalue())
+        self.assertIn("public-workspace/public-project", stdout.getvalue())
         self.assertEqual(len(transport.requests), 2)
         self.assertTrue(
             all(
@@ -674,6 +1070,61 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
             )
         )
         self.assertNotIn(ambient_token, stdout.getvalue())
+
+    def test_repository_shortcuts_deny_policy_before_provider_access(self) -> None:
+        governance = GovernanceProfile.from_toml(ROOT / "config/governance.toml")
+        assert governance.model_context is not None
+        governance = replace(
+            governance,
+            model_context=replace(
+                governance.model_context,
+                destination="unapproved-agent",
+            ),
+        )
+        github_transport = ScriptedTransport()
+        bitbucket_transport = ScriptedTransport()
+
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "github.json"
+            credentials.write_text(
+                json.dumps({"github": "opaque-token"}),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            with (
+                patch(
+                    "master_agent.cli.GovernanceProfile.from_toml",
+                    return_value=governance,
+                ),
+                patch(
+                    "master_agent.cli.CredentialStoreSnapshot.load_github_compatible"
+                ) as load_credentials,
+            ):
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    "no model-context rule",
+                ):
+                    _github_repositories(
+                        credentials_file=credentials,
+                        limit=10,
+                        visibility="all",
+                        output=None,
+                        transport=github_transport,
+                    )
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    "no model-context rule",
+                ):
+                    _bitbucket_repositories(
+                        workspace="public-workspace",
+                        limit=10,
+                        output=None,
+                        transport=bitbucket_transport,
+                    )
+                load_credentials.assert_not_called()
+
+        self.assertEqual(github_transport.requests, [])
+        self.assertEqual(bitbucket_transport.requests, [])
 
     def test_github_repositories_reports_missing_credential_without_network(
         self,
@@ -728,11 +1179,16 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         self.assertEqual(status, 0)
         self.assertFalse(payload["persistent_configuration_changed"])
         self.assertEqual(payload["records"][0]["status"], "reachable")
-        self.assertEqual(payload["records"][0]["probe"]["user_id"], 42)
-        self.assertIn("connected: github", stdout.getvalue())
-        self.assertEqual(len(transport.requests), 1)
         self.assertEqual(
-            transport.requests[0].headers["Authorization"],
+            payload["records"][0]["probe"]["schema"],
+            "master-agent/provider-probe@1",
+        )
+        self.assertTrue(payload["records"][0]["probe"]["reachable"])
+        self.assertIsNotNone(payload["records"][0]["egress"])
+        self.assertIn("connected: github", stdout.getvalue())
+        self.assertEqual(len(transport.requests), 2)
+        self.assertEqual(
+            transport.requests[-1].headers["Authorization"],
             f"Bearer {token}",
         )
         self.assertNotIn(token, stdout.getvalue())
@@ -1152,9 +1608,9 @@ auth_mode = "none"
 
         self.assertEqual(status, 0)
         self.assertIn("connected: microsoft", stdout.getvalue())
-        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(len(transport.requests), 2)
         self.assertEqual(
-            transport.requests[0].headers["Authorization"],
+            transport.requests[-1].headers["Authorization"],
             f"Bearer {token}",
         )
         self.assertNotIn(token, stdout.getvalue())
@@ -1162,6 +1618,11 @@ auth_mode = "none"
     def test_connect_enables_explicit_onenote_read_only_in_memory(self) -> None:
         token = "provider-onenote-token-canary"
         transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/v1.0/me",
+            {"id": "user-42"},
+        )
         transport.add_json(
             "GET",
             "/v1.0/me/onenote/notebooks",
@@ -1188,9 +1649,9 @@ auth_mode = "none"
 
         self.assertEqual(status, 0)
         self.assertIn("connected: onenote", stdout.getvalue())
-        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(len(transport.requests), 2)
         self.assertEqual(
-            transport.requests[0].headers["Authorization"],
+            transport.requests[-1].headers["Authorization"],
             f"Bearer {token}",
         )
 

@@ -20,6 +20,7 @@ from master_agent.models import (
     DataClassification,
     RiskLevel,
 )
+from master_agent.provider_egress import ProviderDataEgressPolicy
 
 
 class EnvironmentKind(StrEnum):
@@ -91,6 +92,7 @@ class GovernanceProfile:
     external_model_policy: str
     rules: tuple[GovernanceRule, ...]
     metadata: Mapping[str, Any]
+    model_context: ProviderDataEgressPolicy | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -150,6 +152,9 @@ class GovernanceProfile:
                     ),
                 )
             )
+        raw_model_context = raw.get("model_context")
+        if raw_model_context is not None and not isinstance(raw_model_context, Mapping):
+            raise ConfigurationError("[model_context] must be a TOML table")
         return cls(
             organization=str(organization.get("name", "")),
             environment=EnvironmentKind(
@@ -171,6 +176,11 @@ class GovernanceProfile:
                     "external_model_policy",
                 }
             },
+            model_context=(
+                ProviderDataEgressPolicy.from_mapping(raw_model_context)
+                if isinstance(raw_model_context, Mapping)
+                else None
+            ),
         )
 
     def rule_for(self, capability: str) -> GovernanceRule | None:

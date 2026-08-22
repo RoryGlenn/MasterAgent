@@ -6,7 +6,10 @@ import json
 import tempfile
 import textwrap
 import unittest
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
@@ -42,7 +45,10 @@ from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.errors import ConfigurationError
-from master_agent.models import ChangePlan
+from master_agent.execution_context import capture_connector_executions
+from master_agent.models import ChangePlan, ExecutionContext
+from master_agent.oauth import AccessToken, write_token_file
+from tests.fakes import ScriptedTransport
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -152,6 +158,71 @@ class ConnectorFactoryTests(unittest.TestCase):
                     include_writes=True,
                 )
 
+    def test_approved_factory_reuses_attested_token_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            token_path = Path(directory) / "graph-token.json"
+            token_a = AccessToken(
+                value="token-A",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                scopes=("Notes.Read", "User.Read"),
+                source="test",
+            )
+            token_b = replace(token_a, value="token-B")
+            write_token_file(token_path, token_a)
+            config = IntegrationConfig.from_toml(ROOT / "config/integrations.toml")
+            environ = {"MASTER_AGENT_GRAPH_TOKEN_FILE": str(token_path)}
+            initial_transport = ScriptedTransport()
+            initial_transport.add_json("GET", "/v1.0/me", {"id": "account-A"})
+            captured = capture_connector_executions(
+                config,
+                environ=environ,
+                systems={"onenote"},
+                principal_transport=initial_transport,
+            )
+            assert config.source_sha256 is not None
+            approved = ExecutionContext(
+                integrations_sha256=config.source_sha256,
+                connectors=tuple(item.binding for item in captured),
+            )
+
+            write_token_file(token_path, token_a)
+            transport = ScriptedTransport()
+            transport.add_json("GET", "/v1.0/me", {"id": "account-A"})
+            transport.add_json(
+                "GET",
+                "/v1.0/me/onenote/notebooks",
+                {"value": []},
+            )
+            original_request = transport.request
+
+            def swap_after_attestation(**kwargs: object) -> object:
+                response = original_request(**kwargs)  # type: ignore[arg-type]
+                if len(transport.requests) == 1:
+                    write_token_file(token_path, token_b)
+                return response
+
+            with patch.object(
+                transport,
+                "request",
+                side_effect=swap_after_attestation,
+            ):
+                connectors = build_live_connectors(
+                    config,
+                    environ=environ,
+                    transport=transport,
+                    systems={"onenote"},
+                    approved_execution_context=approved,
+                )
+                connector = next(
+                    item for item in connectors if item.system == "onenote"
+                )
+                connector.probe()  # type: ignore[attr-defined]
+
+        self.assertEqual(
+            [request.headers.get("Authorization") for request in transport.requests],
+            ["Bearer token-A", "Bearer token-A"],
+        )
+
 
 class CapabilityCatalogConsistencyTests(unittest.TestCase):
     """Ensure every deterministic connector capability is governed."""
@@ -192,6 +263,26 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         }
         missing = sorted(connector_capabilities - set(catalog.definitions))
         self.assertEqual(missing, [])
+
+    def test_catalog_serialization_preserves_read_result_contracts(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+        serialized = catalog.to_dict()["capabilities"]
+
+        for name in catalog.enabled_names():
+            definition = catalog.definition(name)
+            with self.subTest(capability=name):
+                self.assertEqual(
+                    serialized[name]["read_result_schema"],
+                    definition.read_result_schema,
+                )
+                self.assertEqual(
+                    serialized[name]["read_result_resources"],
+                    dict(definition.read_result_resources),
+                )
+                self.assertEqual(
+                    serialized[name]["read_result_metadata"],
+                    list(definition.read_result_metadata),
+                )
 
     def test_onenote_writes_are_disabled_in_catalog_and_connector(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
