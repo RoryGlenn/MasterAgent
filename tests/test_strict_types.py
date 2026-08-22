@@ -10,9 +10,23 @@ from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.governance import GovernanceProfile
-from master_agent.models import ChangePlan
+from master_agent.models import (
+    AgentAction,
+    AuthoritySource,
+    ChangePlan,
+    ResourceRef,
+    RiskLevel,
+)
 from master_agent.oauth_config import OAuthProfiles
 from master_agent.orchestrator import RunReport
+from master_agent.planners.base import (
+    ComplexityItem,
+    ComplexityKind,
+    GovernedPlanner,
+    SystemsAssessment,
+    SystemsGateRoute,
+    SystemsGovernanceGate,
+)
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.provider_egress import ProviderDataEgressPolicy
 
@@ -103,6 +117,215 @@ class StrictBooleanTests(unittest.TestCase):
                     self.assertRaises(ConfigurationError),
                 ):
                     loader(path)
+
+
+class SystemsGovernanceGateTests(unittest.TestCase):
+    """Require systems diagnosis before non-trivial planning."""
+
+    def test_explicit_fast_path_accepts_only_safe_reversible_work(self) -> None:
+        decision = SystemsGovernanceGate().evaluate(
+            _systems_plan(RiskLevel.READ_ONLY),
+            _systems_assessment(),
+        )
+
+        self.assertTrue(decision.permitted, decision.reasons)
+        self.assertEqual(decision.route, SystemsGateRoute.FAST_PATH)
+        self.assertEqual(decision.complexity_score, 0)
+
+    def test_fast_path_rejects_a_write_plan(self) -> None:
+        gate = SystemsGovernanceGate()
+        plan = _systems_plan(RiskLevel.REVERSIBLE_WRITE)
+        assessment = _systems_assessment()
+
+        decision = gate.evaluate(plan, assessment)
+
+        self.assertFalse(decision.permitted)
+        self.assertIn("read-only", " ".join(decision.reasons))
+        with self.assertRaisesRegex(ValidationError, "systems governance denied"):
+            gate.enforce(plan, assessment)
+
+    def test_complete_gated_assessment_scores_added_complexity(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("open work",),
+            flows=("new work arrives",),
+            feedback_loops=("more work creates more coordination",),
+            delays=("benefits appear after adoption",),
+            unintended_consequences=("temporary migration cost",),
+            alternatives_considered=("extend the existing planner",),
+            added_complexity=(
+                ComplexityItem(
+                    ComplexityKind.AGENT,
+                    "one independently governed planning component",
+                ),
+            ),
+            existing_mechanisms_insufficient_because=(
+                "existing planners do not receive a systems assessment"
+            ),
+            reversibility_strategy="remove the wrapper and restore the prior planner",
+        )
+
+        decision = SystemsGovernanceGate().evaluate(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+
+        self.assertTrue(decision.permitted, decision.reasons)
+        self.assertEqual(decision.route, SystemsGateRoute.GATED)
+        self.assertEqual(decision.complexity_score, 2)
+
+    def test_added_complexity_requires_justification_and_removal_plan(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("open work",),
+            flows=("new work arrives",),
+            feedback_loops=("more work creates more coordination",),
+            delays=("none identified",),
+            unintended_consequences=("configuration drift",),
+            added_complexity=(
+                ComplexityItem(
+                    ComplexityKind.CONFIGURATION_SURFACE,
+                    "systems-governance configuration",
+                ),
+            ),
+        )
+
+        decision = SystemsGovernanceGate().evaluate(
+            _systems_plan(RiskLevel.LOCAL_GENERATION),
+            assessment,
+        )
+
+        self.assertFalse(decision.permitted)
+        combined = " ".join(decision.reasons)
+        self.assertIn("alternatives", combined)
+        self.assertIn("existing mechanisms", combined)
+        self.assertIn("reversibility", combined)
+
+    def test_complexity_above_budget_requires_human_review(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("open work",),
+            flows=("new work arrives",),
+            feedback_loops=("more work creates more coordination",),
+            delays=("benefits appear after adoption",),
+            unintended_consequences=("operational burden",),
+            alternatives_considered=("extend current components",),
+            added_complexity=(
+                ComplexityItem(ComplexityKind.AGENT, "planning agent"),
+                ComplexityItem(ComplexityKind.STATE_STORE, "assessment store"),
+                ComplexityItem(ComplexityKind.PERSISTENT_SERVICE, "review service"),
+            ),
+            existing_mechanisms_insufficient_because="no current durable boundary",
+            reversibility_strategy="remove all three components and restore prior flow",
+        )
+
+        decision = SystemsGovernanceGate().evaluate(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+
+        self.assertFalse(decision.permitted)
+        self.assertTrue(decision.requires_human_review)
+        self.assertIn("exceeds automatic budget", " ".join(decision.reasons))
+
+    def test_governed_planner_assesses_before_building_the_plan(self) -> None:
+        events: list[str] = []
+        assessment = _systems_assessment()
+        expected_plan = _systems_plan(RiskLevel.LOCAL_GENERATION)
+
+        class Assessor:
+            def assess(self, goal: str) -> SystemsAssessment:
+                events.append(f"assess:{goal}")
+                return assessment
+
+        class PlanBuilder:
+            def plan(
+                self,
+                goal: str,
+                *,
+                systems_assessment: SystemsAssessment,
+            ) -> ChangePlan:
+                self.assert_assessment(systems_assessment)
+                events.append(f"plan:{goal}")
+                return expected_plan
+
+            @staticmethod
+            def assert_assessment(value: SystemsAssessment) -> None:
+                if value is not assessment:
+                    raise AssertionError("planner did not receive the assessed object")
+
+        result = GovernedPlanner(
+            assessor=Assessor(),
+            planner=PlanBuilder(),
+        ).plan("prepare a local summary")
+
+        self.assertEqual(
+            events,
+            ["assess:prepare a local summary", "plan:prepare a local summary"],
+        )
+        self.assertIs(result.plan, expected_plan)
+        self.assertEqual(
+            result.decision.assessment_fingerprint,
+            assessment.fingerprint,
+        )
+
+
+def _systems_plan(risk: RiskLevel) -> ChangePlan:
+    action = AgentAction(
+        capability="example.summary.generate",
+        target=ResourceRef("example", "summary", "systems-gate"),
+        parameters={},
+        risk=risk,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key=f"systems-gate:{risk}",
+        justification="Exercise the systems-governance planning boundary.",
+    )
+    return ChangePlan(
+        goal="prepare a local summary",
+        actions=(action,),
+        created_by="test",
+    )
+
+
+def _systems_assessment(
+    *,
+    low_risk: bool = True,
+    reversible: bool = True,
+    well_understood: bool = True,
+    stocks: tuple[str, ...] = (),
+    flows: tuple[str, ...] = (),
+    feedback_loops: tuple[str, ...] = (),
+    delays: tuple[str, ...] = (),
+    unintended_consequences: tuple[str, ...] = (),
+    alternatives_considered: tuple[str, ...] = (),
+    added_complexity: tuple[ComplexityItem, ...] = (),
+    existing_mechanisms_insufficient_because: str = "",
+    reversibility_strategy: str = "",
+) -> SystemsAssessment:
+    return SystemsAssessment(
+        desired_outcome="produce an accurate local summary",
+        current_behavior="the summary is prepared manually",
+        constraint="manual preparation time",
+        leverage_point="information flow",
+        simplest_intervention="generate one local draft",
+        success_metric="draft is produced without an external side effect",
+        failure_condition="draft is inaccurate or cannot be discarded",
+        low_risk=low_risk,
+        reversible=reversible,
+        well_understood=well_understood,
+        stocks=stocks,
+        flows=flows,
+        feedback_loops=feedback_loops,
+        delays=delays,
+        unintended_consequences=unintended_consequences,
+        alternatives_considered=alternatives_considered,
+        added_complexity=added_complexity,
+        existing_mechanisms_insufficient_because=(
+            existing_mechanisms_insufficient_because
+        ),
+        reversibility_strategy=reversibility_strategy,
+    )
 
 
 def _model_context_mapping() -> dict[str, object]:
