@@ -28,6 +28,10 @@ from master_agent.platform_runtime.windows.locking import (
     WindowsCrossProcessLockingBackend,
     probe_windows_locking_backend,
 )
+from master_agent.platform_runtime.windows.process import (
+    WindowsProcessSupervisionBackend,
+    probe_windows_process_backend,
+)
 
 WINDOWS_RUNTIME_BACKEND_ID = "windows-native-partial"
 
@@ -51,12 +55,14 @@ def build_windows_runtime() -> PlatformRuntime:
         atomic=atomic,
         api=credential_api,
     )
+    process_api = probe_windows_process_backend()
+    process = WindowsProcessSupervisionBackend(api=process_api)
     services: tuple[tuple[PlatformContract, PlatformBackend | None], ...] = (
         (PlatformContract.SECURE_FILESYSTEM, filesystem),
         (PlatformContract.CROSS_PROCESS_LOCKING, locking),
         (PlatformContract.ATOMIC_PUBLICATION_RECOVERY, atomic),
         (PlatformContract.CREDENTIAL_STORAGE, credentials),
-        (PlatformContract.PROCESS_SUPERVISION, None),
+        (PlatformContract.PROCESS_SUPERVISION, process),
         (PlatformContract.TRUSTED_GIT, None),
         (PlatformContract.CAPSULE_ISOLATION, None),
     )
@@ -87,4 +93,5 @@ def build_windows_runtime() -> PlatformRuntime:
         cross_process_locking=locking,
         atomic_publication_recovery=atomic,
         credential_storage=credentials,
+        process_supervision=process,
     )

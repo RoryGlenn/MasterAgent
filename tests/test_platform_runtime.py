@@ -194,6 +194,7 @@ class PlatformRuntimeTests(unittest.TestCase):
 
     def test_compatibility_worker_fails_typed_before_posix_import(self) -> None:
         from master_agent import capsule_worker
+        from master_agent.platform_runtime.factory import _HOST_PLATFORM
 
         module_name = "master_agent.platform_runtime.posix.capsule_worker"
         imported_before = module_name in sys.modules
@@ -201,7 +202,11 @@ class PlatformRuntimeTests(unittest.TestCase):
         cases = (
             (
                 "win32",
-                "native windows process_supervision backend is not implemented",
+                (
+                    "native windows capsule_isolation backend is not implemented"
+                    if _HOST_PLATFORM == "win32"
+                    else "native windows process_supervision backend is not implemented"
+                ),
             ),
             (
                 "secret-unsupported-platform",

@@ -34,6 +34,46 @@ class PlatformCapabilityUnavailable(ConfigurationError):
     """A required native platform contract has no hardened implementation."""
 
 
+class ProcessExitReason(StrEnum):
+    """Secret-free terminal reason for one supervised process."""
+
+    EXITED = "exited"
+    NONZERO_EXIT = "nonzero_exit"
+    TIMED_OUT = "timed_out"
+
+
+class ProcessSupervisionError(ConfigurationError):
+    """A supervised process could not be launched or controlled safely."""
+
+    def __init__(self, reason: str) -> None:
+        if not reason or reason != reason.strip() or len(reason) > 80:
+            raise ValueError("process supervision reason is invalid")
+        self.reason = reason
+        super().__init__(f"process supervision failed: {reason}")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessExecutionResult:
+    """Bounded terminal state returned by a native process supervisor."""
+
+    reason: ProcessExitReason
+    exit_code: int | None
+    stdout: bytes
+    stderr: bytes
+    output_truncated: bool
+
+    def __post_init__(self) -> None:
+        if self.reason is ProcessExitReason.TIMED_OUT:
+            if self.exit_code is not None:
+                raise ValueError("timed-out process must not report an exit code")
+        elif isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int):
+            raise TypeError("completed process exit code must be an integer")
+        if not isinstance(self.stdout, bytes) or not isinstance(self.stderr, bytes):
+            raise TypeError("process output must be bytes")
+        if not isinstance(self.output_truncated, bool):
+            raise TypeError("process output truncation flag must be a boolean")
+
+
 class LockMode(StrEnum):
     """Portable intent for a whole-file advisory lock."""
 
@@ -442,6 +482,22 @@ class ProcessSupervisionBackend(PlatformBackend, Protocol):
         max_output_bytes: int,
     ) -> None:
         """Apply the complete fail-closed pure-capsule resource-limit set."""
+
+    def run(
+        self,
+        *,
+        executable: Path,
+        arguments: Sequence[str],
+        cwd: Path,
+        environment: Mapping[str, str],
+        inherited_handles: Sequence[int] = (),
+        timeout_seconds: float,
+        cpu_seconds: int,
+        memory_bytes: int,
+        max_processes: int,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
+        """Run one fixed command with native tree and resource supervision."""
 
 
 @runtime_checkable

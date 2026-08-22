@@ -95,6 +95,7 @@ REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
         "windows.filesystem",
         "windows.atomic_state_retention",
         "windows.credentials",
+        "windows.process_supervision",
     }
 )
 REQUIRED_AGENT_PROFILES: Final = {

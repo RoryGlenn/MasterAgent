@@ -29,7 +29,7 @@ Use this generated index as the first discovery hop after loading minimum author
 | `windows-credentials` — Windows Credential Manager and DPAPI | released | `master-agent` | [`specs/current/runtime/MA-WINDOWS-CREDENTIALS-001.md`](../specs/current/runtime/MA-WINDOWS-CREDENTIALS-001.md), [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | [`src/master_agent/platform_runtime/windows/credentials.py`](../src/master_agent/platform_runtime/windows/credentials.py) | [`tests/test_windows_credentials.py`](../tests/test_windows_credentials.py), [`tests/test_windows_credential_cli.py`](../tests/test_windows_credential_cli.py) | `packaging-release`, `platform-runtime` | `windows credentials`, `windows.credentials`, `windows credential manager and dpapi` |
 | `windows-filesystem` — Windows filesystem identity and ACL backend | released | `master-agent` | [`specs/current/runtime/MA-WINDOWS-FILESYSTEM-001.md`](../specs/current/runtime/MA-WINDOWS-FILESYSTEM-001.md), [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | [`src/master_agent/platform_runtime/windows/native.py`](../src/master_agent/platform_runtime/windows/native.py), [`src/master_agent/platform_runtime/windows/filesystem.py`](../src/master_agent/platform_runtime/windows/filesystem.py), [`src/master_agent/platform_runtime/windows/locking.py`](../src/master_agent/platform_runtime/windows/locking.py), [`src/master_agent/platform_runtime/windows/runtime.py`](../src/master_agent/platform_runtime/windows/runtime.py) | [`tests/test_windows_platform_runtime.py`](../tests/test_windows_platform_runtime.py) | `packaging-release`, `platform-runtime` | `windows filesystem`, `windows.filesystem`, `windows filesystem identity and acl backend` |
 | `windows-git` — Windows native Git isolation | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows git isolation`, `windows.git isolation`, `windows native git isolation` |
-| `windows-process` — Windows Job Object process supervision | planned | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | — | — | `platform-runtime` | `windows process supervision`, `windows.process supervision`, `windows job object process supervision` |
+| `windows-process` — Windows Job Object process supervision | released | `master-agent` | [`specs/current/runtime/MA-PLATFORM-001.md`](../specs/current/runtime/MA-PLATFORM-001.md), [`docs/implementation-roadmap.md`](../docs/implementation-roadmap.md) | [`src/master_agent/platform_runtime/windows/process.py`](../src/master_agent/platform_runtime/windows/process.py) | [`tests/test_windows_process.py`](../tests/test_windows_process.py) | `packaging-release`, `platform-runtime` | `windows process supervision`, `windows.process supervision`, `windows job object process supervision` |
 
 ## Hub-and-spoke topology
 
@@ -45,8 +45,8 @@ The parent owns the complete registry. Each child receives only its parent, scop
 
 ## Exact ownership coverage
 
-- `production_modules`: 119 exact entries
-- `tests`: 90 exact entries
+- `production_modules`: 120 exact entries
+- `tests`: 91 exact entries
 - `current_requirements`: 25 exact entries
 - `configurations`: 31 exact entries
 - `cli_commands`: 35 exact entries

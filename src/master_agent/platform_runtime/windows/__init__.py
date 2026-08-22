@@ -70,6 +70,13 @@ from master_agent.platform_runtime.windows.locking import (
     WindowsCrossProcessLockingBackend,
     probe_windows_locking_backend,
 )
+from master_agent.platform_runtime.windows.process import (
+    WINDOWS_PROCESS_BACKEND_ID,
+    CtypesWindowsProcessApi,
+    WindowsProcessApi,
+    WindowsProcessSupervisionBackend,
+    probe_windows_process_backend,
+)
 from master_agent.platform_runtime.windows.runtime import (
     WINDOWS_RUNTIME_BACKEND_ID,
     build_windows_runtime,
@@ -102,9 +109,11 @@ __all__ = [
     "WINDOWS_DPAPI_PROVIDER",
     "WINDOWS_FILESYSTEM_BACKEND_ID",
     "WINDOWS_LOCKING_BACKEND_ID",
+    "WINDOWS_PROCESS_BACKEND_ID",
     "WINDOWS_RUNTIME_BACKEND_ID",
     "CreatedWindowsFile",
     "CtypesWindowsCredentialApi",
+    "CtypesWindowsProcessApi",
     "NativeWindowsFileSnapshot",
     "NativeWindowsSecurity",
     "NativeWindowsVolume",
@@ -125,6 +134,8 @@ __all__ = [
     "WindowsObjectIdentity",
     "WindowsObjectKind",
     "WindowsPathSecurityError",
+    "WindowsProcessApi",
+    "WindowsProcessSupervisionBackend",
     "WindowsSecureFilesystemBackend",
     "build_protected_windows_sddl",
     "build_windows_runtime",
@@ -135,6 +146,7 @@ __all__ = [
     "probe_windows_credential_storage_backend",
     "probe_windows_filesystem_backend",
     "probe_windows_locking_backend",
+    "probe_windows_process_backend",
     "validate_windows_drive_path",
     "windows_ace_sid_length",
     "windows_ace_type_is_supported_allow",
