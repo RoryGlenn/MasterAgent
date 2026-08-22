@@ -81,9 +81,13 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
             "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CAPSULES-001.md",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
+            "/src/master_agent/platform_runtime/windows/capsules.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
             "/tests/test_windows_atomic_state.py",
+            "/tests/test_windows_capsules.py",
         ):
             with self.subTest(suffix=suffix):
                 self.assertIn(
@@ -109,6 +113,15 @@ class ReleaseMetadataTests(unittest.TestCase):
             "master_agent/platform_runtime/windows/atomic.py",
             report.errors,
         )
+        for required in (
+            "master_agent/platform_runtime/windows/capsules.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(
+                    f"release archive is missing required file: {required}",
+                    report.errors,
+                )
 
     def test_wheel_rejects_spoof_prefixed_capsule_workers(self) -> None:
         with TemporaryDirectory() as directory:
@@ -118,6 +131,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                     "master_agent/__init__.py",
                     "evilmaster_agent/capsule_worker.py",
                     "evilmaster_agent/platform_runtime/posix/capsule_worker.py",
+                    "evilmaster_agent/platform_runtime/windows/capsule_worker.py",
                     "master_agent/defaults/capabilities.toml",
                     "master_agent/defaults/dependency-licenses.toml",
                     "master_agent-1.0.0.dist-info/METADATA",
@@ -129,6 +143,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         for required in (
             "master_agent/capsule_worker.py",
             "master_agent/platform_runtime/posix/capsule_worker.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(
@@ -158,6 +173,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         for required in (
             "/src/master_agent/capsule_worker.py",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(
@@ -292,12 +308,14 @@ class ReleaseMetadataTests(unittest.TestCase):
             "--require-level draft",
             "--require-level effect",
             "tests.test_windows_platform_runtime",
+            "tests.test_windows_capsules",
             "windows-native-partial",
             "windows-handle-acl-filesystem",
             "windows-lockfileex",
             "windows-handle-atomic-state",
             "secure_filesystem",
             "capsule_isolation",
+            "windows-appcontainer",
             "readiness --output $readinessPath",
             "native Windows restricted publication smoke failed",
         ):

@@ -74,7 +74,9 @@ handling, and independent verification.
   directory durability, SQLite lifecycle, and post-publication identity/DACL
   validation; runs explicit executables through `windows-job-object`; pins Git
   for Windows and repository metadata for bounded read-only inspection through
-  `windows-trusted-git`; and keeps capsule isolation unavailable.
+  `windows-trusted-git`; launches pure capsules through
+  `windows-appcontainer`; and proves fixed host-file, ambient-secret, IPv4,
+  IPv6, localhost, and child-process denials as a non-administrator.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.

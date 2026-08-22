@@ -6,8 +6,10 @@ measurements compare the last manually maintained semantic index at commit
 introduced for issue #114 and extended with the issue #110 operating-mode
 route after its specification archival. Issue #98 adds the released common
 platform-runtime route, and issue #99 releases the native Windows filesystem
-and locking route. Issue #100 releases the native Windows atomic-state route
-while keeping the other five Windows routes planned.
+and locking route. Issues #100, #101, #103, #102, and #104 release native
+Windows atomic state, credentials, process supervision, trusted Git, and
+AppContainer capsule isolation respectively; hosted certification remains
+planned.
 
 ## Results
 
@@ -27,8 +29,9 @@ The baseline coverage rows count direct links in the prose index; the generated
 rows count exact manifest owners after the issue #83 merge added repository
 assets, issue #110 added progressive operating modes, and issue #98 added the
 common platform-runtime implementation. Issue #99 adds the native Windows
-filesystem slice; issue #100 adds atomic-state implementation, verification,
-and current-requirement ownership. Intervening archived work is also reflected
+filesystem slice; later Windows tranches add atomic-state, credential, process,
+Git, and capsule implementation, verification, and requirement ownership.
+Intervening archived work is also reflected
 in the live exact-owner totals. The baseline `0/24`
 records that the prose index did not expose a
 deterministic machine route-ID operation. It does not claim that a human reader

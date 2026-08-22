@@ -73,7 +73,7 @@ unsafe surfaces remain deliberately non-routable.
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
 | Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, handle-relative atomic local-state recovery, current-user Credential Manager, and DPAPI, while process, Git, capsule isolation, and full certification remain planned |
+| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, atomic local-state recovery, current-user credentials, Job Object supervision, trusted Git, and AppContainer pure-capsule isolation; full hosted certification remains planned |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -316,13 +316,16 @@ The `platform_runtime` report marks `atomic_publication_recovery` available.
 Setup, SQLite-backed state, approval and readiness output, retained evidence,
 OAuth token files, configuration snapshots, capsule/plugin stores, and draft
 artifacts use that native backend rather than POSIX emulation. Process
-supervision, trusted Git, and capsule isolation remain unavailable; an
-operation that needs one of them still stops with `runtime_defect` instead of
-using a weaker compatibility path.
+supervision, trusted Git, and dependency-free pure capsule isolation use the
+native Job Object, trusted-Git, and AppContainer backends. A missing exact
+contract still stops with `runtime_defect` instead of using a weaker
+compatibility path.
 On POSIX hosts, capsule isolation is also reported precisely: Linux selects
 the bubblewrap implementation only when a trusted executable is available and
 otherwise reports the contract unavailable; macOS reports it unavailable until
 a native executable-containment backend exists.
+Native Windows uses `windows-appcontainer`; WSL is Linux and therefore requires
+the trusted bubblewrap path.
 Reading an existing or explicitly selected organization profile is a protected
 filesystem operation. Native Windows reads it only through the retained-handle
 and ACL boundary. Organization-managed trusted-writer policy remains a later

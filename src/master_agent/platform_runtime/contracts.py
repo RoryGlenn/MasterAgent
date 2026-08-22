@@ -675,8 +675,43 @@ class CapsuleIsolationBackend(PlatformBackend, Protocol):
     """Native OS containment for executable capability-capsule workers."""
 
     @property
-    def executable(self) -> Path:
-        """Return the validated native containment executable."""
+    def executable(self) -> Path | None:
+        """Return an external containment executable when the backend uses one."""
+
+    @property
+    def production_isolated(self) -> bool:
+        """Return whether the backend enforces the production OS boundary."""
+
+    def identity_components(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+    ) -> Mapping[str, str | None]:
+        """Return exact secret-free artifact digests for promotion binding."""
+
+    def run_worker(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+        request: bytes,
+        environment: Mapping[str, str],
+        timeout_seconds: float,
+        cpu_seconds: int,
+        memory_bytes: int,
+        max_processes: int,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
+        """Run one bounded request through the backend's isolated worker."""
+
+    def denial_probes(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+    ) -> Sequence[Mapping[str, str]]:
+        """Return OS-enforced denial evidence required by this backend."""
 
 
 @dataclass(frozen=True, slots=True)

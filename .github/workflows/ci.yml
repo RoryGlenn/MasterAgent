@@ -88,7 +88,7 @@ jobs:
         run: python scripts/validate_release.py
 
   windows-startup:
-    name: Windows 11 native filesystem, credentials, process, Git, and startup
+    name: Windows 11 native filesystem, credentials, process, Git, capsules, and startup
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -212,7 +212,7 @@ jobs:
                 ) {
                   throw "native Windows tests received an administrator token"
                 }
-                $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_platform_runtime", "tests.test_windows_credentials", "tests.test_windows_process", "tests.test_windows_git")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
+                $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_platform_runtime", "tests.test_windows_credentials", "tests.test_windows_process", "tests.test_windows_git", "tests.test_windows_capsules")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
                 & $Python -c $runner
                 if ($LASTEXITCODE -ne 0) {
                   throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
@@ -287,9 +287,6 @@ jobs:
             throw "install-level doctor failed with exit code $LASTEXITCODE"
           }
 
-          $unavailableContracts = @(
-            "capsule_isolation"
-          )
           foreach ($report in @($readinessOutput, $doctorOutput)) {
             if ($report -notmatch 'platform runtime: windows \(windows-native-partial\)') {
               throw "platform runtime did not report the partial native Windows backend"
@@ -309,10 +306,8 @@ jobs:
             if ($report -notmatch 'trusted_git: available \(windows-trusted-git\)') {
               throw "platform runtime did not report native Windows trusted Git"
             }
-            foreach ($contractName in $unavailableContracts) {
-              if ($report -notmatch "$contractName`: unavailable \(windows-native-partial\)") {
-                throw "platform runtime did not fail closed for $contractName"
-              }
+            if ($report -notmatch 'capsule_isolation: available \(windows-appcontainer\)') {
+              throw "platform runtime did not report native Windows capsule isolation"
             }
           }
 

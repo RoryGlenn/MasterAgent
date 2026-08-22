@@ -46,6 +46,9 @@ from master_agent.models import (
     freeze_json_mapping,
 )
 from master_agent.platform_runtime import (
+    CapsuleIsolationBackend,
+    ProcessExecutionResult,
+    ProcessExitReason,
     SecureFilesystemBackend,
     get_platform_runtime,
     get_secure_filesystem_backend,
@@ -55,9 +58,6 @@ from master_agent.resource_limits import measure_json_resources
 WORKER_PROTOCOL = "master-agent/capsule-worker@1"
 VALIDATION_SCHEMA = "master-agent/capsule-validation@1"
 SANDBOX_VALIDATION_SCHEMA = "master-agent/capsule-sandbox-validation@1"
-_WORKER_PATH = (
-    Path(__file__).with_name("platform_runtime") / "posix" / "capsule_worker.py"
-)
 _MAX_WORKER_RESPONSE_OVERHEAD = 4_096
 
 
@@ -98,27 +98,31 @@ class CapsuleWorker:
         )
         runtime.require_process_supervision()
         self._filesystem = runtime.require_secure_filesystem()
-        isolation_backend = None
+        isolation_backend: CapsuleIsolationBackend | None = None
         if require_os_sandbox or explicit_bubblewrap:
             isolation_backend = runtime.require_capsule_isolation()
+        self._isolation_backend = isolation_backend
         self._bubblewrap = (
             isolation_backend.executable if isolation_backend is not None else None
         )
         self._require_os_sandbox = require_os_sandbox
-        if require_os_sandbox and self._bubblewrap is None:
+        if require_os_sandbox and isolation_backend is None:
             raise ConfigurationError(
-                "capability capsule execution requires the bubblewrap OS sandbox"
+                "capability capsule execution requires a native OS sandbox"
             )
-        _validate_worker_artifact(
-            _WORKER_PATH,
-            executable=False,
-            filesystem=self._filesystem,
-        )
-        _validate_worker_artifact(
-            Path(sys.executable).resolve(),
-            executable=True,
-            filesystem=self._filesystem,
-        )
+        self._worker_path = _worker_path()
+        interpreter = Path(sys.executable).resolve()
+        if sys.platform != "win32":
+            _validate_worker_artifact(
+                self._worker_path,
+                executable=False,
+                filesystem=self._filesystem,
+            )
+            _validate_worker_artifact(
+                interpreter,
+                executable=True,
+                filesystem=self._filesystem,
+            )
         if self._bubblewrap is not None:
             _validate_worker_artifact(
                 self._bubblewrap,
@@ -130,44 +134,65 @@ class CapsuleWorker:
     def backend(self) -> str:
         """Return the exact isolation backend identity."""
 
-        return "linux-bubblewrap" if self._bubblewrap is not None else "test-subprocess"
+        return (
+            self._isolation_backend.backend_id
+            if self._isolation_backend is not None
+            else "test-subprocess"
+        )
 
     @property
     def production_isolated(self) -> bool:
         """Return whether an OS-enforced no-network/mount namespace is active."""
 
-        return self._bubblewrap is not None and sys.platform.startswith("linux")
+        return (
+            self._isolation_backend is not None
+            and self._isolation_backend.production_isolated
+        )
+
+    @property
+    def identity_components(self) -> Mapping[str, str | None]:
+        """Return the exact component digests bound by the worker identity."""
+
+        interpreter = Path(sys.executable).resolve()
+        if sys.platform != "win32":
+            _validate_worker_artifact(
+                self._worker_path,
+                executable=False,
+                filesystem=self._filesystem,
+            )
+            _validate_worker_artifact(
+                interpreter,
+                executable=True,
+                filesystem=self._filesystem,
+            )
+        if self._isolation_backend is not None:
+            return self._isolation_backend.identity_components(
+                worker=self._worker_path,
+                interpreter=interpreter,
+            )
+        return {
+            "backend": self.backend,
+            "worker_sha256": _sha256_file(self._worker_path),
+            "interpreter_sha256": _sha256_file(interpreter),
+            "sandbox_sha256": None,
+        }
 
     @property
     def identity_sha256(self) -> str:
         """Bind worker source, interpreter, and sandbox binary into promotion."""
 
-        interpreter = Path(sys.executable).resolve()
-        _validate_worker_artifact(
-            _WORKER_PATH,
-            executable=False,
-            filesystem=self._filesystem,
+        return _sha256_json(self.identity_components)
+
+    def denial_probes(self) -> list[dict[str, str]]:
+        """Return backend-specific OS denial evidence."""
+
+        if self._isolation_backend is None:
+            return []
+        evidence = self._isolation_backend.denial_probes(
+            worker=self._worker_path,
+            interpreter=Path(sys.executable).resolve(),
         )
-        _validate_worker_artifact(
-            interpreter,
-            executable=True,
-            filesystem=self._filesystem,
-        )
-        if self._bubblewrap is not None:
-            _validate_worker_artifact(
-                self._bubblewrap,
-                executable=True,
-                filesystem=self._filesystem,
-            )
-        payload = {
-            "backend": self.backend,
-            "worker_sha256": _sha256_file(_WORKER_PATH),
-            "interpreter_sha256": _sha256_file(interpreter),
-            "sandbox_sha256": (
-                _sha256_file(self._bubblewrap) if self._bubblewrap is not None else None
-            ),
-        }
-        return _sha256_json(payload)
+        return [dict(item) for item in evidence]
 
     def execute(
         self, bundle: CapsuleBundle, request: Mapping[str, Any]
@@ -228,52 +253,45 @@ class CapsuleWorker:
         ).encode("utf-8")
         if len(encoded) > 2 * 1024 * 1024:
             raise ConnectorError("capability capsule worker envelope is too large")
-        command = self._command()
         safe_environment = {
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONHASHSEED": "0",
         }
-        with tempfile.TemporaryDirectory(prefix="master-agent-capsule-") as directory:
-            os.chmod(directory, 0o700)
-            with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-                process = subprocess.Popen(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=output,
-                    stderr=errors,
-                    cwd=directory,
-                    env=safe_environment,
-                    start_new_session=True,
-                )
-                try:
-                    process.communicate(encoded, timeout=timeout_seconds + 1)
-                except subprocess.TimeoutExpired as error:
-                    _terminate_process(process)
-                    raise ConnectorError(
-                        "capability capsule worker timed out"
-                    ) from error
-                output.seek(0, os.SEEK_END)
-                size = output.tell()
-                if size > max_output_bytes + _MAX_WORKER_RESPONSE_OVERHEAD:
-                    raise ConnectorError(
-                        "capability capsule worker output exceeded quota"
-                    )
-                output.seek(0)
-                payload = output.read()
-                errors.seek(0, os.SEEK_END)
-                error_size = errors.tell()
-                errors.seek(0)
-                diagnostic = errors.read(4_096) if error_size <= 4_096 else b""
+        if self._isolation_backend is not None:
+            process_result = self._isolation_backend.run_worker(
+                worker=self._worker_path,
+                interpreter=Path(sys.executable).resolve(),
+                request=encoded,
+                environment=safe_environment,
+                timeout_seconds=timeout_seconds + 1,
+                cpu_seconds=cpu_seconds,
+                memory_bytes=memory_bytes,
+                max_processes=max_processes,
+                max_output_bytes=max_output_bytes + _MAX_WORKER_RESPONSE_OVERHEAD,
+            )
+        else:
+            process_result = self._run_test_subprocess(
+                request=encoded,
+                environment=safe_environment,
+                timeout_seconds=timeout_seconds + 1,
+                max_output_bytes=max_output_bytes + _MAX_WORKER_RESPONSE_OVERHEAD,
+            )
+        if process_result.reason is ProcessExitReason.TIMED_OUT:
+            raise ConnectorError("capability capsule worker timed out")
+        if process_result.output_truncated:
+            raise ConnectorError("capability capsule worker output exceeded quota")
+        payload = process_result.stdout
+        diagnostic = process_result.stderr
         try:
             response = json.loads(payload.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError) as error:
             raise ConnectorError(
                 "capability capsule worker response is malformed: "
                 + _classify_worker_launch_failure(
-                    process.returncode,
+                    process_result.exit_code or 0,
                     diagnostic,
-                    diagnostic_overflow=error_size > 4_096,
+                    diagnostic_overflow=diagnostic == b"diagnostic_overflow",
                 )
             ) from error
         if (
@@ -281,7 +299,7 @@ class CapsuleWorker:
             or response.get("schema") != WORKER_PROTOCOL
         ):
             raise ConnectorError("capability capsule worker protocol drifted")
-        if process.returncode != 0 or response.get("ok") is not True:
+        if process_result.exit_code != 0 or response.get("ok") is not True:
             error_code = response.get("error")
             rendered = error_code if isinstance(error_code, str) else "worker_failed"
             raise ConnectorError(f"capability capsule rejected: {rendered}")
@@ -295,62 +313,71 @@ class CapsuleWorker:
         )
         return deepcopy(dict(result))
 
-    def _command(self) -> list[str]:
-        interpreter = Path(sys.executable).resolve()
-        if self._bubblewrap is None:
-            if self._require_os_sandbox:
-                raise ConfigurationError("capability capsule OS sandbox is unavailable")
-            return [str(interpreter), "-I", "-S", str(_WORKER_PATH)]
-        if not sys.platform.startswith("linux"):
-            raise ConfigurationError("bubblewrap capsules require Linux")
-        base_prefix = Path(sys.base_prefix).resolve()
+    def _run_test_subprocess(
+        self,
+        *,
+        request: bytes,
+        environment: Mapping[str, str],
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
+        """Run the explicit non-production subprocess used only by tests."""
+
+        if self._require_os_sandbox:
+            raise ConfigurationError("capability capsule OS sandbox is unavailable")
         command = [
-            str(self._bubblewrap),
-            "--die-with-parent",
-            "--new-session",
-            "--unshare-all",
-            "--cap-drop",
-            "ALL",
-            "--clearenv",
-            "--setenv",
-            "LANG",
-            "C.UTF-8",
-            "--setenv",
-            "LC_ALL",
-            "C.UTF-8",
-            "--setenv",
-            "PYTHONHASHSEED",
-            "0",
-            "--ro-bind",
-            str(base_prefix),
-            str(base_prefix),
+            str(Path(sys.executable).resolve()),
+            "-I",
+            "-S",
+            str(self._worker_path),
         ]
-        for library_root in (Path("/lib"), Path("/lib64")):
-            if library_root.exists():
-                command.extend(["--ro-bind", str(library_root), str(library_root)])
-        command.extend(
-            [
-                "--ro-bind",
-                str(_WORKER_PATH),
-                "/capsule-worker.py",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                "--tmpfs",
-                # This is a private tmpfs inside the new mount namespace.
-                "/tmp",  # nosec B108
-                "--dir",
-                "/work",
-                "--chdir",
-                "/work",
-                str(interpreter),
-                "-I",
-                "-S",
-                "/capsule-worker.py",
-            ]
+        with tempfile.TemporaryDirectory(prefix="master-agent-capsule-") as directory:
+            if sys.platform != "win32":
+                os.chmod(directory, 0o700)
+            with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=output,
+                    stderr=errors,
+                    cwd=directory,
+                    env=dict(environment),
+                    start_new_session=True,
+                )
+                try:
+                    process.communicate(request, timeout=timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    _terminate_process(process)
+                    return ProcessExecutionResult(
+                        reason=ProcessExitReason.TIMED_OUT,
+                        exit_code=None,
+                        stdout=b"",
+                        stderr=b"",
+                        output_truncated=False,
+                    )
+                output.seek(0, os.SEEK_END)
+                output_size = output.tell()
+                output.seek(0)
+                payload = output.read(min(output_size, max_output_bytes))
+                errors.seek(0, os.SEEK_END)
+                error_size = errors.tell()
+                errors.seek(0)
+                diagnostic = (
+                    errors.read(4_096)
+                    if error_size <= 4_096
+                    else b"diagnostic_overflow"
+                )
+        return ProcessExecutionResult(
+            reason=(
+                ProcessExitReason.EXITED
+                if process.returncode == 0
+                else ProcessExitReason.NONZERO_EXIT
+            ),
+            exit_code=process.returncode,
+            stdout=payload,
+            stderr=diagnostic,
+            output_truncated=output_size > max_output_bytes,
         )
-        return command
 
 
 class CapsuleValidator:
@@ -416,6 +443,7 @@ class CapsuleValidator:
             "backend": self._worker.backend,
             "os_isolated": self._worker.production_isolated,
             "worker_sha256": self._worker.identity_sha256,
+            "worker_identity": dict(self._worker.identity_components),
             "probes": probes,
             "status": "passed",
         }
@@ -448,6 +476,7 @@ class CapsuleValidator:
                 raise ValidationError(
                     f"capsule isolation probe unexpectedly ran: {name}"
                 )
+        results.extend(self._worker.denial_probes())
         return results
 
 
@@ -738,6 +767,12 @@ def _sha256_file(path: Path) -> str:
         while block := handle.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _worker_path() -> Path:
+    platform_root = Path(__file__).with_name("platform_runtime")
+    selected = "windows" if sys.platform == "win32" else "posix"
+    return platform_root / selected / "capsule_worker.py"
 
 
 def _validate_worker_artifact(

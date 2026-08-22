@@ -150,8 +150,15 @@ changing files, and serializes transitions with a directory lock.
 
 ## Isolation boundary
 
-`CapsuleWorker` requires Linux bubblewrap by default. It launches an isolated
-interpreter with:
+`CapsuleWorker` requires a certified native isolation backend by default. On
+Linux, that backend is a trusted bubblewrap executable. On native Windows 11,
+it is `windows-appcontainer`: an ephemeral zero-capability AppContainer profile
+containing a private, read-only projection of the exact interpreter, standard
+library, and Windows capsule worker. Windows Subsystem for Linux (WSL) is a
+Linux environment and therefore uses the Linux bubblewrap path; it does not use
+or certify the native Windows AppContainer backend.
+
+The Linux boundary launches an isolated interpreter with:
 
 - new user, mount, PID, IPC, UTS, cgroup, and network namespaces;
 - no inherited environment or network;
@@ -162,11 +169,27 @@ interpreter with:
 - a small AST-validated Python subset with no import, file, socket, subprocess,
   private-introspection, exception, context-manager, or dynamic-call surface.
 
+The native Windows boundary launches the projected interpreter suspended with
+`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, an empty capability list, and
+only its protocol pipes inherited. Before resuming, it assigns the process to a
+kill-on-close Job Object with CPU, committed-memory, process-count, wall-time,
+and shared stdout/stderr limits. The profile and runtime DACL grant the
+AppContainer read/execute only; each request receives one fresh writable work
+directory and a minimal allowlisted environment. The runtime projection rejects
+links and reparse points, is size- and path-bounded, and is rehashed before
+every validation or execution.
+
 Validation runs without provider credentials and includes denial probes for
-host files, ambient secrets, network, subprocesses, and private object
-introspection. The worker, interpreter, and bubblewrap binaries are trusted
-regular files and their digests form the worker identity. That identity is
-rechecked for each connector action. Package builds normalize worker mode; CI,
+host files, ambient secrets, IPv4, IPv6, localhost, subprocesses, and private
+object introspection. Native Windows promotion additionally requires those
+operations to fail inside the actual AppContainer. A network probe accepts
+only native access-denied, unavailable-family/network, or listener-backed
+timeout/drop results; connection refusal or reachability fails validation. The
+signed worker identity
+binds the backend, worker, interpreter, process boundary, projected runtime,
+and DACL policy; Linux also binds the trusted bubblewrap executable. That
+identity is rechecked for each connector action, so source, helper, runtime, or
+projection tampering fails closed. Package builds normalize worker mode; CI,
 sandbox workflows, and the repository bootstrap install into owner-private
 virtual environments under umask `077`. Hosted jobs first remove group/other
 write access from the exact setup-python runtime tree. A worker or interpreter
@@ -181,6 +204,8 @@ If the profile is absent or cannot be loaded, isolation readiness fails closed.
 
 There is no automatic subprocess fallback. A non-isolated subprocess backend
 can be selected only by direct test code and is never production-ready.
+Provider-backed, credentialed, dependent, or side-effect capsules remain
+blocked before connector construction on both native platforms.
 
 ## Governed activation and execution
 

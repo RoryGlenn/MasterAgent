@@ -142,8 +142,11 @@ one output budget across stdout and stderr. Its `windows-trusted-git` backend
 pins a validated Git for Windows executable and a bounded local repository
 metadata tree, rejects linked-worktree and alternate-object redirection, admits
 only complete fixed read-only command forms, disables ambient configuration and
-executable helpers, and launches through that Job Object boundary. Capsule isolation
-retains a bounded unavailable entry. A non-Windows host that
+executable helpers, and launches through that Job Object boundary. Its
+`windows-appcontainer` capsule backend projects an exact read-only Python
+runtime into an ephemeral zero-capability profile, grants one private writable
+directory, inherits only the typed protocol pipes, and applies the Job Object
+quotas before resume. A non-Windows host that
 explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
@@ -185,9 +188,9 @@ ciphertext envelope through the same atomic backend and omits machine scope;
 Credential Manager stores one bounded UTF-8 value per declared name beneath a
 reviewed `MasterAgent/` namespace. Connector configuration binds the non-secret
 provider and target, while values stay in the trusted in-memory credential
-snapshot. The common platform, native Windows filesystem, Windows atomic-state,
-Windows credential, and Windows process routes are released; the other three
-Windows implementation and hosted-certification routes remain planned.
+snapshot. The common platform and native Windows filesystem, atomic-state,
+credential, process, Git, and capsule routes are released; hosted certification
+remains planned.
 
 ## Repository discovery topology
 
@@ -234,10 +237,10 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-The common platform-runtime, Windows-filesystem, Windows atomic-state, Windows
-credential, and Windows process routes are released, while the other three
-Windows routes remain `planned`; a generated index cannot present
-those native backends or hosted certification as released until their own
+The common platform-runtime and Windows filesystem, atomic-state, credential,
+process, Git, and capsule routes are released, while hosted certification
+remains `planned`; a generated index cannot present
+that final certification as released until its own
 implementation changes advance the manifest under validation.
 
 ## Principal components
@@ -328,9 +331,10 @@ an installed signed quarantine; it does not create a catalog definition or
 routing card.
 
 The current worker admits only dependency-free pure read/local-generation
-capsules. It executes their AST-restricted program in Linux bubblewrap with no
-network, no ambient environment, read-only runtime mounts, an ephemeral work
-directory, and process/CPU/memory/time/input/output quotas. Complete signed
+capsules. It executes their AST-restricted program in Linux bubblewrap or a
+native Windows zero-capability AppContainer with no network, no ambient
+environment, a read-only runtime, an ephemeral work directory, and
+process/CPU/memory/time/input/output quotas. Complete signed
 manifest and artifact verification occurs before a connector is constructed.
 Provider destinations, credentials, or declared effects cause activation to
 fail closed because a production provider-capsule adapter is not bundled.
