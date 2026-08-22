@@ -156,7 +156,7 @@ jobs:
             }
 
             New-Item -ItemType Directory -Path $testRoot | Out-Null
-            Invoke-CheckedIcacls @($testRoot, "/inheritance:r")
+            Invoke-CheckedIcacls @($testRoot, "/inheritancelevel:r")
             Invoke-CheckedIcacls @($testRoot, "/setowner", $account)
             Invoke-CheckedIcacls @(
               $testRoot,
