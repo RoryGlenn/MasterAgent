@@ -957,12 +957,17 @@ def _private_sddl(*, owner_sid: str) -> str:
 
 def _network_probe_source(host: str, *, family: int) -> str:
     return (
-        "import socket\n"
+        "import select,socket\n"
         "denied={10013,10047,10049,10050,10051}\n"
+        "pending={10035,10036,10037}\n"
         "try:\n"
         f" s=socket.socket({family},socket.SOCK_STREAM)\n"
         " s.settimeout(1)\n"
         f" code=s.connect_ex(({host!r},9))\n"
+        " if code in pending:\n"
+        "  _,writable,exceptional=select.select([], [s], [s], 1)\n"
+        "  code=(s.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR) "
+        "if writable or exceptional else 10060)\n"
         " s.close()\n"
         "except OSError as error:\n"
         " code=int(error.winerror or error.errno or 0)\n"

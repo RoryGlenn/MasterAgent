@@ -218,10 +218,13 @@ class WindowsAppContainerContractTests(unittest.TestCase):
 
     def test_network_probes_require_native_access_denied_code(self) -> None:
         source = _network_probe_source("127.0.0.1", family=2)
+        compile(source, "<network-probe>", "exec")
         self.assertIn("10013", source)
         self.assertIn("10047", source)
         self.assertNotIn("10061", source)
         self.assertIn("except OSError", source)
+        self.assertIn("select.select", source)
+        self.assertIn("SO_ERROR", source)
         self.assertIn("UNEXPECTED_{code}", source)
 
 
