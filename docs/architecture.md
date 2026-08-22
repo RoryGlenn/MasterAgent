@@ -69,6 +69,55 @@ second runtime or provider path. The parent continues directly whenever that
 adapter is absent or cannot satisfy the full boundary.
 See [`advisory-subagents.md`](advisory-subagents.md).
 
+## Repository discovery topology
+
+Repository development uses a separate hub-and-spoke discovery map before any
+broad source search:
+
+```text
+User -> MasterAgent
+          -> Read Researcher (optional, read/search only)
+          -> Plan Reviewer (optional, read/search only)
+          -> Docs contract (applied directly by the parent)
+          -> deterministic governed runtime
+```
+
+The exact ownership and topology data lives in
+[`semantic-router.toml`](../.ai/semantic-router.toml). The compact
+[`semantic index`](semantic-index.md) is generated from that manifest and is
+navigation data, never authority. After loading the minimum repository policy,
+the parent selects one route and loads only its linked policy, specification,
+implementation, and verification slice. Exact inventory validation prevents a
+new module, test, requirement, command, capability, connector, configuration,
+profile, or platform area from silently inheriting an owner.
+Configuration discovery covers every repository TOML file except specification
+lifecycle metadata and ignored private, cache, or build roots, so packaged
+defaults, top-level package metadata, and supply-chain inputs cannot sit outside
+the exact ownership table.
+Implementation, test, and current-requirement links must agree with that exact
+owner. A route that intentionally references another route's shared
+configuration, authority, or release gate declares that owner as an exact
+dependency, so an unrelated but valid path cannot silently replace it.
+
+Generation opens the destination directory through no-follow descriptors,
+writes a private same-directory temporary file, and atomically replaces the
+index only after a complete synchronized write. A symbolic-link, non-regular,
+or raced destination cannot redirect generated content outside the repository.
+
+A commit-only review phrase selects the semantic-router route. The `changes`
+subcommand then resolves one commit or explicit `BASE..HEAD` range through a
+time- and output-bounded, read-only Git query and returns its exact changed
+paths, every affected route contract, and any unmapped path. This gives the
+parent a deterministic first hop without a broad preliminary repository scan.
+
+Each specialist receives only its parent, scoped role, tool allowlist,
+input/output contract, return path, and selected repository route. Specialists
+do not load sibling prompts or require peer-to-peer awareness. The parent alone
+knows the complete topology and independently revalidates specialist output.
+Seven separate Windows routes remain `planned`; a generated index cannot
+present them as released until their own implementation and certification
+changes advance the manifest under validation.
+
 ## Principal components
 
 ### Advisory sub-agents
@@ -86,9 +135,12 @@ across independent processes. The broker rejects credential, approval, signing,
 target, recipient, connector, tenant, private-context, and `ChangePlan` fields
 before a worker is invoked.
 
-The optional SDK worker binds the exact task, profile, normalized path/file
-inventory, HEAD, index, tracked and staged diffs, and bounded untracked file
-contents. It exposes only repository-owned route-scoped read/search tools; SDK
+The optional SDK worker binds the exact task, immutable profile, normalized
+path/file inventory, HEAD, raw index entries, descriptor-read tracked bytes,
+and bounded untracked file contents. The runner rehashes every commit, tree, and
+prompt-bearing blob used for its manifest or profile inventory and disables Git
+content conversion, replacement refs, lazy fetch, and transports. It exposes
+only repository-owned route-scoped read/search tools; SDK
 filesystem built-ins and ambient config, skill, and MCP discovery remain
 disabled. Each specialist call has an isolated session. One client may be
 reused for same-process calls in one goal and is closed at the goal boundary.

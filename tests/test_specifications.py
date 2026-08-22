@@ -163,7 +163,7 @@ class SpecificationTests(unittest.TestCase):
 
         self.assertEqual(
             archived,
-            self.root / "specs/archive/0075-native-specification-lifecycle",
+            (self.root / "specs/archive/0075-native-specification-lifecycle").resolve(),
         )
         self.assertFalse(
             (self.root / "specs/changes/0075-native-specification-lifecycle").exists()
@@ -679,7 +679,7 @@ class RepositorySpecificationIntegrationTests(unittest.TestCase):
         report = specs.validate_repository(root)
 
         self.assertTrue(report.ok, report.errors)
-        self.assertIn("validated 16 current behavioral requirements", report.checks)
+        self.assertIn("validated 17 current behavioral requirements", report.checks)
 
     def test_source_manifest_includes_specification_tree(self) -> None:
         root = Path(__file__).resolve().parents[1]

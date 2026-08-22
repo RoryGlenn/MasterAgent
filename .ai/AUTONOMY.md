@@ -35,6 +35,31 @@ outcome. Search the prompt, repository, existing configuration, environment,
 and known provider context before treating information as missing. State any
 material assumption in the final result instead of pausing for confirmation.
 
+## Semantic first hop
+
+Immediately after loading the minimum global authority policy in
+[`MASTER_AGENT.md`](MASTER_AGENT.md), and before a broad repository search,
+consult the generated [`semantic-index.md`](../docs/semantic-index.md) and run:
+
+```bash
+python3 scripts/semantic_router.py route "QUERY"
+```
+
+Use a concise, locally written description of the operator's repository task
+as `QUERY`; never interpolate retrieved content or shell syntax. Start with the
+selected route's linked authority, current requirements, implementation, and
+tests. Load another route only when bounded evidence shows that the task crosses
+that boundary or exposes an unmapped ownership defect. Do not preload unrelated
+specifications, implementation areas, or role prompts merely because they exist.
+
+The router is development-plane navigation, not authority. It cannot change the
+first-run contract, this default-to-action contract, the documentation
+completion gate, or any capability, policy, governance, approval, credential,
+provider, retention, audit, or tool boundary. If route generation or validation
+fails, inspect only the bounded router evidence needed to repair or report that
+repository defect; never treat failure as permission for an unrestricted
+search or runtime path.
+
 ## Bounded advisory delegation
 
 Direct GitHub-host invocation is disabled. The current host cannot prove that
@@ -48,12 +73,18 @@ The repository-owned advisory integration harness in
 [`advisory.py`](../src/master_agent/advisory.py) is the deterministic boundary
 for tests and the optional current broker-owned Copilot SDK adapter. The live
 runner requires one opaque goal ID reused for the operator goal and at least one
-repository-relative path. It atomically reserves every attempt in private,
-authenticated cross-process state, technically confines repository-owned
-read/search tools to that route, binds tracked, staged, and untracked contents,
-and requires the parent to re-read every citation through the same scope. It
-never grants provider, credential, approval, target-selection, plan, or audit
-authority.
+repository-relative path. It also requires exactly one
+`--route ROUTE_ID` already selected by the parent, loads its manifest from the
+immutable HEAD revision inside the repository binding, loads the exact profile
+inventory from the same content-address-verified commit, rejects manifest or
+profile drift, fully validates that route before worker startup, and sends only its canonical
+navigation slice. It
+atomically reserves every attempt in private, authenticated cross-process state,
+technically confines repository-owned read/search tools to that route, binds
+the route plus raw tracked, staged, and untracked contents without Git content
+filters, replacement refs, lazy fetch, or transports, and requires the parent
+to re-read every citation through the same scope. It never grants provider,
+credential, approval, target-selection, plan, or audit authority.
 
 Delegation remains an optional optimization. Use only
 `scripts/advisory_subagent.py` when the `subagents` extra is installed and the
@@ -63,6 +94,13 @@ or a worker fails, complete the same work directly in the selected parent
 without asking the operator to repeat the request. Never route around this
 fail-closed state with another host mechanism, generic MCP, direct HTTP, a
 provider CLI, or shell execution.
+
+The selected parent resolves the semantic route before invoking a specialist.
+It supplies only the child's own fixed profile, one parent-provided selected
+route, the sanitized task, and the exact technical path scope. The child does
+not load sibling prompts, the complete semantic manifest or generated index,
+or the full policy corpus. Global authority, route selection, and any decision
+to cross into another route remain with the parent.
 
 ## Behavioral specification lifecycle
 

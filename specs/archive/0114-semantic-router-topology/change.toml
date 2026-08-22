@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0114-semantic-router-topology"
+title = "Generate and enforce the semantic router and agent topology"
+status = "archived"
+github_issue = 114
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-ROUTER-001"
+destination = "development/MA-ROUTER-001.md"
+source = "current/MA-ROUTER-001.md"

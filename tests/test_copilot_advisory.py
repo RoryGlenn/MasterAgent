@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import types
 import unittest
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,14 +21,31 @@ from master_agent.advisory import (
     AdvisoryRole,
     DelegationStatus,
     RepositoryFixture,
+    SemanticRouteSlice,
     load_agent_inventory,
+)
+
+_TEST_ROUTE = SemanticRouteSlice(
+    route="agent-topology",
+    title="Parent and bounded advisory topology",
+    lifecycle="released",
+    summary="Bounded advisory test route.",
+    authority=("specs/current/security/MA-ADVISORY-001.md",),
+    implementation=("src/master_agent/advisory.py",),
+    configuration=(),
+    tests=("tests/test_advisory_integration.py",),
+    release_gates=("scripts/validate_release.py",),
+    dependencies=(),
 )
 from master_agent.copilot_advisory import (
     AdvisoryPathScope,
     CopilotRepositoryScanRejected,
+    CopilotScopeRejected,
     CopilotSdkAdvisoryWorker,
     CopilotSdkUnavailable,
     ScopedRepositoryTools,
+    load_agent_inventory_at_revision,
+    repository_state_binding,
     repository_state_digest,
 )
 
@@ -170,7 +190,8 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         states: list[str] | None = None,
     ) -> tuple[object, _FakeClient]:
         client = _FakeClient(content)
-        state_values = iter(states or ["same", "same"])
+        selected_states = states or ["same", "same"]
+        state_values = iter(selected_states)
 
         def state_reader(root: Path) -> str:
             self.assertEqual(root, self.root)
@@ -180,8 +201,14 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             self.root,
             client_factory=lambda root: client,
             state_reader=state_reader,
+            expected_repository_digest=selected_states[0],
+            profile_inventory=self.inventory,
         )
-        session = self.broker.start_session("MasterAgent", f"sdk-{role.value}")
+        session = self.broker.start_session(
+            "MasterAgent",
+            f"sdk-{role.value}",
+            semantic_route=_TEST_ROUTE,
+        )
         with patch.dict(sys.modules, self.modules):
             outcome = session.delegate(
                 role,
@@ -230,7 +257,34 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         )
         self.assertNotIn("agent", custom_agents[0]["tools"])
         self.assertNotIn("bash", custom_agents[0]["tools"])
-        self.assertIn("task_digest:", client.session.prompts[0])
+        task_prompt = client.session.prompts[0]
+        self.assertIn("task_digest:", task_prompt)
+        self.assertIn("route_digest:", task_prompt)
+        route_line = next(
+            line
+            for line in task_prompt.splitlines()
+            if line.startswith("semantic_route: ")
+        )
+        route_payload = json.loads(route_line.removeprefix("semantic_route: "))
+        self.assertEqual(
+            set(route_payload),
+            {
+                "route",
+                "title",
+                "lifecycle",
+                "summary",
+                "authority",
+                "implementation",
+                "configuration",
+                "tests",
+                "release_gates",
+                "dependencies",
+            },
+        )
+        self.assertEqual(route_payload["route"], "agent-topology")
+        self.assertNotIn("agent", route_payload)
+        self.assertNotIn("aliases", route_payload)
+        self.assertNotIn("routing_cases", route_payload)
         permission_handler = kwargs["on_permission_request"]
         rejected = permission_handler(object(), object())
         self.assertIsInstance(rejected, _Reject)
@@ -256,6 +310,112 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             [item["name"] for item in agents], ["masteragent-plan-reviewer"]
         )
 
+    def test_route_digest_binds_the_authorized_repository_snapshot(self) -> None:
+        """The child-visible route digest changes with its authorized state."""
+
+        route_digests = []
+        for repository_state in ("first-state", "second-state"):
+            outcome, client = self._delegate(
+                AdvisoryRole.RESEARCH,
+                '{"summary":"Bound","findings":[],"citations":[]}',
+                states=[repository_state, repository_state],
+            )
+            self.assertEqual(outcome.status, DelegationStatus.COMPLETED)
+            route_digests.append(
+                next(
+                    line
+                    for line in client.session.prompts[0].splitlines()
+                    if line.startswith("route_digest: ")
+                )
+            )
+
+        self.assertNotEqual(route_digests[0], route_digests[1])
+
+    def test_worker_uses_the_pinned_profile_inventory(self) -> None:
+        """A post-authorization worktree profile cannot enter the SDK prompt."""
+
+        profile = self.root / ".github/agents/MasterAgent-Read-Researcher.agent.md"
+        profile.write_text(
+            profile.read_text(encoding="utf-8") + "\nMUTABLE_PROFILE_SENTINEL\n",
+            encoding="utf-8",
+        )
+
+        outcome, client = self._delegate(
+            AdvisoryRole.RESEARCH,
+            '{"summary":"Bound","findings":[],"citations":[]}',
+        )
+
+        self.assertEqual(outcome.status, DelegationStatus.COMPLETED)
+        self.assertNotIn("MUTABLE_PROFILE_SENTINEL", client.session.prompts[0])
+
+    def test_profile_inventory_rejects_worktree_drift_from_revision(self) -> None:
+        """Mutable profile bytes cannot coexist with checked-in authorization."""
+
+        head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        profile = self.root / ".github/agents/MasterAgent-Read-Researcher.agent.md"
+        profile.write_text("transient invalid profile\n", encoding="utf-8")
+
+        with self.assertRaises(CopilotRepositoryScanRejected):
+            load_agent_inventory_at_revision(self.root, head)
+
+    def test_profile_inventory_rejects_staged_only_drift(self) -> None:
+        """A restored worktree cannot conceal another profile in the index."""
+
+        head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        relative = ".github/agents/MasterAgent-Read-Researcher.agent.md"
+        profile = self.root / relative
+        committed = profile.read_bytes()
+        profile.write_bytes(committed + b"\nstaged profile drift\n")
+        subprocess.run(("git", "add", relative), cwd=self.root, check=True)
+        profile.write_bytes(committed)
+
+        with self.assertRaises(CopilotRepositoryScanRejected):
+            load_agent_inventory_at_revision(self.root, head)
+
+    def test_profile_inventory_rejects_physical_object_substitution(self) -> None:
+        """Git object bytes must still hash to the immutable profile blob ID."""
+
+        relative = ".github/agents/MasterAgent-Read-Researcher.agent.md"
+        head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        blob = subprocess.run(
+            ("git", "rev-parse", f"HEAD:{relative}"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        object_path = self.root / ".git" / "objects" / blob[:2] / blob[2:]
+        self.assertTrue(object_path.is_file())
+        malicious = b"OBJECT_SUBSTITUTION_SENTINEL\n"
+        object_path.chmod(0o600)
+        object_path.write_bytes(
+            zlib.compress(f"blob {len(malicious)}\0".encode("ascii") + malicious)
+        )
+
+        with self.assertRaisesRegex(
+            CopilotRepositoryScanRejected,
+            "content-address verification",
+        ):
+            load_agent_inventory_at_revision(self.root, head)
+
     def test_one_goal_worker_reuses_client_with_isolated_sessions(self) -> None:
         """Safe same-process calls share a client but never an SDK session."""
 
@@ -267,11 +427,14 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             reuse_client=True,
             client_factory=lambda root: client,
             state_reader=lambda root: "same",
+            expected_repository_digest="same",
+            profile_inventory=self.inventory,
         )
         session = self.broker.start_session(
             "MasterAgent",
             "reuse-goal",
             goal_id="reuse-goal",
+            semantic_route=_TEST_ROUTE,
         )
         with patch.dict(sys.modules, self.modules):
             outcomes = [
@@ -305,8 +468,14 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             reuse_client=True,
             client_factory=lambda root: next(clients),
             state_reader=lambda root: "same",
+            expected_repository_digest="same",
+            profile_inventory=self.inventory,
         )
-        session = self.broker.start_session("MasterAgent", "disconnect-goal")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "disconnect-goal",
+            semantic_route=_TEST_ROUTE,
+        )
         with patch.dict(sys.modules, self.modules):
             failed = session.delegate(
                 AdvisoryRole.RESEARCH,
@@ -409,6 +578,43 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
         self.assertTrue(outcome.fallback_to_parent)
         self.assertIn("changed during delegation", outcome.reason)
 
+    def test_stale_route_authorization_falls_back_before_sdk_client_creation(
+        self,
+    ) -> None:
+        """A route validated for another snapshot cannot start an SDK client."""
+
+        created = False
+
+        def factory(root: Path) -> _FakeClient:
+            del root
+            nonlocal created
+            created = True
+            return _FakeClient('{"summary":"unused","findings":[],"citations":[]}')
+
+        worker = CopilotSdkAdvisoryWorker(
+            self.root,
+            client_factory=factory,
+            state_reader=lambda root: "current-state",
+            expected_repository_digest="authorized-state",
+            profile_inventory=self.inventory,
+        )
+        session = self.broker.start_session(
+            "MasterAgent",
+            "stale-route-state",
+            semantic_route=_TEST_ROUTE,
+        )
+
+        outcome = session.delegate(
+            AdvisoryRole.RESEARCH,
+            {"task": "research", "paths": ["README.md"]},
+            worker=worker,
+        )
+
+        self.assertEqual(outcome.status, DelegationStatus.FALLBACK)
+        self.assertTrue(outcome.fallback_to_parent)
+        self.assertFalse(created)
+        self.assertIn("changed during delegation", outcome.reason)
+
     def test_malformed_or_authority_bearing_json_falls_back(self) -> None:
         """The adapter accepts only the narrow advisory result schema."""
 
@@ -436,8 +642,14 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             self.root,
             client_factory=factory,
             state_reader=lambda root: "same",
+            expected_repository_digest="same",
+            profile_inventory=self.inventory,
         )
-        session = self.broker.start_session("MasterAgent", "sensitive-live-sdk")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "sensitive-live-sdk",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "research", "credential": "ghp_1234567890"},
@@ -458,8 +670,14 @@ class CopilotAdvisoryWorkerTests(unittest.TestCase):
             self.root,
             client_factory=unavailable,
             state_reader=lambda root: "same",
+            expected_repository_digest="same",
+            profile_inventory=self.inventory,
         )
-        session = self.broker.start_session("MasterAgent", "missing-sdk")
+        session = self.broker.start_session(
+            "MasterAgent",
+            "missing-sdk",
+            semantic_route=_TEST_ROUTE,
+        )
         outcome = session.delegate(
             AdvisoryRole.RESEARCH,
             {"task": "research", "paths": ["README.md"]},
@@ -512,6 +730,37 @@ class RepositoryStateDigestTests(unittest.TestCase):
         digests.append(repository_state_digest(self.root))
         self.assertEqual(len(digests), len(set(digests)))
 
+    def test_same_size_same_mtime_tracked_rewrite_changes_digest(self) -> None:
+        """Raw content, not only Git or filesystem metadata, binds the state."""
+
+        tracked = self.root / "tracked.txt"
+        before = repository_state_digest(self.root)
+        metadata = tracked.stat()
+        tracked.write_text("altered\n", encoding="utf-8")
+        os.utime(
+            tracked,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns),
+        )
+
+        after = repository_state_digest(self.root)
+
+        self.assertNotEqual(before, after)
+
+    def test_state_binding_carries_the_exact_hashed_head_revision(self) -> None:
+        """The immutable manifest revision comes from the digested state scan."""
+
+        binding = repository_state_binding(self.root)
+        head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        self.assertEqual(binding.head_revision, head)
+        self.assertEqual(binding.digest, repository_state_digest(self.root))
+
     def test_oversized_untracked_file_fails_closed(self) -> None:
         """Untracked content is never silently truncated from the binding."""
 
@@ -523,9 +772,218 @@ class RepositoryStateDigestTests(unittest.TestCase):
             with self.assertRaises(CopilotRepositoryScanRejected):
                 repository_state_digest(self.root)
 
+    def test_repository_binding_never_executes_a_clean_filter(self) -> None:
+        """Raw tracked-file hashing never delegates content to Git filters."""
+
+        (self.root / ".gitattributes").write_text(
+            "tracked.txt filter=tripwire\n",
+            encoding="utf-8",
+        )
+        subprocess.run(("git", "add", ".gitattributes"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "commit", "-qm", "add filter attributes"),
+            cwd=self.root,
+            check=True,
+        )
+        before = repository_state_digest(self.root)
+        with tempfile.TemporaryDirectory() as external:
+            marker = Path(external) / "clean-filter-executed"
+            tripwire = Path(external) / "clean_filter.py"
+            tripwire.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                "Path(sys.argv[1]).touch()\n"
+                "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+                encoding="utf-8",
+            )
+            command = " ".join(
+                shlex.quote(value)
+                for value in (sys.executable, str(tripwire), str(marker))
+            )
+            subprocess.run(
+                ("git", "config", "filter.tripwire.clean", command),
+                cwd=self.root,
+                check=True,
+            )
+            subprocess.run(
+                ("git", "config", "filter.tripwire.required", "true"),
+                cwd=self.root,
+                check=True,
+            )
+            (self.root / "tracked.txt").write_text(
+                "dirty raw bytes\n",
+                encoding="utf-8",
+            )
+
+            after = repository_state_digest(self.root)
+
+            self.assertNotEqual(before, after)
+            self.assertFalse(marker.exists())
+
+    def test_repository_binding_never_lazy_fetches_a_missing_commit(self) -> None:
+        """Promisor configuration cannot start a remote helper while binding."""
+
+        head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        marker = self.root / "remote-helper-executed"
+        subprocess.run(
+            ("git", "config", "extensions.partialClone", "origin"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "remote.origin.promisor", "true"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "remote.origin.url", f"ext::touch {marker}"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "protocol.ext.allow", "always"),
+            cwd=self.root,
+            check=True,
+        )
+        commit_object = self.root / ".git" / "objects" / head[:2] / head[2:]
+        self.assertTrue(commit_object.is_file())
+        commit_object.unlink()
+
+        with self.assertRaises(CopilotRepositoryScanRejected):
+            repository_state_digest(self.root)
+
+        self.assertFalse(marker.exists())
+
+    def test_replace_refs_cannot_alias_a_different_index_and_worktree(self) -> None:
+        """Replacement objects cannot recreate the digest of a clean commit."""
+
+        original_head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        original_digest = repository_state_digest(self.root)
+        (self.root / "tracked.txt").write_text("substituted\n", encoding="utf-8")
+        subprocess.run(("git", "add", "tracked.txt"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "commit", "-qm", "replacement state"),
+            cwd=self.root,
+            check=True,
+        )
+        replacement_head = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ("git", "update-ref", "HEAD", original_head),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "replace", original_head, replacement_head),
+            cwd=self.root,
+            check=True,
+        )
+
+        binding = repository_state_binding(self.root)
+
+        self.assertEqual(binding.head_revision, original_head)
+        self.assertNotEqual(binding.digest, original_digest)
+
+    def test_local_core_worktree_cannot_hide_root_untracked_changes(self) -> None:
+        """Every Git query remains pinned to the explicitly supplied root."""
+
+        untracked = self.root / "untracked.txt"
+        untracked.write_text("first\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as outside:
+            subprocess.run(
+                ("git", "config", "core.worktree", outside),
+                cwd=self.root,
+                check=True,
+            )
+            before = repository_state_digest(self.root)
+            untracked.write_text("second\n", encoding="utf-8")
+            after = repository_state_digest(self.root)
+
+        self.assertNotEqual(before, after)
+
+    def test_missing_tracked_file_below_a_symlinked_parent_fails_closed(self) -> None:
+        """A symlinked parent cannot masquerade as an ordinary deletion."""
+
+        nested = self.root / "nested"
+        nested.mkdir()
+        tracked = nested / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        subprocess.run(("git", "add", "nested/tracked.txt"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "commit", "-qm", "add nested path"),
+            cwd=self.root,
+            check=True,
+        )
+        tracked.unlink()
+        nested.rmdir()
+        with tempfile.TemporaryDirectory() as outside:
+            nested.symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(CopilotRepositoryScanRejected):
+                repository_state_digest(self.root)
+
 
 class AdvisoryPathScopeTests(unittest.TestCase):
     """Prove pathless search remains confined to the explicit route."""
+
+    def test_parent_policy_router_and_agent_prompts_are_never_route_scope(self) -> None:
+        """Global and peer prompt context stays exclusively on the parent."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "advisory-subagents.md").write_text(
+                "bounded child guidance\n",
+                encoding="utf-8",
+            )
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            subprocess.run(
+                ("git", "add", "docs/advisory-subagents.md"),
+                cwd=root,
+                check=True,
+            )
+            forbidden = (
+                "AGENTS.md",
+                ".ai",
+                ".ai/MASTER_AGENT.md",
+                ".ai/semantic-router.toml",
+                "docs/semantic-index.md",
+                ".github",
+                ".github/agents",
+                ".github/agents/MasterAgent.agent.md",
+                ".github/agents/MasterAgent-Read-Researcher.agent.md",
+                ".github/agents/MasterAgent-Plan-Reviewer.agent.md",
+            )
+            for relative in forbidden:
+                with (
+                    self.subTest(path=relative),
+                    self.assertRaises(CopilotScopeRejected),
+                ):
+                    AdvisoryPathScope.bind(root, (relative,))
+
+            allowed = AdvisoryPathScope.bind(root, ("docs/advisory-subagents.md",))
+            self.assertEqual(
+                allowed.relative_paths,
+                ("docs/advisory-subagents.md",),
+            )
 
     def test_search_and_list_cannot_cross_route_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -556,6 +1014,91 @@ class AdvisoryPathScopeTests(unittest.TestCase):
                     {"path": "denied/outside.txt"},
                 )
             )
+
+    def test_bind_rejects_hardlinked_eligible_file(self) -> None:
+        """A safe-looking alias cannot expose parent-only file content."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            policy = root / ".ai/MASTER_AGENT.md"
+            allowed.mkdir()
+            policy.parent.mkdir()
+            policy.write_text("parent-only canary", encoding="utf-8")
+            try:
+                os.link(policy, allowed / "alias.md")
+            except OSError as error:  # pragma: no cover - platform limitation
+                self.skipTest(f"hardlinks unavailable: {error}")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "hardlink"):
+                AdvisoryPathScope.bind(root, ("allowed",))
+
+    def test_post_bind_regular_file_replacement_is_rejected_before_read(self) -> None:
+        """An allowed pathname stays bound to its original file identity."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            scoped = allowed / "file.txt"
+            scoped.write_text("public", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            scope = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(scope)
+            replacement = root / "replacement.txt"
+            replacement.write_text("secret", encoding="utf-8")
+            replacement.replace(scoped)
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "changed"):
+                tools.invoke("masteragent_read", {"path": "allowed/file.txt"})
+
+    def test_post_bind_in_place_mutation_is_rejected_before_read(self) -> None:
+        """Same-path and same-size writes cannot change child-visible bytes."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            scoped = allowed / "file.txt"
+            scoped.write_text("public", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            scope = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(scope)
+            scoped.write_text("secret", encoding="utf-8")
+
+            with self.assertRaisesRegex(CopilotScopeRejected, "changed"):
+                tools.invoke("masteragent_search", {"query": "secret"})
+
+    def test_tracked_and_untracked_files_remain_readable_with_stable_digest(
+        self,
+    ) -> None:
+        """Normal scoped files keep deterministic binding and read behavior."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            allowed.mkdir()
+            tracked = allowed / "tracked.txt"
+            untracked = allowed / "untracked.txt"
+            tracked.write_text("tracked content", encoding="utf-8")
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            subprocess.run(("git", "add", "allowed/tracked.txt"), cwd=root, check=True)
+            untracked.write_text("untracked content", encoding="utf-8")
+
+            first = AdvisoryPathScope.bind(root, ("allowed",))
+            second = AdvisoryPathScope.bind(root, ("allowed",))
+            tools = ScopedRepositoryTools(first)
+            tracked_result = json.loads(
+                tools.invoke("masteragent_read", {"path": "allowed/tracked.txt"})
+            )
+            untracked_result = json.loads(
+                tools.invoke("masteragent_read", {"path": "allowed/untracked.txt"})
+            )
+
+            self.assertEqual(first.digest, second.digest)
+            self.assertEqual(tracked_result["content"], "tracked content")
+            self.assertEqual(untracked_result["content"], "untracked content")
 
 
 if __name__ == "__main__":

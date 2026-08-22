@@ -13,6 +13,22 @@ Think of the specialists as consultants working through a controlled doorway. Th
 
 Neither specialist may edit files, execute shell commands, call providers, access credentials, grant approval, mutate audit state, construct a runtime `ChangePlan`, or invoke another agent.
 
+## Hub-and-spoke context
+
+The selected parent is the only node that knows the complete role registry.
+The generated [semantic router](semantic-index.md) selects one repository route
+before delegation. A specialist then receives only its own checked-in profile,
+the selected route, its parent and return path, and the sanitized input/output
+contract. It does not load the other specialist's prompt or the complete
+repository policy and specification corpus.
+
+This is intentional. Peer-to-peer role awareness would add unrelated context
+without adding authority or evidence. The parent already owns routing, budget,
+scope, fallback, citation revalidation, and every final decision. The exact
+topology and ownership inventory is validated from
+[`semantic-router.toml`](../.ai/semantic-router.toml); generated prose cannot
+widen the tools or invocation flags enforced by the profiles and broker.
+
 ## Two invocation paths
 
 ### GitHub host path remains disabled
@@ -26,15 +42,36 @@ This matters because host-native inference does not pass through MasterAgent's r
 MasterAgent now has an optional live adapter in [`copilot_advisory.py`](../src/master_agent/copilot_advisory.py). When the `subagents` optional dependency is installed, the selected parent can run a Researcher or Plan Reviewer through [`scripts/advisory_subagent.py`](../scripts/advisory_subagent.py).
 
 The runner requires one opaque `--goal-id`, reused for every advisory attempt
-in the operator goal, plus one or more existing repository-relative `--path`
-values. Paths must be narrower than the repository root. A directory scope
-contains only its bounded tracked and non-ignored untracked regular-file
-inventory; ignored files, symlinks, `.git`, and `.master-agent` are absent.
+in the operator goal; exactly one `--route ROUTE_ID` already selected by the
+parent; and one or more existing repository-relative `--path` values. It fully
+validates the manifest and exact stable route ID before worker construction,
+then includes only that route's canonical navigation fields in the sanitized
+envelope. It never sends aliases, routing fixtures, the agent registry, sibling
+metadata, the full manifest, or the generated index.
+
+Route validation uses the exact immutable HEAD revision captured inside a
+complete repository-state binding. The runner parses the manifest from that
+commit, loads the exact profile inventory from verified commit/tree/blob
+objects, and refuses staged or unstaged manifest or profile drift. The resulting
+digest remains parent-owned and must match the worker's first state binding
+before any SDK client is created. A transient manifest swap or a change between
+route authorization and worker startup therefore falls back to the parent
+instead of using a stale route.
+
+Each path must be an exact tracked or non-ignored untracked regular file linked
+or owned by the selected route or its recursively declared dependencies.
+Directory and ancestor widening is rejected before scope binding, worker
+construction, or budget access. Ignored files, symlinks, `.git`, and
+`.master-agent` are absent. Parent-only context is also excluded: `AGENTS.md`,
+every `.ai` policy or manifest path, `docs/semantic-index.md`, and every
+`.github/agents` profile.
 
 The flow is:
 
 ```text
 MasterAgent parent
+    ↓
+verified immutable-HEAD manifest/profile validation + repository-state binding
     ↓
 private authenticated goal-budget reservation
     ↓
@@ -92,20 +129,34 @@ same scope.
 
 ## State binding
 
-Before a live specialist starts, MasterAgent hashes four things without storing their contents:
+Before a live specialist starts, MasterAgent hashes five things without storing their contents:
 
 - the sanitized task envelope;
-- the exact checked-in specialist profile; and
-- the normalized route and eligible file inventory; and
-- repository HEAD, index, tracked worktree diff, staged diff, untracked paths,
-  and every non-ignored untracked regular file's content digest.
+- the exact selected route ID and canonical navigation slice;
+- the exact checked-in specialist profile;
+- the normalized technical path scope and eligible file inventory; and
+- repository HEAD, raw stage-zero index entries, every tracked regular file's
+  presence, mode, and raw content digest, untracked paths, and every non-ignored
+  untracked regular file's content digest.
 
-Each repository digest requires two matching complete scans. Git output,
+The first complete state scan yields both a digest and the exact HEAD object ID
+inside that digest. The route and profile inventory are parsed from that
+immutable commit, while any worktree manifest or profile drift fails closed.
+Every commit, tree, and prompt-bearing blob is rehashed against its requested
+Git object ID before parsing. A second complete state scan must match,
+the worker requires that authorization digest to match its first scan, and the
+route digest covers both the selected route slice and repository digest. The
+repository digest itself remains outside the child prompt.
+
+Each repository digest requires two matching complete scans. Git discovery is
+pinned to the supplied worktree and cannot use content filters, replacement
+refs, lazy fetch, ambient config, or any transport protocol. Git output,
 untracked paths, file count, individual bytes, and total bytes have explicit
 limits. Files are opened no-follow and their descriptor/path identity, size,
 timestamps, and content are checked for races. Truncation, unreadable or special
-files, excess, a scan race, or any task/profile/route/repository change before
-completion rejects the result and returns the work to the parent.
+files, excess, an object-address mismatch, a scan race, or any
+task/profile/route/repository change before completion rejects the result and
+returns the work to the parent.
 
 ## Result validation
 
@@ -141,7 +192,7 @@ That fallback is successful degradation, not a setup failure. MasterAgent comple
 
 ## Hermetic end-to-end tests
 
-[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_advisory_budget.py`](../tests/test_advisory_budget.py) proves authenticated private state, restart persistence, consumed failure attempts, and tamper fallback. [`test_advisory_runner.py`](../tests/test_advisory_runner.py) starts independent and concurrent runner processes and mutates an already-untracked file during a live fake-SDK call. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) proves exact Git transitions, scan limits, route-scoped handlers, ignored-file exclusion, one-client/isolated-session reuse, role selection, ambient-discovery denial, malformed-output rejection, sensitive-context filtering, and optional-SDK fallback.
+[`test_advisory_integration.py`](../tests/test_advisory_integration.py) proves the deterministic broker boundary with hermetic repository and protected-state fixtures. [`test_advisory_budget.py`](../tests/test_advisory_budget.py) proves authenticated private state, restart persistence, consumed failure attempts, and tamper fallback. [`test_advisory_runner.py`](../tests/test_advisory_runner.py) starts independent and concurrent runner processes and mutates an already-untracked file during a live fake-SDK call. [`test_copilot_advisory.py`](../tests/test_copilot_advisory.py) proves exact Git transitions, scan limits, route-scoped handlers, ignored-file exclusion, immutable profile binding, clean-filter and replacement-ref denial, no lazy fetch, object-address verification, one-client/isolated-session reuse, role selection, ambient-discovery denial, malformed-output rejection, sensitive-context filtering, and optional-SDK fallback.
 
 No live Copilot canary is bundled. A live SDK session is an optional execution adapter, not evidence that host-native inference or an unrestricted child path is safe. Pull-request security remains grounded in deterministic broker, release, packaging, dependency, security, and coverage validation.
 

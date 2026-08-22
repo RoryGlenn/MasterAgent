@@ -14,22 +14,47 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from master_agent.advisory import AdvisoryReport, AdvisoryRole
+from master_agent.advisory import (
+    AdvisoryReport,
+    AdvisoryRole,
+    SemanticRouteSlice,
+    load_agent_inventory,
+)
 from scripts import advisory_subagent
 
 _FAKE_RUNNER = textwrap.dedent(
     """
     import sys
     from pathlib import Path
-    from master_agent.advisory import AdvisoryReport, AdvisoryRole
+    from master_agent.advisory import AdvisoryReport, AdvisoryRole, SemanticRouteSlice, load_agent_inventory
     from scripts import advisory_subagent as runner
+
+    ROUTE = SemanticRouteSlice(
+        route="agent-topology",
+        title="Parent and bounded advisory topology",
+        lifecycle="released",
+        summary="Bounded advisory test route.",
+        authority=(),
+        implementation=(),
+        configuration=(),
+        tests=(),
+        release_gates=(),
+        dependencies=(),
+    )
 
     class Worker:
         def __call__(self, envelope, dispatcher):
             del envelope, dispatcher
             return AdvisoryReport("bounded", (), ())
 
-    runner.CopilotSdkAdvisoryWorker = lambda root, scope=None: Worker()
+    runner.CopilotSdkAdvisoryWorker = (
+        lambda root, scope=None, expected_repository_digest=None, profile_inventory=None: Worker()
+    )
+    runner._validated_semantic_route = lambda root, route, paths: runner._BoundSemanticRoute(
+        ROUTE,
+        runner.AdvisoryRepositoryState("stable", "0" * 40),
+        load_agent_inventory(root),
+    )
     role = (
         AdvisoryRole.RESEARCH
         if sys.argv[3] == "research"
@@ -41,11 +66,25 @@ _FAKE_RUNNER = textwrap.dedent(
             role,
             "runner process test",
             ("README.md",),
+            route="agent-topology",
             goal_id=sys.argv[4],
             state_directory=Path(sys.argv[2]),
         )
     )
     """
+)
+
+_TEST_ROUTE = SemanticRouteSlice(
+    route="agent-topology",
+    title="Parent and bounded advisory topology",
+    lifecycle="released",
+    summary="Bounded advisory test route.",
+    authority=("specs/current/security/MA-ADVISORY-001.md",),
+    implementation=("src/master_agent/advisory.py",),
+    configuration=(),
+    tests=("tests/test_advisory_integration.py",),
+    release_gates=("scripts/validate_release.py",),
+    dependencies=(),
 )
 
 
@@ -175,7 +214,21 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
             patch.object(
                 advisory_subagent,
                 "CopilotSdkAdvisoryWorker",
-                side_effect=lambda root, scope=None: Worker(),
+                side_effect=lambda root, scope=None, expected_repository_digest=None, profile_inventory=None: (
+                    Worker()
+                ),
+            ),
+            patch.object(
+                advisory_subagent,
+                "_validated_semantic_route",
+                return_value=advisory_subagent._BoundSemanticRoute(
+                    _TEST_ROUTE,
+                    advisory_subagent.AdvisoryRepositoryState(
+                        "stable",
+                        "0" * 40,
+                    ),
+                    load_agent_inventory(self.root),
+                ),
             ),
             redirect_stdout(output),
         ):
@@ -184,11 +237,506 @@ class AdvisoryRunnerProcessTests(unittest.TestCase):
                 AdvisoryRole.RESEARCH,
                 "read only the README",
                 ("README.md",),
+                route="agent-topology",
                 goal_id="citation-goal",
                 state_directory=self.state,
             )
 
         self.assertEqual(return_code, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
+
+
+class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
+    """Bind one validated selected route before starting a live worker."""
+
+    def setUp(self) -> None:
+        self.source = Path(__file__).resolve().parents[1]
+        self.temporary = tempfile.TemporaryDirectory()
+        base = Path(self.temporary.name).resolve()
+        self.root = base / "repository"
+        manifest = self.root / ".ai/semantic-router.toml"
+        manifest.parent.mkdir(parents=True)
+        shutil.copy2(self.source / ".ai/semantic-router.toml", manifest)
+        implementation = self.root / "src/master_agent/advisory.py"
+        implementation.parent.mkdir(parents=True)
+        shutil.copy2(
+            self.source / "src/master_agent/advisory.py",
+            implementation,
+        )
+        release_validator = self.root / "scripts/validate_release.py"
+        release_validator.parent.mkdir(parents=True)
+        shutil.copy2(
+            self.source / "scripts/validate_release.py",
+            release_validator,
+        )
+        profiles = self.root / ".github/agents"
+        profiles.mkdir(parents=True)
+        for name in (
+            "MasterAgent.agent.md",
+            "MasterAgent-Read-Researcher.agent.md",
+            "MasterAgent-Plan-Reviewer.agent.md",
+        ):
+            shutil.copy2(self.source / ".github/agents" / name, profiles / name)
+        subprocess.run(("git", "init", "-q"), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "config", "user.email", "test@example.invalid"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "MasterAgent Test"),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(("git", "add", "."), cwd=self.root, check=True)
+        subprocess.run(
+            ("git", "commit", "-qm", "initial"),
+            cwd=self.root,
+            check=True,
+        )
+        self.state = base / "state"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_validated_route_slice_reaches_worker_and_changes_task_identity(
+        self,
+    ) -> None:
+        """Only canonical route-local fields enter the envelope and task hash."""
+
+        envelopes = []
+
+        class Worker:
+            def __call__(self, envelope, dispatcher):  # type: ignore[no-untyped-def]
+                del dispatcher
+                envelopes.append(envelope)
+                return AdvisoryReport("bounded", (), ())
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=lambda root, scope=None, expected_repository_digest=None, profile_inventory=None: (
+                    Worker()
+                ),
+            ),
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            redirect_stdout(output),
+        ):
+            results = [
+                advisory_subagent.run(
+                    self.root,
+                    AdvisoryRole.RESEARCH,
+                    "inspect one bounded file",
+                    ("scripts/validate_release.py",),
+                    route=route,
+                    goal_id="route-binding-goal",
+                    state_directory=self.state,
+                )
+                for route in ("agent-topology", "direct-read")
+            ]
+
+        self.assertEqual(results, [0, 0])
+        self.assertEqual(len(envelopes), 2)
+        self.assertNotEqual(envelopes[0].task_id, envelopes[1].task_id)
+        route_payload = envelopes[0].semantic_route.to_payload()
+        self.assertEqual(
+            set(route_payload),
+            {
+                "route",
+                "title",
+                "lifecycle",
+                "summary",
+                "authority",
+                "implementation",
+                "configuration",
+                "tests",
+                "release_gates",
+                "dependencies",
+            },
+        )
+        self.assertEqual(route_payload["route"], "agent-topology")
+        self.assertNotIn("agent", route_payload)
+        self.assertNotIn("aliases", route_payload)
+        self.assertNotIn("routing_cases", route_payload)
+
+    def test_route_accepts_owned_file_not_repeated_in_navigation_slice(self) -> None:
+        """Exact ownership makes the full selected route available."""
+
+        allowed = self.root / "src/master_agent/advisory_budget.py"
+        shutil.copy2(
+            self.source / "src/master_agent/advisory_budget.py",
+            allowed,
+        )
+        with patch.object(
+            advisory_subagent._semantic_router,
+            "validate_repository",
+            return_value=[],
+        ):
+            route = advisory_subagent._validated_semantic_route(
+                self.root,
+                "agent-topology",
+                ("src/master_agent/advisory_budget.py",),
+            )
+
+        self.assertEqual(route.route.route, "agent-topology")
+        self.assertEqual(
+            route.repository_state,
+            advisory_subagent.repository_state_binding(self.root),
+        )
+
+    def test_route_accepts_file_from_explicit_dependency(self) -> None:
+        """A declared dependency contributes its governed file ownership."""
+
+        dependency = self.root / "scripts/bootstrap_agent.py"
+        shutil.copy2(self.source / "scripts/bootstrap_agent.py", dependency)
+        with patch.object(
+            advisory_subagent._semantic_router,
+            "validate_repository",
+            return_value=[],
+        ):
+            route = advisory_subagent._validated_semantic_route(
+                self.root,
+                "semantic-router",
+                ("scripts/bootstrap_agent.py",),
+            )
+
+        self.assertEqual(route.route.route, "semantic-router")
+
+    def test_route_validation_rejects_repository_snapshot_race(self) -> None:
+        """A route authorization cannot outlive the snapshot that produced it."""
+
+        authorized = advisory_subagent.repository_state_binding(self.root)
+        changed = advisory_subagent.AdvisoryRepositoryState(
+            "changed-state",
+            authorized.head_revision,
+        )
+        with (
+            patch.object(
+                advisory_subagent,
+                "repository_state_binding",
+                side_effect=(authorized, changed),
+            ),
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            self.assertRaises(advisory_subagent.CopilotRepositoryChanged),
+        ):
+            advisory_subagent._validated_semantic_route(
+                self.root,
+                "agent-topology",
+                ("src/master_agent/advisory.py",),
+            )
+
+    def test_same_digest_manifest_aba_fails_before_worker_creation(self) -> None:
+        """A transient manifest cannot hide between equal outer state digests."""
+
+        authorized = advisory_subagent.repository_state_binding(self.root)
+        manifest = self.root / ".ai/semantic-router.toml"
+        original = manifest.read_bytes()
+        transient = original + b"\n# transient valid ABA fixture\n"
+        real_loader = advisory_subagent._semantic_router.load_manifest_at_revision
+
+        def racing_loader(root: Path, revision: str):  # type: ignore[no-untyped-def]
+            manifest.write_bytes(transient)
+            try:
+                return real_loader(root, revision)
+            finally:
+                manifest.write_bytes(original)
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent,
+                "repository_state_binding",
+                return_value=authorized,
+            ),
+            patch.object(
+                advisory_subagent._semantic_router,
+                "load_manifest_at_revision",
+                side_effect=racing_loader,
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=AssertionError("worker must not be created"),
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect one bounded file",
+                ("src/master_agent/advisory.py",),
+                route="agent-topology",
+                goal_id="manifest-aba-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
+
+    def test_manifest_swap_after_route_validation_never_starts_sdk(self) -> None:
+        """The original stable-swap race fails before SDK client creation."""
+
+        manifest = self.root / ".ai/semantic-router.toml"
+        original_bind = advisory_subagent.AdvisoryPathScope.bind
+        real_worker = advisory_subagent.CopilotSdkAdvisoryWorker
+        client_created = False
+
+        def racing_bind(root, paths):  # type: ignore[no-untyped-def]
+            manifest.write_text("invalid = true\n", encoding="utf-8")
+            return original_bind(root, paths)
+
+        def client_factory(root):  # type: ignore[no-untyped-def]
+            del root
+            nonlocal client_created
+            client_created = True
+            raise AssertionError("SDK client must not be created")
+
+        def worker_factory(  # type: ignore[no-untyped-def]
+            root,
+            scope=None,
+            expected_repository_digest=None,
+            profile_inventory=None,
+        ):
+            return real_worker(
+                root,
+                scope=scope,
+                client_factory=client_factory,
+                expected_repository_digest=expected_repository_digest,
+                profile_inventory=profile_inventory,
+            )
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent.AdvisoryPathScope,
+                "bind",
+                side_effect=racing_bind,
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=worker_factory,
+            ),
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect one bounded file",
+                ("src/master_agent/advisory.py",),
+                route="agent-topology",
+                goal_id="stable-swap-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        self.assertFalse(client_created)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "fallback")
+        self.assertIn("changed during delegation", payload["reason"])
+
+    def test_unrelated_route_path_fails_before_scope_worker_and_budget(self) -> None:
+        """The reviewer example cannot expose a GitHub connector through the router."""
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            patch.object(
+                advisory_subagent.AdvisoryPathScope,
+                "bind",
+                side_effect=AssertionError("scope must not be bound"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=AssertionError("worker must not be created"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "AdvisoryBudgetStore",
+                side_effect=AssertionError("budget must not be opened"),
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect an unrelated connector",
+                (
+                    "scripts/semantic_router.py",
+                    "src/master_agent/connectors/github.py",
+                ),
+                route="semantic-router",
+                goal_id="unrelated-route-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "fallback")
+        self.assertEqual(
+            payload["reason"],
+            "advisory runner prerequisites failed closed",
+        )
+
+    def test_ancestor_path_fails_before_scope_worker_and_budget(self) -> None:
+        """A directory ancestor cannot widen a route to unrelated files."""
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            patch.object(
+                advisory_subagent.AdvisoryPathScope,
+                "bind",
+                side_effect=AssertionError("scope must not be bound"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=AssertionError("worker must not be created"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "AdvisoryBudgetStore",
+                side_effect=AssertionError("budget must not be opened"),
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect one route",
+                ("src/master_agent",),
+                route="agent-topology",
+                goal_id="ancestor-route-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
+
+    def test_missing_and_unknown_routes_fail_before_worker_creation(self) -> None:
+        """No live adapter is constructed without one known exact route ID."""
+
+        created = False
+
+        def worker_factory(  # type: ignore[no-untyped-def]
+            root,
+            scope=None,
+            expected_repository_digest=None,
+            profile_inventory=None,
+        ):
+            del root, scope, expected_repository_digest, profile_inventory
+            nonlocal created
+            created = True
+            raise AssertionError("worker must not be created")
+
+        for route in (None, "unknown-route"):
+            with self.subTest(route=route):
+                output = StringIO()
+                with (
+                    patch.object(
+                        advisory_subagent,
+                        "CopilotSdkAdvisoryWorker",
+                        side_effect=worker_factory,
+                    ),
+                    patch.object(
+                        advisory_subagent._semantic_router,
+                        "validate_repository",
+                        return_value=[],
+                    ),
+                    redirect_stdout(output),
+                ):
+                    result = advisory_subagent.run(
+                        self.root,
+                        AdvisoryRole.RESEARCH,
+                        "inspect one bounded file",
+                        ("src/master_agent/advisory.py",),
+                        route=route,
+                        goal_id="invalid-route-goal",
+                        state_directory=self.state,
+                    )
+
+                self.assertEqual(result, 2)
+                self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
+        self.assertFalse(created)
+
+    def test_duplicate_cli_routes_fail_before_runner_dispatch(self) -> None:
+        """Repeated --route arguments cannot silently choose the final value."""
+
+        output = StringIO()
+        arguments = [
+            "advisory_subagent.py",
+            "research",
+            "--task",
+            "inspect one file",
+            "--route",
+            "agent-topology",
+            "--route",
+            "direct-read",
+            "--goal-id",
+            "duplicate-route-goal",
+            "--path",
+            "README.md",
+        ]
+        with patch.object(sys, "argv", arguments), redirect_stdout(output):
+            result = advisory_subagent.main()
+
+        self.assertEqual(result, 2)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "fallback")
+        self.assertIn("exactly one", payload["reason"])
+
+    def test_duplicate_manifest_route_ids_fail_before_worker_creation(self) -> None:
+        """A malformed ambiguous registry never reaches scope or SDK setup."""
+
+        root = Path(self.temporary.name).resolve() / "duplicate-manifest"
+        manifest_path = root / ".ai/semantic-router.toml"
+        manifest_path.parent.mkdir(parents=True)
+        manifest = (self.root / ".ai/semantic-router.toml").read_text(encoding="utf-8")
+        duplicate = manifest.replace(
+            'id = "specification-lifecycle"',
+            'id = "agent-topology"',
+            1,
+        )
+        self.assertNotEqual(duplicate, manifest)
+        manifest_path.write_text(duplicate, encoding="utf-8")
+        output = StringIO()
+        with redirect_stdout(output):
+            result = advisory_subagent.run(
+                root,
+                AdvisoryRole.RESEARCH,
+                "inspect one file",
+                ("missing.txt",),
+                route="agent-topology",
+                goal_id="duplicate-manifest-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
         self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
 
 
@@ -240,7 +788,7 @@ class AdvisoryRunnerMutationTests(unittest.TestCase):
                 import sys
                 import types
                 from pathlib import Path
-                from master_agent.advisory import AdvisoryRole
+                from master_agent.advisory import AdvisoryRole, SemanticRouteSlice, load_agent_inventory
                 from master_agent.copilot_advisory import CopilotSdkAdvisoryWorker as RealWorker
                 from scripts import advisory_subagent as runner
 
@@ -279,19 +827,38 @@ class AdvisoryRunnerMutationTests(unittest.TestCase):
                         del kwargs
                         return Session()
 
-                def factory(root, scope=None):
+                def factory(root, scope=None, expected_repository_digest=None, profile_inventory=None):
                     return RealWorker(
                         root,
                         scope=scope,
                         client_factory=lambda selected: Client(),
+                        expected_repository_digest=expected_repository_digest,
+                        profile_inventory=profile_inventory,
                     )
                 runner.CopilotSdkAdvisoryWorker = factory
+                runner._validated_semantic_route = lambda root, route, paths: runner._BoundSemanticRoute(
+                    SemanticRouteSlice(
+                        route="agent-topology",
+                        title="Parent and bounded advisory topology",
+                        lifecycle="released",
+                        summary="Bounded advisory test route.",
+                        authority=(),
+                        implementation=(),
+                        configuration=(),
+                        tests=(),
+                        release_gates=(),
+                        dependencies=(),
+                    ),
+                    runner.repository_state_binding(root),
+                    load_agent_inventory(root),
+                )
                 raise SystemExit(
                     runner.run(
                         Path(sys.argv[1]),
                         AdvisoryRole.RESEARCH,
                         "inspect scoped files",
                         ("scope",),
+                        route="agent-topology",
                         goal_id="mutation-goal",
                         state_directory=Path(sys.argv[2]),
                     )

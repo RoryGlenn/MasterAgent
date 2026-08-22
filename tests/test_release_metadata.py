@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import tarfile
 import tomllib
 import unittest
 import zipfile
@@ -20,6 +21,7 @@ from scripts.validate_release import (
     _validate_first_run_contract,
     _validate_public_read_contract,
     _validate_retention_prune_contract,
+    _validate_semantic_router,
     _validate_supply_chain,
     validate_archive,
     validate_project,
@@ -36,6 +38,50 @@ class ReleaseMetadataTests(unittest.TestCase):
         report = validate_project(root)
         self.assertEqual(report.errors, ())
         self.assertTrue(report.valid)
+
+    @patch(
+        "scripts.validate_release.validate_semantic_repository",
+        return_value=["unmapped production_modules: fixture.py"],
+    )
+    @patch("scripts.validate_release.load_semantic_manifest")
+    def test_release_semantic_adapter_prefixes_validation_errors(
+        self,
+        _load_manifest: object,
+        _validate_manifest: object,
+    ) -> None:
+        checks: list[str] = []
+        errors: list[str] = []
+
+        _validate_semantic_router(Path("unused"), checks, errors)
+
+        self.assertEqual(checks, [])
+        self.assertEqual(
+            errors,
+            ["semantic router: unmapped production_modules: fixture.py"],
+        )
+
+    def test_source_archive_requires_all_semantic_router_artifacts(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "minimal.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz"):
+                pass
+
+            report = validate_archive(archive_path)
+
+        for suffix in (
+            "/.ai/semantic-router.toml",
+            "/.github/workflows/github-actions-live-integration.yml",
+            "/docs/semantic-index.md",
+            "/docs/semantic-router-metrics.md",
+            "/scripts/semantic_router.py",
+            "/tests/test_semantic_router.py",
+            "/specs/current/development/MA-ROUTER-001.md",
+        ):
+            with self.subTest(suffix=suffix):
+                self.assertIn(
+                    f"release archive is missing required file: {suffix}",
+                    report.errors,
+                )
 
     def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
         with TemporaryDirectory() as directory:

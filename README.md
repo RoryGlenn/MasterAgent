@@ -51,6 +51,9 @@ User/workflow request → ChangePlan → policy/governance → approval
   and implementation tasks.
 - [`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md) defines the evidence-aware
   documentation completion gate for non-trivial repository changes.
+- [`.ai/semantic-router.toml`](.ai/semantic-router.toml) assigns exact
+  repository ownership; its generated [semantic index](docs/semantic-index.md)
+  is the compact first discovery hop after minimum authority policy.
 - Tests provide executable evidence.
 - A runtime `ChangePlan` binds exact provider effects and approvals.
 
@@ -78,6 +81,7 @@ unsafe surfaces remain deliberately non-routable.
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
 | Capability capsule promotion | Signed test/local promotion for dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
+| Semantic ownership | Exact machine-readable module, test, requirement, command, capability, connector, profile, configuration, and platform routing with generated-index drift checks implemented |
 
 ## Capability surface
 
@@ -165,7 +169,7 @@ does not install anything. The detailed behavior lives in the
 [first-run contract](.ai/FIRST_RUN.md) and
 [force-multiplier contract](.ai/AUTONOMY.md).
 
-The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional current broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including an authenticated cross-process goal budget, context sanitization, required minimum path scope, repository-owned scoped read/search tools, exact tracked/staged/untracked-content binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, complete the same work directly in the parent; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
+The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional current broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including an authenticated cross-process goal budget, context sanitization, required minimum path scope, a content-address-verified immutable-HEAD semantic manifest and profile inventory, repository-owned scoped read/search tools, non-converting exact tracked/staged/untracked-content binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, complete the same work directly in the parent; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
 
 For every non-trivial repository change, the selected parent also applies the
 [Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
@@ -209,22 +213,28 @@ The base installation remains usable without that extra; unavailable specialist
 delegation falls back to the selected MasterAgent parent.
 
 The selected parent invokes the adapter with one opaque goal ID reused across
-all attempts for that operator goal and at least one repository-relative path:
+all attempts for that operator goal and at least one repository-relative
+governed file:
 
 ```bash
 .venv/bin/python scripts/advisory_subagent.py research \
   --goal-id 550e8400-e29b-41d4-a716-446655440000 \
+  --route agent-topology \
   --task "Trace the advisory budget implementation" \
   --path src/master_agent/advisory.py \
   --path src/master_agent/advisory_budget.py
 ```
 
-The runner creates ignored private state under `.master-agent/advisory/` by
-default. The same goal ID shares at most three research attempts and one plan
-review across retries, concurrent commands, and process restarts. A path must
-name an existing tracked or non-ignored untracked file or directory and must be
-narrower than the repository root. Unsafe state, scope, SDK, result, or
-repository races return a content-minimized parent fallback.
+The parent must pass exactly one `--route ROUTE_ID` from its semantic-router
+hop. The runner fully validates the manifest and exact stable ID before worker
+startup, then sends only that route's canonical navigation fields. Every path
+must be an exact tracked or non-ignored untracked regular file linked or owned
+by the selected route or its recursively declared dependencies; directory and
+ancestor widening is rejected. It creates ignored private state under
+`.master-agent/advisory/` by default. The same goal ID shares at most three
+research attempts and one plan review across retries, concurrent commands, and
+process restarts. Unsafe route, state, scope, SDK, result, or repository races
+return a content-minimized parent fallback.
 
 The core package deliberately omits the local Office and draft renderers. If
 you need `demo` or `draft-package`, add the optional extra to the same virtual
@@ -466,6 +476,7 @@ creating another runtime planner or authorization layer. See
 - [Development specifications](docs/development-specifications.md)
 - [Architecture](docs/architecture.md)
 - [Semantic codebase index](docs/semantic-index.md)
+- [Semantic router measurements](docs/semantic-router-metrics.md)
 - [CLI reference](docs/cli-reference.md)
 - [Configuration](docs/configuration.md)
 - [Capability contract](docs/capability-contract.md)
