@@ -465,8 +465,7 @@ class NativeWindowsTrustedGitTests(unittest.TestCase):
                     max_output_bytes=4096,
                 )
 
-    @staticmethod
-    def _initialize_repository(repository: Path, filename: str) -> None:
+    def _initialize_repository(self, repository: Path, filename: str) -> None:
         subprocess.run(("git", "init", "--quiet"), cwd=repository, check=True)
         subprocess.run(
             ("git", "config", "user.name", "MasterAgent Test"),
@@ -484,6 +483,29 @@ class NativeWindowsTrustedGitTests(unittest.TestCase):
             ("git", "commit", "--quiet", "-m", "fixture"),
             cwd=repository,
             check=True,
+        )
+        config_result = subprocess.run(
+            (
+                str(self.backend._require_open().path),
+                "--no-pager",
+                "config",
+                "--file",
+                str(repository / ".git" / "config"),
+                "--no-includes",
+                "--null",
+                "--name-only",
+                "--list",
+            ),
+            cwd=self.backend._home,
+            env=self.backend._environment(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            config_result.returncode,
+            0,
+            config_result.stderr.decode("utf-8", errors="replace"),
         )
 
 
