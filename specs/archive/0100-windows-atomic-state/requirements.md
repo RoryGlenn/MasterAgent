@@ -19,15 +19,6 @@ POSIX behavior remain unchanged.
 
 ## MODIFIED
 
-### MA-PLATFORM-001 — Platform runtime contracts
-
-The native Windows runtime MUST advertise `atomic_publication_recovery` only
-when protected state transactions, deterministic recovery, and every required
-protected persistence caller are available. Stateful Windows operations MUST
-then admit the complete filesystem, locking, and atomic-publication contract
-set while unrelated incomplete process, Git, and capsule-isolation contracts
-remain unavailable.
-
 ### MA-RETENTION-001 — Descriptor-safe retained-evidence expiration
 
 Native Windows retained-evidence publication, preview, apply, repair, and

@@ -80,6 +80,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/tests/test_semantic_router.py",
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
+            "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
             "/tests/test_windows_atomic_state.py",

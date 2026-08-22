@@ -735,6 +735,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/tests/fixtures/advisory/provider_prompt_injection.txt",
             "/specs/current/security/MA-ADVISORY-001.md",
             "/specs/current/development/MA-ROUTER-001.md",
+            "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
             "/src/master_agent/__init__.py",
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",

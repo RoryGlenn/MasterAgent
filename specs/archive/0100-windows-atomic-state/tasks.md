@@ -16,6 +16,6 @@
 - [x] Update semantic ownership, platform/runtime/retention specifications,
   architecture, operations, threat model, roadmap, release, and changelog
   documentation.
-- [ ] Run focused/full tests, Ruff, mypy, specification, semantic, release,
+- [x] Run focused/full tests, Ruff, mypy, specification, semantic, release,
   installed-artifact, native Windows, and immutable-range security validation.
-- [ ] Apply the documentation completion gate and archive the verified change.
+- [x] Apply the documentation completion gate and archive the verified change.
