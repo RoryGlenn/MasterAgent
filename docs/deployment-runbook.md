@@ -15,12 +15,17 @@ the packaged development placeholders for an organization deployment.
 
 ## 3. Select provider deployments
 
-For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS API root. Every Microsoft connector is Microsoft Graph Cloud-only: set
-`deployment = "cloud"`, select one of the supported Graph national-cloud roots,
-and choose the capability-specific identity mode. A Data Center or arbitrary
-Graph origin is rejected before credentials are resolved. The built-in Teams
-send connector is delegated-only; any Teams bot must be implemented and
-approved as a separate connector.
+For each Atlassian connector choose Cloud or Data Center and set the exact HTTPS
+API root. Jira and Confluence Cloud may use the exact tenant root or their
+product-specific `https://api.atlassian.com/ex/{product}/{cloudId}` scoped-token
+gateway. A gateway also requires the exact tenant `web_base_url` for
+credential-free browser links; requests, redirects, and pagination remain
+confined to the configured product/cloud-ID API path. Every Microsoft connector
+is Microsoft Graph Cloud-only: set `deployment = "cloud"`, select one of the
+supported Graph national-cloud roots, and choose the capability-specific
+identity mode. A Data Center or arbitrary Graph origin is rejected before
+credentials are resolved. The built-in Teams send connector is delegated-only;
+any Teams bot must be implemented and approved as a separate connector.
 
 ## 4. Register only required applications and credentials
 
@@ -31,7 +36,41 @@ it. For authenticated capabilities, prefer separate credentials for read,
 reversible write, and communication, and store persistent secrets in the
 approved secret manager.
 
-## 5. Run offline readiness
+## 5. Protect credentialed integration evidence
+
+The complete multi-provider workflow is manual-dispatch only and must run from
+reviewed default-branch code. Keep three separate GitHub environments:
+
+- `connector-integration-read` for read credentials and fixtures;
+- `connector-integration-effects` for reversible effects and dedicated test
+  communications; and
+- `connector-integration-admin` for the separate GitHub administration
+  configuration and personal access token.
+
+Ordinary GitHub read/effect tests use the job-scoped `github.token`, not the
+admin token. Use the privilege-specific configuration and token secret names
+listed in [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md).
+Before enabling a repository variable, complete the environment's reviewer and
+exact-default-branch restriction, least-privilege provider credentials, tenant
+consent, stable fixtures, and dedicated nonproduction targets.
+
+For this repository, all three environments currently require reviewer
+`RoryGlenn` and allow only the exact `main` branch. Self-review prevention is
+off because that account is the sole eligible collaborator. No enablement
+variables, provider secrets, or fixture variables are configured, so the live
+jobs remain disabled and this is incomplete integration setup—not successful
+provider evidence. Add a second eligible reviewer and enable self-review
+prevention if organization policy requires reviewer separation.
+
+Microsoft live evidence uses restricted delegated token files, not application
+credentials for OneNote or normal Teams operations. The harness checks exact
+scopes, delegated identity, token lifetime, every fixture, and every gate before
+the first mutation. Reversible effects write a private runner-temporary recovery
+journal, verify compensation in-process, and retry residual entries in a
+same-job `always()` step. Never upload that journal; reconcile the provider
+manually if a request may have committed but its response was lost.
+
+## 6. Run offline readiness
 
 Create a reviewed `organization-profile.toml` with absolute paths to this
 deployment's configuration, exact installed capabilities, private state root,
@@ -74,7 +113,7 @@ The selected egress check is still offline, but it additionally requires a
 usable connector/credential configuration and an allowed route for the active
 destination, tenancy, classification, audit sink, and DLP implementation.
 
-## 6. Validate read-only access
+## 7. Validate read-only access
 
 Select and probe one read connector at a time:
 
@@ -119,7 +158,7 @@ master-agent bitbucket-repositories --workspace WORKSPACE
 This route must ignore ambient Bitbucket credentials and reject any repository
 not explicitly marked public.
 
-## 7. Validate draft-only output
+## 8. Validate draft-only output
 
 Install the optional draft-rendering extra, then run `master-agent demo` for a
 credential-free smoke test. The core runtime does not install local Office and
@@ -142,7 +181,7 @@ master-agent draft-package \
 
 Review the generated `.eml`, Teams draft, deck, proposals, patch, and manifest.
 
-## 8. Validate reversible writes in non-production
+## 9. Validate reversible writes in non-production
 
 Use disposable Jira issues, Confluence pages, GitHub issues/pull requests and
 test repositories. Capture
@@ -170,11 +209,11 @@ replacement. Their typed adapters are intentionally catalog/governance-disabled
 until a provider-side compare-and-swap can be proven. A test resource and extra
 approvers do not repair that concurrency gap.
 
-## 9. Validate communication
+## 10. Validate communication
 
 Use designated test recipients/chats/channels. Approve exact content. Verify provider identity and tenant restrictions. Confirm the runtime reports provider acceptance rather than claiming delivery/read receipt.
 
-## 10. Inspect recurring registrations
+## 11. Inspect recurring registrations
 
 Use the reviewed registration for due-state inspection:
 
@@ -186,7 +225,7 @@ Do not install a
 `recurring-run` scheduler invocation; execution is disabled pending exact
 target/config/source and runtime-manifest binding.
 
-## 11. Production controls
+## 12. Production controls
 
 Before production:
 

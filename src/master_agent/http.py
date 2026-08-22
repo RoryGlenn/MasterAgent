@@ -18,7 +18,7 @@ from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import ParseResult, urlencode, urljoin, urlparse
+from urllib.parse import ParseResult, unquote, urlencode, urljoin, urlparse
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
@@ -209,7 +209,22 @@ class HttpTransport(Protocol):
 
 
 class _SameOriginRedirectHandler(HTTPRedirectHandler):
-    """Reject redirects that would carry credentials to another origin."""
+    """Reject redirects that would carry credentials outside an API root."""
+
+    def __init__(self, *, allowed_base_url: str | None = None) -> None:
+        super().__init__()
+        self._allowed_origin: tuple[str, str, int] | None = None
+        self._allowed_path: str | None = None
+        if allowed_base_url is None:
+            return
+        parsed = urlparse(allowed_base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ConfigurationError("redirect confinement requires an HTTPS base URL")
+        allowed_path = _decoded_safe_path(parsed.path)
+        if allowed_path is None:
+            raise ConfigurationError("connector base URL contains an unsafe path")
+        self._allowed_origin = _origin(parsed)
+        self._allowed_path = allowed_path
 
     def redirect_request(
         self,
@@ -225,6 +240,18 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
         if old_origin != new_origin:
             raise ConnectorHttpError(
                 "cross-origin redirect rejected by connector HTTP policy"
+            )
+        if (
+            self._allowed_origin is not None
+            and self._allowed_path is not None
+            and not _url_within_scope(
+                newurl,
+                origin=self._allowed_origin,
+                path=self._allowed_path,
+            )
+        ):
+            raise ConnectorHttpError(
+                "redirect outside the configured URL scope was rejected"
             )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -290,13 +317,14 @@ def _create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
 
 
 class UrllibTransport:
-    """Standard-library HTTP transport with same-origin redirects."""
+    """Standard-library HTTP transport with origin-and-path-bound redirects."""
 
     def __init__(
         self,
         *,
         ca_bundle: Path | None = None,
         ca_bundle_data: bytes | None = None,
+        allowed_base_url: str | None = None,
     ) -> None:
         if ca_bundle is not None and ca_bundle_data is not None:
             raise ConfigurationError(
@@ -313,7 +341,7 @@ class UrllibTransport:
             # or credentials embedded in ambient proxy settings.
             ProxyHandler({}),
             _PinnedHTTPSHandler(context=context),
-            _SameOriginRedirectHandler(),
+            _SameOriginRedirectHandler(allowed_base_url=allowed_base_url),
         )
 
     def request(
@@ -365,13 +393,13 @@ class UrllibTransport:
 
 
 class SafeHttpClient:
-    """Origin-bound, size-limited HTTP client for connector APIs.
+    """Origin-and-base-path-bound, size-limited client for connector APIs.
 
     Parameters
     ----------
     base_url
         Connector API base URL. All requests and followed pagination links must
-        remain on this origin.
+        remain on this origin and under this path.
     default_headers
         Headers applied to every request. Authentication values are never
         included in exceptions.
@@ -412,6 +440,10 @@ class SafeHttpClient:
                 "connector base URL must not include a query or fragment"
             )
         self._origin = _origin(parsed)
+        scope_path = _decoded_safe_path(parsed.path)
+        if scope_path is None:
+            raise ConfigurationError("connector base URL contains an unsafe path")
+        self._scope_path = scope_path
         self._headers = {
             "Accept": "application/json",
             "User-Agent": "master-agent/1.0.0",
@@ -425,6 +457,7 @@ class SafeHttpClient:
         self._transport = transport or UrllibTransport(
             ca_bundle=ca_bundle,
             ca_bundle_data=ca_bundle_data,
+            allowed_base_url=self._base_url,
         )
         self._timeout_seconds = timeout_seconds
         self._max_response_bytes = max_response_bytes
@@ -453,7 +486,7 @@ class SafeHttpClient:
         max_response_bytes: int | None = None,
         accepted_statuses: frozenset[int] = frozenset(),
     ) -> tuple[Any, HttpResponse]:
-        """Perform an origin-bound request and decode JSON.
+        """Perform a URL-scope-bound request and decode JSON.
 
         Parameters
         ----------
@@ -530,7 +563,7 @@ class SafeHttpClient:
         max_response_bytes: int | None = None,
         accepted_statuses: frozenset[int] = frozenset(),
     ) -> HttpResponse:
-        """Perform an origin-bound request and return bounded bytes."""
+        """Perform a URL-scope-bound request and return bounded bytes."""
 
         normalized_method = method.upper()
         if normalized_method not in self._allowed_methods:
@@ -587,9 +620,23 @@ class SafeHttpClient:
                 timeout_seconds=self._timeout_seconds,
                 max_response_bytes=request_max_bytes,
             )
-            if _origin(urlparse(response.url)) != self._origin:
+            try:
+                response_origin = _origin(urlparse(response.url))
+            except (ConfigurationError, ValueError):
+                response_origin = None
+            if response_origin != self._origin:
                 raise ConnectorHttpError(
-                    "connector transport returned a response outside its configured origin"
+                    "connector transport returned a response outside its configured "
+                    "origin"
+                )
+            if not _url_within_scope(
+                response.url,
+                origin=self._origin,
+                path=self._scope_path,
+            ):
+                raise ConnectorHttpError(
+                    "connector transport returned a response outside its configured "
+                    "URL scope"
                 )
             if budget is not None:
                 budget.record_response(len(response.body))
@@ -619,14 +666,32 @@ class SafeHttpClient:
         if not candidate:
             raise ConnectorHttpError("request path must not be empty")
         parsed_candidate = urlparse(candidate)
+        if parsed_candidate.netloc and not parsed_candidate.scheme:
+            raise ConnectorHttpError("unsafe URL rejected by connector HTTP policy")
+        if _decoded_safe_path(parsed_candidate.path) is None:
+            raise ConnectorHttpError(
+                "unsafe URL path rejected by connector HTTP policy"
+            )
         if parsed_candidate.scheme:
             url = candidate
         else:
             url = urljoin(self._base_url, candidate.lstrip("/"))
         parsed = urlparse(url)
-        if _origin(parsed) != self._origin:
+        try:
+            candidate_origin = _origin(parsed)
+        except (ConfigurationError, ValueError):
+            candidate_origin = None
+        if candidate_origin != self._origin:
             raise ConnectorHttpError(
                 "connector attempted to access a URL outside its configured origin"
+            )
+        if not _url_within_scope(
+            url,
+            origin=self._origin,
+            path=self._scope_path,
+        ):
+            raise ConnectorHttpError(
+                "connector attempted to access a URL outside its configured URL scope"
             )
         if parsed.username or parsed.password or parsed.fragment:
             raise ConnectorHttpError("unsafe URL rejected by connector HTTP policy")
@@ -694,6 +759,50 @@ def _read_bounded(stream: Any, max_bytes: int) -> bytes:
 
 def _normalize_headers(headers: Message | Mapping[str, str]) -> dict[str, str]:
     return {str(key).lower(): str(value) for key, value in headers.items()}
+
+
+def _decoded_safe_path(path: str) -> str | None:
+    """Return a fully decoded path, or ``None`` for traversal-shaped input."""
+
+    candidate = path or "/"
+    for _ in range(8):
+        if "\\" in candidate or any(
+            segment.partition(";")[0] in {".", ".."} for segment in candidate.split("/")
+        ):
+            return None
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            normalized = candidate.rstrip("/")
+            return normalized or "/"
+        candidate = decoded
+    return None
+
+
+def _url_within_scope(
+    url: str,
+    *,
+    origin: tuple[str, str, int],
+    path: str,
+) -> bool:
+    """Return whether a URL remains in one origin and decoded base-path tree."""
+
+    parsed = urlparse(url)
+    try:
+        candidate_origin = _origin(parsed)
+    except (ConfigurationError, ValueError):
+        return False
+    candidate_path = _decoded_safe_path(parsed.path)
+    if (
+        candidate_origin != origin
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or candidate_path is None
+    ):
+        return False
+    return (
+        path == "/" or candidate_path == path or candidate_path.startswith(f"{path}/")
+    )
 
 
 def _origin(parsed: ParseResult) -> tuple[str, str, int]:

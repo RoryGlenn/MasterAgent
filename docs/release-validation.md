@@ -62,6 +62,11 @@ handling, and independent verification.
 - Immutable plan binding, authenticated approval, principal and scope
   attestation, idempotency, version checks, verification, compensation, and
   audit-chain behavior are covered by contract and adversarial tests.
+- The static credentialed-live-workflow contract proves manual-only triggering,
+  exact default-branch binding, the three protected environment names,
+  privilege-specific secret mapping, opt-in gates, private materialization,
+  pinned actions, same-job recovery, and the absence of recovery artifact
+  upload. Missing provider setup is not replaced by mock or anonymous evidence.
 - The resumable approval handoff is tested from missing approval through
   private request inspection, trusted signing, exact-run resume, and partial
   dual approval. Tampered, stale, symlinked, permission-unsafe, or
@@ -189,7 +194,8 @@ handling, and independent verification.
   builder's umask.
 - CI installs and tests from owner-private virtual environments rather than a
   hosted runner's shared site-packages.
-- The source archive includes workflow definitions, `.ai/DOCS_AGENT.md`, and
+- The source archive includes workflow definitions—including
+  `.github/workflows/live-connector-integration.yml`—`.ai/DOCS_AGENT.md`, and
   the tests that validate them.
 
 ### Optional live sandbox validation
@@ -206,6 +212,17 @@ required offline gates with a real provider lifecycle:
 
 It runs only from trusted default-branch code, never from pull-request code, and
 is not required when sandbox secrets are unavailable.
+
+The complete credentialed multi-provider matrix is a separate manual-only
+workflow. Read, effect, and GitHub administration jobs use distinct protected
+environments; ordinary GitHub jobs use `github.token`, while administration
+uses a separately scoped personal access token and configuration. The Microsoft
+jobs accept only delegated restricted token files and preflight exact scopes,
+remaining lifetime, gates, and every fixture before effects. Reversible test
+results enter a mode-`0600` runner-temporary recovery journal with verified
+in-process and `always()` cleanup. A skipped job or missing credential, tenant
+consent, fixture, dedicated target, or enablement variable is an incomplete
+deployment and is never counted as successful live evidence.
 
 ## Local validation
 

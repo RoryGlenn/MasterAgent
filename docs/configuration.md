@@ -178,10 +178,13 @@ authenticated capability, the typed GitHub adapter calls `GET /user` and binds
 the provider-returned numeric user ID. It does not trust a configured identity
 label or persist the token or mutable login.
 
-Authenticated Bitbucket capabilities use the configured username/token pair.
-The separate `bitbucket.public_repository.list` capability constructs an
-anonymous connector from the fixed `api.bitbucket.org` Cloud root and never
-resolves or sends ambient Bitbucket credentials.
+Authenticated Bitbucket Cloud capabilities use an Atlassian account email and
+API-token pair. The packaged configuration therefore references
+`MASTER_AGENT_BITBUCKET_EMAIL`; an existing private app-password deployment may
+keep `MASTER_AGENT_BITBUCKET_USERNAME` explicitly for compatibility. The
+separate `bitbucket.public_repository.list` capability constructs an anonymous
+connector from the fixed `api.bitbucket.org` Cloud root.
+It never resolves or sends ambient Bitbucket credentials.
 
 Exact-plan binding records a flow-enforced or provider-verified non-secret
 credential identity, not the token or password. Basic usernames and Entra
@@ -322,8 +325,17 @@ This does not edit `integrations.toml`, the credential file, or any mutation or
 communication gate. Explicit credential-file values win over ambient values for the names in
 that file. The optional report is mode `0600` and contains only redacted
 discovery metadata. Jira and Confluence packaged URLs are deliberate
-placeholders. For an operator-requested Atlassian Cloud connection, pass the
-Jira or Confluence page/site URL without editing configuration:
+placeholders. A Cloud connector may use either its exact tenant root or an
+Atlassian scoped-token gateway root as its authenticated API boundary:
+
+- Jira: `https://api.atlassian.com/ex/jira/{cloudId}`
+- Confluence: `https://api.atlassian.com/ex/confluence/{cloudId}`
+
+A gateway configuration must also set `web_base_url` to the exact
+`https://tenant.atlassian.net` browser root. Connector credentials go only to
+the API root; `web_base_url` is used only for sanitized user-facing links. For
+an operator-requested Atlassian Cloud connection, pass the Jira or Confluence
+page/site URL without editing configuration:
 
 ```bash
 master-agent connect \
@@ -334,23 +346,31 @@ master-agent connect \
 ```
 
 `connect` normalizes the URL to `https://tenant.atlassian.net`, rejects any
-non-HTTPS, credential-bearing, non-Atlassian, duplicate, or unselected target,
-and uses the override only in memory. `bind-context`, direct-read `run`, and
-applied `run` accept the same repeatable `--connector-url SYSTEM=URL` argument;
-the normalized destination and connector identity are approval-bound for an
+non-HTTPS, credential-bearing, non-Atlassian, nondefault-port, duplicate, or
+unselected target, normalizes an explicit default `:443` away, and uses the
+override only in memory. For a tenant-root connector, it becomes the API and
+browser root. For a scoped gateway connector, it changes only `web_base_url`;
+the exact product/cloud-ID API root is preserved.
+`bind-context`, direct-read `run`, and applied `run` accept the same repeatable
+`--connector-url SYSTEM=URL` argument; both roots are approval-bound for an
 applied run. Data Center context roots still require the organization's
 permission-checked integrations file.
 
 `connect`, `bind-context`, direct-read `run`, and applied `run` accept
 `--credential-map FILE_KEY=DECLARED_NAME` to select and rename fields from a
-canonical multi-provider store for one invocation. This supports, for example,
-explicitly reusing one Atlassian email and API token for both Jira and
-Confluence without loading unrelated credentials or rewriting the store.
-For selected Jira and Confluence Cloud connectors using Basic authentication,
-that same-account fallback is automatic when the selected connector's own
-names are absent. Explicit selected-connector credentials always win. The
-related connector is not activated, and only the provider probe determines
-whether that Atlassian account has access to the target product and site.
+canonical multi-provider store for one invocation. For selected Jira and
+Confluence Cloud connectors using Basic authentication, same-account
+compatibility is deliberately narrower for scoped tokens:
+
+- the configured Atlassian account email may be reused in memory;
+- a Jira scoped token is never copied into the Confluence token field, or vice
+  versa; and
+- legacy tenant-root configurations retain automatic email/API-token pair
+  compatibility for existing unscoped tokens.
+
+Explicit selected-connector credentials always win. The related connector is
+not activated, and only the provider probe determines whether the account has
+access to the target product and site.
 
 Microsoft runtime systems share one connector configuration. `connect` selects
 delegated token-file, delegated environment-token, or application
@@ -406,10 +426,15 @@ the normal bound `run --apply` path and retain its approval and state checks.
 Select `cloud` or `data_center` independently for Jira, Confluence, and
 Bitbucket. Cloud and Data Center endpoints and payloads are implemented by
 separate connector branches rather than pretending the APIs are identical.
-GitHub and Microsoft operating/runtime connectors are Cloud-only. Microsoft
-Graph targets are additionally restricted to the supported fixed cloud origin;
-an arbitrary or Data Center origin is rejected before credential resolution or
-any bearer request.
+Jira and Confluence Cloud accept an exact single-label tenant root or the
+product-specific `api.atlassian.com/ex/{product}/{cloudId}` form. A scoped
+gateway binds its product, UUID cloud ID, and decoded path prefix: relative
+traversal, same-origin absolute URLs, redirects, and pagination links cannot
+escape it. Extra paths and explicit ports are rejected on configured Cloud API
+roots. GitHub and Microsoft operating/runtime connectors are Cloud-only.
+Microsoft Graph targets are additionally restricted to the supported fixed
+cloud origin; an arbitrary or Data Center origin is rejected before credential
+resolution or any bearer request.
 
 ## GitHub Cloud
 
@@ -476,7 +501,25 @@ master-agent github-repositories \
 
 ## OAuth profiles
 
-`config/oauth.toml` separates read-only, reversible-write, communication, application, and existing-token profiles. Enable only a reviewed profile.
+`config/oauth.toml` separates read-only, reversible-write, communication,
+application, existing-token, and credentialed-integration profiles. Enable only
+one exact reviewed profile. The disabled integration profiles request:
+
+- `microsoft_integration_read`: `User.Read`, `Mail.Read`, `Chat.Read`,
+  `Sites.Read.All`, and `Notes.Read`;
+- `microsoft_integration_effects`: `User.Read`, `Sites.ReadWrite.All`,
+  `Mail.ReadWrite`, `Mail.Send`, `Chat.Read`, and `ChatMessage.Send`.
+
+The general `microsoft_communication` profile pairs each send permission with
+the read permission used for independent verification: `Mail.ReadWrite` plus
+`Mail.Send`, `Chat.Read` plus `ChatMessage.Send`, and
+`ChannelMessage.Read.All` plus `ChannelMessage.Send`.
+
+The corresponding live jobs require a delegated restricted token file. Before
+provider work, the harness verifies the delegated identity, the exact effective
+scope set, and enough remaining lifetime for the job timeout plus cleanup
+margin. Application credentials do not substitute for delegated OneNote reads
+or normal Teams sends.
 
 The device-code command writes a restricted JSON token file. It does not manage tenant consent, register applications, or persist a refresh token in a general-purpose database.
 
@@ -711,7 +754,9 @@ agent can retry `connect` with
 `--credential-map FILE_KEY=DECLARED_NAME` without rewriting the token file.
 
 Only providers selected by `--systems`, plus the related Jira/Confluence Cloud
-credential labels described above, are accepted. Related labels supply only
-the selected connector and never activate their own connector. Unknown or
-duplicate mappings, loose permissions, symlinks, and ambiguous shapes fail
-closed. The file is never rewritten.
+account-email label and legacy tenant-root compatibility labels described
+above, are accepted. Related labels supply only the selected connector and
+never activate their own connector. A product-specific scoped token is not a
+cross-product compatibility label. Unknown or duplicate mappings, loose
+permissions, symlinks, and ambiguous shapes fail closed. The file is never
+rewritten.

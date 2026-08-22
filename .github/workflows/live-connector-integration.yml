@@ -13,8 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "43 6 * * 2"
 
 permissions:
   contents: read
@@ -28,14 +26,35 @@ defaults:
     shell: bash
 
 jobs:
+  validate-selection:
+    name: Validate manual privilege selection
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Reject simultaneous effect and administration modes
+        env:
+          RUN_EFFECTS: ${{ inputs.run_effects }}
+          RUN_GITHUB_ADMIN: ${{ inputs.run_github_admin }}
+        run: |
+          set -euo pipefail
+          if test "$RUN_EFFECTS" = "true" && test "$RUN_GITHUB_ADMIN" = "true"; then
+            echo "run_effects and run_github_admin are mutually exclusive" >&2
+            exit 1
+          fi
+
   credentialed-read:
     name: Credentialed read connectors
+    needs: validate-selection
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.event_name == 'workflow_dispatch' &&
       vars.MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: connector-integration-read
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -62,21 +81,20 @@ jobs:
           echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Materialize private connector configuration
         env:
-          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_INTEGRATIONS_TOML }}
-          GRAPH_TOKEN_FILE_JSON: ${{ secrets.MASTER_AGENT_GRAPH_TOKEN_FILE_JSON }}
+          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_READ_INTEGRATIONS_TOML }}
+          GRAPH_TOKEN_FILE_JSON: ${{ secrets.MASTER_AGENT_LIVE_READ_GRAPH_TOKEN_FILE_JSON }}
           ENTERPRISE_CA_BUNDLE_PEM: ${{ secrets.MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM }}
         run: |
           set -euo pipefail
           umask 077
           test -n "$LIVE_INTEGRATIONS_TOML"
+          test -n "$GRAPH_TOKEN_FILE_JSON"
           integrations="$RUNNER_TEMP/master-agent-live-integrations.toml"
           printf '%s' "$LIVE_INTEGRATIONS_TOML" > "$integrations"
           echo "MASTER_AGENT_LIVE_INTEGRATIONS_FILE=$integrations" >> "$GITHUB_ENV"
-          if test -n "$GRAPH_TOKEN_FILE_JSON"; then
-            token_file="$RUNNER_TEMP/master-agent-graph-token.json"
-            printf '%s' "$GRAPH_TOKEN_FILE_JSON" > "$token_file"
-            echo "MASTER_AGENT_GRAPH_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
-          fi
+          token_file="$RUNNER_TEMP/master-agent-graph-token.json"
+          printf '%s' "$GRAPH_TOKEN_FILE_JSON" > "$token_file"
+          echo "MASTER_AGENT_GRAPH_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
           if test -n "$ENTERPRISE_CA_BUNDLE_PEM"; then
             ca_file="$RUNNER_TEMP/master-agent-enterprise-ca.pem"
             printf '%s' "$ENTERPRISE_CA_BUNDLE_PEM" > "$ca_file"
@@ -86,18 +104,16 @@ jobs:
         env:
           MASTER_AGENT_RUN_LIVE_CONNECTOR_TESTS: "1"
           MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_JIRA_USERNAME }}
-          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_JIRA_TOKEN }}
-          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_CONFLUENCE_USERNAME }}
-          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_CONFLUENCE_TOKEN }}
-          MASTER_AGENT_BITBUCKET_USERNAME: ${{ secrets.MASTER_AGENT_BITBUCKET_USERNAME }}
-          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_BITBUCKET_TOKEN }}
-          MASTER_AGENT_GITHUB_TOKEN: ${{ secrets.MASTER_AGENT_GITHUB_TOKEN }}
-          MASTER_AGENT_GRAPH_ACCESS_TOKEN: ${{ secrets.MASTER_AGENT_GRAPH_ACCESS_TOKEN }}
-          MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT: ${{ secrets.MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT }}
-          MASTER_AGENT_ENTRA_TENANT_ID: ${{ secrets.MASTER_AGENT_ENTRA_TENANT_ID }}
-          MASTER_AGENT_ENTRA_APP_CLIENT_ID: ${{ secrets.MASTER_AGENT_ENTRA_APP_CLIENT_ID }}
-          MASTER_AGENT_ENTRA_APP_CLIENT_SECRET: ${{ secrets.MASTER_AGENT_ENTRA_APP_CLIENT_SECRET }}
+          MASTER_AGENT_LIVE_JOB_TIMEOUT_SECONDS: "1500"
+          MASTER_AGENT_LIVE_CLEANUP_MARGIN_SECONDS: "300"
+          MASTER_AGENT_LIVE_GITHUB_ACTIONS_TOKEN: "true"
+          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_USERNAME }}
+          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_TOKEN }}
+          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_USERNAME }}
+          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_TOKEN }}
+          MASTER_AGENT_BITBUCKET_EMAIL: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_EMAIL }}
+          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_TOKEN }}
+          MASTER_AGENT_GITHUB_TOKEN: ${{ github.token }}
           MASTER_AGENT_LIVE_JIRA_ISSUE_ID: ${{ vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID }}
           MASTER_AGENT_LIVE_CONFLUENCE_PAGE_ID: ${{ vars.MASTER_AGENT_LIVE_CONFLUENCE_PAGE_ID }}
           MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE: ${{ vars.MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE }}
@@ -117,14 +133,19 @@ jobs:
 
   sandbox-effects:
     name: Protected connector effects
+    needs: validate-selection
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       github.event_name == 'workflow_dispatch' &&
       inputs.run_effects &&
+      !inputs.run_github_admin &&
       vars.MASTER_AGENT_LIVE_EFFECT_TESTS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: connector-integration-effects
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -151,43 +172,48 @@ jobs:
           echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Materialize private connector configuration
         env:
-          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_INTEGRATIONS_TOML }}
-          GRAPH_TOKEN_FILE_JSON: ${{ secrets.MASTER_AGENT_GRAPH_TOKEN_FILE_JSON }}
+          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_INTEGRATIONS_TOML }}
+          GRAPH_TOKEN_FILE_JSON: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_GRAPH_TOKEN_FILE_JSON }}
           ENTERPRISE_CA_BUNDLE_PEM: ${{ secrets.MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM }}
         run: |
           set -euo pipefail
           umask 077
           test -n "$LIVE_INTEGRATIONS_TOML"
+          test -n "$GRAPH_TOKEN_FILE_JSON"
           integrations="$RUNNER_TEMP/master-agent-live-integrations.toml"
           printf '%s' "$LIVE_INTEGRATIONS_TOML" > "$integrations"
           echo "MASTER_AGENT_LIVE_INTEGRATIONS_FILE=$integrations" >> "$GITHUB_ENV"
-          if test -n "$GRAPH_TOKEN_FILE_JSON"; then
-            token_file="$RUNNER_TEMP/master-agent-graph-token.json"
-            printf '%s' "$GRAPH_TOKEN_FILE_JSON" > "$token_file"
-            echo "MASTER_AGENT_GRAPH_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
-          fi
+          token_file="$RUNNER_TEMP/master-agent-graph-token.json"
+          printf '%s' "$GRAPH_TOKEN_FILE_JSON" > "$token_file"
+          echo "MASTER_AGENT_GRAPH_TOKEN_FILE=$token_file" >> "$GITHUB_ENV"
           if test -n "$ENTERPRISE_CA_BUNDLE_PEM"; then
             ca_file="$RUNNER_TEMP/master-agent-enterprise-ca.pem"
             printf '%s' "$ENTERPRISE_CA_BUNDLE_PEM" > "$ca_file"
             echo "MASTER_AGENT_ENTERPRISE_CA_BUNDLE=$ca_file" >> "$GITHUB_ENV"
           fi
-      - name: Run sandbox writes, compensation, and test communications
+      - name: Create private bounded recovery journal
+        id: recovery-root
+        run: |
+          set -euo pipefail
+          umask 077
+          recovery_root="$RUNNER_TEMP/master-agent-live-recovery-${{ github.run_id }}-${{ github.run_attempt }}"
+          install -d -m 0700 -- "$recovery_root"
+          echo "MASTER_AGENT_LIVE_RECOVERY_ROOT=$recovery_root" >> "$GITHUB_ENV"
+      - name: Run reversible sandbox writes and compensation
         env:
           MASTER_AGENT_RUN_LIVE_EFFECT_TESTS: "1"
           MASTER_AGENT_LIVE_NON_PRODUCTION: ${{ vars.MASTER_AGENT_LIVE_NON_PRODUCTION }}
           MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_JIRA_USERNAME }}
-          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_JIRA_TOKEN }}
-          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_CONFLUENCE_USERNAME }}
-          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_CONFLUENCE_TOKEN }}
-          MASTER_AGENT_BITBUCKET_USERNAME: ${{ secrets.MASTER_AGENT_BITBUCKET_USERNAME }}
-          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_BITBUCKET_TOKEN }}
-          MASTER_AGENT_GITHUB_TOKEN: ${{ secrets.MASTER_AGENT_GITHUB_TOKEN }}
-          MASTER_AGENT_GRAPH_ACCESS_TOKEN: ${{ secrets.MASTER_AGENT_GRAPH_ACCESS_TOKEN }}
-          MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT: ${{ secrets.MASTER_AGENT_GRAPH_ACCESS_TOKEN_EXPIRES_AT }}
-          MASTER_AGENT_ENTRA_TENANT_ID: ${{ secrets.MASTER_AGENT_ENTRA_TENANT_ID }}
-          MASTER_AGENT_ENTRA_APP_CLIENT_ID: ${{ secrets.MASTER_AGENT_ENTRA_APP_CLIENT_ID }}
-          MASTER_AGENT_ENTRA_APP_CLIENT_SECRET: ${{ secrets.MASTER_AGENT_ENTRA_APP_CLIENT_SECRET }}
+          MASTER_AGENT_LIVE_JOB_TIMEOUT_SECONDS: "2100"
+          MASTER_AGENT_LIVE_CLEANUP_MARGIN_SECONDS: "600"
+          MASTER_AGENT_LIVE_GITHUB_ACTIONS_TOKEN: "true"
+          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_JIRA_USERNAME }}
+          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_JIRA_TOKEN }}
+          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_CONFLUENCE_USERNAME }}
+          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_CONFLUENCE_TOKEN }}
+          MASTER_AGENT_BITBUCKET_EMAIL: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_BITBUCKET_EMAIL }}
+          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_BITBUCKET_TOKEN }}
+          MASTER_AGENT_GITHUB_TOKEN: ${{ github.token }}
           MASTER_AGENT_LIVE_JIRA_ISSUE_ID: ${{ vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID }}
           MASTER_AGENT_LIVE_CONFLUENCE_SPACE_ID: ${{ vars.MASTER_AGENT_LIVE_CONFLUENCE_SPACE_ID }}
           MASTER_AGENT_LIVE_CONFLUENCE_PARENT_ID: ${{ vars.MASTER_AGENT_LIVE_CONFLUENCE_PARENT_ID }}
@@ -206,17 +232,62 @@ jobs:
           python -m unittest
           tests.test_connector_integration_matrix.CredentialedEffectConnectorIntegrationTests
           -v
+      - name: Recover returned reversible effects after ordinary failure
+        if: always() && steps.recovery-root.outcome == 'success'
+        env:
+          MASTER_AGENT_LIVE_NON_PRODUCTION: ${{ vars.MASTER_AGENT_LIVE_NON_PRODUCTION }}
+          MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          MASTER_AGENT_LIVE_GITHUB_ACTIONS_TOKEN: "true"
+          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_JIRA_USERNAME }}
+          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_JIRA_TOKEN }}
+          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_CONFLUENCE_USERNAME }}
+          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_CONFLUENCE_TOKEN }}
+          MASTER_AGENT_BITBUCKET_EMAIL: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_BITBUCKET_EMAIL }}
+          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_EFFECT_BITBUCKET_TOKEN }}
+          MASTER_AGENT_GITHUB_TOKEN: ${{ github.token }}
+          MASTER_AGENT_LIVE_JIRA_ISSUE_ID: ${{ vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID }}
+          MASTER_AGENT_LIVE_CONFLUENCE_SPACE_ID: ${{ vars.MASTER_AGENT_LIVE_CONFLUENCE_SPACE_ID }}
+          MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE: ${{ vars.MASTER_AGENT_LIVE_BITBUCKET_WORKSPACE }}
+          MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY: ${{ vars.MASTER_AGENT_LIVE_BITBUCKET_REPOSITORY }}
+          MASTER_AGENT_LIVE_BITBUCKET_SOURCE_BRANCH: ${{ vars.MASTER_AGENT_LIVE_BITBUCKET_SOURCE_BRANCH }}
+          MASTER_AGENT_LIVE_BITBUCKET_DESTINATION_BRANCH: ${{ vars.MASTER_AGENT_LIVE_BITBUCKET_DESTINATION_BRANCH }}
+          MASTER_AGENT_LIVE_GITHUB_OWNER: ${{ vars.MASTER_AGENT_LIVE_GITHUB_OWNER }}
+          MASTER_AGENT_LIVE_GITHUB_REPOSITORY: ${{ vars.MASTER_AGENT_LIVE_GITHUB_REPOSITORY }}
+          MASTER_AGENT_LIVE_MICROSOFT_IDENTITY: ${{ vars.MASTER_AGENT_LIVE_MICROSOFT_IDENTITY }}
+          MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID: ${{ vars.MASTER_AGENT_LIVE_SHAREPOINT_DRIVE_ID }}
+          MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID: ${{ vars.MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID }}
+          MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT: ${{ vars.MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT }}
+          MASTER_AGENT_LIVE_TEAMS_CHAT_ID: ${{ vars.MASTER_AGENT_LIVE_TEAMS_CHAT_ID }}
+        run: python tests/test_connector_integration_matrix.py recover --mode effects
+      - name: Send dedicated test communications last
+        env:
+          MASTER_AGENT_RUN_LIVE_COMMUNICATION_TESTS: "1"
+          MASTER_AGENT_LIVE_NON_PRODUCTION: ${{ vars.MASTER_AGENT_LIVE_NON_PRODUCTION }}
+          MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          MASTER_AGENT_LIVE_JOB_TIMEOUT_SECONDS: "2100"
+          MASTER_AGENT_LIVE_CLEANUP_MARGIN_SECONDS: "600"
+          MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT: ${{ vars.MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT }}
+          MASTER_AGENT_LIVE_TEAMS_CHAT_ID: ${{ vars.MASTER_AGENT_LIVE_TEAMS_CHAT_ID }}
+          MASTER_AGENT_LIVE_MICROSOFT_IDENTITY: ${{ vars.MASTER_AGENT_LIVE_MICROSOFT_IDENTITY }}
+        run: >-
+          python -m unittest
+          tests.test_connector_integration_matrix.CredentialedCommunicationConnectorIntegrationTests
+          -v
 
   github-admin-sandbox:
     name: Protected GitHub administration lifecycle
+    needs: validate-selection
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       github.event_name == 'workflow_dispatch' &&
       inputs.run_github_admin &&
+      !inputs.run_effects &&
       vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_TESTS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: connector-integration-admin
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -243,7 +314,7 @@ jobs:
           echo "$runtime_env/bin" >> "$GITHUB_PATH"
       - name: Materialize private connector configuration
         env:
-          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_INTEGRATIONS_TOML }}
+          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_GITHUB_ADMIN_INTEGRATIONS_TOML }}
           ENTERPRISE_CA_BUNDLE_PEM: ${{ secrets.MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM }}
         run: |
           set -euo pipefail
@@ -257,11 +328,20 @@ jobs:
             printf '%s' "$ENTERPRISE_CA_BUNDLE_PEM" > "$ca_file"
             echo "MASTER_AGENT_ENTERPRISE_CA_BUNDLE=$ca_file" >> "$GITHUB_ENV"
           fi
+      - name: Create private bounded recovery journal
+        id: admin-recovery-root
+        run: |
+          set -euo pipefail
+          umask 077
+          recovery_root="$RUNNER_TEMP/master-agent-live-admin-recovery-${{ github.run_id }}-${{ github.run_attempt }}"
+          install -d -m 0700 -- "$recovery_root"
+          echo "MASTER_AGENT_LIVE_RECOVERY_ROOT=$recovery_root" >> "$GITHUB_ENV"
       - name: Toggle, verify, and restore one sandbox repository setting
         env:
           MASTER_AGENT_RUN_LIVE_GITHUB_ADMIN_TESTS: "1"
           MASTER_AGENT_LIVE_GITHUB_ADMIN_NON_PRODUCTION: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_NON_PRODUCTION }}
-          MASTER_AGENT_GITHUB_TOKEN: ${{ secrets.MASTER_AGENT_GITHUB_TOKEN }}
+          MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          MASTER_AGENT_GITHUB_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_GITHUB_ADMIN_TOKEN }}
           MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER }}
           MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY }}
           MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING }}
@@ -269,3 +349,13 @@ jobs:
           python -m unittest
           tests.test_connector_integration_matrix.CredentialedGitHubAdminConnectorIntegrationTests
           -v
+      - name: Recover returned administration effect after ordinary failure
+        if: always() && steps.admin-recovery-root.outcome == 'success'
+        env:
+          MASTER_AGENT_LIVE_GITHUB_ADMIN_NON_PRODUCTION: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_NON_PRODUCTION }}
+          MASTER_AGENT_LIVE_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+          MASTER_AGENT_GITHUB_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_GITHUB_ADMIN_TOKEN }}
+          MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER }}
+          MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY }}
+          MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING }}
+        run: python tests/test_connector_integration_matrix.py recover --mode admin

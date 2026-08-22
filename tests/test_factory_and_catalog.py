@@ -387,6 +387,28 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         self.assertFalse(catalog.definitions["onenote.page.update"].enabled)
         self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
 
+    def test_communications_scopes_cover_provider_verification_reads(self) -> None:
+        catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
+
+        expected_scopes = {
+            "outlook.email.send": ("Mail.ReadWrite", "Mail.Send"),
+            "teams.chat.message.send": ("Chat.Read", "ChatMessage.Send"),
+            "teams.channel.message.send": (
+                "ChannelMessage.Read.All",
+                "ChannelMessage.Send",
+            ),
+            "teams.channel.message.reply": (
+                "ChannelMessage.Read.All",
+                "ChannelMessage.Send",
+            ),
+        }
+        for capability, scopes in expected_scopes.items():
+            with self.subTest(capability=capability):
+                self.assertEqual(
+                    catalog.definitions[capability].required_scopes,
+                    scopes,
+                )
+
     def test_local_git_mutations_are_disabled_in_catalog(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
 

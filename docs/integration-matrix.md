@@ -2,9 +2,9 @@
 
 | System | Deployment/auth modes | Read-only | Draft/local | Approved mutation | Compensation/verification | Default |
 |---|---|---|---|---|---|---|
-| Jira | Cloud basic/API token; Data Center bearer/basic | server info, search, issue read | update/comment/transition proposal | comment creation; update/transition disabled pending CAS | independent read; manual comment deletion recovery | disabled |
-| Confluence | Cloud basic/API token; Data Center bearer/basic | page search/read | create/update proposal | create Cloud space; create/update page | exact content/status/space/parent read; manual created-resource deletion; atomic versioned page restore; opt-in protected Cloud sandbox lifecycle | disabled |
-| Bitbucket | Cloud anonymous public reads, token/basic, or bearer; Data Center PAT/bearer | public-workspace repository lists; authenticated repository, PR, diffstat/changes, and build-status reads | branch/patch plan | create PR; local-Git branch publication disabled | anonymous route omits credentials; verify exact PR; manual decline recovery | disabled |
+| Jira | Cloud basic/API token at exact tenant root or `api.atlassian.com/ex/jira/{cloudId}`; Data Center bearer/basic | server info, search, issue read | update/comment/transition proposal | comment creation; update/transition disabled pending CAS | independent read; manual comment deletion recovery | disabled |
+| Confluence | Cloud basic/API token at exact tenant root or `api.atlassian.com/ex/confluence/{cloudId}`; Data Center bearer/basic | page search/read | create/update proposal | create Cloud space; create/update page | exact content/status/space/parent read; manual created-resource deletion; atomic versioned page restore; opt-in protected Cloud sandbox lifecycle | disabled |
+| Bitbucket | Cloud anonymous public reads, account email/API token, legacy app-password username, or bearer; Data Center PAT/bearer | public-workspace repository lists; authenticated repository, PR, diffstat/changes, and build-status reads | branch/patch plan | create PR; local-Git branch publication disabled | anonymous route omits credentials; verify exact PR; manual decline recovery | disabled |
 | GitHub | Cloud anonymous public reads or bearer token with provider-verified numeric-user attestation | public-user and authenticated-user repository lists, repository read, PR search/read, commit check runs | — | issue/PR create; administration disabled pending CAS | anonymous route omits credentials; authenticated principal/scope check; exact post-write re-read; manual close recovery | disabled |
 | Microsoft identity | Microsoft Graph Cloud-only (`deployment = "cloud"`); delegated or explicit application user | current/explicit user and directory search | — | — | normalized identity/citation | disabled |
 | Outlook | Microsoft Graph Cloud-only (`deployment = "cloud"`); delegated by default | folders, message search/read, attachment metadata, allowlisted UTF-8 text | `.eml` | send | create provider draft, re-read exact content, then send; non-reversible | disabled |
@@ -36,3 +36,8 @@
 ## Provider-specific activation
 
 A connector's `enabled = true` is not enough. Mutation and communication require the runtime flag plus the generic and granular provider flags documented in [`configuration.md`](configuration.md).
+
+Jira and Confluence scoped gateway configurations require a separate exact
+`web_base_url = "https://tenant.atlassian.net"` for browser links. Credentials
+remain confined to the product/cloud-ID API path; the browser root never
+receives an authorization header.

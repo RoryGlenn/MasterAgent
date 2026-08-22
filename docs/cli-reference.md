@@ -260,8 +260,10 @@ fail before the pending provider action executes.
 Confluence, Bitbucket, GitHub, Microsoft identity, SharePoint, Outlook, Teams,
 and OneNote. It activates only the selected connector configurations for that
 probe and performs each connector's fixed read-only check. An Atlassian Cloud
-URL supplied through `--connector-url` replaces the packaged placeholder only
-in memory; Data Center still requires an explicit reviewed integrations file.
+URL supplied through `--connector-url` sets the approval-bound tenant browser
+root in memory. It also replaces a packaged tenant placeholder, but preserves a
+configured scoped-token API gateway root. Data Center still requires an
+explicit reviewed integrations file.
 This command verifies connectivity; the agent must continue with a typed
 feature command to complete the requested outcome.
 
@@ -285,10 +287,14 @@ names, such as `myJiraApiToken`, are inferred without inspecting values. An
 ambiguous key stops with candidate declared names; after clarification,
 `connect --credential-map FILE_KEY=DECLARED_NAME` supplies a one-run mapping
 without rewriting the file. For selected Jira or Confluence Cloud Basic-auth
-connectors, a missing selected-product name automatically falls back to the
-other connector's Atlassian email/API-token pair in memory. Explicit selected-
-product credentials win, the other connector remains inactive, and a fixed
-probe decides access. Unknown fields and duplicate destinations fail closed.
+connectors, a missing selected-product email automatically falls back to the
+other connector's Atlassian account email in memory. A legacy static
+tenant-root configuration may also reuse one unscoped API-token pair. Scoped
+`api.atlassian.com/ex/{product}/{cloudId}` configurations never copy a token
+across products; each requires its explicitly named product token. Explicit
+selected-product credentials win, the other connector remains inactive, and a
+fixed probe decides access. Unknown fields and duplicate destinations fail
+closed.
 An explicit credential file wins over ambient values for the names it contains;
 no value is printed or persisted. Selected output is written mode `0600`.
 

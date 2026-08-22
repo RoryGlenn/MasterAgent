@@ -18,6 +18,7 @@ unsafe provider mutations non-routable.
 | 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX; native Windows expiry execution gated | Contract-tested; authenticated deployment requires approved applications and credentials |
 | 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | Provider-data model-context boundary | Complete | Replace development destination/tenancy/classification rules and supply any required external audit or DLP adapters |
+| Protected credentialed integration evidence | Repository workflow and static contract complete | Configure least-privilege credentials, tenant consent, stable fixtures, dedicated communication targets, and run the approved manual matrix |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
@@ -38,6 +39,12 @@ Provider access remains inactive until the selected deployment supplies its
 approved configuration. Anonymous public-data routes are the exception to the
 credential requirement, not to governance, bounded retrieval, or independent
 verification.
+
+The protected integration workflow is implementation, not provider evidence by
+itself. Its repository gates, environment separation, preflight, and recovery
+contract can be complete while the live matrix remains operationally incomplete
+because credentials, consent, fixtures, targets, or enablement variables are
+absent.
 
 ## Phase acceptance criteria
 
@@ -70,10 +77,13 @@ verification.
 - expired retained-evidence pairs can be previewed and explicitly deleted on
   POSIX through one bounded descriptor plan, locked rescan, and recoverable
   pair transaction;
-- live provider probes are explicit rather than automatic; and
+- live provider probes are explicit rather than automatic;
 - every direct, applied, probe, and repository-shortcut provider read is
   classified and authorized before access, rebound before return, exact-schema
-  sanitized, item/byte bounded, and content-free in audit.
+  sanitized, item/byte bounded, and content-free in audit; and
+- the complete credentialed provider matrix is manual-only, default-branch
+  bound, privilege-separated, statically checked, and never counts a skip or
+  missing external setup as provider evidence.
 
 ### Phase 3 — draft-only output
 
@@ -217,9 +227,14 @@ A target organization must still:
    legal hold, and external-model policy;
 7. replace sample identities, project keys, sites, repositories, recipients,
    and canonical resources;
-8. validate read-only probes in non-production;
-9. validate reversible writes using disposable resources; and
-10. approve a narrow production rollout.
+8. configure the three protected integration environments with independent
+   read, effect, and administration credentials, stable fixtures, dedicated
+   communication targets, reviewer rules, and exact default-branch restrictions;
+9. validate read-only probes in non-production;
+10. run the approved manual credentialed matrix and reconcile any indeterminate
+    provider operation;
+11. validate reversible writes using disposable resources; and
+12. approve a narrow production rollout.
 
 The runtime reports this distinction instead of representing contract tests or
 a local demonstration as a successful company deployment.

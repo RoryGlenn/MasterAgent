@@ -4847,6 +4847,33 @@ def _supports_shared_atlassian_credentials(connector: ConnectorConfig) -> bool:
     )
 
 
+def _requires_product_specific_atlassian_token(
+    connector: ConnectorConfig,
+) -> bool:
+    """Return whether cross-product API-token reuse must stay disabled."""
+
+    # A dynamic API root is resolved only after the selected credential overlay
+    # exists. Treat it conservatively because it may name a scoped gateway.
+    if connector.base_url_env:
+        return True
+
+    return _uses_resolved_atlassian_gateway(connector)
+
+
+def _uses_resolved_atlassian_gateway(connector: ConnectorConfig) -> bool:
+    """Return whether the currently resolved API root is a scoped gateway."""
+
+    try:
+        parsed = urlsplit(connector.effective_base_url(os.environ))
+    except ValueError:
+        return False
+    return (parsed.hostname or "").casefold().rstrip(
+        "."
+    ) == "api.atlassian.com" and parsed.path.rstrip("/").startswith(
+        ("/ex/jira/", "/ex/confluence/")
+    )
+
+
 def _related_atlassian_configurations(
     integrations: IntegrationConfig,
     *,
@@ -4877,7 +4904,7 @@ def _atlassian_credential_compatibility(
     *,
     configurations: set[str],
 ) -> dict[str, str]:
-    """Map missing Jira/Confluence names to the related Atlassian account pair."""
+    """Map compatible missing Jira/Confluence account credential names."""
 
     compatible: dict[str, str] = {}
     for target_name, source_name in (
@@ -4895,10 +4922,13 @@ def _atlassian_credential_compatibility(
             and _supports_shared_atlassian_credentials(source)
         ):
             continue
-        for destination, fallback in (
-            (target.username_env, source.username_env),
-            (target.secret_env, source.secret_env),
+        compatible_fields = [(target.username_env, source.username_env)]
+        if not (
+            _requires_product_specific_atlassian_token(target)
+            or _requires_product_specific_atlassian_token(source)
         ):
+            compatible_fields.append((target.secret_env, source.secret_env))
+        for destination, fallback in compatible_fields:
             if destination and fallback and destination != fallback:
                 compatible[destination] = fallback
     return compatible
@@ -4935,12 +4965,20 @@ def _with_connector_url_overrides(
         overrides[system] = _normalize_atlassian_cloud_url(connector, raw_url)
 
     connectors = dict(integrations.connectors)
-    for system, base_url in overrides.items():
-        connectors[system] = replace(
-            connectors[system],
-            base_url=base_url,
-            base_url_env=None,
-        )
+    for system, web_base_url in overrides.items():
+        connector = connectors[system]
+        if _uses_resolved_atlassian_gateway(connector):
+            connectors[system] = replace(
+                connector,
+                web_base_url=web_base_url,
+            )
+        else:
+            connectors[system] = replace(
+                connector,
+                base_url=web_base_url,
+                base_url_env=None,
+                web_base_url=web_base_url,
+            )
     return IntegrationConfig(
         connectors=connectors,
         source_sha256=integrations.source_sha256,

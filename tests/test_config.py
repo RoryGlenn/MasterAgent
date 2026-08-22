@@ -184,6 +184,202 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
             with self.assertRaisesRegex(ConfigurationError, "provider origins"):
                 connector.resolve({"MASTER_AGENT_JIRA_TOKEN": "synthetic-token"})
 
+    def test_scoped_atlassian_gateway_roots_resolve_with_separate_web_root(
+        self,
+    ) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        for system in ("jira", "confluence"):
+            with (
+                self.subTest(system=system),
+                private_temporary_directory() as directory,
+            ):
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    f"[connectors.{system}]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    f'base_url = "https://api.atlassian.com/ex/{system}/'
+                    f'{cloud_id}/"\n'
+                    'web_base_url = "https://acme.atlassian.net/"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+
+                connector = IntegrationConfig.from_toml(path).connector(system)
+                resolved = connector.resolve({})
+
+                self.assertEqual(
+                    resolved.base_url,
+                    f"https://api.atlassian.com/ex/{system}/{cloud_id}",
+                )
+                self.assertEqual(
+                    resolved.web_base_url,
+                    "https://acme.atlassian.net",
+                )
+
+    def test_atlassian_gateway_root_requires_approved_web_root(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                "[connectors.jira]\n"
+                "enabled = true\n"
+                'deployment = "cloud"\n'
+                'base_url = "https://api.atlassian.com/ex/jira/'
+                '12345678-1234-1234-1234-123456789abc"\n'
+                'auth_mode = "none"\n',
+                encoding="utf-8",
+            )
+            connector = IntegrationConfig.from_toml(path).connector("jira")
+
+            with self.assertRaisesRegex(ConfigurationError, "requires web_base_url"):
+                connector.resolve({})
+
+    def test_cloud_atlassian_api_roots_reject_ambiguous_shapes(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        invalid_urls = (
+            f"https://api.atlassian.com/ex/confluence/{cloud_id}",
+            "https://api.atlassian.com/ex/jira/not-a-cloud-id",
+            f"https://api.atlassian.com/ex/jira/{cloud_id}/rest",
+            f"https://api.atlassian.com:443/ex/jira/{cloud_id}",
+            "https://acme.atlassian.net/wiki",
+            "https://acme.atlassian.net:443",
+            "https://nested.acme.atlassian.net",
+        )
+        for base_url in invalid_urls:
+            with (
+                self.subTest(base_url=base_url),
+                private_temporary_directory() as directory,
+            ):
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.jira]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    f'base_url = "{base_url}"\n'
+                    'web_base_url = "https://acme.atlassian.net"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+                connector = IntegrationConfig.from_toml(path).connector("jira")
+
+                with self.assertRaisesRegex(ConfigurationError, "provider origins"):
+                    connector.resolve({})
+
+    def test_atlassian_web_root_is_tenant_only_and_approval_bound(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        identities: list[str] = []
+        for web_base_url in (
+            "https://acme.atlassian.net",
+            "https://other.atlassian.net",
+        ):
+            with private_temporary_directory() as directory:
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.jira]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    f'base_url = "https://api.atlassian.com/ex/jira/{cloud_id}"\n'
+                    f'web_base_url = "{web_base_url}"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+                identities.append(
+                    IntegrationConfig.from_toml(path).connector("jira").identity
+                )
+        self.assertNotEqual(identities[0], identities[1])
+
+        for web_base_url in (
+            "https://api.atlassian.com",
+            "https://acme.atlassian.net/wiki",
+            "https://acme.atlassian.net:443",
+        ):
+            with (
+                self.subTest(web_base_url=web_base_url),
+                private_temporary_directory() as directory,
+            ):
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.jira]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    f'base_url = "https://api.atlassian.com/ex/jira/{cloud_id}"\n'
+                    f'web_base_url = "{web_base_url}"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+                connector = IntegrationConfig.from_toml(path).connector("jira")
+                with self.assertRaisesRegex(ConfigurationError, "tenant root"):
+                    connector.resolve({})
+
+    def test_cloud_tenant_root_remains_compatible_without_web_override(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                "[connectors.jira]\n"
+                "enabled = true\n"
+                'deployment = "cloud"\n'
+                'base_url = "https://acme.atlassian.net/"\n'
+                'auth_mode = "none"\n',
+                encoding="utf-8",
+            )
+
+            resolved = IntegrationConfig.from_toml(path).connector("jira").resolve({})
+
+            self.assertEqual(resolved.base_url, "https://acme.atlassian.net")
+            self.assertEqual(resolved.web_base_url, "https://acme.atlassian.net")
+
+    def test_bitbucket_cloud_root_and_email_environment_are_exact(self) -> None:
+        for username_env in (
+            "MASTER_AGENT_BITBUCKET_EMAIL",
+            "MASTER_AGENT_BITBUCKET_USERNAME",
+        ):
+            with (
+                self.subTest(username_env=username_env),
+                private_temporary_directory() as directory,
+            ):
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.bitbucket]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    'base_url = "https://api.bitbucket.org/2.0"\n'
+                    'auth_mode = "basic"\n'
+                    f'username_env = "{username_env}"\n'
+                    'secret_env = "MASTER_AGENT_BITBUCKET_TOKEN"\n',
+                    encoding="utf-8",
+                )
+                connector = IntegrationConfig.from_toml(path).connector("bitbucket")
+                resolved = connector.resolve(
+                    {
+                        username_env: "operator@example.test",
+                        "MASTER_AGENT_BITBUCKET_TOKEN": "synthetic-token",
+                    }
+                )
+                self.assertEqual(resolved.base_url, "https://api.bitbucket.org/2.0")
+
+        for base_url in (
+            "https://api.bitbucket.org",
+            "https://api.bitbucket.org/1.0",
+            "https://api.bitbucket.org/2.0/repositories",
+            "https://api.bitbucket.org:443/2.0",
+        ):
+            with (
+                self.subTest(base_url=base_url),
+                private_temporary_directory() as directory,
+            ):
+                path = Path(directory) / "integrations.toml"
+                path.write_text(
+                    "[connectors.bitbucket]\n"
+                    "enabled = true\n"
+                    'deployment = "cloud"\n'
+                    f'base_url = "{base_url}"\n'
+                    'auth_mode = "none"\n',
+                    encoding="utf-8",
+                )
+                connector = IntegrationConfig.from_toml(path).connector("bitbucket")
+                with self.assertRaisesRegex(ConfigurationError, "provider origins"):
+                    connector.resolve({})
+
     @unittest.skipUnless(os.name == "posix", "permission checks require POSIX")
     def test_explicit_config_rejects_symlinks_and_writable_files(self) -> None:
         with private_temporary_directory() as directory:

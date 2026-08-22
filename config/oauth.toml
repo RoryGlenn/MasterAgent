@@ -1,6 +1,6 @@
 # All profiles are disabled in packaged defaults. Environment-variable fields
-# contain names, never credential values. Enable only one reviewed profile at a
-# time and use a separate integration configuration for broader privileges.
+# contain names, never credential values. Each profile is a complete,
+# purpose-specific grant set; enable only the exact reviewed profile for a run.
 
 [profiles.microsoft_delegated]
 enabled = false
@@ -40,12 +40,48 @@ tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
 client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
 scopes = [
   "User.Read",
+  "Mail.ReadWrite",
   "Mail.Send",
+  "Chat.Read",
   "ChatMessage.Send",
+  "ChannelMessage.Read.All",
   "ChannelMessage.Send",
 ]
 identity_mode = "delegated"
 purpose = "Phase 5 exact-approval Outlook and Teams sends"
+
+[profiles.microsoft_integration_read]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_device_code"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
+scopes = [
+  "User.Read",
+  "Mail.Read",
+  "Chat.Read",
+  "Sites.Read.All",
+  "Notes.Read",
+]
+identity_mode = "delegated"
+purpose = "Credentialed integration read matrix"
+
+[profiles.microsoft_integration_effects]
+enabled = false
+provider = "microsoft_entra"
+flow = "entra_device_code"
+tenant_id_env = "MASTER_AGENT_ENTRA_TENANT_ID"
+client_id_env = "MASTER_AGENT_ENTRA_PUBLIC_CLIENT_ID"
+scopes = [
+  "User.Read",
+  "Sites.ReadWrite.All",
+  "Mail.ReadWrite",
+  "Mail.Send",
+  "Chat.Read",
+  "ChatMessage.Send",
+]
+identity_mode = "delegated"
+purpose = "Credentialed integration effect matrix"
 
 [profiles.microsoft_application]
 enabled = false

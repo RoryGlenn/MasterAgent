@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlparse
 
 from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.connectors.read_only import ReadOnlyConnector, RetrievedPayload
@@ -39,6 +40,7 @@ class ConfluenceConnector(ReadOnlyConnector):
     ) -> None:
         super().__init__(system="confluence", capabilities=self._CAPABILITIES)
         self._config = config
+        self._web_base_url = (config.web_base_url or config.base_url).rstrip("/")
         self._client = SafeHttpClient(
             base_url=config.base_url,
             header_provider=config.auth.headers,
@@ -220,8 +222,7 @@ class ConfluenceConnector(ReadOnlyConnector):
             "updated_at": last_updated.get("when"),
             "body_text": None,
             "body_excerpt": None,
-            "web_url": absolute_web_url(
-                self._config.base_url,
+            "web_url": self._approved_web_url(
                 str(links.get("webui")) if links.get("webui") else None,
             ),
         }
@@ -247,8 +248,7 @@ class ConfluenceConnector(ReadOnlyConnector):
             "updated_at": version.get("createdAt"),
             "body_text": text,
             "body_excerpt": excerpt(text),
-            "web_url": absolute_web_url(
-                self._config.base_url,
+            "web_url": self._approved_web_url(
                 str(links.get("webui")) if links.get("webui") else None,
             ),
         }
@@ -279,8 +279,36 @@ class ConfluenceConnector(ReadOnlyConnector):
             "updated_at": version.get("when"),
             "body_text": text,
             "body_excerpt": excerpt(text),
-            "web_url": absolute_web_url(
-                self._config.base_url,
+            "web_url": self._approved_web_url(
                 str(links.get("webui")) if links.get("webui") else None,
             ),
         }
+
+    def _approved_web_url(self, candidate: str | None) -> str | None:
+        """Resolve a provider web link only on the approved browser origin."""
+
+        resolved = absolute_web_url(self._web_base_url, candidate)
+        if resolved is None:
+            return None
+        approved = urlparse(self._web_base_url)
+        parsed = urlparse(resolved)
+        try:
+            approved_origin = (
+                approved.scheme.casefold(),
+                (approved.hostname or "").casefold(),
+                approved.port or 443,
+            )
+            candidate_origin = (
+                parsed.scheme.casefold(),
+                (parsed.hostname or "").casefold(),
+                parsed.port or 443,
+            )
+        except ValueError:
+            return None
+        if approved_origin != candidate_origin:
+            return None
+        return parsed._replace(
+            scheme=approved.scheme,
+            netloc=approved.netloc,
+            fragment="",
+        ).geturl()

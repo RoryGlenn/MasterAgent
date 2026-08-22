@@ -85,6 +85,47 @@ class JiraConnectorTests(unittest.TestCase):
         )
         self.assertEqual(transport.requests[0].json_body()["startAt"], 0)
 
+    def test_gateway_api_root_keeps_browser_links_on_tenant(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "POST",
+            f"/ex/jira/{cloud_id}/rest/api/3/search/jql",
+            {
+                "issues": [_jira_issue()],
+                "total": 1,
+                "isLast": True,
+            },
+        )
+        connector = JiraConnector(
+            replace(
+                resolved_config(
+                    "jira",
+                    base_url=f"https://api.atlassian.com/ex/jira/{cloud_id}",
+                ),
+                web_base_url="https://acme.atlassian.net/",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "jira.issue.search",
+            system="jira",
+            resource_type="issue_collection",
+            resource_id="gateway-search",
+            parameters={"jql": "project = RISE", "limit": 1},
+        )
+
+        result = connector.execute(action)
+
+        self.assertEqual(
+            urlparse(transport.requests[0].url).path,
+            f"/ex/jira/{cloud_id}/rest/api/3/search/jql",
+        )
+        self.assertEqual(
+            result.after["issues"][0]["web_url"],
+            "https://acme.atlassian.net/browse/RISE-142",
+        )
+
 
 class ConfluenceConnectorTests(unittest.TestCase):
     """Verify page normalization for Cloud and Data Center."""
@@ -175,6 +216,126 @@ class ConfluenceConnectorTests(unittest.TestCase):
         self.assertEqual(
             urlparse(transport.requests[0].url).path,
             "/rest/api/content/search",
+        )
+
+    def test_gateway_api_root_keeps_page_links_on_tenant(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            f"/ex/confluence/{cloud_id}/wiki/api/v2/pages/123",
+            {
+                "id": "123",
+                "title": "Project Status",
+                "status": "current",
+                "spaceId": "space-1",
+                "version": {"number": 12, "createdAt": "2026-08-13T10:00:00Z"},
+                "body": {"storage": {"value": "<p>On track.</p>"}},
+                "_links": {"webui": "/spaces/RISE/pages/123"},
+            },
+        )
+        connector = ConfluenceConnector(
+            replace(
+                resolved_config(
+                    "confluence",
+                    base_url=(f"https://api.atlassian.com/ex/confluence/{cloud_id}"),
+                ),
+                web_base_url="https://acme.atlassian.net/",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "confluence.page.read",
+            system="confluence",
+            resource_type="page",
+            resource_id="123",
+        )
+
+        result = connector.execute(action)
+
+        self.assertEqual(
+            urlparse(transport.requests[0].url).path,
+            f"/ex/confluence/{cloud_id}/wiki/api/v2/pages/123",
+        )
+        self.assertEqual(
+            result.after["page"]["web_url"],
+            "https://acme.atlassian.net/spaces/RISE/pages/123",
+        )
+
+    def test_gateway_pagination_cannot_cross_to_sibling_product(self) -> None:
+        cloud_id = "12345678-1234-1234-1234-123456789abc"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            f"/ex/confluence/{cloud_id}/wiki/rest/api/content/search",
+            {
+                "results": [{"id": "123", "title": "Project Status"}],
+                "_links": {
+                    "next": (
+                        "https://api.atlassian.com/ex/jira/"
+                        f"{cloud_id}/rest/api/3/issue/MA-1"
+                    )
+                },
+            },
+        )
+        connector = ConfluenceConnector(
+            replace(
+                resolved_config(
+                    "confluence",
+                    base_url=(f"https://api.atlassian.com/ex/confluence/{cloud_id}"),
+                ),
+                web_base_url="https://acme.atlassian.net",
+            ),
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorHttpError, "outside"):
+            connector.execute(
+                read_action(
+                    "confluence.page.search",
+                    system="confluence",
+                    resource_type="page_collection",
+                    resource_id="gateway-search",
+                    parameters={"cql": "type = page", "limit": 2},
+                )
+            )
+
+        self.assertEqual(len(transport.requests), 1)
+
+    def test_provider_web_link_cannot_escape_approved_tenant(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/wiki/api/v2/pages/123",
+            {
+                "id": "123",
+                "title": "Project Status",
+                "version": {"number": 1},
+                "body": {"storage": {"value": "<p>On track.</p>"}},
+                "_links": {"webui": "https://attacker.example/phishing"},
+            },
+        )
+        connector = ConfluenceConnector(
+            resolved_config(
+                "confluence",
+                base_url="https://acme.atlassian.net",
+            ),
+            transport=transport,
+        )
+
+        result = connector.execute(
+            read_action(
+                "confluence.page.read",
+                system="confluence",
+                resource_type="page",
+                resource_id="123",
+            )
+        )
+
+        self.assertIsNone(result.after["page"]["web_url"])
+        self.assertNotIn(
+            "https://attacker.example/phishing",
+            result.after["source_urls"],
         )
 
 

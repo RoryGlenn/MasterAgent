@@ -215,17 +215,20 @@ unambiguous friendly-key forms. Infer friendly mappings only from key names. If
 a key is ambiguous, ask once what it represents and retry `connect` with
 `--credential-map FILE_KEY=DECLARED_NAME`; never inspect a secret value to
 guess, and never rewrite the credential file merely to change its wrapper.
-When Jira or Confluence Cloud is selected, the runtime automatically tries a
-missing product-specific email/API-token pair from the other configured
-Atlassian product in memory. The selected product's explicit names take
+When Jira or Confluence Cloud is selected, the runtime may reuse a missing
+Atlassian account email from the other configured product in memory. A legacy
+static tenant-root configuration may also reuse one unscoped API-token pair.
+Scoped `api.atlassian.com/ex/{product}/{cloudId}` configurations require an
+explicit token for each product. The selected product's explicit names take
 precedence, the other connector remains inactive, and the provider probe—not
 the JSON key label—decides whether access exists.
 
 If the operator supplies a Jira or Confluence Cloud page or site URL, pass it
 as `--connector-url SYSTEM=URL` instead of stopping at the packaged placeholder
 or creating a persistent configuration. The runtime reduces the UI URL to a
-validated Atlassian tenant origin. Reuse that exact argument for
-`bind-context` and `run --apply` so the destination remains approval-bound.
+validated Atlassian tenant browser origin and preserves any configured scoped
+API gateway root. Reuse that exact argument for `bind-context` and
+`run --apply` so both destinations remain approval-bound.
 Data Center deployments still require an explicitly reviewed context root.
 
 GitHub repository discovery is routed by the data the operator requested. When

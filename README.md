@@ -71,6 +71,7 @@ unsafe surfaces remain deliberately non-routable.
 | Area | Current status |
 |---|---|
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
+| Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
@@ -388,7 +389,11 @@ master-agent connect \
 ```
 
 For Atlassian Cloud, an operator-provided UI URL can be normalized and bound
-for one invocation without changing persistent configuration:
+for one invocation without changing persistent configuration. Jira and
+Confluence scoped API tokens use their exact
+`api.atlassian.com/ex/{product}/{cloudId}` gateway root plus a separate
+credential-free tenant `web_base_url`; the override changes only that browser
+root and cannot replace or escape the product/cloud-ID API boundary:
 
 ```bash
 master-agent connect \
@@ -400,6 +405,11 @@ master-agent connect \
 
 Reuse the exact `--connector-url` during `bind-context` and `run --apply` so the
 destination remains approval-bound.
+
+Atlassian scoped tokens are product-specific: Jira and Confluence may share the
+account email in memory, but never each other's scoped token. Bitbucket Cloud
+API tokens use the Atlassian account email; private legacy app-password
+configuration may retain its explicit username.
 
 ### Direct, verified provider reads
 
