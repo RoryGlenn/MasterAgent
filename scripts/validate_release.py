@@ -338,7 +338,7 @@ _PUBLIC_READ_FORBIDDEN_CLAIMS = {
 _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     Path("CHANGELOG.md"): (
         "Enable descriptor-safe expiration deletion",
-        "all Windows execution remains capability-gated",
+        "preview, apply, and orphan repair remain capability-gated",
     ),
     Path("docs/architecture.md"): (
         "Expiration preview and explicit POSIX deletion share",
@@ -348,7 +348,8 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     Path("docs/cli-reference.md"): (
         "## Evidence expiration maintenance",
         "every discovered evidence-parent retention lock",
-        "all Windows execution is capability-gated",
+        "All `evidence-prune` execution remains unavailable on Windows",
+        "Windows preview and apply are capability-gated",
     ),
     Path("docs/configuration.md"): (
         "## Retention and expiry",
@@ -356,13 +357,14 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
         "root and discovered evidence-parent locks",
     ),
     Path("docs/implementation-roadmap.md"): (
-        "Complete on POSIX; native Windows expiry execution gated",
-        "native Windows retained-evidence preview and deletion",
+        "Complete on POSIX; native Windows retention preview/apply/repair gated",
+        "native Windows secure filesystem/ACL, locking, atomic state and retention",
     ),
     Path("docs/operations.md"): (
         "repeat the apply command under the same root",
         "bounded and uses the same evidence-parent locks",
         "All `evidence-prune` execution remains unavailable on Windows",
+        "Windows retention preview, apply, and orphan repair remain unavailable",
     ),
     Path("docs/phase-2b-communication-context.md"): (
         "same bounded descriptor-relative validation plan",
@@ -370,12 +372,13 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     ),
     Path("docs/release-validation.md"): (
         "POSIX retained-evidence expiration tests prove",
-        "All Windows execution remains capability-gated",
+        "apply, and orphan repair remain capability-gated",
     ),
     Path("docs/threat-model.md"): (
         "every discovered evidence-parent",
         "broad, path-based, or unvalidated recursive evidence deletion",
-        "native Windows expiration execution remains unavailable",
+        "common Windows import and configuration-diagnostics boundary is not",
+        "orphan repair remain unavailable",
     ),
 }
 
@@ -651,15 +654,29 @@ def validate_archive(path: Path) -> ValidationReport:
     for name in names:
         _validate_archive_member(name, errors)
     if path.suffix == ".whl":
-        required_suffixes = (
+        required_members = (
             "master_agent/__init__.py",
             "master_agent/capsule_worker.py",
+            "master_agent/platform_runtime/posix/capsule_worker.py",
             "master_agent/defaults/capabilities.toml",
             "master_agent/defaults/dependency-licenses.toml",
-            ".dist-info/METADATA",
         )
+        for required in required_members:
+            if required not in names:
+                errors.append(f"release archive is missing required file: {required}")
+        wheel_parts = path.name.removesuffix(".whl").split("-")
+        metadata_member = (
+            f"master_agent-{wheel_parts[1]}.dist-info/METADATA"
+            if len(wheel_parts) >= 5 and wheel_parts[0] == "master_agent"
+            else None
+        )
+        if metadata_member is None or metadata_member not in names:
+            errors.append(
+                "release archive is missing required file: "
+                "master_agent-<version>.dist-info/METADATA"
+            )
     else:
-        required_suffixes = (
+        required_paths = (
             "/.ai/MASTER_AGENT.md",
             "/.ai/FIRST_RUN.md",
             "/.ai/AUTONOMY.md",
@@ -700,10 +717,32 @@ def validate_archive(path: Path) -> ValidationReport:
             "/src/master_agent/__init__.py",
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",
+            "/src/master_agent/platform_runtime/posix/capsule_worker.py",
         )
-    for required in required_suffixes:
-        if not any(name.endswith(required) for name in names):
-            errors.append(f"release archive is missing required file: {required}")
+        source_members = tuple(PurePosixPath(name) for name in names)
+        source_roots = {
+            member.parts[0] for member in source_members if len(member.parts) >= 2
+        }
+        common_root = (
+            next(iter(source_roots))
+            if source_members
+            and len(source_roots) == 1
+            and all(len(member.parts) >= 2 for member in source_members)
+            else None
+        )
+        if common_root is None:
+            errors.append(
+                "source archive must contain exactly one top-level root directory"
+            )
+        for required in required_paths:
+            required_parts = PurePosixPath(required.removeprefix("/")).parts
+            expected_parts = (
+                (common_root, *required_parts) if common_root is not None else None
+            )
+            if expected_parts is None or not any(
+                member.parts == expected_parts for member in source_members
+            ):
+                errors.append(f"release archive is missing required file: {required}")
     if not errors:
         checks.append(
             f"validated release archive {path.name} ({len(names)} files, no links)"
@@ -1895,7 +1934,11 @@ def _validate_archive_runtime_mode(
 ) -> None:
     """Reject a capsule worker another operating-system account can alter."""
 
-    if not name.endswith("master_agent/capsule_worker.py"):
+    worker_suffixes = (
+        "master_agent/capsule_worker.py",
+        "master_agent/platform_runtime/posix/capsule_worker.py",
+    )
+    if not name.endswith(worker_suffixes):
         return
     if not is_regular:
         errors.append(f"release archive capsule worker is not regular: {name}")

@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0098-platform-runtime-contracts"
+title = "Cross-platform runtime contracts"
+status = "archived"
+github_issue = 98
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-PLATFORM-001"
+destination = "runtime/MA-PLATFORM-001.md"
+source = "current/MA-PLATFORM-001.md"

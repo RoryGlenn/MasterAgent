@@ -23,6 +23,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.platform_runtime import require_persistent_state_platform
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +257,7 @@ def render_weekly_status_package(
         Generated artifact paths.
     """
 
+    require_persistent_state_platform()
     output_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = output_dir / "weekly-status-evidence.json"
     markdown_path = output_dir / "weekly-status.md"

@@ -157,7 +157,8 @@ recoverably deletes only a complete expired
 evidence/sidecar pair. Malformed, unsafe, substituted, oversized, or truncated
 trees fail closed. Recovery durably syncs absent public names before removing
 staged links, and an ancestor scan reports nonempty nested-root transaction
-state for exact-root recovery. All Windows execution remains gated.
+state for exact-root recovery. Windows retention preview, apply, and orphan
+repair remain gated.
 `evidence-repair` remains separate and can recoverably quarantine an orphan
 while refusing identity races.
 

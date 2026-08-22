@@ -164,6 +164,37 @@ Controls:
   approval, verification, idempotency, compensation, and audit gates remain
   independently mandatory after profile admission.
 
+### Platform backend downgrade or eager native loading
+
+An unsupported host, missing native primitive, or platform-specific import may
+either break harmless package inspection or tempt a caller to continue through
+a compatibility layer that does not preserve MasterAgent's security
+guarantees.
+
+Controls:
+
+- platform family and backend identities are selected by fixed runtime code,
+  not an organization profile, environment variable, retrieved instruction, or
+  plugin;
+- platform-neutral package and CLI imports do not initialize Unix-only or other
+  native backends;
+- `secure_filesystem`, `cross_process_locking`,
+  `atomic_publication_recovery`, `process_supervision`, `trusted_git`, and
+  `capsule_isolation` report independent stable availability and secret-free
+  reasons;
+- capsule isolation means executable OS containment: Linux selects the
+  bubblewrap backend only when a trusted executable is available and otherwise
+  reports the contract unavailable; macOS reports the contract unavailable
+  rather than treating owner-private group membership as a sandbox;
+- help, version, and configuration-only readiness consume descriptive status
+  only and cannot turn availability into authority;
+- a stateful operation requires its exact contract before protected state,
+  credentials, connector construction, provider access, or effects;
+- unavailable selection raises one typed bounded error and never retries
+  through a POSIX shim, another platform, or a weaker fallback; and
+- Windows startup/configuration and existing POSIX behavior receive separate
+  regression coverage, while native Windows backend routes remain planned.
+
 ### Excessive permissions
 
 A single broad token may expose unrelated data or actions.
@@ -544,8 +575,11 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- native Windows expiration execution remains unavailable pending equivalent
-  filesystem and atomic-state guarantees; quarantine intentionally retains
+- the common Windows import and configuration-diagnostics boundary is not
+  native runtime certification: stateful operations remain unavailable where
+  secure filesystem, locking, atomic publication/recovery, process, Git, or
+  capsule contracts are absent. Native Windows retention preview, apply, and
+  orphan repair remain unavailable; expiration quarantine intentionally retains
   orphaned bytes until an operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;

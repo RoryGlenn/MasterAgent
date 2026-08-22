@@ -7,6 +7,7 @@ import tarfile
 import tomllib
 import unittest
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -79,12 +80,111 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/tests/test_semantic_router.py",
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
+            "/src/master_agent/platform_runtime/posix/capsule_worker.py",
         ):
             with self.subTest(suffix=suffix):
                 self.assertIn(
                     f"release archive is missing required file: {suffix}",
                     report.errors,
                 )
+
+    def test_wheel_requires_the_actual_posix_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "minimal.whl"
+            with zipfile.ZipFile(archive_path, mode="w"):
+                pass
+
+            report = validate_archive(archive_path)
+
+        self.assertIn(
+            "release archive is missing required file: "
+            "master_agent/platform_runtime/posix/capsule_worker.py",
+            report.errors,
+        )
+
+    def test_wheel_rejects_spoof_prefixed_capsule_workers(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "master_agent-1.0.0-py3-none-any.whl"
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                for name in (
+                    "master_agent/__init__.py",
+                    "evilmaster_agent/capsule_worker.py",
+                    "evilmaster_agent/platform_runtime/posix/capsule_worker.py",
+                    "master_agent/defaults/capabilities.toml",
+                    "master_agent/defaults/dependency-licenses.toml",
+                    "master_agent-1.0.0.dist-info/METADATA",
+                ):
+                    archive.writestr(name, "safe fixture\n")
+
+            report = validate_archive(archive_path)
+
+        for required in (
+            "master_agent/capsule_worker.py",
+            "master_agent/platform_runtime/posix/capsule_worker.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(
+                    f"release archive is missing required file: {required}",
+                    report.errors,
+                )
+
+    def test_sdist_requires_exactly_one_archive_root_before_workers(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "master-agent-1.0.0.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for name in (
+                    "outer/inner/src/master_agent/capsule_worker.py",
+                    (
+                        "outer/inner/src/master_agent/platform_runtime/posix/"
+                        "capsule_worker.py"
+                    ),
+                ):
+                    payload = b"safe fixture\n"
+                    member = tarfile.TarInfo(name)
+                    member.size = len(payload)
+                    member.mode = 0o644
+                    archive.addfile(member, BytesIO(payload))
+
+            report = validate_archive(archive_path)
+
+        for required in (
+            "/src/master_agent/capsule_worker.py",
+            "/src/master_agent/platform_runtime/posix/capsule_worker.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(
+                    f"release archive is missing required file: {required}",
+                    report.errors,
+                )
+
+    def test_sdist_rejects_rootless_or_multiple_archive_roots(self) -> None:
+        fixtures = {
+            "rootless": ("LICENSE",),
+            "multiple": (
+                "master-agent-a/src/master_agent/capsule_worker.py",
+                (
+                    "master-agent-b/src/master_agent/platform_runtime/posix/"
+                    "capsule_worker.py"
+                ),
+            ),
+        }
+        for label, names in fixtures.items():
+            with self.subTest(label=label), TemporaryDirectory() as directory:
+                archive_path = Path(directory) / f"{label}.tar.gz"
+                with tarfile.open(archive_path, mode="w:gz") as archive:
+                    for name in names:
+                        payload = b"safe fixture\n"
+                        member = tarfile.TarInfo(name)
+                        member.size = len(payload)
+                        member.mode = 0o644
+                        archive.addfile(member, BytesIO(payload))
+
+                report = validate_archive(archive_path)
+
+            self.assertIn(
+                "source archive must contain exactly one top-level root directory",
+                report.errors,
+            )
 
     def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
         with TemporaryDirectory() as directory:
@@ -115,6 +215,39 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertTrue(any("link entry" in error for error in report.errors))
             self.assertTrue(any("is not regular" in error for error in report.errors))
 
+    def test_release_rejects_a_world_writable_posix_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo(
+                "master_agent/platform_runtime/posix/capsule_worker.py"
+            )
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFREG | 0o666) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "pass\n")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(
+                any("writable by group or others" in error for error in report.errors)
+            )
+
+    def test_release_rejects_a_symlinked_posix_capsule_worker(self) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "unsafe.whl"
+            worker = zipfile.ZipInfo(
+                "master_agent/platform_runtime/posix/capsule_worker.py"
+            )
+            worker.create_system = 3
+            worker.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive_path, mode="w") as archive:
+                archive.writestr(worker, "../attacker.py")
+
+            report = validate_archive(archive_path)
+
+            self.assertTrue(any("link entry" in error for error in report.errors))
+            self.assertTrue(any("is not regular" in error for error in report.errors))
+
     def test_ci_installs_the_runtime_only_in_private_virtual_environments(self) -> None:
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -128,6 +261,31 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("apparmor_restrict_unprivileged_userns=0", workflow)
         self.assertNotIn("run: python -m pip install", workflow)
         self.assertNotIn("\n          python -m pip install", workflow)
+
+    def test_ci_smokes_the_installed_windows_package_without_publication(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        start = workflow.index("  windows-startup:")
+        end = workflow.index("\n  package:", start)
+        job = workflow[start:end]
+
+        for required in (
+            "runs-on: windows-latest",
+            "import master_agent; import master_agent.cli; import master_agent.readiness",
+            "--help",
+            "--version",
+            "readiness",
+            "--require-level install",
+            "--require-level draft",
+            "--require-level effect",
+            "windows-unavailable",
+            "secure_filesystem",
+            "capsule_isolation",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, job)
+        self.assertNotIn("--output", job)
+        self.assertNotIn("setup --", job)
 
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

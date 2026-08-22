@@ -32,6 +32,12 @@ from master_agent.copilot_advisory import (
     read_scoped_text,
     repository_state_binding,
 )
+from master_agent.platform_runtime import (
+    PlatformCapabilityUnavailable,
+    PlatformContract,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
 
 if __package__:
     from scripts import semantic_router as _semantic_router
@@ -74,9 +80,12 @@ def run(
 ) -> int:
     """Execute one live specialist call through the repository-owned broker."""
 
-    root = root.resolve()
-    selected_state = state_directory or root / ".master-agent/advisory"
     try:
+        require_persistent_state_platform()
+        require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
+        require_platform_contract(PlatformContract.TRUSTED_GIT)
+        root = root.resolve()
+        selected_state = state_directory or root / ".master-agent/advisory"
         bound_route = _validated_semantic_route(root, route, paths)
         semantic_route = bound_route.route
         scope = AdvisoryPathScope.bind(root, paths)
@@ -116,6 +125,7 @@ def run(
         CopilotRepositoryChanged,
         CopilotRepositoryScanRejected,
         CopilotScopeRejected,
+        PlatformCapabilityUnavailable,
         OSError,
         ValueError,
     ):

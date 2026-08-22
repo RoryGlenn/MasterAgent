@@ -8,12 +8,9 @@ verified compensation.
 
 from __future__ import annotations
 
-import grp
 import hashlib
 import json
 import os
-import pwd
-import shutil
 import signal
 import stat
 import subprocess
@@ -48,12 +45,19 @@ from master_agent.models import (
     VerificationResult,
     freeze_json_mapping,
 )
+from master_agent.platform_runtime import (
+    SecureFilesystemBackend,
+    get_platform_runtime,
+    get_secure_filesystem_backend,
+)
 from master_agent.resource_limits import measure_json_resources
 
 WORKER_PROTOCOL = "master-agent/capsule-worker@1"
 VALIDATION_SCHEMA = "master-agent/capsule-validation@1"
 SANDBOX_VALIDATION_SCHEMA = "master-agent/capsule-sandbox-validation@1"
-_WORKER_PATH = Path(__file__).with_name("capsule_worker.py")
+_WORKER_PATH = (
+    Path(__file__).with_name("platform_runtime") / "posix" / "capsule_worker.py"
+)
 _MAX_WORKER_RESPONSE_OVERHEAD = 4_096
 
 
@@ -86,22 +90,41 @@ class CapsuleWorker:
         require_os_sandbox: bool = True,
         bubblewrap: str | None = None,
     ) -> None:
-        selected = bubblewrap if bubblewrap is not None else shutil.which("bwrap")
-        try:
-            self._bubblewrap = Path(selected).resolve(strict=True) if selected else None
-        except OSError as error:
-            raise ConfigurationError(
-                "capability capsule isolation backend is unavailable"
-            ) from error
+        explicit_bubblewrap = bubblewrap is not None
+        runtime = get_platform_runtime(
+            capsule_executable=(
+                bubblewrap if explicit_bubblewrap or require_os_sandbox else ""
+            )
+        )
+        runtime.require_process_supervision()
+        self._filesystem = runtime.require_secure_filesystem()
+        isolation_backend = None
+        if require_os_sandbox or explicit_bubblewrap:
+            isolation_backend = runtime.require_capsule_isolation()
+        self._bubblewrap = (
+            isolation_backend.executable if isolation_backend is not None else None
+        )
         self._require_os_sandbox = require_os_sandbox
         if require_os_sandbox and self._bubblewrap is None:
             raise ConfigurationError(
                 "capability capsule execution requires the bubblewrap OS sandbox"
             )
-        _validate_worker_artifact(_WORKER_PATH, executable=False)
-        _validate_worker_artifact(Path(sys.executable).resolve(), executable=True)
+        _validate_worker_artifact(
+            _WORKER_PATH,
+            executable=False,
+            filesystem=self._filesystem,
+        )
+        _validate_worker_artifact(
+            Path(sys.executable).resolve(),
+            executable=True,
+            filesystem=self._filesystem,
+        )
         if self._bubblewrap is not None:
-            _validate_worker_artifact(self._bubblewrap, executable=True)
+            _validate_worker_artifact(
+                self._bubblewrap,
+                executable=True,
+                filesystem=self._filesystem,
+            )
 
     @property
     def backend(self) -> str:
@@ -120,10 +143,22 @@ class CapsuleWorker:
         """Bind worker source, interpreter, and sandbox binary into promotion."""
 
         interpreter = Path(sys.executable).resolve()
-        _validate_worker_artifact(_WORKER_PATH, executable=False)
-        _validate_worker_artifact(interpreter, executable=True)
+        _validate_worker_artifact(
+            _WORKER_PATH,
+            executable=False,
+            filesystem=self._filesystem,
+        )
+        _validate_worker_artifact(
+            interpreter,
+            executable=True,
+            filesystem=self._filesystem,
+        )
         if self._bubblewrap is not None:
-            _validate_worker_artifact(self._bubblewrap, executable=True)
+            _validate_worker_artifact(
+                self._bubblewrap,
+                executable=True,
+                filesystem=self._filesystem,
+            )
         payload = {
             "backend": self.backend,
             "worker_sha256": _sha256_file(_WORKER_PATH),
@@ -699,7 +734,12 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_worker_artifact(path: Path, *, executable: bool) -> None:
+def _validate_worker_artifact(
+    path: Path,
+    *,
+    executable: bool,
+    filesystem: SecureFilesystemBackend | None = None,
+) -> None:
     try:
         metadata = path.lstat()
     except OSError as error:
@@ -709,13 +749,14 @@ def _validate_worker_artifact(path: Path, *, executable: bool) -> None:
     failures: list[str] = []
     if not stat.S_ISREG(metadata.st_mode):
         failures.append("not_regular")
-    if metadata.st_uid not in {0, os.geteuid()}:
+    filesystem = filesystem or get_secure_filesystem_backend()
+    if metadata.st_uid not in {0, filesystem.effective_user_id()}:
         failures.append("untrusted_owner")
     if metadata.st_nlink != 1:
         failures.append("multiple_links")
     if stat.S_IMODE(metadata.st_mode) & stat.S_IWOTH:
         failures.append("world_writable")
-    if not _group_write_is_owner_private(metadata):
+    if not _group_write_is_owner_private(metadata, filesystem=filesystem):
         failures.append("shared_group_writable")
     if executable and not os.access(path, os.X_OK):
         failures.append("not_executable")
@@ -725,25 +766,21 @@ def _validate_worker_artifact(path: Path, *, executable: bool) -> None:
         )
 
 
-def _group_write_is_owner_private(metadata: os.stat_result) -> bool:
+def _group_write_is_owner_private(
+    metadata: os.stat_result,
+    *,
+    filesystem: SecureFilesystemBackend,
+) -> bool:
     """Allow group writes only when that group represents the file owner alone."""
 
     if not stat.S_IMODE(metadata.st_mode) & stat.S_IWGRP:
         return True
-    if metadata.st_uid != os.geteuid():
+    if metadata.st_uid != filesystem.effective_user_id():
         return False
-    try:
-        owner = pwd.getpwuid(metadata.st_uid).pw_name
-        group = grp.getgrgid(metadata.st_gid)
-        members = set(group.gr_mem)
-        members.update(
-            account.pw_name
-            for account in pwd.getpwall()
-            if account.pw_gid == metadata.st_gid
-        )
-    except (KeyError, OSError):
-        return False
-    return members <= {owner}
+    return filesystem.group_is_private_to_owner(
+        owner_id=metadata.st_uid,
+        group_id=metadata.st_gid,
+    )
 
 
 def _classify_worker_launch_failure(

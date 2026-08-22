@@ -8,7 +8,6 @@ worker process.
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import hmac
 import json
@@ -34,6 +33,13 @@ from master_agent.models import (
     DataClassification,
     RiskLevel,
     freeze_json_mapping,
+)
+from master_agent.platform_runtime import (
+    LockMode,
+    PlatformContract,
+    get_cross_process_locking_backend,
+    get_secure_filesystem_backend,
+    require_platform_contract,
 )
 from master_agent.resource_limits import measure_json_resources
 
@@ -426,6 +432,7 @@ class CapsuleBundle:
     def from_directory(cls, root: Path) -> CapsuleBundle:
         """Read an owner-controlled, symlink-free generated bundle."""
 
+        require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         descriptor = _open_private_directory(root)
         try:
             return cls._from_descriptor(descriptor)
@@ -958,10 +965,19 @@ def advance_manifest(
     return authority.sign(manifest)
 
 
+def _require_capsule_store_platform() -> None:
+    """Require every native contract used by persistent capsule storage."""
+
+    get_secure_filesystem_backend()
+    get_cross_process_locking_backend()
+    require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
+
+
 class CapsuleStore:
     """Owner-private append-only capsule artifacts and signed state chains."""
 
     def __init__(self, root: Path) -> None:
+        _require_capsule_store_platform()
         self._root_anchor = _private_root(root)
         self.root = self._root_anchor.path
 
@@ -974,6 +990,7 @@ class CapsuleStore:
     ) -> Path:
         """Install one quarantined immutable bundle without overwriting files."""
 
+        _require_capsule_store_platform()
         trust.verify(manifest)
         if manifest.state is not CapsuleState.QUARANTINED:
             raise ConfigurationError("capsule install requires quarantined state")
@@ -993,7 +1010,10 @@ class CapsuleStore:
         finally:
             os.close(root_descriptor)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            get_cross_process_locking_backend().acquire(
+                descriptor,
+                mode=LockMode.EXCLUSIVE,
+            )
             artifacts = {
                 "capsule.json": _canonical_json(bundle.spec.to_dict()),
                 "program.py": bundle.source,
@@ -1027,12 +1047,16 @@ class CapsuleStore:
     ) -> Path:
         """Append one authenticated transition after verifying the entire chain."""
 
+        _require_capsule_store_platform()
         trust.verify(manifest)
         descriptor = self._open_capsule(
             manifest.spec.capability_id, manifest.spec.version
         )
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            get_cross_process_locking_backend().acquire(
+                descriptor,
+                mode=LockMode.EXCLUSIVE,
+            )
             bundle = CapsuleBundle._from_descriptor(descriptor)
             _verify_bundle_identity(bundle, manifest)
             existing = self._manifests_at(
@@ -1057,9 +1081,13 @@ class CapsuleStore:
     def load_bundle(self, capability_id: str, version: str) -> CapsuleBundle:
         """Re-read and authenticate the fixed artifact set without following links."""
 
+        _require_capsule_store_platform()
         descriptor = self._open_capsule(capability_id, version)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            get_cross_process_locking_backend().acquire(
+                descriptor,
+                mode=LockMode.SHARED,
+            )
             return CapsuleBundle._from_descriptor(descriptor)
         finally:
             os.close(descriptor)
@@ -1073,9 +1101,13 @@ class CapsuleStore:
     ) -> tuple[CapsuleManifest, ...]:
         """Load and authenticate a complete bounded promotion chain."""
 
+        _require_capsule_store_platform()
         descriptor = self._open_capsule(capability_id, version)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            get_cross_process_locking_backend().acquire(
+                descriptor,
+                mode=LockMode.SHARED,
+            )
             return self._manifests_at(
                 descriptor,
                 capability_id,
@@ -1095,10 +1127,14 @@ class CapsuleStore:
     ) -> tuple[CapsuleManifest, CapsuleBundle]:
         """Resolve only the exact latest enabled immutable manifest."""
 
+        _require_capsule_store_platform()
         _validate_sha256(manifest_sha256, "requested capsule manifest")
         descriptor = self._open_capsule(capability_id, version)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            get_cross_process_locking_backend().acquire(
+                descriptor,
+                mode=LockMode.SHARED,
+            )
             manifests = self._manifests_at(
                 descriptor,
                 capability_id,
@@ -1397,7 +1433,7 @@ def _private_root(path: Path) -> PinnedDirectory:
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
+        or metadata.st_uid != get_secure_filesystem_backend().effective_user_id()
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         raise ConfigurationError("capsule store root must be owner-private mode 0700")
@@ -1419,7 +1455,7 @@ def _open_private_directory(path: Path) -> int:
     metadata = os.fstat(descriptor)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
+        or metadata.st_uid != get_secure_filesystem_backend().effective_user_id()
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         os.close(descriptor)
@@ -1444,7 +1480,7 @@ def _open_private_directory_at(parent_descriptor: int, name: str) -> int:
     metadata = os.fstat(descriptor)
     if (
         not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
+        or metadata.st_uid != get_secure_filesystem_backend().effective_user_id()
         or stat.S_IMODE(metadata.st_mode) != 0o700
     ):
         os.close(descriptor)
@@ -1465,7 +1501,7 @@ def _read_regular_at(directory_fd: int, name: str) -> bytes:
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
+            or metadata.st_uid != get_secure_filesystem_backend().effective_user_id()
             or metadata.st_nlink != 1
             or metadata.st_size > _MAX_BUNDLE_FILE_BYTES
         ):

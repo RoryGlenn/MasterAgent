@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConnectorError
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_INDEX_BYTES = 128 * 1024 * 1024
@@ -31,6 +32,18 @@ _PINNED_CWD_EXEC = (
     "os.close(fd);"
     "os.execve(argv[0],argv,os.environ)"
 )
+
+
+def _require_git_sandbox_platform() -> None:
+    """Require every native contract used by isolated Git reads."""
+
+    for contract in (
+        PlatformContract.SECURE_FILESYSTEM,
+        PlatformContract.CROSS_PROCESS_LOCKING,
+        PlatformContract.PROCESS_SUPERVISION,
+        PlatformContract.TRUSTED_GIT,
+    ):
+        require_platform_contract(contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +169,7 @@ class LockedGitConfig:
         self._config_bytes = b""
 
     def __enter__(self) -> Self:
+        _require_git_sandbox_platform()
         try:
             path_metadata = self._git_path.lstat()
             if not stat.S_ISDIR(path_metadata.st_mode):
@@ -391,6 +405,7 @@ class GitSandbox:
         timeout_seconds: float,
         allow_file_protocol: bool = False,
     ) -> None:
+        _require_git_sandbox_platform()
         executable = shutil.which("git", path="/usr/bin:/bin:/usr/local/bin")
         if not executable:
             raise ConnectorError("Git executable is unavailable")
@@ -411,7 +426,9 @@ class GitSandbox:
     def close(self) -> None:
         """Remove trusted temporary state immediately."""
 
-        self._state.cleanup()
+        state = getattr(self, "_state", None)
+        if state is not None:
+            state.cleanup()
 
     def __del__(self) -> None:
         self.close()
@@ -430,6 +447,7 @@ class GitSandbox:
     ) -> SandboxedGitResult:
         """Run an argv-only Git command with a minimal deterministic environment."""
 
+        _require_git_sandbox_platform()
         command = [
             self._git,
             *self._config_overrides(),
@@ -525,6 +543,7 @@ class GitSandbox:
     def isolated_index(self) -> Iterator[Path]:
         """Yield a private alternate index path outside repository control."""
 
+        _require_git_sandbox_platform()
         with tempfile.TemporaryDirectory(
             prefix="index-",
             dir=self._root,
@@ -535,6 +554,7 @@ class GitSandbox:
     def isolated_publication_repository(self, source: Path) -> Iterator[Path]:
         """Yield a config-isolated bare repository backed by source objects."""
 
+        _require_git_sandbox_platform()
         with tempfile.TemporaryDirectory(
             prefix="publication-",
             dir=self._root,
@@ -583,6 +603,7 @@ class GitSandbox:
     ) -> Iterator[IsolatedWorktreeSnapshot]:
         """Yield config-isolated metadata for non-executable status/diff reads."""
 
+        _require_git_sandbox_platform()
         if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head):
             raise ConnectorError("repository HEAD object ID is invalid")
         with self.isolated_publication_repository(source) as git_dir:
@@ -686,6 +707,7 @@ class GitSandbox:
         source HEAD reflog without releasing that lock.
         """
 
+        _require_git_sandbox_platform()
         common = (source / ".git").resolve()
         if any(character in str(common) for character in ("\n", "\r", "\0")):
             raise ConnectorError("repository Git metadata path is invalid")
@@ -776,6 +798,7 @@ class GitSandbox:
         reflog through a verified hard link.
         """
 
+        _require_git_sandbox_platform()
         common = (source / ".git").resolve()
         if any(character in str(common) for character in ("\n", "\r", "\0")):
             raise ConnectorError("repository Git metadata path is invalid")
@@ -837,6 +860,7 @@ class GitSandbox:
     def lock_repository_config(self, repository: Path) -> LockedGitConfig:
         """Return a context guard that pins local config and excludes writers."""
 
+        _require_git_sandbox_platform()
         return LockedGitConfig(repository)
 
     def validate_repository_config(self, repository: Path) -> None:

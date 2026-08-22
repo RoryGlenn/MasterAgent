@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import IO, BinaryIO, Literal, overload
 
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 
@@ -135,6 +136,7 @@ def _trusted_explicit_file(path: Path) -> ConfigSnapshot:
     invoking account must own both objects.
     """
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     if not selected.is_absolute():
         selected = Path.cwd() / selected

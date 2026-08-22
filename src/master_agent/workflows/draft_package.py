@@ -22,6 +22,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.platform_runtime import require_persistent_state_platform
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +233,7 @@ def render_draft_package(
 ) -> DraftPackageArtifacts:
     """Create a package summary and manifest without following public paths."""
 
+    require_persistent_state_platform()
     with pin_directory(output_dir) as directory:
         root = directory.path
         artifacts: list[dict[str, Any]] = []

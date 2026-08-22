@@ -1,0 +1,51 @@
+"""Public platform-runtime contracts and deterministic backend selection."""
+
+from master_agent.platform_runtime.contracts import (
+    AtomicPublicationRecoveryBackend,
+    CapsuleIsolationBackend,
+    CrossProcessLockingBackend,
+    LockMode,
+    PlatformBackend,
+    PlatformCapabilityUnavailable,
+    PlatformContract,
+    PlatformContractStatus,
+    PlatformRuntime,
+    PlatformRuntimeStatus,
+    ProcessSupervisionBackend,
+    SecureFilesystemBackend,
+    TrustedGitBackend,
+)
+from master_agent.platform_runtime.factory import (
+    get_capsule_isolation_backend,
+    get_cross_process_locking_backend,
+    get_platform_runtime,
+    get_process_supervision_backend,
+    get_secure_filesystem_backend,
+    platform_runtime_status,
+    require_persistent_state_platform,
+    require_platform_contract,
+)
+
+__all__ = [
+    "AtomicPublicationRecoveryBackend",
+    "CapsuleIsolationBackend",
+    "CrossProcessLockingBackend",
+    "LockMode",
+    "PlatformBackend",
+    "PlatformCapabilityUnavailable",
+    "PlatformContract",
+    "PlatformContractStatus",
+    "PlatformRuntime",
+    "PlatformRuntimeStatus",
+    "ProcessSupervisionBackend",
+    "SecureFilesystemBackend",
+    "TrustedGitBackend",
+    "get_capsule_isolation_backend",
+    "get_cross_process_locking_backend",
+    "get_platform_runtime",
+    "get_process_supervision_backend",
+    "get_secure_filesystem_backend",
+    "platform_runtime_status",
+    "require_persistent_state_platform",
+    "require_platform_contract",
+]

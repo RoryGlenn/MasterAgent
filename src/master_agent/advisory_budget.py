@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import hmac
 import json
@@ -20,6 +19,13 @@ from master_agent.advisory import (
 )
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import (
+    LockMode,
+    PlatformContract,
+    get_cross_process_locking_backend,
+    get_secure_filesystem_backend,
+    require_platform_contract,
+)
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 
 _DATABASE_NAME = "budget.sqlite3"
@@ -41,6 +47,14 @@ class AdvisoryBudgetStateError(RuntimeError):
     """Durable advisory-budget state is missing, unsafe, or invalid."""
 
 
+def _require_advisory_budget_platform() -> None:
+    """Require every native contract used by durable advisory state."""
+
+    get_secure_filesystem_backend()
+    get_cross_process_locking_backend()
+    require_platform_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY)
+
+
 class AdvisoryBudgetStore:
     """Atomically reserve authenticated attempts for one operator goal.
 
@@ -50,6 +64,7 @@ class AdvisoryBudgetStore:
     """
 
     def __init__(self, state_directory: Path, repository_root: Path) -> None:
+        _require_advisory_budget_platform()
         self._repository_digest = _repository_identity(repository_root)
         selected = Path(os.path.abspath(os.fspath(state_directory.expanduser())))
         try:
@@ -335,7 +350,7 @@ def _create_and_pin_private_directory(path: Path) -> PinnedDirectory:
         expected = DirectoryIdentity.from_stat(final_stat)
         if (
             not stat.S_ISDIR(final_stat.st_mode)
-            or final_stat.st_uid != os.getuid()
+            or final_stat.st_uid != get_secure_filesystem_backend().real_user_id()
             or stat.S_IMODE(final_stat.st_mode) != 0o700
         ):
             raise ConfigurationError(
@@ -355,8 +370,9 @@ def _load_or_create_key(directory: PinnedDirectory) -> bytes:
     parent_descriptor = directory.duplicate_fd()
     descriptor: int | None = None
     created = False
+    locking = get_cross_process_locking_backend()
     try:
-        fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
+        locking.acquire(parent_descriptor, mode=LockMode.EXCLUSIVE)
         try:
             descriptor = os.open(
                 _KEY_NAME,
@@ -407,7 +423,7 @@ def _load_or_create_key(directory: PinnedDirectory) -> bytes:
         if descriptor is not None:
             os.close(descriptor)
         try:
-            fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+            locking.release(parent_descriptor)
         finally:
             os.close(parent_descriptor)
 
@@ -415,7 +431,7 @@ def _load_or_create_key(directory: PinnedDirectory) -> bytes:
 def _validated_key_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     if (
         not stat.S_ISREG(value.st_mode)
-        or value.st_uid != os.getuid()
+        or value.st_uid != get_secure_filesystem_backend().real_user_id()
         or value.st_nlink != 1
         or stat.S_IMODE(value.st_mode) != 0o600
     ):

@@ -1,5 +1,18 @@
 # Changelog
 
+- Add deterministic cross-platform runtime contracts for secure filesystem,
+  cross-process locking, atomic publication/recovery, process supervision,
+  trusted Git, and capsule isolation. Platform-neutral package and CLI imports
+  no longer require Unix-only modules at startup; Windows can run help,
+  version, deployment readiness, and configuration-only install diagnostics.
+  Readiness exposes secret-free backend identity and per-contract availability,
+  while operations that need an unavailable native backend fail before state,
+  credentials, connectors, or provider access. Existing POSIX filesystem,
+  locking, atomic-state, process, and Git semantics remain unchanged; Linux
+  reports bubblewrap capsule isolation only when a trusted executable is
+  selected and otherwise reports that contract unavailable, as does macOS. All
+  seven native Windows implementation/certification routes remain planned.
+
 - Harden credentialed connector evidence behind a manual-only, reviewed-
   default-branch workflow with separate protected read, effect, and GitHub
   administration credentials; exact delegated Microsoft scope/lifetime and
@@ -40,7 +53,8 @@
   apply can repair crash-stricter owner-only internal modes. Orphan repair now
   takes the same descendant-parent locks and rescans before quarantine, so a
   partial child publication fails closed. Malformed, unsafe, truncated,
-  substituted, or concurrently changing trees fail closed; all Windows execution remains capability-gated.
+  substituted, or concurrently changing trees fail closed; Windows retention
+  preview, apply, and orphan repair remain capability-gated.
 
 - Make the optional broker-owned Copilot SDK adapter enforce its documented
   controls at the real runner boundary: HMAC-authenticated cross-process goal

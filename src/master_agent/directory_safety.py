@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 import stat
 import weakref
@@ -12,6 +11,7 @@ from threading import RLock
 from typing import Self
 
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import get_secure_filesystem_backend
 
 _MAX_DIRECTORY_DEPTH = 64
 _MINIMUM_INHERITED_DESCRIPTOR = 3
@@ -106,6 +106,8 @@ class PinnedDirectory:
         disable that permission policy only when they apply their own ownership
         policy to the pinned identity and every descriptor-relative child.
         """
+
+        get_secure_filesystem_backend()
 
         if create:
             raise ConfigurationError("runtime directories must exist before approval")
@@ -403,7 +405,7 @@ def _validate_directory(value: os.stat_result) -> None:
 
 def _validate_private_directory(value: os.stat_result) -> None:
     _validate_directory(value)
-    if value.st_uid != os.getuid():
+    if value.st_uid != get_secure_filesystem_backend().real_user_id():
         raise ConfigurationError(
             "runtime directory must be owned by the current account"
         )
@@ -443,16 +445,10 @@ def _directory_open_flags() -> int:
 def _duplicate_descriptor(descriptor: int) -> int:
     """Duplicate one descriptor safely above the standard-stream range."""
 
-    command = getattr(fcntl, "F_DUPFD_CLOEXEC", None)
-    if command is None:
-        raise ConfigurationError("close-on-exec descriptor duplication is unavailable")
     try:
-        return int(
-            fcntl.fcntl(
-                descriptor,
-                command,
-                _MINIMUM_INHERITED_DESCRIPTOR,
-            )
+        return get_secure_filesystem_backend().duplicate_descriptor(
+            descriptor,
+            minimum_descriptor=_MINIMUM_INHERITED_DESCRIPTOR,
         )
     except OSError as error:
         raise ConfigurationError("runtime directory could not be duplicated") from error

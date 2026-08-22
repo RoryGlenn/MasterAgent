@@ -21,6 +21,11 @@ handling, and independent verification.
   Python 3.12, 3.13, and 3.14.
 - Package imports, CLI entry points, generated artifacts, and checked-in
   examples are validated against the current source.
+- A hosted Windows isolated installed-package job imports `master_agent`,
+  `master_agent.cli`, and `master_agent.readiness`; exercises `--help`,
+  `--version`, deployment `readiness`, and configuration-only
+  `doctor --require-level install`; validates the platform report; and proves
+  unavailable stateful readiness fails closed.
 
 ### Behavioral specifications
 
@@ -47,6 +52,19 @@ handling, and independent verification.
 - The strict organization profile, capability-scoped doctor report, employee
   and developer boundaries, private setup, one-command read/effect routing, and
   exact-profile approval resume are covered by positive and adversarial tests.
+- The platform runtime reports exact `secure_filesystem`,
+  `cross_process_locking`, `atomic_publication_recovery`,
+  `process_supervision`, `trusted_git`, and `capsule_isolation` status with
+  stable backend identities and bounded secret-free unavailable reasons.
+  Platform-neutral imports load no native backend, while status inspection
+  performs no protected-state or credential I/O. Required operations reject an
+  unavailable contract before protected state, credentials, connectors, or
+  provider access and never select a weaker fallback. Linux capsule isolation
+  reports bubblewrap only when a trusted executable is selected and otherwise
+  reports that contract unavailable; macOS also reports it unavailable rather
+  than
+  treating owner/group artifact trust as executable containment. Existing
+  certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
 - All 82 typed capabilities have governance coverage.
@@ -81,7 +99,8 @@ handling, and independent verification.
   overlap names, digest mismatch, depth and entry limits, transaction fan-out,
   cross-device staging, descriptor substitution, cancellation, source-parent
   fsync failure, crash-stricter internal file modes, pending nested-root
-  transactions, and concurrent nested publication. All Windows execution remains capability-gated.
+  transactions, and concurrent nested publication. Windows retention preview,
+  apply, and orphan repair remain capability-gated.
 - Release validation keeps the CLI, operations, configuration, architecture,
   threat model, roadmap, communication-context guide, semantic index, and
   current changelog entry synchronized with that expiration boundary.
@@ -104,9 +123,9 @@ handling, and independent verification.
   `BASE..HEAD` range and uses bounded read-only Git discovery to report exact
   changed paths, affected route contracts, and any unmapped path.
 - The topology is hub-and-spoke: the parent sees the complete registry;
-  specialists see only their own profile and selected route. The seven native
-  Windows routes remain distinctly planned until separately implemented and
-  certified.
+  specialists see only their own profile and selected route. The common
+  platform-runtime route is released; the seven native Windows routes remain
+  distinctly planned until separately implemented and certified.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay
@@ -197,6 +216,10 @@ handling, and independent verification.
 - The source archive includes workflow definitions—including
   `.github/workflows/live-connector-integration.yml`—`.ai/DOCS_AGENT.md`, and
   the tests that validate them.
+- The wheel and source archive include the platform-runtime package and the
+  Windows startup/configuration contract tests; the hosted job installs the
+  package into an isolated virtual environment, then exercises it outside the
+  checkout.
 
 ### Optional live sandbox validation
 

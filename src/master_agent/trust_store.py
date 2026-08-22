@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 
 _MAX_CA_BUNDLE_BYTES = 4 * 1024 * 1024
 
@@ -26,6 +27,7 @@ class CaBundleSnapshot:
 def capture_ca_bundle(path: Path) -> CaBundleSnapshot:
     """Capture one stable, bounded regular file without following its final link."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     try:
         resolved = path.expanduser().resolve(strict=True)
         path_metadata = resolved.lstat()

@@ -51,6 +51,7 @@ from master_agent.execution_context import (
 )
 from master_agent.http import HttpTransport
 from master_agent.models import ExecutionContext
+from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.registry import ConnectorRegistry
 
 _READ_SYSTEMS = frozenset(
@@ -452,6 +453,7 @@ def register_draft_connectors(
 ) -> ConnectorRegistry:
     """Register all local, non-publishing Phase 3 generators."""
 
+    require_persistent_state_platform()
     root = pin_directory(output_root)
     budget = artifact_budget or ArtifactBudget()
     output_limits = catalog.local_generation_output_limits() if catalog else None

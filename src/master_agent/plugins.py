@@ -29,6 +29,7 @@ from typing import Any
 from master_agent.config_sources import ConfigSource
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.registry import ConnectorRegistry
 
 CONNECTOR_ENTRY_POINT_GROUP = "master_agent.connectors"
@@ -286,6 +287,7 @@ def load_connector_plugins(
     requested = _requested_names(enabled_names)
     if not requested:
         return ()
+    require_persistent_state_platform()
     selected = tuple(entries) if entries is not None else _installed_entries()
     by_name = {str(item.name): item for item in selected}
 

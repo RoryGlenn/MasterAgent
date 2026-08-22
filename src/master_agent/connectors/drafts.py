@@ -26,6 +26,7 @@ from master_agent.models import (
     ResourceRef,
     VerificationResult,
 )
+from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.resource_limits import (
     MAX_LOCAL_ARTIFACT_BYTES,
     MAX_RUN_ARTIFACT_BYTES,
@@ -122,6 +123,7 @@ class _LocalDraftConnector:
         artifact_budget: ArtifactBudget | None = None,
         output_limits: Mapping[str, int] | None = None,
     ) -> None:
+        require_persistent_state_platform()
         self._system = system
         self._capabilities = capabilities
         self._output_directory = pin_directory(output_root)
@@ -932,6 +934,7 @@ def write_artifact_bundle(
     transaction are removed.
     """
 
+    require_persistent_state_platform()
     with pin_directory(output_root) as directory:
         return _write_bundle(
             directory,

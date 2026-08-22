@@ -1,6 +1,9 @@
 # CLI Reference
 
-`master-agent COMMAND --help` is the exact argument reference. The table below
+`master-agent --help` and `master-agent COMMAND --help` are the exact argument
+references. `master-agent --version` prints the installed CLI name and version
+without loading configuration, state, credentials, or a native runtime backend.
+The table below
 documents every public command and, critically, whether it can perform network
 or filesystem side effects.
 
@@ -17,7 +20,7 @@ checks; this does not relax publication rules for other output paths.
 
 | Command | Purpose | Side-effect boundary |
 |---|---|---|
-| `setup` | Install or validate the private organization profile and minimum local state | Creates only the dedicated owner-private profile/state paths; performs no provider request and enables no effect |
+| `setup` | Install or validate the private organization profile and minimum local state | Requires secure filesystem, cross-process locking, and atomic publication/recovery; creates only the dedicated owner-private profile/state paths, performs no provider request, and enables no effect |
 | `doctor` | Report capability-scoped installation, read, draft, effect, and enterprise readiness | Offline and content-free; optional credentials are level-specific gaps, not installation failures |
 | `execute` | Run an unbound plan or resume its exact approval request through one governed front door | Reads stay stateless when eligible; effects use the existing bound runtime and cannot run without all normal gates and authenticated approval |
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |
@@ -44,13 +47,17 @@ checks; this does not relax publication rules for other output paths.
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
 | `retain-evidence` | Persist evidence under the selected retention rule | Local create-only evidence and sidecar output; never contacts a provider |
-| `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; on POSIX, `--apply` locks the pinned root and discovered evidence parents, descriptor-rescans, and recoverably deletes only complete validated expired pairs; all Windows execution is capability-gated |
-| `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; `--apply` recoverably moves exact descriptor-validated identities into a private same-filesystem quarantine |
+| `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; on POSIX, `--apply` locks the pinned root and discovered evidence parents, descriptor-rescans, and recoverably deletes only complete validated expired pairs; Windows preview and apply are capability-gated |
+| `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; POSIX `--apply` recoverably moves exact descriptor-validated identities into a private same-filesystem quarantine; Windows preview and apply are capability-gated |
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
 | `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only; displayed excerpts are terminal-safe and bounded while raw input is not printed |
 | `audit-verify` | Verify an existing SQLite audit hash chain | Read-only verification; missing or malformed state is rejected without creation |
+
+All `evidence-prune` execution remains unavailable on Windows until equivalent
+native filesystem, locking, and atomic-state guarantees are implemented.
+`evidence-repair` preview and apply remain unavailable under the same boundary.
 
 ## Progressive operating modes
 
@@ -84,6 +91,43 @@ the installation broken. Diagnostics use stable error categories:
 `unsupported_capability`, `missing_organization_setup`,
 `missing_user_authentication`, `blocked_policy`, and `runtime_defect`.
 Messages contain no credential value or provider body.
+
+Both progressive `doctor` and deployment `readiness` include an additive
+`platform_runtime` object:
+
+```json
+{
+  "platform": "macos",
+  "backend": "posix-macos",
+  "capabilities": {
+    "secure_filesystem": {
+      "available": true,
+      "backend": "posix-descriptor-filesystem"
+    }
+  }
+}
+```
+
+The complete map always includes `secure_filesystem`,
+`cross_process_locking`, `atomic_publication_recovery`,
+`process_supervision`, `trusted_git`, and `capsule_isolation`. An unavailable
+entry also has a bounded, secret-free `reason`. Reading this object performs no
+protected-state or credential I/O and grants no authority.
+Linux reports the `linux-bubblewrap` capsule-isolation implementation only when
+a trusted executable is selected and otherwise reports it unavailable. macOS
+also reports `capsule_isolation` unavailable; its owner/group artifact checks
+belong to `secure_filesystem` and do not certify executable containment.
+
+On Windows, package imports, `--help`, `--version`, `readiness`, and the bounded
+absent-profile result from `doctor --require-level install` remain usable before
+the native security backends are complete. That doctor result may test only
+whether the selected profile entry exists; it does not open or parse profile
+bytes. An existing or explicit profile requires `secure_filesystem` and fails
+with `runtime_defect` before its bytes are read while that contract is
+unavailable. `install_ready` therefore describes the neutral installation
+surface, not permission to inspect protected configuration. A read, draft,
+effect, or enterprise level that depends on an unavailable contract stays
+false; execution never falls back to a weaker backend.
 
 The report is also content-free: it confirms only that a delegated token-file
 reference is configured and nonblank; it does not inspect, open, or parse the

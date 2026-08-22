@@ -37,6 +37,7 @@ from master_agent.advisory import (
     AgentProfile,
     load_agent_inventory_from_texts,
 )
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 
 _READ_ONLY_SDK_TOOLS = (
     "masteragent_read",
@@ -186,6 +187,7 @@ class AdvisoryPathScope:
     def bind(cls, repository_root: Path, requested: Sequence[str]) -> AdvisoryPathScope:
         """Resolve and minimize one explicit repository-relative route scope."""
 
+        require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         root = repository_root.expanduser().resolve(strict=True)
         if not root.is_dir():
             raise CopilotScopeRejected("advisory repository root is not a directory")
@@ -896,6 +898,8 @@ def _sha256_text(value: str) -> str:
 
 
 def _run_git(root: Path, *arguments: str, max_bytes: int) -> bytes:
+    require_platform_contract(PlatformContract.TRUSTED_GIT)
+    require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
     command = (
         "git",
         "--no-pager",
@@ -1012,6 +1016,9 @@ def repository_state_digest(root: Path) -> str:
 def load_agent_inventory_at_revision(root: Path, revision: str) -> AgentInventory:
     """Load the exact validated agent profiles from one immutable commit."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    require_platform_contract(PlatformContract.TRUSTED_GIT)
+    require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
     root = root.resolve(strict=True)
     entries = _verified_tree_at_revision(
         root,
@@ -1231,6 +1238,9 @@ def _require_index_and_worktree_blob(
 def repository_state_binding(root: Path) -> AdvisoryRepositoryState:
     """Return one stable repository digest with its bound immutable commit."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    require_platform_contract(PlatformContract.TRUSTED_GIT)
+    require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
     root = root.resolve()
     first = _repository_state_snapshot(root)
     second = _repository_state_snapshot(root)
@@ -1911,6 +1921,7 @@ class CopilotSdkAdvisoryWorker:
         expected_repository_digest: str,
         profile_inventory: AgentInventory,
     ) -> None:
+        require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
         self._root = repository_root.resolve()
         self._scope = scope
         self._reuse_client = reuse_client
@@ -2052,6 +2063,7 @@ class CopilotSdkAdvisoryWorker:
     async def _started_client(self) -> _SdkClient:
         if self._client is not None:
             return self._client
+        require_platform_contract(PlatformContract.PROCESS_SUPERVISION)
         candidate = self._client_factory(self._root)
         try:
             await candidate.start()

@@ -15,6 +15,7 @@ from master_agent.identity import IdentityRegistry
 from master_agent.models import DataClassification, RiskLevel
 from master_agent.oauth import AccessToken, inspect_jwt_claims
 from master_agent.oauth_config import OAuthProfiles
+from master_agent.platform_runtime import PlatformRuntimeStatus, platform_runtime_status
 from master_agent.provider_egress import (
     ProviderDataRoute,
     implemented_dlp_adapter,
@@ -30,6 +31,7 @@ class ReadinessReport:
     checks: tuple[Mapping[str, Any], ...]
     errors: tuple[str, ...]
     warnings: tuple[str, ...]
+    platform_runtime: PlatformRuntimeStatus
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the report."""
@@ -41,6 +43,7 @@ class ReadinessReport:
             "checks": [dict(item) for item in self.checks],
             "errors": list(self.errors),
             "warnings": list(self.warnings),
+            "platform_runtime": self.platform_runtime.to_dict(),
         }
 
 
@@ -115,6 +118,7 @@ def assess_readiness(
     checks: list[Mapping[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
+    selected_platform_status = platform_runtime_status()
     static_egress_denials = provider_data_egress_policy_denials(
         catalog=catalog,
         governance=governance,
@@ -389,7 +393,10 @@ def assess_readiness(
         for name, profile in sorted(oauth_profiles.profiles.items()):
             if not profile.enabled:
                 continue
-            profile_errors = profile.readiness_errors(readiness_environ)
+            profile_errors = profile.readiness_errors(
+                readiness_environ,
+                platform_status=selected_platform_status,
+            )
             checks.append(
                 {
                     "name": f"oauth:{name}",
@@ -460,6 +467,7 @@ def assess_readiness(
         checks=tuple(checks),
         errors=tuple(dict.fromkeys(errors)),
         warnings=tuple(dict.fromkeys(warnings)),
+        platform_runtime=selected_platform_status,
     )
 
 

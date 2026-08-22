@@ -14,6 +14,7 @@ from typing import Any
 
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 
 _MAX_STORE_BYTES = 1024 * 1024
 _MAX_CREDENTIALS = 64
@@ -24,6 +25,7 @@ _SCHEMA = "master-agent/credential-store@1"
 def canonical_credential_store_path(path: Path) -> Path:
     """Return the canonical absolute path used in an execution binding."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     if not selected.is_absolute():
         raise ConfigurationError("--credentials-file must be an absolute path")
@@ -139,6 +141,7 @@ class CredentialStoreSnapshot:
 
 
 def _read_restricted_file(path: Path) -> tuple[Path, bytes]:
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     selected = path.expanduser()
     canonical = canonical_credential_store_path(path)
     try:

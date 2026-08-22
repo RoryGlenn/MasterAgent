@@ -34,6 +34,7 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.oauth import StaticTokenProvider
+from master_agent.platform_runtime import PlatformContract, require_platform_contract
 from master_agent.plugins import PluginDescriptor
 
 
@@ -377,6 +378,7 @@ def build_runtime_execution_binding(
 ) -> RuntimeExecutionBinding:
     """Capture every non-secret runtime input that can alter an applied run."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     source = environ if environ is not None else os.environ
     normalized_workspace = _canonical_path(workspace_root)
     owned_paths: tuple[CapturedRuntimePath, ...] = ()
@@ -466,6 +468,7 @@ def capture_runtime_execution_paths(
 ) -> tuple[CapturedRuntimePath, ...]:
     """Capture and retain exact ancestor identities for every writable root."""
 
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
     source = environ if environ is not None else os.environ
     captured: list[CapturedRuntimePath] = []
     try:
