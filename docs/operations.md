@@ -75,10 +75,59 @@ the request JSON as approval.
 - Access tokens should be short-lived.
 - Token-file mode rejects group/world-readable files and expired tokens.
 - Approval TTLs should be minutes, not days.
-- Evidence expiry deletion remains preview-only. Orphan checks are previewed
-  with `evidence-repair`; `--apply` moves exact descriptor-validated files or
-  symlinks into `.retention-quarantine` without deleting their content.
 - Recurring execution is disabled; do not install or repair scheduler locks.
+
+On POSIX, preview an owner-controlled retained-evidence root before explicitly
+applying expiration:
+
+```bash
+master-agent evidence-prune --root /private/retained-evidence
+master-agent evidence-prune --root /private/retained-evidence --apply
+```
+
+The root must already exist, be owned by the current account, and not be
+writable by group or world. Preview is non-mutating. Both modes enumerate a
+bounded descriptor-relative record set and validate every evidence/sidecar
+pair, including owner, mode, link count, sidecar schema, canonical timestamps,
+sibling name, and content digest. Apply acquires the pinned-root lock and every
+discovered evidence-parent lock. It also shared-locks existing retention locks
+in owner-controlled pinned ancestors. Retained writers first expose and
+exclusively lock their exact parent, then share existing ancestor retention
+locks; a parent maintenance scan therefore either already excludes the writer
+or discovers its visible leaf lock. Apply repeats the scan and starts no new deletion when a
+sidecar or its referenced evidence is malformed, unsafe, substituted, missing,
+conflicting, oversized, or omitted by a scan limit. Unreferenced regular files
+are outside prune classification and remain available to `evidence-repair`.
+
+Repair apply uses the same selected-root and ancestor coordination, discovers
+and locks every descendant record parent, and rescans before classifying or
+quarantining an orphan. If a child publication is active—even after its
+manifest appears—repair fails closed and moves neither file.
+
+Each expired pair is removed through a private `.retention-prune` transaction.
+If an interruption leaves a transaction, preview reports that apply recovery
+is required; repeat the apply command under the same root. The recovery path is
+bounded and uses the same evidence-parent locks. Apply can normalize an exact
+owner-owned internal directory or known lock/marker file left with permissions
+stricter than `0700` or `0600` by a crash between creation and mode
+normalization; preview never changes it. Internal state with group/world or
+special permission bits remains unsafe. Recovery fsyncs the common source
+parent while both public names are absent before discarding the staged recovery
+links. If an ancestor scan reports pending nested prune state, run apply on the
+reported exact child root first; an empty recovered child stage is harmless.
+Do not delete or edit staging state manually. A completed repeated apply is an
+honest successful no-op, and result records contain paths and status rather
+than retained evidence bytes.
+
+All `evidence-prune` execution remains unavailable on Windows until native
+filesystem identity, locking, and atomic-state guarantees are implemented.
+Pruning enforces the expiration already recorded in each sidecar; it does not
+make or change legal-hold decisions. Confirm that the selected root is eligible
+under the organization's retention and legal-hold policy before apply.
+
+Orphan checks remain a separate operation. `evidence-repair` previews by
+default; `--apply` moves exact descriptor-validated files or symlinks into
+`.retention-quarantine` without deleting their content.
 
 ## Monitoring
 

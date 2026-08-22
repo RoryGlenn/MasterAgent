@@ -148,9 +148,18 @@ Every retained evidence file receives a sibling `*.retention.json` sidecar conta
 Evidence and its manifest are fully written and fsynced through private,
 mode-`0600`, same-directory staging files. The manifest is create-only
 published before the evidence name; failure rolls back every transaction-owned
-name. Expiry deletion remains preview-only. `evidence-repair` uses pinned,
-no-follow recursive descriptors and can recoverably quarantine an orphan while
-refusing identity races; `evidence-prune --apply` still fails before traversal.
+name. `evidence-prune` uses the same bounded descriptor-relative validation plan
+for preview and explicit POSIX apply. Writers expose an exclusive exact-parent
+retention lock and share existing owner-controlled ancestor retention locks;
+apply uses the same ancestor handshake plus the selected-root and every
+discovered evidence-parent retention lock. It performs an exact rescan and
+recoverably deletes only a complete expired
+evidence/sidecar pair. Malformed, unsafe, substituted, oversized, or truncated
+trees fail closed. Recovery durably syncs absent public names before removing
+staged links, and an ancestor scan reports nonempty nested-root transaction
+state for exact-root recovery. All Windows execution remains gated.
+`evidence-repair` remains separate and can recoverably quarantine an orphan
+while refusing identity races.
 
 ## Audit boundary
 

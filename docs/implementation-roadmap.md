@@ -6,15 +6,15 @@ The v1 governed core, provider contracts, bounded advisory profiles, capability
 capsule path, native behavioral specification lifecycle, and audience-aware
 documentation completion gate are implemented. Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
-execution, destructive retention maintenance, raw plugin execution, and unsafe
-provider mutations non-routable.
+execution, native Windows retention maintenance, raw plugin execution, and
+unsafe provider mutations non-routable.
 
 | Area | Software status | Operational status |
 |---|---|---|
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
-| 2B — Outlook, Teams, identity, citations, and retention | Complete | Contract-tested; authenticated deployment requires approved applications and credentials |
+| 2B — Outlook, Teams, identity, citations, and retention | Complete on POSIX; native Windows expiry execution gated | Contract-tested; authenticated deployment requires approved applications and credentials |
 | 2C — authentication and readiness | Complete | App registration, consent, Conditional Access, and token issuance are organization tasks |
 | Provider-data model-context boundary | Complete | Replace development destination/tenancy/classification rules and supply any required external audit or DLP adapters |
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
@@ -65,7 +65,10 @@ verification.
   default;
 - anonymous public routes never resolve ambient credentials;
 - retrieved content remains untrusted;
-- normalized evidence, citations, and retention are implemented; and
+- normalized evidence, citations, and retention are implemented;
+- expired retained-evidence pairs can be previewed and explicitly deleted on
+  POSIX through one bounded descriptor plan, locked rescan, and recoverable
+  pair transaction;
 - live provider probes are explicit rather than automatic; and
 - every direct, applied, probe, and repository-shortcut provider read is
   classified and authorized before access, rebound before return, exact-schema
@@ -190,7 +193,8 @@ verification.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- destructive retention pruning;
+- native Windows retained-evidence preview and deletion pending equivalent
+  filesystem identity, locking, and atomic-state backends;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
 - production credential-broker and external receipt/audit adapters;

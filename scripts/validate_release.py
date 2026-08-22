@@ -316,6 +316,72 @@ _PUBLIC_READ_FORBIDDEN_CLAIMS = {
     Path("docs/release-validation.md"): ("Before live use, administrators must",),
 }
 
+_RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
+    Path("CHANGELOG.md"): (
+        "Enable descriptor-safe expiration deletion",
+        "all Windows execution remains capability-gated",
+    ),
+    Path("docs/architecture.md"): (
+        "Expiration preview and explicit POSIX deletion share",
+        "every discovered evidence-parent lock",
+        "content-free transaction before either public name",
+    ),
+    Path("docs/cli-reference.md"): (
+        "## Evidence expiration maintenance",
+        "every discovered evidence-parent retention lock",
+        "all Windows execution is capability-gated",
+    ),
+    Path("docs/configuration.md"): (
+        "## Retention and expiry",
+        "Changing `retention.toml` later does not",
+        "root and discovered evidence-parent locks",
+    ),
+    Path("docs/implementation-roadmap.md"): (
+        "Complete on POSIX; native Windows expiry execution gated",
+        "native Windows retained-evidence preview and deletion",
+    ),
+    Path("docs/operations.md"): (
+        "repeat the apply command under the same root",
+        "bounded and uses the same evidence-parent locks",
+        "All `evidence-prune` execution remains unavailable on Windows",
+    ),
+    Path("docs/phase-2b-communication-context.md"): (
+        "same bounded descriptor-relative validation plan",
+        "discovered evidence-parent retention lock",
+    ),
+    Path("docs/release-validation.md"): (
+        "POSIX retained-evidence expiration tests prove",
+        "All Windows execution remains capability-gated",
+    ),
+    Path("docs/semantic-index.md"): (
+        "expiration deletes only descriptor-validated, locked, complete pairs",
+        "test_cli_phase_completion.py",
+    ),
+    Path("docs/threat-model.md"): (
+        "every discovered evidence-parent",
+        "broad, path-based, or unvalidated recursive evidence deletion",
+        "native Windows expiration execution remains unavailable",
+    ),
+}
+
+_RETENTION_PRUNE_FORBIDDEN_CURRENT_CLAIMS = {
+    Path("docs/architecture.md"): ("expiry deletion remains preview-only",),
+    Path("docs/cli-reference.md"): (
+        "`--apply` is disabled before traversal or deletion",
+    ),
+    Path("docs/implementation-roadmap.md"): ("destructive retention pruning",),
+    Path("docs/operations.md"): ("Evidence expiry deletion remains preview-only",),
+    Path("docs/phase-2b-communication-context.md"): (
+        "Expiry deletion remains preview-only",
+        "`evidence-prune --apply` still fails before traversal",
+    ),
+    Path("docs/threat-model.md"): (
+        "expiry deletion remains preview-only",
+        "expiry deletion is preview-only",
+        "destructive recursive evidence pruning",
+    ),
+}
+
 _CAPSULE_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "newly generated capability code as quarantined data",
@@ -498,6 +564,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_first_run_contract(root, checks, errors)
     _validate_public_read_contract(root, checks, errors)
     _validate_capsule_contract(root, checks, errors)
+    _validate_retention_prune_contract(root, checks, errors)
     _validate_markdown_links(root, checks, errors)
     _validate_documentation(root, checks, errors)
     _validate_demo(root, checks, errors)
@@ -1319,6 +1386,43 @@ def _validate_capsule_contract(
         checks.append(
             "capability-capsule safety guidance is consistent across "
             f"{len(_CAPSULE_DOCUMENT_REQUIREMENTS)} policy and documentation files"
+        )
+
+
+def _validate_retention_prune_contract(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Keep the enabled retained-evidence expiration boundary documented."""
+
+    starting_errors = len(errors)
+    for relative, requirements in _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS.items():
+        path = root / relative
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            errors.append(
+                f"retention-prune contract document is unreadable: {relative}: {error}"
+            )
+            continue
+        for requirement in requirements:
+            if requirement not in text:
+                errors.append(
+                    "retention-prune contract document is inconsistent: "
+                    f"{relative} is missing {requirement!r}"
+                )
+        for forbidden in _RETENTION_PRUNE_FORBIDDEN_CURRENT_CLAIMS.get(relative, ()):
+            if forbidden in text:
+                errors.append(
+                    "retention-prune contract contains a stale preview-only claim: "
+                    f"{relative} contains {forbidden!r}"
+                )
+
+    if len(errors) == starting_errors:
+        checks.append(
+            "retained-evidence expiration guidance is consistent across "
+            f"{len(_RETENTION_PRUNE_DOCUMENT_REQUIREMENTS)} documentation files"
         )
 
 

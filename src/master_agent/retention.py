@@ -33,8 +33,26 @@ _SECURITY_CATEGORIES = frozenset(
 _SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 _RETENTION_FLOCK_NAME = ".master-agent-retention.flock"
 _RETENTION_QUARANTINE_NAME = ".retention-quarantine"
+_RETENTION_PRUNE_STAGE_NAME = ".retention-prune"
+_RETENTION_PRUNE_MARKER_NAME = "transaction.json"
+_RETENTION_PRUNE_EVIDENCE_NAME = "evidence"
+_RETENTION_PRUNE_SIDECAR_NAME = "sidecar"
+_RETENTION_PRUNE_TRANSACTION_SCHEMA = "master-agent/evidence-prune-transaction@1"
 _MAX_REPAIR_FILE_BYTES = 64 * 1024 * 1024
 _MAX_REPAIR_DEPTH = 64
+_MAX_PRUNE_TRANSACTION_ENTRIES = 4
+_RETENTION_MANIFEST_KEYS = frozenset(
+    {
+        "evidence_path",
+        "evidence_type",
+        "created_at",
+        "expires_at",
+        "persistence",
+        "content_included",
+        "content_digest",
+        "citation_ids",
+    }
+)
 
 
 class PersistenceMode(StrEnum):
@@ -244,6 +262,42 @@ class _RetainedFileRecord:
         return stat.S_ISLNK(self.mode)
 
 
+@dataclass(frozen=True, slots=True)
+class _RetainedEvidencePair:
+    """One fully validated evidence-and-sidecar identity."""
+
+    evidence: _RetainedFileRecord
+    sidecar: _RetainedFileRecord
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _PruneTransaction:
+    """Content-free recovery binding for one staged expiration transaction."""
+
+    evidence_parts: tuple[str, ...]
+    evidence_identity: tuple[int, int]
+    sidecar_parts: tuple[str, ...]
+    sidecar_identity: tuple[int, int]
+    expires_at: str
+    selected_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the recovery binding without retained content."""
+
+        return {
+            "schema": _RETENTION_PRUNE_TRANSACTION_SCHEMA,
+            "evidence_parts": list(self.evidence_parts),
+            "evidence_device": self.evidence_identity[0],
+            "evidence_inode": self.evidence_identity[1],
+            "sidecar_parts": list(self.sidecar_parts),
+            "sidecar_device": self.sidecar_identity[0],
+            "sidecar_inode": self.sidecar_identity[1],
+            "expires_at": self.expires_at,
+            "selected_at": self.selected_at,
+        }
+
+
 class RetainedJSONReservation:
     """Create-only retained JSON names held across an external operation.
 
@@ -289,12 +343,14 @@ class RetainedJSONReservation:
                 "retained evidence must be an immediate child of its pinned parent"
             )
         self._path = self._pinned.path / absolute.name
-        self._sidecar = self._path.with_suffix(self._path.suffix + ".retention.json")
-        if self._sidecar.name == self._path.name:
+        try:
+            self._sidecar = _retention_sidecar_path(self._path)
+        except ConfigurationError:
             self._pinned.close()
-            raise ConfigurationError("retained evidence names must be distinct")
+            raise
         self._lock_descriptor = -1
         self._lock_identity: tuple[int, int] | None = None
+        self._hierarchy_locks: list[int] = []
         self._files: list[tuple[str, tuple[int, int]]] = []
         self._committed = False
         self._closed = False
@@ -303,6 +359,9 @@ class RetainedJSONReservation:
                 self._parent_descriptor
             )
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            self._hierarchy_locks = _acquire_retention_directory_hierarchy(
+                self._pinned,
+            )
             _validate_restricted_file_at(
                 self._parent_descriptor,
                 _RETENTION_FLOCK_NAME,
@@ -336,7 +395,8 @@ class RetainedJSONReservation:
         if self._closed or self._committed:
             raise ConfigurationError("retained evidence reservation is not active")
         output = dict(payload) if self._include_content else _metadata_only(payload)
-        citations = output.get("citations", [])
+        evidence_payload, normalized = _serialize_retained_json(output)
+        citations = normalized.get("citations", [])
         citation_ids = tuple(
             str(item.get("citation_id"))
             for item in citations
@@ -348,13 +408,11 @@ class RetainedJSONReservation:
             rule=self._rule,
             created=self._created_at,
             content_included=self._include_content,
-            digest=content_digest(output),
+            digest=content_digest(normalized),
             citation_ids=citation_ids,
         )
         content_by_name = {
-            self._path.name: (
-                json.dumps(output, indent=2, ensure_ascii=False, default=str) + "\n"
-            ).encode("utf-8"),
+            self._path.name: evidence_payload,
             self._sidecar.name: (
                 json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
             ).encode("utf-8"),
@@ -440,6 +498,8 @@ class RetainedJSONReservation:
             finally:
                 os.close(self._lock_descriptor)
                 self._lock_descriptor = -1
+        _release_retention_directory_hierarchy(self._hierarchy_locks)
+        self._hierarchy_locks.clear()
         self._pinned.close()
         self._closed = True
         if rollback_errors:
@@ -472,7 +532,8 @@ def write_retained_json(
     )
     created = _aware_utc(now)
     output = dict(payload) if include_content else _metadata_only(payload)
-    citations = output.get("citations", [])
+    evidence_payload, normalized = _serialize_retained_json(output)
+    citations = normalized.get("citations", [])
     citation_ids = tuple(
         str(item.get("citation_id"))
         for item in citations
@@ -484,14 +545,12 @@ def write_retained_json(
         rule=rule,
         created=created,
         content_included=include_content,
-        digest=content_digest(output),
+        digest=content_digest(normalized),
         citation_ids=citation_ids,
     )
     _atomic_write_files(
         {
-            path: (
-                json.dumps(output, indent=2, ensure_ascii=False, default=str) + "\n"
-            ).encode("utf-8"),
+            path: evidence_payload,
             sidecar: (
                 json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
             ).encode("utf-8"),
@@ -499,6 +558,25 @@ def write_retained_json(
         parent_directory=parent_directory,
     )
     return path, sidecar
+
+
+def _serialize_retained_json(
+    value: Mapping[str, Any],
+) -> tuple[bytes, Mapping[str, Any]]:
+    """Serialize once and return the exact semantic value used for its digest."""
+
+    try:
+        payload = (
+            json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n"
+        ).encode("utf-8")
+        normalized = _load_json_bytes(payload)
+    except (TypeError, ValueError, json.JSONDecodeError, UnicodeError) as error:
+        raise ConfigurationError(
+            "retained JSON evidence is not serializable"
+        ) from error
+    if not isinstance(normalized, Mapping):
+        raise ConfigurationError("retained JSON evidence must be an object")
+    return payload, normalized
 
 
 def write_retained_text(
@@ -547,17 +625,17 @@ def purge_expired_evidence(
     dry_run: bool = True,
     max_manifests: int = 10_000,
 ) -> RetentionPurgeResult:
-    """Preview expiration cleanup; destructive traversal is disabled."""
+    """Preview or apply bounded descriptor-safe expiration cleanup."""
 
-    if not dry_run:
+    if os.name == "nt":
         raise ConfigurationError(
-            "destructive evidence pruning is disabled until recursive traversal "
-            "and deletion are descriptor-bound"
+            "evidence pruning is unavailable on Windows until native filesystem "
+            "identity and atomic-state guarantees are enabled"
         )
     return _purge_expired_evidence_locked(
         root,
         now=now,
-        dry_run=True,
+        dry_run=dry_run,
         max_manifests=max_manifests,
     )
 
@@ -569,64 +647,264 @@ def _purge_expired_evidence_locked(
     dry_run: bool = True,
     max_manifests: int = 10_000,
 ) -> RetentionPurgeResult:
-    """Remove expired evidence and sidecars without following external paths.
-
-    Only sidecars below ``root`` are considered. Each sidecar may name only a
-    sibling evidence file, preventing path traversal or deletion outside the
-    selected evidence directory.
-    """
+    """Plan and remove expired pairs beneath one pinned, locked root."""
 
     if max_manifests <= 0:
         raise ValueError("max_manifests must be positive")
     current = _aware_utc(now)
-    resolved_root = root.resolve()
-    manifests = sorted(root.rglob("*.retention.json"))[:max_manifests]
-    removed: list[str] = []
-    errors: list[str] = []
-    expired = 0
-
-    for sidecar in manifests:
+    with PinnedDirectory.open(root) as pinned:
+        root_descriptor = pinned.fileno()
+        existing_lock_missing = False
+        lock_descriptor = -1
+        lock_identity: tuple[int, int] | None = None
+        lock_acquired = False
+        hierarchy_locks: list[int] = []
+        descendant_locks: list[tuple[tuple[str, ...], int, tuple[int, int]]] = []
         try:
-            if sidecar.is_symlink():
-                raise OSError("retention sidecar must not be a symbolic link")
-            raw = json.loads(sidecar.read_text(encoding="utf-8"))
-            if not isinstance(raw, Mapping):
-                raise StructuredDataTypeError("retention sidecar must be a JSON object")
-            expires_at = datetime.fromisoformat(str(raw["expires_at"]))
-            expires_at = _aware_utc(expires_at)
-            if expires_at > current:
-                continue
-            expired += 1
-            evidence_name = str(raw.get("evidence_path", ""))
-            if not evidence_name or Path(evidence_name).name != evidence_name:
-                raise ValueError("retention evidence_path must be a sibling filename")
-            evidence_path = sidecar.parent / evidence_name
-            if evidence_path.is_symlink() or not evidence_path.is_file():
-                raise ValueError("retention evidence file is missing or unsafe")
-            evidence = evidence_path.resolve()
-            if evidence.parent != sidecar.parent.resolve():
-                raise ValueError(
-                    "retention evidence path escapes its sidecar directory"
-                )
-            if resolved_root not in (sidecar.resolve(), *sidecar.resolve().parents):
-                raise ValueError("retention sidecar escapes selected root")
-            _verify_retained_content(evidence_path, raw)
-            for candidate in (evidence, sidecar.resolve()):
-                if candidate.exists():
-                    removed.append(str(candidate))
+            if dry_run:
+                try:
+                    existing_lock = _open_existing_retention_lock(root_descriptor)
+                except ConfigurationError:
+                    return RetentionPurgeResult(
+                        scanned_manifests=0,
+                        expired_manifests=0,
+                        removed_files=(),
+                        errors=("retention transaction lock is unsafe",),
+                        dry_run=True,
+                    )
+                if existing_lock is None:
+                    existing_lock_missing = True
+                else:
+                    lock_descriptor, lock_identity = existing_lock
+            else:
+                lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
+            if lock_descriptor >= 0:
+                try:
+                    fcntl.flock(
+                        lock_descriptor,
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                    lock_acquired = True
+                except BlockingIOError as error:
                     if not dry_run:
-                        candidate.unlink()
-        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
-            # Corrupt sidecars must not stop cleanup of independent records.
-            errors.append(f"{sidecar}: {type(error).__name__}: {error}")
-
-    return RetentionPurgeResult(
-        scanned_manifests=len(manifests),
-        expired_manifests=expired,
-        removed_files=tuple(removed),
-        errors=tuple(errors),
-        dry_run=dry_run,
-    )
+                        raise ConfigurationError(
+                            "evidence prune refused while retention maintenance "
+                            "is active"
+                        ) from error
+                    return RetentionPurgeResult(
+                        scanned_manifests=0,
+                        expired_manifests=0,
+                        removed_files=(),
+                        errors=("retention maintenance is active; scan deferred",),
+                        dry_run=True,
+                    )
+                assert lock_identity is not None
+                _validate_restricted_file_at(
+                    root_descriptor,
+                    _RETENTION_FLOCK_NAME,
+                    lock_identity,
+                )
+            try:
+                hierarchy_locks = _acquire_retention_directory_hierarchy(pinned)
+            except ConfigurationError:
+                if not dry_run:
+                    raise
+                return RetentionPurgeResult(
+                    scanned_manifests=0,
+                    expired_manifests=0,
+                    removed_files=(),
+                    errors=("retention directory hierarchy is active; scan deferred",),
+                    dry_run=True,
+                )
+            pinned.validate()
+            recovered: list[tuple[str, str]] = []
+            if dry_run:
+                recovery_errors = _inspect_prune_transactions_at(
+                    root_descriptor,
+                    max_transactions=max_manifests,
+                )
+            else:
+                recovery_errors = []
+            lock_parents: set[tuple[str, ...]] = set()
+            records, scan_errors = _scan_retained_files_at(
+                root_descriptor,
+                max_files=max_manifests * 2,
+                lock_parents=lock_parents,
+                strict_unsupported=False,
+            )
+            lock_parents.update(
+                record.relative_parts[:-1]
+                for record in records
+                if record.name.endswith(".retention.json")
+                and record.relative_parts[:-1]
+            )
+            pending_lock_parents, pending_parent_errors = (
+                _discover_prune_transaction_parents_at(
+                    root_descriptor,
+                    max_transactions=max_manifests,
+                    normalize_restricted=not dry_run,
+                )
+            )
+            lock_parents.update(pending_lock_parents)
+            recovery_errors.extend(pending_parent_errors)
+            (
+                descendant_locks,
+                missing_descendant_locks,
+                descendant_lock_errors,
+            ) = _acquire_descendant_retention_locks_at(
+                root_descriptor,
+                lock_parents,
+                dry_run=dry_run,
+            )
+            if (
+                not dry_run
+                and not recovery_errors
+                and not scan_errors
+                and not descendant_lock_errors
+            ):
+                recovered, recovered_errors = _recover_prune_transactions_at(
+                    root_descriptor,
+                    pinned.path,
+                    current=current,
+                    max_transactions=max_manifests,
+                )
+                recovery_errors.extend(recovered_errors)
+            baseline_lock_parents: set[tuple[str, ...]] = set()
+            baseline_records, baseline_errors = _scan_retained_files_at(
+                root_descriptor,
+                max_files=max_manifests * 2,
+                lock_parents=baseline_lock_parents,
+                strict_unsupported=False,
+            )
+            baseline_lock_parents.update(
+                record.relative_parts[:-1]
+                for record in baseline_records
+                if record.name.endswith(".retention.json")
+                and record.relative_parts[:-1]
+            )
+            recovered_parts = {
+                tuple(Path(path).relative_to(pinned.path).parts)
+                for pair in recovered
+                for path in pair
+            }
+            expected_records = [
+                record
+                for record in records
+                if record.relative_parts not in recovered_parts
+            ]
+            stability_errors: list[str] = []
+            if lock_parents != baseline_lock_parents:
+                stability_errors.append(
+                    "retention lock topology changed while locks were acquired"
+                )
+            if expected_records != baseline_records or scan_errors != baseline_errors:
+                stability_errors.append(
+                    "retained evidence tree changed while locks were acquired"
+                )
+            rescanned_lock_parents: set[tuple[str, ...]] = set()
+            rescanned_records, rescan_errors = _scan_retained_files_at(
+                root_descriptor,
+                max_files=max_manifests * 2,
+                lock_parents=rescanned_lock_parents,
+                strict_unsupported=False,
+            )
+            rescanned_lock_parents.update(
+                record.relative_parts[:-1]
+                for record in rescanned_records
+                if record.name.endswith(".retention.json")
+                and record.relative_parts[:-1]
+            )
+            if (
+                baseline_records != rescanned_records
+                or baseline_errors != rescan_errors
+                or baseline_lock_parents != rescanned_lock_parents
+            ):
+                stability_errors.append(
+                    "retained evidence tree changed during the validating rescan"
+                )
+            records = rescanned_records
+            for relative_parts in missing_descendant_locks:
+                parent_descriptor = _open_relative_directory_at(
+                    root_descriptor,
+                    relative_parts,
+                )
+                try:
+                    if _retention_lock_exists_at(parent_descriptor):
+                        rescan_errors.append(
+                            f"{'/'.join(relative_parts)}: retention publication "
+                            "began during the preview"
+                        )
+                finally:
+                    os.close(parent_descriptor)
+            _validate_descendant_retention_locks_at(
+                root_descriptor,
+                descendant_locks,
+            )
+            pairs, validation_errors, scanned_manifests = _plan_retained_pairs_at(
+                root_descriptor,
+                records,
+                max_manifests=max_manifests,
+            )
+            errors = [
+                *recovery_errors,
+                *rescan_errors,
+                *stability_errors,
+                *descendant_lock_errors,
+                *validation_errors,
+            ]
+            if existing_lock_missing and _retention_lock_exists_at(root_descriptor):
+                errors.append(
+                    "retention publication began during the preview; rescan required"
+                )
+            expired_pairs = [pair for pair in pairs if pair.expires_at <= current]
+            removed = [path for pair in recovered for path in pair]
+            if not errors:
+                if dry_run:
+                    removed.extend(
+                        path
+                        for pair in expired_pairs
+                        for path in _pair_display_paths(pinned.path, pair)
+                    )
+                else:
+                    for pair in expired_pairs:
+                        try:
+                            _delete_retained_pair_at(
+                                root_descriptor,
+                                pair,
+                                current=current,
+                            )
+                        except (OSError, ConfigurationError) as error:
+                            display = "/".join(pair.sidecar.relative_parts)
+                            errors.append(
+                                f"{display}: deletion failed: {type(error).__name__}"
+                            )
+                            break
+                        removed.extend(_pair_display_paths(pinned.path, pair))
+            pinned.validate()
+            return RetentionPurgeResult(
+                scanned_manifests=scanned_manifests + len(recovered),
+                expired_manifests=len(expired_pairs) + len(recovered),
+                removed_files=tuple(removed),
+                errors=tuple(errors),
+                dry_run=dry_run,
+            )
+        finally:
+            try:
+                for _, descriptor, _ in reversed(descendant_locks):
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
+            finally:
+                try:
+                    if lock_acquired:
+                        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                finally:
+                    try:
+                        if lock_descriptor >= 0:
+                            os.close(lock_descriptor)
+                    finally:
+                        _release_retention_directory_hierarchy(hierarchy_locks)
 
 
 def repair_orphaned_evidence(
@@ -657,18 +935,29 @@ def _repair_orphaned_evidence_locked(
     with PinnedDirectory.open(root) as pinned:
         root_descriptor = pinned.fileno()
         existing_lock_missing = False
-        if dry_run:
-            existing_lock = _open_existing_retention_lock(root_descriptor)
-            if existing_lock is None:
-                lock_descriptor = -1
-                lock_identity = None
-                existing_lock_missing = True
-            else:
-                lock_descriptor, lock_identity = existing_lock
-        else:
-            lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
+        lock_descriptor = -1
+        lock_identity: tuple[int, int] | None = None
         lock_acquired = False
+        hierarchy_locks: list[int] = []
+        descendant_locks: list[tuple[tuple[str, ...], int, tuple[int, int]]] = []
         try:
+            if dry_run:
+                try:
+                    existing_lock = _open_existing_retention_lock(root_descriptor)
+                except ConfigurationError:
+                    return RetentionRepairResult(
+                        scanned_files=0,
+                        orphaned_files=(),
+                        quarantined_files=(),
+                        errors=("retention transaction lock is unsafe",),
+                        dry_run=True,
+                    )
+                if existing_lock is None:
+                    existing_lock_missing = True
+                else:
+                    lock_descriptor, lock_identity = existing_lock
+            else:
+                lock_descriptor, lock_identity = _open_retention_lock(root_descriptor)
             if lock_descriptor >= 0:
                 try:
                     fcntl.flock(
@@ -694,22 +983,96 @@ def _repair_orphaned_evidence_locked(
                     _RETENTION_FLOCK_NAME,
                     lock_identity,
                 )
+            try:
+                hierarchy_locks = _acquire_retention_directory_hierarchy(pinned)
+            except ConfigurationError:
+                if not dry_run:
+                    raise
+                return RetentionRepairResult(
+                    scanned_files=0,
+                    orphaned_files=(),
+                    quarantined_files=(),
+                    errors=("retention directory hierarchy is active; scan deferred",),
+                    dry_run=True,
+                )
             pinned.validate()
+            lock_parents: set[tuple[str, ...]] = set()
             records, scan_errors = _scan_retained_files_at(
                 root_descriptor,
                 max_files=max_files,
+                lock_parents=lock_parents,
+            )
+            lock_parents.update(
+                record.relative_parts[:-1]
+                for record in records
+                if record.relative_parts[:-1]
+            )
+            (
+                descendant_locks,
+                missing_descendant_locks,
+                descendant_lock_errors,
+            ) = _acquire_descendant_retention_locks_at(
+                root_descriptor,
+                lock_parents,
+                dry_run=dry_run,
+            )
+            rescanned_lock_parents: set[tuple[str, ...]] = set()
+            rescanned_records, rescan_errors = _scan_retained_files_at(
+                root_descriptor,
+                max_files=max_files,
+                lock_parents=rescanned_lock_parents,
+            )
+            rescanned_lock_parents.update(
+                record.relative_parts[:-1]
+                for record in rescanned_records
+                if record.relative_parts[:-1]
+            )
+            stability_errors: list[str] = []
+            if lock_parents != rescanned_lock_parents:
+                stability_errors.append(
+                    "retention lock topology changed while locks were acquired"
+                )
+            if records != rescanned_records or scan_errors != rescan_errors:
+                stability_errors.append(
+                    "retained evidence tree changed while locks were acquired"
+                )
+            records = rescanned_records
+            for relative_parts in missing_descendant_locks:
+                parent_descriptor = _open_relative_directory_at(
+                    root_descriptor,
+                    relative_parts,
+                )
+                try:
+                    if _retention_lock_exists_at(parent_descriptor):
+                        rescan_errors.append(
+                            f"{'/'.join(relative_parts)}: retention publication "
+                            "began during the preview"
+                        )
+                finally:
+                    os.close(parent_descriptor)
+            _validate_descendant_retention_locks_at(
+                root_descriptor,
+                descendant_locks,
             )
             orphans, classification_errors = _classify_orphaned_records_at(
                 root_descriptor,
                 records,
             )
-            errors = [*scan_errors, *classification_errors]
+            blocking_errors = [
+                *rescan_errors,
+                *stability_errors,
+                *descendant_lock_errors,
+            ]
+            errors = [
+                *blocking_errors,
+                *classification_errors,
+            ]
             if existing_lock_missing and _retention_lock_exists_at(root_descriptor):
                 errors.append(
                     "retention publication began during the preview; rescan required"
                 )
             quarantined: list[str] = []
-            if not dry_run and scan_errors:
+            if not dry_run and blocking_errors:
                 errors.append(
                     "quarantine refused because the descriptor scan was incomplete"
                 )
@@ -733,45 +1096,70 @@ def _repair_orphaned_evidence_locked(
             )
         finally:
             try:
-                if lock_acquired:
-                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                for _, descriptor, _ in reversed(descendant_locks):
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
             finally:
-                if lock_descriptor >= 0:
-                    os.close(lock_descriptor)
+                try:
+                    if lock_acquired:
+                        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                finally:
+                    try:
+                        if lock_descriptor >= 0:
+                            os.close(lock_descriptor)
+                    finally:
+                        _release_retention_directory_hierarchy(hierarchy_locks)
 
 
 def _scan_retained_files_at(
     root_descriptor: int,
     *,
     max_files: int,
+    lock_parents: set[tuple[str, ...]] | None = None,
+    strict_unsupported: bool = True,
 ) -> tuple[list[_RetainedFileRecord], list[str]]:
     """Recursively enumerate files without following a pathname or symlink."""
 
     records: list[_RetainedFileRecord] = []
     errors: list[str] = []
     truncated = False
+    visited_entries = 0
 
     def visit(directory_descriptor: int, prefix: tuple[str, ...]) -> None:
-        nonlocal truncated
-        if len(prefix) > _MAX_REPAIR_DEPTH or len(records) >= max_files:
+        nonlocal truncated, visited_entries
+        if len(prefix) > _MAX_REPAIR_DEPTH:
             truncated = True
             return
         try:
-            names = sorted(os.listdir(directory_descriptor))
+            names: list[str] = []
+            remaining = max_files - visited_entries
+            with os.scandir(directory_descriptor) as entries:
+                for entry in entries:
+                    if entry.name == _RETENTION_FLOCK_NAME:
+                        if prefix and lock_parents is not None:
+                            lock_parents.add(prefix)
+                        continue
+                    if not prefix and entry.name == _RETENTION_PRUNE_STAGE_NAME:
+                        continue
+                    if entry.name == _RETENTION_QUARANTINE_NAME:
+                        continue
+                    if len(names) >= remaining:
+                        truncated = True
+                        return
+                    names.append(entry.name)
+            names.sort()
         except OSError as error:
             errors.append(
                 f"{'/'.join(prefix) or '.'}: scan failed: {type(error).__name__}"
             )
             return
         for name in names:
-            if len(records) >= max_files:
+            if visited_entries >= max_files:
                 truncated = True
                 return
-            if not prefix and name in {
-                _RETENTION_FLOCK_NAME,
-                _RETENTION_QUARANTINE_NAME,
-            }:
-                continue
+            visited_entries += 1
             relative = (*prefix, name)
             try:
                 metadata = os.stat(
@@ -783,6 +1171,44 @@ def _scan_retained_files_at(
                 errors.append(
                     f"{'/'.join(relative)}: scan failed: {type(error).__name__}"
                 )
+                continue
+            if prefix and name == _RETENTION_PRUNE_STAGE_NAME:
+                stage_descriptor = -1
+                try:
+                    if not stat.S_ISDIR(metadata.st_mode):
+                        raise ConfigurationError(
+                            "nested prune state is not a directory"
+                        )
+                    opened = _open_existing_private_directory_at(
+                        directory_descriptor,
+                        name,
+                    )
+                    if opened is None:
+                        raise ConfigurationError("nested prune state disappeared")
+                    stage_descriptor = opened
+                    current = os.fstat(stage_descriptor)
+                    if (current.st_dev, current.st_ino) != (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    ):
+                        raise ConfigurationError("nested prune state identity changed")
+                    pending = _bounded_sorted_names_at(
+                        stage_descriptor,
+                        max_entries=max_files,
+                        label="nested prune state",
+                    )
+                    if pending:
+                        errors.append(
+                            f"{'/'.join(relative)}: nested prune state requires "
+                            "recovery at its exact root"
+                        )
+                except (OSError, ConfigurationError) as error:
+                    errors.append(
+                        f"{'/'.join(relative)}: scan failed: {type(error).__name__}"
+                    )
+                finally:
+                    if stage_descriptor >= 0:
+                        os.close(stage_descriptor)
                 continue
             if stat.S_ISDIR(metadata.st_mode):
                 if len(relative) > _MAX_REPAIR_DEPTH:
@@ -827,11 +1253,1794 @@ def _scan_retained_files_at(
                         size=metadata.st_size,
                     )
                 )
+                continue
+            if strict_unsupported or name.endswith(".retention.json"):
+                errors.append(f"{'/'.join(relative)}: unsupported retained file type")
 
     visit(root_descriptor, ())
     if truncated:
-        errors.append(f"descriptor scan exceeded the {max_files}-file limit")
+        errors.append(f"descriptor scan exceeded the {max_files}-entry limit")
     return records, errors
+
+
+def _plan_retained_pairs_at(
+    root_descriptor: int,
+    records: list[_RetainedFileRecord],
+    *,
+    max_manifests: int,
+) -> tuple[list[_RetainedEvidencePair], list[str], int]:
+    """Validate every discovered record and return canonical retained pairs."""
+
+    root_device = os.fstat(root_descriptor).st_dev
+    by_relative: dict[tuple[str, ...], _RetainedFileRecord] = {}
+    errors: list[str] = []
+    for record in records:
+        if record.relative_parts in by_relative:
+            errors.append(
+                f"{'/'.join(record.relative_parts)}: duplicate descriptor record"
+            )
+            continue
+        by_relative[record.relative_parts] = record
+    sidecars = sorted(
+        (record for record in records if record.name.endswith(".retention.json")),
+        key=lambda record: record.relative_parts,
+    )
+    if len(sidecars) > max_manifests:
+        errors.append(f"retention scan exceeded the {max_manifests}-manifest limit")
+    paired_evidence: set[tuple[str, ...]] = set()
+    pairs: list[_RetainedEvidencePair] = []
+    for sidecar in sidecars[:max_manifests]:
+        display = "/".join(sidecar.relative_parts)
+        try:
+            if sidecar.identity[0] != root_device:
+                raise OSError("retention sidecar cannot use the root transaction")
+            raw_bytes = _read_record_bytes_at(root_descriptor, sidecar)
+            raw = _load_json_bytes(raw_bytes)
+            if not isinstance(raw, Mapping):
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
+            evidence_name, expires_at = _validate_retention_manifest(
+                raw,
+                sidecar_name=sidecar.name,
+            )
+            evidence_relative = (*sidecar.relative_parts[:-1], evidence_name)
+            evidence = by_relative.get(evidence_relative)
+            if evidence is None:
+                raise ValueError("retention evidence file is missing")
+            if evidence.identity[0] != root_device:
+                raise OSError("retention evidence cannot use the root transaction")
+            if evidence_relative in paired_evidence:
+                raise ValueError("retention evidence has conflicting sidecars")
+            _verify_retained_record_at(root_descriptor, evidence, raw)
+            paired_evidence.add(evidence_relative)
+            pairs.append(
+                _RetainedEvidencePair(
+                    evidence=evidence,
+                    sidecar=sidecar,
+                    expires_at=expires_at,
+                )
+            )
+        except (
+            OSError,
+            StructuredDataTypeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            errors.append(f"{display}: invalid retained pair: {type(error).__name__}")
+
+    return pairs, errors, len(sidecars)
+
+
+def _load_json_bytes(raw: bytes) -> Any:
+    """Decode bounded JSON while rejecting duplicate object member names."""
+
+    try:
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except RecursionError as error:
+        raise ValueError("JSON nesting exceeds the retention limit") from error
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object only when every member name is unique."""
+
+    output: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError("duplicate JSON object member")
+        output[key] = value
+    return output
+
+
+def _validate_retention_manifest(
+    raw: Mapping[str, Any],
+    *,
+    sidecar_name: str,
+) -> tuple[str, datetime]:
+    """Validate the exact persisted manifest schema and sibling binding."""
+
+    if set(raw) != _RETENTION_MANIFEST_KEYS:
+        raise ValueError("retention sidecar fields are invalid")
+    evidence_name = raw["evidence_path"]
+    if (
+        not isinstance(evidence_name, str)
+        or not evidence_name
+        or evidence_name in {".", ".."}
+        or Path(evidence_name).name != evidence_name
+        or _is_reserved_retained_evidence_name(evidence_name)
+        or sidecar_name != f"{evidence_name}.retention.json"
+    ):
+        raise ValueError("retention evidence sibling relationship is invalid")
+    evidence_type = raw["evidence_type"]
+    if not isinstance(evidence_type, str) or not evidence_type.strip():
+        raise ValueError("retention evidence_type is invalid")
+    created_at = _validated_manifest_timestamp(raw["created_at"])
+    expires_at = _validated_manifest_timestamp(raw["expires_at"])
+    if expires_at <= created_at:
+        raise ValueError("retention expiration must follow creation")
+    persistence_raw = raw["persistence"]
+    if not isinstance(persistence_raw, str):
+        raise TypeError("retention persistence is invalid")
+    persistence = PersistenceMode(persistence_raw)
+    if persistence is PersistenceMode.PROHIBITED:
+        raise ValueError("prohibited evidence must not be persisted")
+    content_included = raw["content_included"]
+    if type(content_included) is not bool:
+        raise ValueError("retention content_included is invalid")
+    if content_included and persistence is not PersistenceMode.EXPLICIT_CONTENT:
+        raise ValueError("retained content is inconsistent with persistence")
+    digest = raw["content_digest"]
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError("retention content digest is invalid")
+    citation_ids = raw["citation_ids"]
+    if (
+        not isinstance(citation_ids, list)
+        or any(not isinstance(value, str) or not value for value in citation_ids)
+        or len(set(citation_ids)) != len(citation_ids)
+    ):
+        raise ValueError("retention citation_ids are invalid")
+    return evidence_name, expires_at
+
+
+def _validated_manifest_timestamp(value: Any) -> datetime:
+    """Return one canonical aware manifest timestamp in UTC."""
+
+    if not isinstance(value, str):
+        raise TypeError("retention timestamp is invalid")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("retention timestamp must be timezone-aware")
+    if parsed.isoformat() != value:
+        raise ValueError("retention timestamp is not canonical")
+    return parsed.astimezone(UTC)
+
+
+def _pair_display_paths(
+    root: Path,
+    pair: _RetainedEvidencePair,
+) -> tuple[str, str]:
+    """Return deterministic content-free source paths for one pair."""
+
+    return (
+        str(root.joinpath(*pair.evidence.relative_parts)),
+        str(root.joinpath(*pair.sidecar.relative_parts)),
+    )
+
+
+def _acquire_retention_directory_hierarchy(
+    pinned: PinnedDirectory,
+) -> list[int]:
+    """Share-lock existing ancestor retention boundaries for coordination."""
+
+    directory_descriptors = list(pinned.duplicate_descriptor_chain())
+    acquired_locks: list[int] = []
+    try:
+        for directory_descriptor in directory_descriptors[:-1]:
+            directory = os.fstat(directory_descriptor)
+            if (
+                directory.st_uid != os.getuid()
+                or stat.S_IMODE(directory.st_mode) & 0o022
+            ):
+                continue
+            opened = _open_existing_retention_lock(directory_descriptor)
+            if opened is None:
+                continue
+            lock_descriptor, identity = opened
+            try:
+                fcntl.flock(
+                    lock_descriptor,
+                    fcntl.LOCK_SH | fcntl.LOCK_NB,
+                )
+            except BlockingIOError as error:
+                os.close(lock_descriptor)
+                raise ConfigurationError(
+                    "retention directory hierarchy is active"
+                ) from error
+            except BaseException:
+                os.close(lock_descriptor)
+                raise
+            try:
+                _validate_restricted_file_at(
+                    directory_descriptor,
+                    _RETENTION_FLOCK_NAME,
+                    identity,
+                )
+            except BaseException:
+                try:
+                    fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(lock_descriptor)
+                raise
+            acquired_locks.append(lock_descriptor)
+        pinned.validate()
+        return acquired_locks
+    except BaseException:
+        for descriptor in reversed(acquired_locks):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        raise
+    finally:
+        for descriptor in directory_descriptors:
+            os.close(descriptor)
+
+
+def _release_retention_directory_hierarchy(descriptors: list[int]) -> None:
+    """Release caller-owned hierarchy locks in reverse order."""
+
+    for descriptor in reversed(descriptors):
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _acquire_descendant_retention_locks_at(
+    root_descriptor: int,
+    relative_parents: set[tuple[str, ...]],
+    *,
+    dry_run: bool,
+) -> tuple[
+    list[tuple[tuple[str, ...], int, tuple[int, int]]],
+    list[tuple[str, ...]],
+    list[str],
+]:
+    """Hold every relevant descendant lock before a validating rescan."""
+    acquired: list[tuple[tuple[str, ...], int, tuple[int, int]]] = []
+    missing: list[tuple[str, ...]] = []
+    errors: list[str] = []
+    try:
+        for relative_parts in sorted(relative_parents):
+            parent_descriptor = _open_relative_directory_at(
+                root_descriptor,
+                relative_parts,
+            )
+            try:
+                try:
+                    if dry_run:
+                        opened = _open_existing_retention_lock(parent_descriptor)
+                        if opened is None:
+                            missing.append(relative_parts)
+                            continue
+                        descriptor, identity = opened
+                    else:
+                        descriptor, identity = _open_retention_lock(parent_descriptor)
+                except ConfigurationError:
+                    if not dry_run:
+                        raise
+                    errors.append(
+                        f"{'/'.join(relative_parts)}: retention lock is unsafe"
+                    )
+                    continue
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    os.close(descriptor)
+                    if not dry_run:
+                        raise ConfigurationError(
+                            "retention operation refused while descendant "
+                            "retention maintenance is active"
+                        ) from error
+                    errors.append(
+                        f"{'/'.join(relative_parts)}: retention maintenance is active"
+                    )
+                    continue
+                except BaseException:
+                    os.close(descriptor)
+                    raise
+                try:
+                    _validate_restricted_file_at(
+                        parent_descriptor,
+                        _RETENTION_FLOCK_NAME,
+                        identity,
+                    )
+                except BaseException:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
+                    raise
+                acquired.append((relative_parts, descriptor, identity))
+            finally:
+                os.close(parent_descriptor)
+        return acquired, missing, errors
+    except BaseException:
+        for _, descriptor, _ in reversed(acquired):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        raise
+
+
+def _validate_descendant_retention_locks_at(
+    root_descriptor: int,
+    locks: list[tuple[tuple[str, ...], int, tuple[int, int]]],
+) -> None:
+    """Revalidate held descendant lock names against their exact identities."""
+
+    for relative_parts, descriptor, identity in locks:
+        parent_descriptor = _open_relative_directory_at(
+            root_descriptor,
+            relative_parts,
+        )
+        try:
+            _restricted_file_identity(
+                os.fstat(descriptor),
+                _RETENTION_FLOCK_NAME,
+            )
+            _validate_restricted_file_at(
+                parent_descriptor,
+                _RETENTION_FLOCK_NAME,
+                identity,
+            )
+        finally:
+            os.close(parent_descriptor)
+
+
+def _delete_retained_pair_at(
+    root_descriptor: int,
+    pair: _RetainedEvidencePair,
+    *,
+    current: datetime,
+) -> None:
+    """Delete one exact pair through a recoverable descriptor-bound stage."""
+
+    if pair.expires_at > current:
+        raise ConfigurationError("retained pair is not expired")
+    try:
+        _revalidate_retained_pair_at(root_descriptor, pair)
+    except (
+        OSError,
+        StructuredDataTypeError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as error:
+        raise ConfigurationError("retained pair changed after planning") from error
+    stage_descriptor = _open_or_create_private_directory_at(
+        root_descriptor,
+        _RETENTION_PRUNE_STAGE_NAME,
+    )
+    transaction_name = ""
+    transaction_descriptor = -1
+    transaction_identity: tuple[int, int] | None = None
+    try:
+        (
+            transaction_name,
+            transaction_descriptor,
+            transaction_identity,
+        ) = _create_private_transaction_directory_at(stage_descriptor)
+        transaction = _PruneTransaction(
+            evidence_parts=pair.evidence.relative_parts,
+            evidence_identity=pair.evidence.identity,
+            sidecar_parts=pair.sidecar.relative_parts,
+            sidecar_identity=pair.sidecar.identity,
+            expires_at=pair.expires_at.isoformat(),
+            selected_at=current.isoformat(),
+        )
+        marker_payload = (
+            json.dumps(
+                transaction.to_dict(),
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        _write_prune_transaction_marker_at(
+            transaction_descriptor,
+            marker_payload,
+        )
+        _link_prune_stage_file_at(
+            root_descriptor,
+            pair.evidence,
+            transaction_descriptor,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+        )
+        _link_prune_stage_file_at(
+            root_descriptor,
+            pair.sidecar,
+            transaction_descriptor,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+        )
+        os.fsync(transaction_descriptor)
+        _revalidate_staged_pair_at(
+            transaction_descriptor,
+            pair,
+            allowed_link_counts=frozenset({2}),
+        )
+        _unlink_relative_record_at(
+            root_descriptor,
+            pair.sidecar,
+            allowed_link_counts=frozenset({2}),
+        )
+        _unlink_relative_record_at(
+            root_descriptor,
+            pair.evidence,
+            allowed_link_counts=frozenset({2}),
+        )
+        _fsync_absent_transaction_sources_at(root_descriptor, transaction)
+        _unlink_stage_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+            pair.evidence.identity,
+        )
+        _unlink_stage_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+            pair.sidecar.identity,
+        )
+        marker = _stat_immediate_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_MARKER_NAME,
+        )
+        if marker is None:
+            raise ConfigurationError("prune transaction marker disappeared")
+        _unlink_stage_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_MARKER_NAME,
+            marker.identity,
+        )
+        os.fsync(transaction_descriptor)
+        assert transaction_identity is not None
+        _remove_private_transaction_directory_at(
+            stage_descriptor,
+            transaction_name,
+            transaction_identity,
+        )
+    except BaseException as error:
+        if transaction_descriptor >= 0:
+            os.close(transaction_descriptor)
+            transaction_descriptor = -1
+        if transaction_name:
+            try:
+                recovered = _recover_prune_transaction_at(
+                    root_descriptor,
+                    stage_descriptor,
+                    transaction_name,
+                )
+            except (
+                OSError,
+                ConfigurationError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ) as recovery_error:
+                if not isinstance(error, Exception):
+                    raise error
+                raise ConfigurationError(
+                    "expired evidence transaction recovery failed"
+                ) from recovery_error
+            if recovered is not None:
+                if not isinstance(error, Exception):
+                    raise
+                return
+        if isinstance(error, (OSError, ConfigurationError)):
+            raise
+        if not isinstance(error, Exception):
+            raise
+        raise ConfigurationError("expired evidence deletion failed") from error
+    finally:
+        if transaction_descriptor >= 0:
+            os.close(transaction_descriptor)
+        os.close(stage_descriptor)
+
+
+def _revalidate_retained_pair_at(
+    root_descriptor: int,
+    pair: _RetainedEvidencePair,
+) -> None:
+    """Re-read one planned pair immediately before destructive staging."""
+
+    raw_bytes = _read_record_bytes_at(root_descriptor, pair.sidecar)
+    raw = _load_json_bytes(raw_bytes)
+    if not isinstance(raw, Mapping):
+        raise StructuredDataTypeError("retention sidecar must be a JSON object")
+    evidence_name, expires_at = _validate_retention_manifest(
+        raw,
+        sidecar_name=pair.sidecar.name,
+    )
+    if (
+        *pair.sidecar.relative_parts[:-1],
+        evidence_name,
+    ) != pair.evidence.relative_parts or expires_at != pair.expires_at:
+        raise ConfigurationError("retained pair changed after planning")
+    _verify_retained_record_at(root_descriptor, pair.evidence, raw)
+
+
+def _link_prune_stage_file_at(
+    root_descriptor: int,
+    record: _RetainedFileRecord,
+    transaction_descriptor: int,
+    stage_name: str,
+) -> None:
+    """Create-only hard-link one exact source inode into a private stage."""
+
+    source_parent = _open_relative_directory_at(
+        root_descriptor,
+        record.relative_parts[:-1],
+    )
+    linked = False
+    try:
+        source = os.stat(
+            record.name,
+            dir_fd=source_parent,
+            follow_symlinks=False,
+        )
+        if _restricted_file_identity(source, record.name) != record.identity:
+            raise ConfigurationError("retained evidence file identity changed")
+        _require_retained_names_absent(transaction_descriptor, (stage_name,))
+        os.link(
+            record.name,
+            stage_name,
+            src_dir_fd=source_parent,
+            dst_dir_fd=transaction_descriptor,
+            follow_symlinks=False,
+        )
+        linked = True
+        staged = os.stat(
+            stage_name,
+            dir_fd=transaction_descriptor,
+            follow_symlinks=False,
+        )
+        current = os.stat(
+            record.name,
+            dir_fd=source_parent,
+            follow_symlinks=False,
+        )
+        for metadata in (staged, current):
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_nlink != 2
+                or (metadata.st_dev, metadata.st_ino) != record.identity
+            ):
+                raise ConfigurationError("prune staging identity changed")
+    except BaseException:
+        if linked:
+            try:
+                _unlink_owned_file_at(
+                    transaction_descriptor,
+                    stage_name,
+                    record.identity,
+                    allowed_link_counts=frozenset({2}),
+                )
+                os.fsync(transaction_descriptor)
+            except (OSError, ConfigurationError):
+                pass
+        raise
+    finally:
+        os.close(source_parent)
+
+
+def _revalidate_staged_pair_at(
+    transaction_descriptor: int,
+    pair: _RetainedEvidencePair,
+    *,
+    allowed_link_counts: frozenset[int],
+) -> None:
+    """Require staged inodes and bytes to remain the validated planned pair."""
+
+    evidence = _stage_record(
+        pair.evidence,
+        name=_RETENTION_PRUNE_EVIDENCE_NAME,
+    )
+    sidecar = _stage_record(
+        pair.sidecar,
+        name=_RETENTION_PRUNE_SIDECAR_NAME,
+    )
+    raw_bytes = _read_record_bytes_at(
+        transaction_descriptor,
+        sidecar,
+        allowed_link_counts=allowed_link_counts,
+    )
+    raw = _load_json_bytes(raw_bytes)
+    if not isinstance(raw, Mapping):
+        raise StructuredDataTypeError("retention sidecar must be a JSON object")
+    evidence_name, expires_at = _validate_retention_manifest(
+        raw,
+        sidecar_name=pair.sidecar.name,
+    )
+    if evidence_name != pair.evidence.name or expires_at != pair.expires_at:
+        raise ConfigurationError("staged retained pair changed")
+    _verify_retained_record_at(
+        transaction_descriptor,
+        evidence,
+        raw,
+        allowed_link_counts=allowed_link_counts,
+    )
+
+
+def _stage_record(
+    source: _RetainedFileRecord,
+    *,
+    name: str,
+) -> _RetainedFileRecord:
+    """Describe a staged hard link using its source identity and bounded size."""
+
+    return _RetainedFileRecord(
+        relative_parts=(name,),
+        identity=source.identity,
+        mode=source.mode,
+        size=source.size,
+    )
+
+
+def _unlink_relative_record_at(
+    root_descriptor: int,
+    record: _RetainedFileRecord,
+    *,
+    allowed_link_counts: frozenset[int],
+) -> None:
+    """Unlink one exact root-relative regular file and sync its parent."""
+
+    parent_descriptor = _open_relative_directory_at(
+        root_descriptor,
+        record.relative_parts[:-1],
+    )
+    try:
+        _unlink_owned_file_at(
+            parent_descriptor,
+            record.name,
+            record.identity,
+            allowed_link_counts=allowed_link_counts,
+        )
+        os.fsync(parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
+
+
+def _fsync_absent_transaction_sources_at(
+    root_descriptor: int,
+    transaction: _PruneTransaction,
+) -> None:
+    """Persist both absent public names before discarding recovery links."""
+
+    if transaction.evidence_parts[:-1] != transaction.sidecar_parts[:-1]:
+        raise ConfigurationError("prune transaction source parents differ")
+    parent_descriptor = _open_relative_directory_at(
+        root_descriptor,
+        transaction.evidence_parts[:-1],
+    )
+    try:
+        source_names = (
+            transaction.evidence_parts[-1],
+            transaction.sidecar_parts[-1],
+        )
+        for name in source_names:
+            try:
+                os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ConfigurationError(
+                "prune transaction source reappeared before durable commit"
+            )
+        os.fsync(parent_descriptor)
+        for name in source_names:
+            try:
+                os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ConfigurationError(
+                "prune transaction source reappeared during durable commit"
+            )
+    finally:
+        os.close(parent_descriptor)
+
+
+def _unlink_stage_record_at(
+    transaction_descriptor: int,
+    name: str,
+    identity: tuple[int, int],
+) -> None:
+    """Unlink one final single-link transaction-stage inode."""
+
+    _unlink_owned_file_at(
+        transaction_descriptor,
+        name,
+        identity,
+        allowed_link_counts=frozenset({1}),
+    )
+    os.fsync(transaction_descriptor)
+
+
+def _create_private_transaction_directory_at(
+    stage_descriptor: int,
+) -> tuple[str, int, tuple[int, int]]:
+    """Create and open one unpredictable owner-private transaction directory."""
+
+    for _ in range(32):
+        name = f"txn-{secrets.token_hex(16)}"
+        try:
+            descriptor, identity = _create_private_directory_at(
+                stage_descriptor,
+                name,
+            )
+        except FileExistsError:
+            continue
+        return name, descriptor, identity
+    raise ConfigurationError("could not allocate a prune transaction directory")
+
+
+def _write_prune_transaction_marker_at(
+    transaction_descriptor: int,
+    payload: bytes,
+) -> None:
+    """Publish one complete marker directly inside its private transaction."""
+
+    descriptor = -1
+    identity: tuple[int, int] | None = None
+    try:
+        descriptor, identity = _open_new_restricted_file_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_MARKER_NAME,
+        )
+        _write_restricted_descriptor(descriptor, payload)
+        _validate_restricted_file_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_MARKER_NAME,
+            identity,
+        )
+        if _read_restricted_descriptor(descriptor) != payload:
+            raise ConfigurationError("prune transaction marker readback failed")
+        os.fsync(transaction_descriptor)
+    except BaseException as error:
+        cleanup_error: BaseException | None = None
+        if identity is not None:
+            try:
+                _unlink_new_private_file_at(
+                    transaction_descriptor,
+                    _RETENTION_PRUNE_MARKER_NAME,
+                    identity,
+                )
+                os.fsync(transaction_descriptor)
+            except (OSError, ConfigurationError) as caught:
+                cleanup_error = caught
+        if cleanup_error is not None:
+            raise ConfigurationError(
+                "prune transaction marker rollback was incomplete"
+            ) from error
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _normalize_prune_transaction_marker_at(
+    transaction_descriptor: int,
+) -> None:
+    """Apply-only recovery for a marker left stricter than mode ``0600``."""
+
+    opened = _open_existing_restricted_file_at(
+        transaction_descriptor,
+        _RETENTION_PRUNE_MARKER_NAME,
+        normalize_restricted=True,
+    )
+    if opened is None:
+        raise ConfigurationError("prune transaction marker disappeared")
+    descriptor, _ = opened
+    os.close(descriptor)
+
+
+def _open_existing_private_directory_at(
+    parent_descriptor: int,
+    name: str,
+    *,
+    normalize_restricted: bool = False,
+) -> int | None:
+    """Open one existing owner-private no-follow child directory.
+
+    Apply-only recovery may normalize an owner-owned directory whose permission
+    bits are a strict subset of ``0700``. This repairs the bounded crash window
+    between ``mkdir`` and ``chmod`` without making preview mutate state or
+    accepting a directory that was ever accessible to another account.
+    """
+
+    if name in {"", ".", ".."} or Path(name).name != name:
+        raise ConfigurationError("unsafe private directory component")
+    expected_identity: tuple[int, int] | None = None
+    if normalize_restricted:
+        try:
+            initial = os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return None
+        initial_mode = stat.S_IMODE(initial.st_mode)
+        if (
+            not stat.S_ISDIR(initial.st_mode)
+            or initial.st_uid != os.getuid()
+            or initial_mode & ~0o700
+        ):
+            raise ConfigurationError("private transaction directory is unsafe")
+        expected_identity = initial.st_dev, initial.st_ino
+        if initial_mode != 0o700:
+            os.chmod(
+                name,
+                0o700,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            os.fsync(parent_descriptor)
+            normalized = os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(normalized.st_mode)
+                or normalized.st_uid != os.getuid()
+                or stat.S_IMODE(normalized.st_mode) != 0o700
+                or (normalized.st_dev, normalized.st_ino) != expected_identity
+            ):
+                raise ConfigurationError(
+                    "private transaction directory identity changed"
+                )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        return None
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or (
+            expected_identity is not None
+            and (metadata.st_dev, metadata.st_ino) != expected_identity
+        )
+    ):
+        os.close(descriptor)
+        raise ConfigurationError("private transaction directory is unsafe")
+    return descriptor
+
+
+def _create_private_directory_at(
+    parent_descriptor: int,
+    name: str,
+) -> tuple[int, tuple[int, int]]:
+    """Create, normalize, and open one exact owner-private directory."""
+
+    if name in {"", ".", ".."} or Path(name).name != name:
+        raise ConfigurationError("unsafe private directory component")
+    descriptor = -1
+    identity: tuple[int, int] | None = None
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_descriptor)
+        created = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if not stat.S_ISDIR(created.st_mode) or created.st_uid != os.getuid():
+            raise ConfigurationError("created private directory is unsafe")
+        identity = created.st_dev, created.st_ino
+        os.chmod(
+            name,
+            0o700,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        opened = _open_existing_private_directory_at(parent_descriptor, name)
+        if opened is None:
+            raise ConfigurationError("created private directory disappeared")
+        descriptor = opened
+        current = os.fstat(descriptor)
+        if (current.st_dev, current.st_ino) != identity:
+            raise ConfigurationError("created private directory identity changed")
+        os.fsync(descriptor)
+        os.fsync(parent_descriptor)
+        return descriptor, identity
+    except FileExistsError:
+        raise
+    except BaseException as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+            descriptor = -1
+        if identity is not None:
+            try:
+                _remove_new_private_directory_at(
+                    parent_descriptor,
+                    name,
+                    identity,
+                )
+            except (OSError, ConfigurationError):
+                raise ConfigurationError(
+                    "private directory initialization rollback was incomplete"
+                ) from error
+        raise
+
+
+def _remove_new_private_directory_at(
+    parent_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove only the exact empty directory created by this transaction."""
+
+    current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or current.st_uid != os.getuid()
+        or (current.st_dev, current.st_ino) != expected_identity
+    ):
+        raise ConfigurationError("created private directory identity changed")
+    os.rmdir(name, dir_fd=parent_descriptor)
+    os.fsync(parent_descriptor)
+
+
+def _bounded_sorted_names_at(
+    directory_descriptor: int,
+    *,
+    max_entries: int,
+    label: str,
+) -> list[str]:
+    """Return deterministic names without materializing an unbounded directory."""
+
+    if max_entries <= 0:
+        raise ValueError("directory entry limit must be positive")
+    names: list[str] = []
+    with os.scandir(directory_descriptor) as entries:
+        for entry in entries:
+            if len(names) >= max_entries:
+                raise ConfigurationError(
+                    f"{label} exceeded the {max_entries}-entry limit"
+                )
+            names.append(entry.name)
+    names.sort()
+    return names
+
+
+def _remove_private_transaction_directory_at(
+    stage_descriptor: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove only the empty transaction directory opened by this operation."""
+
+    current = os.stat(name, dir_fd=stage_descriptor, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or current.st_uid != os.getuid()
+        or stat.S_IMODE(current.st_mode) != 0o700
+        or (current.st_dev, current.st_ino) != expected_identity
+    ):
+        raise ConfigurationError("prune transaction directory identity changed")
+    os.rmdir(name, dir_fd=stage_descriptor)
+    os.fsync(stage_descriptor)
+
+
+def _inspect_prune_transactions_at(
+    root_descriptor: int,
+    *,
+    max_transactions: int,
+) -> list[str]:
+    """Report pending apply recovery without mutating preview state."""
+
+    try:
+        stage_descriptor = _open_existing_private_directory_at(
+            root_descriptor,
+            _RETENTION_PRUNE_STAGE_NAME,
+        )
+    except (OSError, ConfigurationError) as error:
+        return [f"prune transaction inspection failed: {type(error).__name__}"]
+    if stage_descriptor is None:
+        return []
+    try:
+        try:
+            transaction_names = _bounded_sorted_names_at(
+                stage_descriptor,
+                max_entries=max_transactions,
+                label="prune transaction stage",
+            )
+        except (OSError, ConfigurationError) as error:
+            return [f"prune transaction inspection failed: {type(error).__name__}"]
+        if transaction_names:
+            return ["pending evidence-prune transaction requires apply recovery"]
+        return []
+    finally:
+        os.close(stage_descriptor)
+
+
+def _discover_prune_transaction_parents_at(
+    root_descriptor: int,
+    *,
+    max_transactions: int,
+    normalize_restricted: bool,
+) -> tuple[set[tuple[str, ...]], list[str]]:
+    """Discover every source parent that pending recovery could mutate."""
+
+    try:
+        stage_descriptor = _open_existing_private_directory_at(
+            root_descriptor,
+            _RETENTION_PRUNE_STAGE_NAME,
+            normalize_restricted=normalize_restricted,
+        )
+    except (OSError, ConfigurationError) as error:
+        return set(), [f"prune transaction discovery failed: {type(error).__name__}"]
+    if stage_descriptor is None:
+        return set(), []
+    parents: set[tuple[str, ...]] = set()
+    errors: list[str] = []
+    try:
+        try:
+            transaction_names = _bounded_sorted_names_at(
+                stage_descriptor,
+                max_entries=max_transactions,
+                label="prune transaction stage",
+            )
+        except (OSError, ConfigurationError) as error:
+            return set(), [
+                f"prune transaction discovery failed: {type(error).__name__}"
+            ]
+        for transaction_name in transaction_names:
+            transaction_descriptor = -1
+            try:
+                opened = _open_existing_private_directory_at(
+                    stage_descriptor,
+                    transaction_name,
+                    normalize_restricted=normalize_restricted,
+                )
+                if opened is None:
+                    raise ConfigurationError("prune transaction disappeared")
+                transaction_descriptor = opened
+                entries = set(
+                    _bounded_sorted_names_at(
+                        transaction_descriptor,
+                        max_entries=_MAX_PRUNE_TRANSACTION_ENTRIES,
+                        label="prune transaction",
+                    )
+                )
+                if normalize_restricted and _RETENTION_PRUNE_MARKER_NAME in entries:
+                    _normalize_prune_transaction_marker_at(transaction_descriptor)
+                if not entries.intersection(
+                    {
+                        _RETENTION_PRUNE_EVIDENCE_NAME,
+                        _RETENTION_PRUNE_SIDECAR_NAME,
+                    }
+                ):
+                    continue
+                if not entries <= {
+                    _RETENTION_PRUNE_MARKER_NAME,
+                    _RETENTION_PRUNE_EVIDENCE_NAME,
+                    _RETENTION_PRUNE_SIDECAR_NAME,
+                }:
+                    raise ConfigurationError(
+                        "prune transaction contains unexpected entries"
+                    )
+                transaction, _ = _load_prune_transaction_at(transaction_descriptor)
+                parent = transaction.evidence_parts[:-1]
+                if parent:
+                    parents.add(parent)
+            except (
+                OSError,
+                ConfigurationError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ) as error:
+                errors.append(
+                    f"{_RETENTION_PRUNE_STAGE_NAME}/{transaction_name}: "
+                    f"lock discovery failed: {type(error).__name__}"
+                )
+            finally:
+                if transaction_descriptor >= 0:
+                    os.close(transaction_descriptor)
+        return parents, errors
+    finally:
+        os.close(stage_descriptor)
+
+
+def _recover_prune_transactions_at(
+    root_descriptor: int,
+    root: Path,
+    *,
+    current: datetime,
+    max_transactions: int,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Complete or roll back bounded transactions left by interrupted apply."""
+
+    # Recovery trusts the marker's original descriptor-bound expiry decision.
+    # Keep ``current`` in this private interface for deterministic test hooks and
+    # compatibility with the first implementation, but never re-evaluate TTLs.
+    del current
+
+    stage_descriptor = _open_existing_private_directory_at(
+        root_descriptor,
+        _RETENTION_PRUNE_STAGE_NAME,
+        normalize_restricted=True,
+    )
+    if stage_descriptor is None:
+        return [], []
+    recovered: list[tuple[str, str]] = []
+    errors: list[str] = []
+    try:
+        try:
+            transaction_names = _bounded_sorted_names_at(
+                stage_descriptor,
+                max_entries=max_transactions,
+                label="prune transaction stage",
+            )
+        except (OSError, ConfigurationError) as error:
+            return [], [f"prune transaction scan failed: {type(error).__name__}"]
+        for transaction_name in transaction_names:
+            try:
+                _preflight_prune_transaction_at(
+                    root_descriptor,
+                    stage_descriptor,
+                    transaction_name,
+                )
+            except (
+                OSError,
+                ConfigurationError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ) as error:
+                errors.append(
+                    f"{_RETENTION_PRUNE_STAGE_NAME}/{transaction_name}: "
+                    f"recovery preflight failed: {type(error).__name__}"
+                )
+        if errors:
+            return [], errors
+        for transaction_name in transaction_names:
+            try:
+                paths = _recover_prune_transaction_at(
+                    root_descriptor,
+                    stage_descriptor,
+                    transaction_name,
+                )
+                if paths is not None:
+                    recovered.append(
+                        (
+                            str(root.joinpath(*paths[0])),
+                            str(root.joinpath(*paths[1])),
+                        )
+                    )
+            except (
+                OSError,
+                ConfigurationError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ) as error:
+                errors.append(
+                    f"{_RETENTION_PRUNE_STAGE_NAME}/{transaction_name}: "
+                    f"recovery failed: {type(error).__name__}"
+                )
+        return recovered, errors
+    finally:
+        os.close(stage_descriptor)
+
+
+def _preflight_prune_transaction_at(
+    root_descriptor: int,
+    stage_descriptor: int,
+    transaction_name: str,
+) -> None:
+    """Validate one pending transaction completely before any recovery mutates."""
+
+    transaction_descriptor = _open_existing_private_directory_at(
+        stage_descriptor,
+        transaction_name,
+        normalize_restricted=True,
+    )
+    if transaction_descriptor is None:
+        raise ConfigurationError("prune transaction disappeared")
+    try:
+        entries = set(
+            _bounded_sorted_names_at(
+                transaction_descriptor,
+                max_entries=_MAX_PRUNE_TRANSACTION_ENTRIES,
+                label="prune transaction",
+            )
+        )
+        if _RETENTION_PRUNE_MARKER_NAME in entries:
+            _normalize_prune_transaction_marker_at(transaction_descriptor)
+        has_staged_source = bool(
+            entries.intersection(
+                {
+                    _RETENTION_PRUNE_EVIDENCE_NAME,
+                    _RETENTION_PRUNE_SIDECAR_NAME,
+                }
+            )
+        )
+        if not has_staged_source:
+            if not entries <= {_RETENTION_PRUNE_MARKER_NAME}:
+                raise ConfigurationError(
+                    "prune transaction contains unexpected entries"
+                )
+            if _RETENTION_PRUNE_MARKER_NAME not in entries:
+                return
+            try:
+                transaction, _ = _load_prune_transaction_at(transaction_descriptor)
+            except (
+                OSError,
+                ConfigurationError,
+                StructuredDataTypeError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ):
+                return
+            source_evidence = _stat_relative_record_at(
+                root_descriptor,
+                transaction.evidence_parts,
+            )
+            source_sidecar = _stat_relative_record_at(
+                root_descriptor,
+                transaction.sidecar_parts,
+            )
+            if (source_evidence is None) != (source_sidecar is None):
+                raise ConfigurationError(
+                    "stage-free prune transaction has incomplete sources"
+                )
+            return
+
+        if not entries <= {
+            _RETENTION_PRUNE_MARKER_NAME,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+        }:
+            raise ConfigurationError("prune transaction contains unexpected entries")
+        if _RETENTION_PRUNE_MARKER_NAME not in entries:
+            raise ConfigurationError("prune transaction marker is missing")
+        transaction, _ = _load_prune_transaction_at(transaction_descriptor)
+        staged_evidence = _stat_immediate_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+        )
+        staged_sidecar = _stat_immediate_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+        )
+        source_evidence = _stat_relative_record_at(
+            root_descriptor,
+            transaction.evidence_parts,
+        )
+        source_sidecar = _stat_relative_record_at(
+            root_descriptor,
+            transaction.sidecar_parts,
+        )
+        _require_transaction_record_identity(
+            staged_evidence,
+            transaction.evidence_identity,
+        )
+        _require_transaction_record_identity(
+            staged_sidecar,
+            transaction.sidecar_identity,
+        )
+        _require_transaction_record_identity(
+            source_evidence,
+            transaction.evidence_identity,
+        )
+        _require_transaction_record_identity(
+            source_sidecar,
+            transaction.sidecar_identity,
+        )
+        if staged_evidence is not None and staged_sidecar is not None:
+            pair = _RetainedEvidencePair(
+                evidence=_transaction_source_record(
+                    transaction.evidence_parts,
+                    staged_evidence,
+                ),
+                sidecar=_transaction_source_record(
+                    transaction.sidecar_parts,
+                    staged_sidecar,
+                ),
+                expires_at=_validated_manifest_timestamp(transaction.expires_at),
+            )
+            _revalidate_staged_pair_at(
+                transaction_descriptor,
+                pair,
+                allowed_link_counts=frozenset({1, 2}),
+            )
+            _read_record_bytes_at(
+                transaction_descriptor,
+                staged_evidence,
+                allowed_link_counts=frozenset(
+                    {2 if source_evidence is not None else 1}
+                ),
+            )
+            _read_record_bytes_at(
+                transaction_descriptor,
+                staged_sidecar,
+                allowed_link_counts=frozenset({2 if source_sidecar is not None else 1}),
+            )
+            for source in (source_evidence, source_sidecar):
+                if source is not None:
+                    _read_record_bytes_at(
+                        root_descriptor,
+                        source,
+                        allowed_link_counts=frozenset({2}),
+                    )
+            return
+
+        if (source_evidence is None) != (source_sidecar is None):
+            raise ConfigurationError("incomplete prune transaction is not recoverable")
+        if staged_evidence is not None:
+            _read_record_bytes_at(
+                transaction_descriptor,
+                staged_evidence,
+                allowed_link_counts=frozenset(
+                    {2 if source_evidence is not None else 1}
+                ),
+            )
+        if staged_sidecar is not None:
+            _read_record_bytes_at(
+                transaction_descriptor,
+                staged_sidecar,
+                allowed_link_counts=frozenset({2 if source_sidecar is not None else 1}),
+            )
+        if source_evidence is not None and source_sidecar is not None:
+            _read_record_bytes_at(
+                root_descriptor,
+                source_evidence,
+                allowed_link_counts=frozenset(
+                    {2 if staged_evidence is not None else 1}
+                ),
+            )
+            _read_record_bytes_at(
+                root_descriptor,
+                source_sidecar,
+                allowed_link_counts=frozenset({2 if staged_sidecar is not None else 1}),
+            )
+    finally:
+        os.close(transaction_descriptor)
+
+
+def _recover_prune_transaction_at(
+    root_descriptor: int,
+    stage_descriptor: int,
+    transaction_name: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Recover one exact transaction, returning paths when deletion completed."""
+
+    transaction_descriptor = _open_existing_private_directory_at(
+        stage_descriptor,
+        transaction_name,
+        normalize_restricted=True,
+    )
+    if transaction_descriptor is None:
+        raise ConfigurationError("prune transaction disappeared")
+    transaction_metadata = os.fstat(transaction_descriptor)
+    transaction_identity = (
+        transaction_metadata.st_dev,
+        transaction_metadata.st_ino,
+    )
+    try:
+        entries = set(
+            _bounded_sorted_names_at(
+                transaction_descriptor,
+                max_entries=_MAX_PRUNE_TRANSACTION_ENTRIES,
+                label="prune transaction",
+            )
+        )
+        if _RETENTION_PRUNE_MARKER_NAME in entries:
+            _normalize_prune_transaction_marker_at(transaction_descriptor)
+        has_staged_source = bool(
+            entries.intersection(
+                {
+                    _RETENTION_PRUNE_EVIDENCE_NAME,
+                    _RETENTION_PRUNE_SIDECAR_NAME,
+                }
+            )
+        )
+        if not has_staged_source:
+            if not entries <= {_RETENTION_PRUNE_MARKER_NAME}:
+                raise ConfigurationError(
+                    "prune transaction contains unexpected entries"
+                )
+            completed_paths: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+            if _RETENTION_PRUNE_MARKER_NAME in entries:
+                try:
+                    transaction, _ = _load_prune_transaction_at(transaction_descriptor)
+                except (
+                    OSError,
+                    ConfigurationError,
+                    StructuredDataTypeError,
+                    TypeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    UnicodeDecodeError,
+                ):
+                    transaction = None
+                if transaction is not None:
+                    source_evidence = _stat_relative_record_at(
+                        root_descriptor,
+                        transaction.evidence_parts,
+                    )
+                    source_sidecar = _stat_relative_record_at(
+                        root_descriptor,
+                        transaction.sidecar_parts,
+                    )
+                    if (source_evidence is None) != (source_sidecar is None):
+                        raise ConfigurationError(
+                            "stage-free prune transaction has incomplete sources"
+                        )
+                    if source_evidence is None and source_sidecar is None:
+                        completed_paths = (
+                            transaction.evidence_parts,
+                            transaction.sidecar_parts,
+                        )
+                        _fsync_absent_transaction_sources_at(
+                            root_descriptor,
+                            transaction,
+                        )
+            for name in sorted(entries):
+                record = _stat_immediate_record_at(transaction_descriptor, name)
+                if record is None:
+                    raise ConfigurationError("prune transaction entry disappeared")
+                _unlink_owned_file_at(
+                    transaction_descriptor,
+                    name,
+                    record.identity,
+                    allowed_link_counts=frozenset({1}),
+                )
+            if entries:
+                os.fsync(transaction_descriptor)
+            _remove_private_transaction_directory_at(
+                stage_descriptor,
+                transaction_name,
+                transaction_identity,
+            )
+            return completed_paths
+        allowed_entries = {
+            _RETENTION_PRUNE_MARKER_NAME,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+        }
+        if not entries <= allowed_entries:
+            raise ConfigurationError("prune transaction contains unexpected entries")
+        if _RETENTION_PRUNE_MARKER_NAME not in entries:
+            raise ConfigurationError("prune transaction marker is missing")
+        transaction, marker = _load_prune_transaction_at(transaction_descriptor)
+        staged_evidence = _stat_immediate_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_EVIDENCE_NAME,
+        )
+        staged_sidecar = _stat_immediate_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_SIDECAR_NAME,
+        )
+        source_evidence = _stat_relative_record_at(
+            root_descriptor,
+            transaction.evidence_parts,
+        )
+        source_sidecar = _stat_relative_record_at(
+            root_descriptor,
+            transaction.sidecar_parts,
+        )
+        _require_transaction_record_identity(
+            staged_evidence,
+            transaction.evidence_identity,
+        )
+        _require_transaction_record_identity(
+            staged_sidecar,
+            transaction.sidecar_identity,
+        )
+        _require_transaction_record_identity(
+            source_evidence,
+            transaction.evidence_identity,
+        )
+        _require_transaction_record_identity(
+            source_sidecar,
+            transaction.sidecar_identity,
+        )
+        if staged_evidence is not None and staged_sidecar is not None:
+            pair = _RetainedEvidencePair(
+                evidence=_transaction_source_record(
+                    transaction.evidence_parts,
+                    staged_evidence,
+                ),
+                sidecar=_transaction_source_record(
+                    transaction.sidecar_parts,
+                    staged_sidecar,
+                ),
+                expires_at=_validated_manifest_timestamp(transaction.expires_at),
+            )
+            _revalidate_staged_pair_at(
+                transaction_descriptor,
+                pair,
+                allowed_link_counts=frozenset({1, 2}),
+            )
+            if source_sidecar is not None:
+                _unlink_relative_record_at(
+                    root_descriptor,
+                    source_sidecar,
+                    allowed_link_counts=frozenset({2}),
+                )
+            if source_evidence is not None:
+                _unlink_relative_record_at(
+                    root_descriptor,
+                    source_evidence,
+                    allowed_link_counts=frozenset({2}),
+                )
+            _fsync_absent_transaction_sources_at(root_descriptor, transaction)
+            _unlink_stage_record_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_EVIDENCE_NAME,
+                transaction.evidence_identity,
+            )
+            _unlink_stage_record_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_SIDECAR_NAME,
+                transaction.sidecar_identity,
+            )
+            _unlink_stage_record_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_MARKER_NAME,
+                marker.identity,
+            )
+            _remove_private_transaction_directory_at(
+                stage_descriptor,
+                transaction_name,
+                transaction_identity,
+            )
+            return transaction.evidence_parts, transaction.sidecar_parts
+
+        if source_evidence is None and source_sidecar is None:
+            _fsync_absent_transaction_sources_at(root_descriptor, transaction)
+            if staged_evidence is not None:
+                _unlink_stage_record_at(
+                    transaction_descriptor,
+                    _RETENTION_PRUNE_EVIDENCE_NAME,
+                    transaction.evidence_identity,
+                )
+            if staged_sidecar is not None:
+                _unlink_stage_record_at(
+                    transaction_descriptor,
+                    _RETENTION_PRUNE_SIDECAR_NAME,
+                    transaction.sidecar_identity,
+                )
+            _unlink_stage_record_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_MARKER_NAME,
+                marker.identity,
+            )
+            _remove_private_transaction_directory_at(
+                stage_descriptor,
+                transaction_name,
+                transaction_identity,
+            )
+            return transaction.evidence_parts, transaction.sidecar_parts
+
+        if source_evidence is None or source_sidecar is None:
+            raise ConfigurationError("incomplete prune transaction is not recoverable")
+        if staged_evidence is not None:
+            _unlink_owned_file_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_EVIDENCE_NAME,
+                transaction.evidence_identity,
+                allowed_link_counts=frozenset({2}),
+            )
+        if staged_sidecar is not None:
+            _unlink_owned_file_at(
+                transaction_descriptor,
+                _RETENTION_PRUNE_SIDECAR_NAME,
+                transaction.sidecar_identity,
+                allowed_link_counts=frozenset({2}),
+            )
+        _unlink_stage_record_at(
+            transaction_descriptor,
+            _RETENTION_PRUNE_MARKER_NAME,
+            marker.identity,
+        )
+        os.fsync(transaction_descriptor)
+        _remove_private_transaction_directory_at(
+            stage_descriptor,
+            transaction_name,
+            transaction_identity,
+        )
+        return None
+    finally:
+        os.close(transaction_descriptor)
+
+
+def _load_prune_transaction_at(
+    transaction_descriptor: int,
+) -> tuple[_PruneTransaction, _RetainedFileRecord]:
+    """Load and validate one content-free transaction marker."""
+
+    marker = _stat_immediate_record_at(
+        transaction_descriptor,
+        _RETENTION_PRUNE_MARKER_NAME,
+    )
+    if marker is None:
+        raise ConfigurationError("prune transaction marker is missing")
+    raw_bytes = _read_record_bytes_at(transaction_descriptor, marker)
+    raw = _load_json_bytes(raw_bytes)
+    if not isinstance(raw, Mapping):
+        raise ConfigurationError("prune transaction marker is malformed")
+    expected_keys = {
+        "schema",
+        "evidence_parts",
+        "evidence_device",
+        "evidence_inode",
+        "sidecar_parts",
+        "sidecar_device",
+        "sidecar_inode",
+        "expires_at",
+        "selected_at",
+    }
+    if (
+        set(raw) != expected_keys
+        or raw["schema"] != _RETENTION_PRUNE_TRANSACTION_SCHEMA
+    ):
+        raise ConfigurationError("prune transaction marker schema is invalid")
+    evidence_parts = _validated_relative_parts(raw["evidence_parts"])
+    sidecar_parts = _validated_relative_parts(raw["sidecar_parts"])
+    if (
+        sidecar_parts[:-1] != evidence_parts[:-1]
+        or sidecar_parts[-1] != f"{evidence_parts[-1]}.retention.json"
+    ):
+        raise ConfigurationError("prune transaction pair relationship is invalid")
+    expires_at = raw["expires_at"]
+    selected_at = raw["selected_at"]
+    if not isinstance(expires_at, str) or not isinstance(selected_at, str):
+        raise ConfigurationError("prune transaction expiration is invalid")
+    expires = _validated_manifest_timestamp(expires_at)
+    selected = _validated_manifest_timestamp(selected_at)
+    if selected < expires:
+        raise ConfigurationError("prune transaction was not selected after expiry")
+    return (
+        _PruneTransaction(
+            evidence_parts=evidence_parts,
+            evidence_identity=(
+                _validated_identity_integer(raw["evidence_device"]),
+                _validated_identity_integer(raw["evidence_inode"]),
+            ),
+            sidecar_parts=sidecar_parts,
+            sidecar_identity=(
+                _validated_identity_integer(raw["sidecar_device"]),
+                _validated_identity_integer(raw["sidecar_inode"]),
+            ),
+            expires_at=expires_at,
+            selected_at=selected_at,
+        ),
+        marker,
+    )
+
+
+def _validated_relative_parts(value: Any) -> tuple[str, ...]:
+    """Validate a bounded normalized descriptor-relative path component list."""
+
+    if not isinstance(value, list) or not value or len(value) > _MAX_REPAIR_DEPTH + 1:
+        raise ConfigurationError("prune transaction path is invalid")
+    parts = tuple(value)
+    if any(
+        not isinstance(part, str)
+        or not part
+        or part in {".", ".."}
+        or Path(part).name != part
+        for part in parts
+    ):
+        raise ConfigurationError("prune transaction path is invalid")
+    return parts
+
+
+def _validated_identity_integer(value: Any) -> int:
+    """Validate a filesystem identity integer without accepting booleans."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigurationError("prune transaction identity is invalid")
+    return value
+
+
+def _stat_immediate_record_at(
+    parent_descriptor: int,
+    name: str,
+) -> _RetainedFileRecord | None:
+    """Return one no-follow immediate record, or None when it is absent."""
+
+    try:
+        metadata = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return _RetainedFileRecord(
+        relative_parts=(name,),
+        identity=(metadata.st_dev, metadata.st_ino),
+        mode=metadata.st_mode,
+        size=metadata.st_size,
+    )
+
+
+def _stat_relative_record_at(
+    root_descriptor: int,
+    relative_parts: tuple[str, ...],
+) -> _RetainedFileRecord | None:
+    """Return one no-follow root-relative record, or None when absent."""
+
+    parent_descriptor = _open_relative_directory_at(
+        root_descriptor,
+        relative_parts[:-1],
+    )
+    try:
+        try:
+            metadata = os.stat(
+                relative_parts[-1],
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return None
+        return _RetainedFileRecord(
+            relative_parts=relative_parts,
+            identity=(metadata.st_dev, metadata.st_ino),
+            mode=metadata.st_mode,
+            size=metadata.st_size,
+        )
+    finally:
+        os.close(parent_descriptor)
+
+
+def _require_transaction_record_identity(
+    record: _RetainedFileRecord | None,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Reject a present transaction or source name bound to another inode."""
+
+    if record is not None and record.identity != expected_identity:
+        raise ConfigurationError("prune transaction identity changed")
+
+
+def _transaction_source_record(
+    relative_parts: tuple[str, ...],
+    staged: _RetainedFileRecord,
+) -> _RetainedFileRecord:
+    """Reconstruct source display metadata from one exact staged inode."""
+
+    return _RetainedFileRecord(
+        relative_parts=relative_parts,
+        identity=staged.identity,
+        mode=staged.mode,
+        size=staged.size,
+    )
 
 
 def _classify_orphaned_records_at(
@@ -854,7 +3063,7 @@ def _classify_orphaned_records_at(
             if sidecar.is_symlink:
                 raise OSError("retention sidecar must not be a symbolic link")
             raw_bytes = _read_record_bytes_at(root_descriptor, sidecar)
-            raw = json.loads(raw_bytes.decode("utf-8"))
+            raw = _load_json_bytes(raw_bytes)
             if not isinstance(raw, Mapping):
                 raise StructuredDataTypeError("retention sidecar must be a JSON object")
             evidence_name = str(raw.get("evidence_path", ""))
@@ -910,6 +3119,8 @@ def _verify_retained_record_at(
     root_descriptor: int,
     record: _RetainedFileRecord,
     manifest: Mapping[str, Any],
+    *,
+    allowed_link_counts: frozenset[int] = frozenset({1}),
 ) -> None:
     """Require descriptor-read evidence bytes to match one manifest digest."""
 
@@ -920,16 +3131,28 @@ def _verify_retained_record_at(
         or any(character not in "0123456789abcdef" for character in expected)
     ):
         raise ValueError("retention content digest is invalid")
-    raw = _read_record_bytes_at(root_descriptor, record)
+    raw = _read_record_bytes_at(
+        root_descriptor,
+        record,
+        allowed_link_counts=allowed_link_counts,
+    )
     text = raw.decode("utf-8")
-    value: Any = json.loads(text) if record.name.casefold().endswith(".json") else text
-    if content_digest(value) != expected:
-        raise ValueError("retention content digest does not match evidence")
+    if content_digest(text) == expected:
+        return
+    try:
+        value = _load_json_bytes(raw)
+    except (TypeError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError("retention content digest does not match evidence") from error
+    if content_digest(value) == expected:
+        return
+    raise ValueError("retention content digest does not match evidence")
 
 
 def _read_record_bytes_at(
     root_descriptor: int,
     record: _RetainedFileRecord,
+    *,
+    allowed_link_counts: frozenset[int] = frozenset({1}),
 ) -> bytes:
     """Read one bounded regular file through its validated relative descriptor."""
 
@@ -950,7 +3173,7 @@ def _read_record_bytes_at(
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
-            or metadata.st_nlink != 1
+            or metadata.st_nlink not in allowed_link_counts
             or stat.S_IMODE(metadata.st_mode) != 0o600
             or (metadata.st_dev, metadata.st_ino) != record.identity
             or metadata.st_size != record.size
@@ -1089,27 +3312,18 @@ def _open_or_create_private_directory_at(
     if name in {"", ".", ".."} or Path(name).name != name:
         raise ConfigurationError("unsafe quarantine directory component")
     try:
-        os.mkdir(name, 0o700, dir_fd=parent_descriptor)
-        os.fsync(parent_descriptor)
+        descriptor, _ = _create_private_directory_at(parent_descriptor, name)
+        return descriptor
     except FileExistsError:
         pass
-    descriptor = os.open(
+    existing_descriptor = _open_existing_private_directory_at(
+        parent_descriptor,
         name,
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0),
-        dir_fd=parent_descriptor,
+        normalize_restricted=True,
     )
-    metadata = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700
-    ):
-        os.close(descriptor)
-        raise ConfigurationError("quarantine directory is not owner-private")
-    return descriptor
+    if existing_descriptor is None:
+        raise ConfigurationError("private maintenance directory disappeared")
+    return existing_descriptor
 
 
 def _quarantine_owned_name_at(
@@ -1205,7 +3419,11 @@ def _verify_retained_content(path: Path, manifest: Mapping[str, Any]) -> None:
     ):
         raise ValueError("retention content digest is invalid")
     text = path.read_text(encoding="utf-8")
-    value: Any = json.loads(text) if path.suffix.casefold() == ".json" else text
+    value: Any = (
+        _load_json_bytes(text.encode("utf-8"))
+        if path.suffix.casefold() == ".json"
+        else text
+    )
     if content_digest(value) != expected:
         raise ValueError("retention content digest does not match evidence")
 
@@ -1216,6 +3434,8 @@ def _permitted_rule(
     evidence_type: str,
     include_content: bool,
 ) -> RetentionRule:
+    if not isinstance(evidence_type, str) or not evidence_type.strip():
+        raise ConfigurationError("retention evidence_type must not be empty")
     rule = config.decide(evidence_type)
     if rule.persistence is PersistenceMode.PROHIBITED:
         raise ConfigurationError(
@@ -1238,6 +3458,9 @@ def _build_manifest(
     digest: str,
     citation_ids: tuple[str, ...],
 ) -> tuple[Path, RetentionManifest]:
+    sidecar = _retention_sidecar_path(path)
+    if any(not isinstance(value, str) or not value for value in citation_ids):
+        raise ConfigurationError("retention citation_ids are invalid")
     manifest = RetentionManifest(
         evidence_path=path.name,
         evidence_type=evidence_type,
@@ -1248,8 +3471,37 @@ def _build_manifest(
         content_digest=digest,
         citation_ids=tuple(dict.fromkeys(citation_ids)),
     )
-    sidecar = path.with_suffix(path.suffix + ".retention.json")
+    try:
+        _validate_retention_manifest(
+            manifest.to_dict(),
+            sidecar_name=sidecar.name,
+        )
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError("generated retention manifest is invalid") from error
     return sidecar, manifest
+
+
+def _retention_sidecar_path(path: Path) -> Path:
+    """Return an unambiguous sidecar name outside internal maintenance names."""
+
+    if _is_reserved_retained_evidence_name(path.name):
+        raise ConfigurationError("retained evidence filename is reserved")
+    sidecar = path.with_suffix(path.suffix + ".retention.json")
+    if sidecar.name == path.name:
+        raise ConfigurationError("retained evidence names must be distinct")
+    return sidecar
+
+
+def _is_reserved_retained_evidence_name(name: str) -> bool:
+    """Return whether one name collides with maintenance or sidecar roles."""
+
+    reserved_names = {
+        _RETENTION_FLOCK_NAME.casefold(),
+        _RETENTION_PRUNE_STAGE_NAME.casefold(),
+        _RETENTION_QUARANTINE_NAME.casefold(),
+    }
+    folded_name = name.casefold()
+    return folded_name in reserved_names or folded_name.endswith(".retention.json")
 
 
 def _metadata_only(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1524,10 +3776,12 @@ def _atomic_write_files_at(
     parent_descriptor = pinned.fileno()
     lock_descriptor = -1
     lock_identity: tuple[int, int] | None = None
+    hierarchy_locks: list[int] = []
     published: list[tuple[str, tuple[int, int]]] = []
     try:
         lock_descriptor, lock_identity = _open_retention_lock(parent_descriptor)
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        hierarchy_locks = _acquire_retention_directory_hierarchy(pinned)
         _validate_restricted_file_at(
             parent_descriptor,
             _RETENTION_FLOCK_NAME,
@@ -1587,7 +3841,10 @@ def _atomic_write_files_at(
                 fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(lock_descriptor)
-        pinned.close()
+        try:
+            _release_retention_directory_hierarchy(hierarchy_locks)
+        finally:
+            pinned.close()
 
 
 def _commit_restricted_files_at(
@@ -1606,6 +3863,12 @@ def _commit_restricted_files_at(
 
     if publish_last not in content_by_name:
         raise ConfigurationError("retained publication target is missing")
+    if any(
+        len(content) > _MAX_REPAIR_FILE_BYTES for content in content_by_name.values()
+    ):
+        raise ConfigurationError(
+            "retained evidence exceeds the descriptor validation size limit"
+        )
     final_names = tuple(content_by_name)
     _require_retained_names_absent(parent_descriptor, final_names)
     staged: list[tuple[str, str, int, tuple[int, int]]] = []
@@ -1706,44 +3969,65 @@ def _open_retention_lock(
 ) -> tuple[int, tuple[int, int]]:
     """Open or create the content-free persistent retention lock."""
 
-    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    created = False
     try:
-        descriptor = os.open(_RETENTION_FLOCK_NAME, flags, dir_fd=parent_descriptor)
-    except FileNotFoundError:
-        try:
-            descriptor = os.open(
-                _RETENTION_FLOCK_NAME,
-                flags | os.O_CREAT | os.O_EXCL,
-                0o600,
-                dir_fd=parent_descriptor,
-            )
-            created = True
-        except FileExistsError:
-            descriptor = os.open(
-                _RETENTION_FLOCK_NAME,
-                flags,
-                dir_fd=parent_descriptor,
-            )
-    except OSError as error:
+        existing = _open_existing_restricted_file_at(
+            parent_descriptor,
+            _RETENTION_FLOCK_NAME,
+            normalize_restricted=True,
+        )
+    except (OSError, ConfigurationError) as error:
         raise ConfigurationError("retention transaction lock is unsafe") from error
+    if existing is not None:
+        return existing
+
     try:
-        if created:
-            os.fchmod(descriptor, 0o600)
-            os.fsync(descriptor)
-            os.fsync(parent_descriptor)
-        identity = _restricted_file_identity(
-            os.fstat(descriptor),
+        descriptor, identity = _open_new_restricted_file_at(
+            parent_descriptor,
             _RETENTION_FLOCK_NAME,
         )
+    except ConfigurationError as error:
+        # A competing create can win after the absent stat. Reopen and validate
+        # only the exact persistent lock contract; initialization failures from
+        # our own create have already rolled their inode back.
+        try:
+            existing = _open_existing_restricted_file_at(
+                parent_descriptor,
+                _RETENTION_FLOCK_NAME,
+                normalize_restricted=True,
+            )
+        except (OSError, ConfigurationError) as reopen_error:
+            raise ConfigurationError(
+                "retention transaction lock is unsafe"
+            ) from reopen_error
+        if existing is not None:
+            return existing
+        raise ConfigurationError("retention transaction lock is unsafe") from error
+
+    try:
+        os.fsync(descriptor)
+        os.fsync(parent_descriptor)
         _validate_restricted_file_at(
             parent_descriptor,
             _RETENTION_FLOCK_NAME,
             identity,
         )
         return descriptor, identity
-    except BaseException:
+    except BaseException as error:
+        cleanup_error: BaseException | None = None
+        try:
+            _unlink_new_private_file_at(
+                parent_descriptor,
+                _RETENTION_FLOCK_NAME,
+                identity,
+            )
+            os.fsync(parent_descriptor)
+        except (OSError, ConfigurationError) as caught:
+            cleanup_error = caught
         os.close(descriptor)
+        if cleanup_error is not None:
+            raise ConfigurationError(
+                "retention lock initialization rollback was incomplete"
+            ) from error
         raise
 
 
@@ -1752,28 +4036,74 @@ def _open_existing_retention_lock(
 ) -> tuple[int, tuple[int, int]] | None:
     """Open an existing lock without mutating state during a repair preview."""
 
-    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
-        descriptor = os.open(
+        return _open_existing_restricted_file_at(
+            parent_descriptor,
             _RETENTION_FLOCK_NAME,
-            flags,
+            normalize_restricted=False,
+        )
+    except (OSError, ConfigurationError) as error:
+        raise ConfigurationError("retention transaction lock is unsafe") from error
+
+
+def _open_existing_restricted_file_at(
+    parent_descriptor: int,
+    name: str,
+    *,
+    normalize_restricted: bool,
+) -> tuple[int, tuple[int, int]] | None:
+    """Open a known internal file, optionally repairing stricter owner bits."""
+
+    if name in {"", ".", ".."} or Path(name).name != name:
+        raise ConfigurationError("unsafe restricted file component")
+    try:
+        initial = os.stat(
+            name,
             dir_fd=parent_descriptor,
+            follow_symlinks=False,
         )
     except FileNotFoundError:
         return None
-    except OSError as error:
-        raise ConfigurationError("retention transaction lock is unsafe") from error
-    try:
-        identity = _restricted_file_identity(
-            os.fstat(descriptor),
-            _RETENTION_FLOCK_NAME,
+    initial_mode = stat.S_IMODE(initial.st_mode)
+    if (
+        not stat.S_ISREG(initial.st_mode)
+        or initial.st_uid != os.getuid()
+        or initial.st_nlink != 1
+        or (normalize_restricted and initial_mode & ~0o600 != 0)
+        or (not normalize_restricted and initial_mode != 0o600)
+    ):
+        raise ConfigurationError(f"retained evidence file is unsafe: {name}")
+    expected_identity = initial.st_dev, initial.st_ino
+    if normalize_restricted and initial_mode != 0o600:
+        os.chmod(
+            name,
+            0o600,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
         )
+        os.fsync(parent_descriptor)
+        normalized = os.stat(
+            name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if _restricted_file_identity(normalized, name) != expected_identity:
+            raise ConfigurationError("retained evidence file identity changed")
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except OSError as error:
+        raise ConfigurationError(f"retained evidence file is unsafe: {name}") from error
+    try:
+        if _restricted_file_identity(os.fstat(descriptor), name) != expected_identity:
+            raise ConfigurationError("retained evidence file identity changed")
         _validate_restricted_file_at(
             parent_descriptor,
-            _RETENTION_FLOCK_NAME,
-            identity,
+            name,
+            expected_identity,
         )
-        return descriptor, identity
+        return descriptor, expected_identity
     except BaseException:
         os.close(descriptor)
         raise
@@ -1790,8 +4120,7 @@ def _retention_lock_exists_at(parent_descriptor: int) -> bool:
         )
     except FileNotFoundError:
         return False
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ConfigurationError("retention transaction lock is unsafe")
+    _restricted_file_identity(metadata, _RETENTION_FLOCK_NAME)
     return True
 
 

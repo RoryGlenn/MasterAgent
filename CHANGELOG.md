@@ -1,5 +1,18 @@
 # Changelog
 
+- Enable descriptor-safe expiration deletion for retained evidence on POSIX.
+  `evidence-prune` now derives preview and explicit apply from the same bounded,
+  validated record plan, coordinates ancestor and descendant roots through
+  owner-private ancestor retention locks, holds the selected-root and discovered
+  evidence-parent publication locks, descriptor-rescans before mutation, and
+  removes each expired evidence and sidecar pair through a recoverable
+  content-free transaction with a durable source-parent commit barrier. A
+  pending nested-root transaction is reported for exact-root recovery, and
+  apply can repair crash-stricter owner-only internal modes. Orphan repair now
+  takes the same descendant-parent locks and rescans before quarantine, so a
+  partial child publication fails closed. Malformed, unsafe, truncated,
+  substituted, or concurrently changing trees fail closed; all Windows execution remains capability-gated.
+
 - Make the optional broker-owned Copilot SDK adapter enforce its documented
   controls at the real runner boundary: HMAC-authenticated cross-process goal
   budgets, bounded tracked/staged/untracked-content state binding,

@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 
 from master_agent.cli import main
+from master_agent.retention import RetentionConfig, write_retained_text
 from tests.helpers import private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,18 +88,30 @@ class PhaseCompletionCliTests(unittest.TestCase):
             self.assertGreaterEqual(len(payload["workflows"]), 2)
             self.assertTrue(all(not item["enabled"] for item in payload["workflows"]))
 
-    def test_evidence_prune_apply_is_disabled_before_traversal(self) -> None:
-        """Destructive recursive maintenance must remain non-routable."""
+    def test_evidence_prune_apply_deletes_only_an_expired_valid_pair(self) -> None:
+        """Explicit apply should use the descriptor-bound retention path."""
 
         with private_temporary_directory() as directory:
-            missing = Path(directory) / "does-not-exist"
+            root = Path(directory)
+            created = datetime(2000, 1, 1, tzinfo=UTC)
+            config = RetentionConfig.from_toml(ROOT / "config" / "retention.toml")
+            evidence, sidecar = write_retained_text(
+                root / "result.txt",
+                "expired",
+                evidence_type="run-result/test",
+                config=config,
+                now=created,
+            )
+            stdout = StringIO()
             stderr = StringIO()
-            with redirect_stderr(stderr):
-                status = main(["evidence-prune", "--root", str(missing), "--apply"])
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(["evidence-prune", "--root", str(root), "--apply"])
 
-            self.assertEqual(status, 1)
-            self.assertIn("pruning is disabled", stderr.getvalue())
-            self.assertFalse(missing.exists())
+            self.assertEqual(status, 0, stderr.getvalue())
+            self.assertFalse(evidence.exists())
+            self.assertFalse(sidecar.exists())
+            self.assertIn("mode: apply", stdout.getvalue())
+            self.assertIn("deleted:", stdout.getvalue())
 
     def test_evidence_repair_apply_quarantines_orphan_recoverably(self) -> None:
         with private_temporary_directory() as directory:

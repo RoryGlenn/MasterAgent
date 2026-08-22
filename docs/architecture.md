@@ -355,8 +355,32 @@ messages represented by stable digests/reason codes. Prohibited retention
 matches override every allow rule. Retained evidence and its sidecar are
 fsynced through mode-`0600` same-directory staging files and create-only
 published manifest-first. Descriptor-relative repair can move orphaned
-identities into a private same-filesystem quarantine; expiry deletion remains
-preview-only.
+identities into a private same-filesystem quarantine.
+
+Expiration preview and explicit POSIX deletion share one deterministic,
+bounded descriptor-relative validation plan beneath a pinned root. The runtime
+first exposes and exclusively holds the exact selected-parent retention lock
+for publication. It then shared-locks every existing retention boundary in the
+owner-controlled pinned ancestor chain. Maintenance uses the same handshake:
+an exclusive selected-root lock, shared existing ancestor retention locks, and
+every discovered evidence-parent lock. Thus it still holds the root retention
+lock plus every discovered evidence-parent lock. A parent operation either owns
+an ancestor lock before a child starts or discovers the child's already-visible
+leaf lock during its bounded scan. It rescans the exact descriptor tree and
+rejects identity, mode, link, manifest, digest, sibling, size, limit, or
+concurrency drift before starting new deletion. Each expired evidence/sidecar
+pair is hard-linked into a private, bounded, same-filesystem, content-free transaction before either public name
+is removed. The common source parent is fsynced with both public names absent
+before recovery links are discarded, allowing a later apply to complete or
+roll back interrupted staging without losing deletion durability. Pending
+transactions beneath a nested retention root make an ancestor scan fail closed
+until the exact child root is recovered. Native Windows execution remains
+unavailable until equivalent filesystem and atomic-state contracts exist.
+
+Descriptor-relative orphan repair participates in the same selected-root,
+ancestor, and descendant-parent lock handshake. It repeats the bounded scan
+while those locks are held before classification or quarantine, so ancestor
+repair cannot move a manifest from an active child-first publication.
 
 ### Recurring runner
 

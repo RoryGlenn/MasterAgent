@@ -63,6 +63,20 @@ handling, and independent verification.
   private request inspection, trusted signing, exact-run resume, and partial
   dual approval. Tampered, stale, symlinked, permission-unsafe, or
   authority-drifted requests fail closed.
+- POSIX retained-evidence expiration tests prove preview/apply candidate parity,
+  expired-only pair deletion, future-record preservation, deterministic output,
+  repeated-apply idempotency, owner-private ancestor/selected-root retention-
+  lock exclusion, root and descendant-parent lock coordination, exact descriptor rescans, and
+  bounded interrupted-transaction recovery. Adversarial cases cover malformed
+  sidecars, writer/schema/size drift, deep JSON nesting, unsafe permissions,
+  restrictive-umask interruption, symlinks, hard links, traversal and role-
+  overlap names, digest mismatch, depth and entry limits, transaction fan-out,
+  cross-device staging, descriptor substitution, cancellation, source-parent
+  fsync failure, crash-stricter internal file modes, pending nested-root
+  transactions, and concurrent nested publication. All Windows execution remains capability-gated.
+- Release validation keeps the CLI, operations, configuration, architecture,
+  threat model, roadmap, communication-context guide, semantic index, and
+  current changelog entry synchronized with that expiration boundary.
 
 ### Agent profiles and repository automation
 
