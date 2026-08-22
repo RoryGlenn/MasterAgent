@@ -21,6 +21,9 @@ from master_agent.platform_runtime.windows import (
     WindowsProcessSupervisionBackend,
     build_windows_runtime,
 )
+from master_agent.platform_runtime.windows.process import (
+    _PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+)
 
 _SECRET = "ambient-process-secret-canary"
 
@@ -50,6 +53,11 @@ class WindowsProcessContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.api = _FakeProcessApi()
         self.backend = WindowsProcessSupervisionBackend(api=self.api)
+
+    def test_appcontainer_security_attribute_uses_win32_thread_input_value(
+        self,
+    ) -> None:
+        self.assertEqual(_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, 0x00020009)
 
     def test_minimal_environment_and_explicit_handle_selection(self) -> None:
         previous = os.environ.get("MASTER_AGENT_AMBIENT_PROCESS_SECRET")

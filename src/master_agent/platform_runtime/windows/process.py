@@ -26,7 +26,7 @@ _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _STARTF_USESTDHANDLES = 0x00000100
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
-_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020005
+_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
 _HANDLE_FLAG_INHERIT = 0x00000001
 _GENERIC_READ = 0x80000000
 _FILE_SHARE_READ = 0x00000001
@@ -814,7 +814,8 @@ class CtypesWindowsProcessApi:
             ):
                 self._kernel.DeleteProcThreadAttributeList(storage)
                 raise ProcessSupervisionError(
-                    "appcontainer_attribute_configuration_failed"
+                    "appcontainer_attribute_configuration_failed",
+                    native_error_code=_last_error(),
                 )
         startup = _StartupInfoExW()
         startup.startup_info.cb = ctypes.sizeof(_StartupInfoExW)
