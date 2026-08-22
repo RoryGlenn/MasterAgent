@@ -18,14 +18,7 @@ compatible, and no existing file may be migrated or rewritten automatically.
 
 ## MODIFIED
 
-### MA-PLATFORM-001 — Platform runtime contracts
-
-The platform runtime MUST expose a seventh `credential_storage` contract.
-Native Windows MAY advertise it only after Credential Manager, current-user
-DPAPI, secure filesystem, locking, and atomic publication probes succeed. Other
-platforms MUST report the new contract unavailable until an equivalent native
-provider is certified, without blocking their existing environment or
-restricted-file credential adapters.
+None.
 
 ## REMOVED
 

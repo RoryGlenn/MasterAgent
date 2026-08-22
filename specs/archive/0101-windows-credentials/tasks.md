@@ -11,6 +11,6 @@
   Entra/OAuth shapes, redaction, bounds, rollback, and legacy compatibility.
 - [x] Update configuration, architecture, operations, threat model, roadmap,
   semantic ownership, release gates, and Windows native CI.
-- [ ] Run focused/full tests, Ruff, mypy, specification, semantic, release,
+- [x] Run focused/full tests, Ruff, mypy, specification, semantic, release,
   installed-artifact, native Windows, and immutable-range security validation.
-- [ ] Apply the documentation completion gate and archive the verified change.
+- [x] Apply the documentation completion gate and archive the verified change.
