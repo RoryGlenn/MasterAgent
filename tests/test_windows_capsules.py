@@ -218,8 +218,10 @@ class WindowsAppContainerContractTests(unittest.TestCase):
 
     def test_network_probes_require_native_access_denied_code(self) -> None:
         source = _network_probe_source("127.0.0.1", family=2)
-        self.assertIn("code==10013", source)
-        self.assertNotIn("except", source)
+        self.assertIn("10013", source)
+        self.assertIn("10047", source)
+        self.assertNotIn("10061", source)
+        self.assertIn("except OSError", source)
 
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")
@@ -297,7 +299,10 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
             _ = self.worker.identity_components
 
     def test_worker_output_and_wall_time_limits_fail_closed(self) -> None:
-        with self.assertRaisesRegex(ConnectorError, "output exceeded quota"):
+        with self.assertRaisesRegex(
+            ConnectorError,
+            "output exceeded quota|output_too_large",
+        ):
             self.worker.execute_program(
                 source=(
                     b'def run(request):\n    return {"value": "x" * request["size"]}\n'

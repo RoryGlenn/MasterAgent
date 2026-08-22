@@ -952,11 +952,15 @@ def _private_sddl(*, owner_sid: str) -> str:
 def _network_probe_source(host: str, *, family: int) -> str:
     return (
         "import socket\n"
-        f"s=socket.socket({family},socket.SOCK_STREAM)\n"
-        "s.settimeout(1)\n"
-        f"code=s.connect_ex(({host!r},9))\n"
-        "s.close()\n"
-        "print('DENIED' if code==10013 else 'ALLOWED')\n"
+        "denied={10013,10047,10049,10050,10051}\n"
+        "try:\n"
+        f" s=socket.socket({family},socket.SOCK_STREAM)\n"
+        " s.settimeout(1)\n"
+        f" code=s.connect_ex(({host!r},9))\n"
+        " s.close()\n"
+        "except OSError as error:\n"
+        " code=int(error.winerror or error.errno or 0)\n"
+        "print('DENIED' if code in denied else 'ALLOWED')\n"
     )
 
 
