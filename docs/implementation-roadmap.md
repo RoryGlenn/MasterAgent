@@ -7,8 +7,9 @@ capsule path, native behavioral specification lifecycle, and audience-aware
 documentation completion gate are implemented. A common platform-runtime
 contract now keeps imports and configuration diagnostics platform neutral. The
 native Windows filesystem/ACL, locking, and atomic local-state tranche is
-implemented while the remaining Windows security backends stay separately
-planned. Release-hardening gates keep
+implemented, as are credential storage, process supervision, and trusted Git.
+Capsule isolation and hosted certification stay separately planned.
+Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
 execution, raw plugin execution, and
 unsafe provider mutations non-routable.
@@ -16,7 +17,7 @@ unsafe provider mutations non-routable.
 | Area | Software status | Operational status |
 |---|---|---|
 | Progressive user workflow | Complete | Install a reviewed organization profile; local installation, selected reads, governed effects, and enterprise deployment report independent readiness |
-| Platform runtime | Common contract and native Windows filesystem, locking, and atomic state complete; existing POSIX behavior preserved; remaining Windows backends planned | Windows supports trusted reads, setup, SQLite and protected file persistence, retention, and local artifact stores; route-specific process, Git, capsule isolation, credential-broker, and certification gates remain |
+| Platform runtime | Common contract and native Windows filesystem, locking, atomic state, credentials, process supervision, and read-only Git complete; existing POSIX behavior preserved; capsule isolation and certification planned | Windows supports trusted reads, setup, SQLite and protected file persistence, retention, local artifact stores, bounded processes, and local Git inspection; capsule isolation and hosted certification gates remain |
 | 0 — environment and governance | Complete | Replace example governance and run readiness in the target organization |
 | 1 — local governed runtime | Complete | Ready |
 | 2A — Jira, Confluence, Bitbucket, GitHub, and SharePoint reads | Complete | Contract-tested; authenticated capabilities need approved credentials, while `github.public_repository.list` and `bitbucket.public_repository.list` operate anonymously |
@@ -78,9 +79,9 @@ absent.
   remain covered; Linux capsule isolation identifies a selected trusted
   bubblewrap executable or reports that independent contract unavailable, as
   does macOS; Windows filesystem, locking, atomic state, credential storage,
-  and Job Object process supervision have native evidence, while each remaining
-  Windows route stays planned until its own implementation and evidence are
-  complete.
+  Job Object process supervision, and trusted Git have native evidence, while
+  capsule isolation and hosted certification stay planned until their own
+  implementation and evidence are complete.
 
 ### Phase 1 — governed runtime
 

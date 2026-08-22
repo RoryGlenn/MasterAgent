@@ -750,8 +750,12 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             relative_path = _safe_relative_path(
                 _required_text(action.parameters, "relative_path")
             )
-            before = str(action.parameters.get("before_text", ""))
-            after = str(action.parameters.get("after_text", ""))
+            before = _normalize_patch_newlines(
+                str(action.parameters.get("before_text", ""))
+            )
+            after = _normalize_patch_newlines(
+                str(action.parameters.get("after_text", ""))
+            )
             diff = "".join(
                 difflib.unified_diff(
                     before.splitlines(keepends=True),
@@ -799,6 +803,12 @@ def _require_capability(action: AgentAction, connector: _LocalDraftConnector) ->
         )
     if action.capability not in connector.capabilities:
         raise ConnectorError(f"unsupported draft capability: {action.capability}")
+
+
+def _normalize_patch_newlines(value: str) -> str:
+    """Return platform-independent LF text without changing content boundaries."""
+
+    return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _render_preview(

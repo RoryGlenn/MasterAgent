@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from master_agent.audit import AuditLog
@@ -77,8 +78,6 @@ class DraftPackageTests(unittest.TestCase):
         settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
         plan = build_draft_package_plan(settings)
         patch = plan.actions[-1]
-        from dataclasses import replace
-
         unsafe = replace(
             patch,
             parameters={**patch.parameters, "relative_path": "../secret.txt"},
@@ -88,6 +87,38 @@ class DraftPackageTests(unittest.TestCase):
             self.assertRaisesRegex(Exception, "inside the repository"),
         ):
             RepositoryDraftConnector(Path(directory)).execute(unsafe)
+
+    def test_repository_patch_normalizes_crlf_to_deterministic_lf(self) -> None:
+        settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
+        action = build_draft_package_plan(settings).actions[-1]
+        crlf = replace(
+            action,
+            parameters={
+                **action.parameters,
+                "before_text": "first\r\nsecond\r\n",
+                "after_text": "first\r\nchanged\r\n",
+                "output_name": "crlf.patch",
+            },
+        )
+        lf = replace(
+            crlf,
+            parameters={
+                **crlf.parameters,
+                "before_text": "first\nsecond\n",
+                "after_text": "first\nchanged\n",
+                "output_name": "lf.patch",
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connector = RepositoryDraftConnector(root)
+            connector.execute(crlf)
+            connector.execute(lf)
+            crlf_bytes = (root / "crlf.patch").read_bytes()
+            lf_bytes = (root / "lf.patch").read_bytes()
+
+        self.assertEqual(crlf_bytes, lf_bytes)
+        self.assertNotIn(b"\r", crlf_bytes)
 
 
 if __name__ == "__main__":

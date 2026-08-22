@@ -24,6 +24,10 @@ from master_agent.platform_runtime.windows.filesystem import (
     WindowsSecureFilesystemBackend,
     probe_windows_filesystem_backend,
 )
+from master_agent.platform_runtime.windows.git import (
+    WINDOWS_GIT_UNAVAILABLE_REASON,
+    probe_windows_git_backend,
+)
 from master_agent.platform_runtime.windows.locking import (
     WindowsCrossProcessLockingBackend,
     probe_windows_locking_backend,
@@ -57,13 +61,17 @@ def build_windows_runtime() -> PlatformRuntime:
     )
     process_api = probe_windows_process_backend()
     process = WindowsProcessSupervisionBackend(api=process_api)
+    try:
+        git = probe_windows_git_backend(filesystem=filesystem, process=process)
+    except PlatformCapabilityUnavailable:
+        git = None
     services: tuple[tuple[PlatformContract, PlatformBackend | None], ...] = (
         (PlatformContract.SECURE_FILESYSTEM, filesystem),
         (PlatformContract.CROSS_PROCESS_LOCKING, locking),
         (PlatformContract.ATOMIC_PUBLICATION_RECOVERY, atomic),
         (PlatformContract.CREDENTIAL_STORAGE, credentials),
         (PlatformContract.PROCESS_SUPERVISION, process),
-        (PlatformContract.TRUSTED_GIT, None),
+        (PlatformContract.TRUSTED_GIT, git),
         (PlatformContract.CAPSULE_ISOLATION, None),
     )
     statuses = tuple(
@@ -78,7 +86,11 @@ def build_windows_runtime() -> PlatformRuntime:
             reason=(
                 None
                 if service is not None
-                else f"native windows {contract} backend is not implemented"
+                else (
+                    WINDOWS_GIT_UNAVAILABLE_REASON
+                    if contract is PlatformContract.TRUSTED_GIT
+                    else f"native windows {contract} backend is not implemented"
+                )
             ),
         )
         for contract, service in services
@@ -94,4 +106,5 @@ def build_windows_runtime() -> PlatformRuntime:
         atomic_publication_recovery=atomic,
         credential_storage=credentials,
         process_supervision=process,
+        trusted_git=git,
     )

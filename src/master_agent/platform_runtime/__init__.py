@@ -22,6 +22,7 @@ from master_agent.platform_runtime.contracts import (
     ProcessSupervisionError,
     SecureFilesystemBackend,
     TrustedGitBackend,
+    TrustedGitError,
 )
 from master_agent.platform_runtime.factory import (
     get_atomic_publication_recovery_backend,
@@ -31,6 +32,7 @@ from master_agent.platform_runtime.factory import (
     get_platform_runtime,
     get_process_supervision_backend,
     get_secure_filesystem_backend,
+    get_trusted_git_backend,
     platform_runtime_status,
     require_persistent_state_platform,
     require_platform_contract,
@@ -58,6 +60,7 @@ __all__ = [
     "ProcessSupervisionError",
     "SecureFilesystemBackend",
     "TrustedGitBackend",
+    "TrustedGitError",
     "get_atomic_publication_recovery_backend",
     "get_capsule_isolation_backend",
     "get_credential_storage_backend",
@@ -65,6 +68,7 @@ __all__ = [
     "get_platform_runtime",
     "get_process_supervision_backend",
     "get_secure_filesystem_backend",
+    "get_trusted_git_backend",
     "platform_runtime_status",
     "require_persistent_state_platform",
     "require_platform_contract",

@@ -122,8 +122,9 @@ Win32 handles only after local-volume, object-identity, owner-SID, and
 effective-DACL validation. The filesystem, locking, atomic-publication, and
 credential-storage contracts are available; setup, restricted output, SQLite state, retention,
 tokens, configuration snapshots, capsule/plugin stores, and draft artifacts
-use the native state backend. Process supervision, trusted Git, and capsule
-isolation remain unavailable. A read, draft, effect, or enterprise level that
+use the native state backend. Process supervision and read-only trusted Git are
+available through Job Object and retained-handle boundaries; capsule isolation
+remains unavailable. A read, draft, effect, or enterprise level that
 depends on one of those contracts stays false; execution never falls back to a
 weaker backend.
 

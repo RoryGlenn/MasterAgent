@@ -23,9 +23,16 @@ available through `windows-job-object`: it runs only a fixed absolute
 executable, starts from a minimal environment, inherits selected handles, and
 applies whole-tree CPU-time, memory, process-count, timeout, and output bounds.
 It is not a shell or general command capability.
+The native `trusted_git` contract is available through `windows-trusted-git`.
+It selects only an explicit or bounded Git for Windows `git.exe`, binds its
+identity and digest, pins a bounded local repository metadata tree, rejects
+linked-worktree and alternate-object redirection, and permits only complete
+bounded local status, diff, index, revision, and object command forms with
+ambient Git configuration, credentials, helpers, hooks, filters, and transports disabled.
+It does not enable commit, branch, fetch, push, or any other Git mutation.
 An `execute` plan should proceed only when every contract its route needs is
-available in the report's `platform_runtime` section; trusted Git and capsule
-isolation remain separate fail-closed gates.
+available in the report's `platform_runtime` section; capsule isolation remains
+a separate fail-closed gate.
 
 1. Run `master-agent setup` once for the selected profile. This prepares only
    owner-private local paths and does not contact a provider.
