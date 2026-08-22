@@ -64,9 +64,9 @@ _FILE_WRITE_THROUGH = 0x00000002
 _FILE_NON_DIRECTORY_FILE = 0x00000040
 _FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
 _STATUS_OBJECT_NAME_COLLISION = 0xC0000035
-_FILE_RENAME_INFO_CLASS = 3
 _FILE_DISPOSITION_INFO_CLASS = 4
-_FILE_RENAME_INFO_EX_CLASS = 22
+_FILE_RENAME_INFORMATION_CLASS = 10
+_FILE_RENAME_INFORMATION_EX_CLASS = 65
 _FILE_RENAME_REPLACE_IF_EXISTS = 0x00000001
 _FILE_RENAME_POSIX_SEMANTICS = 0x00000002
 
@@ -787,19 +787,33 @@ class NativeWindowsApi:
         ctypes.memmove(
             ctypes.addressof(buffer) + file_name_offset, encoded, len(encoded)
         )
-        # FILE_RENAME_POSIX_SEMANTICS is defined only for replacement.  Keep
-        # create-only publication on the base class so a zero-flag rename is
-        # accepted consistently while still failing atomically on collision.
+        # NtSetInformationFile accepts the native FILE_INFORMATION_CLASS
+        # values.  FILE_RENAME_POSIX_SEMANTICS is defined only for replacement,
+        # while the base class preserves create-only collision semantics.
         information_class = (
-            _FILE_RENAME_INFO_EX_CLASS if replace_existing else _FILE_RENAME_INFO_CLASS
+            _FILE_RENAME_INFORMATION_EX_CLASS
+            if replace_existing
+            else _FILE_RENAME_INFORMATION_CLASS
         )
-        if not self._kernel32.SetFileInformationByHandle(
-            _HANDLE(source_handle),
-            information_class,
-            buffer,
-            size,
-        ):
-            self._raise_last_error("SetFileInformationByHandle")
+        io_status = _IO_STATUS_BLOCK()
+        status = int(
+            self._ntdll.NtSetInformationFile(
+                _HANDLE(source_handle),
+                ctypes.byref(io_status),
+                buffer,
+                size,
+                information_class,
+            )
+        )
+        status_code = status & 0xFFFFFFFF
+        if status_code != 0:
+            if status_code == _STATUS_OBJECT_NAME_COLLISION:
+                raise FileExistsError(
+                    errno.EEXIST,
+                    "Windows replacement destination already exists",
+                )
+            error = int(self._ntdll.RtlNtStatusToDosError(ctypes.c_long(status)))
+            raise OSError(error, "NtSetInformationFile failed")
 
     def flush_directory(self, handle: int) -> None:
         """Synchronously flush one retained directory file object."""
@@ -1169,6 +1183,14 @@ class NativeWindowsApi:
             ctypes.POINTER(_IO_STATUS_BLOCK),
         ]
         self._ntdll.NtFlushBuffersFile.restype = ctypes.c_long
+        self._ntdll.NtSetInformationFile.argtypes = [
+            _HANDLE,
+            ctypes.POINTER(_IO_STATUS_BLOCK),
+            ctypes.c_void_p,
+            _DWORD,
+            _DWORD,
+        ]
+        self._ntdll.NtSetInformationFile.restype = ctypes.c_long
         self._ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
         self._ntdll.RtlNtStatusToDosError.restype = _DWORD
 

@@ -741,9 +741,10 @@ assert 'msvcrt' not in sys.modules
 
         def replace_file(
             source: ctypes.c_void_p,
-            information_class: int,
+            _io_status: object,
             buffer: object,
             size: int,
+            information_class: int,
         ) -> int:
             information = ctypes.cast(
                 buffer,
@@ -763,10 +764,13 @@ assert 'msvcrt' not in sys.modules
                     ),
                 )
             )
-            return 1
+            return 0
 
         api = object.__new__(NativeWindowsApi)
-        api._kernel32 = SimpleNamespace(SetFileInformationByHandle=replace_file)
+        api._ntdll = SimpleNamespace(
+            NtSetInformationFile=replace_file,
+            RtlNtStatusToDosError=lambda _status: 183,
+        )
         api.replace_file(
             0x1234,
             0x5678,
@@ -778,7 +782,7 @@ assert 'msvcrt' not in sys.modules
             [
                 (
                     0x1234,
-                    3,
+                    10,
                     0x5678,
                     0,
                     ctypes.sizeof(windows_native._FILE_RENAME_INFO_EX)
@@ -798,12 +802,23 @@ assert 'msvcrt' not in sys.modules
         self.assertEqual(
             observed[0][1:4],
             (
-                22,
+                65,
                 0x5678,
                 windows_native._FILE_RENAME_POSIX_SEMANTICS
                 | windows_native._FILE_RENAME_REPLACE_IF_EXISTS,
             ),
         )
+
+        api._ntdll.NtSetInformationFile = lambda *_args: (
+            ctypes.c_int32(windows_native._STATUS_OBJECT_NAME_COLLISION).value
+        )
+        with self.assertRaises(FileExistsError):
+            api.replace_file(
+                0x1234,
+                0x5678,
+                "x",
+                replace_existing=False,
+            )
 
     def test_native_ordinal_comparison_uses_null_terminated_unicode_inputs(
         self,
