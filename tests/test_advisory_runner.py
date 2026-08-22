@@ -234,9 +234,30 @@ class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
     """Bind one validated selected route before starting a live worker."""
 
     def setUp(self) -> None:
-        self.root = Path(__file__).resolve().parents[1]
+        self.source = Path(__file__).resolve().parents[1]
         self.temporary = tempfile.TemporaryDirectory()
-        self.state = Path(self.temporary.name).resolve() / "state"
+        base = Path(self.temporary.name).resolve()
+        self.root = base / "repository"
+        manifest = self.root / ".ai/semantic-router.toml"
+        manifest.parent.mkdir(parents=True)
+        shutil.copy2(self.source / ".ai/semantic-router.toml", manifest)
+        implementation = self.root / "src/master_agent/advisory.py"
+        implementation.parent.mkdir(parents=True)
+        shutil.copy2(
+            self.source / "src/master_agent/advisory.py",
+            implementation,
+        )
+        profiles = self.root / ".github/agents"
+        profiles.mkdir(parents=True)
+        for name in (
+            "MasterAgent.agent.md",
+            "MasterAgent-Read-Researcher.agent.md",
+            "MasterAgent-Plan-Reviewer.agent.md",
+        ):
+            shutil.copy2(self.source / ".github/agents" / name, profiles / name)
+        subprocess.run(("git", "init", "-q"), cwd=self.root, check=True)
+        subprocess.run(("git", "add", "."), cwd=self.root, check=True)
+        self.state = base / "state"
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -260,6 +281,11 @@ class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
                 advisory_subagent,
                 "CopilotSdkAdvisoryWorker",
                 side_effect=lambda root, scope=None: Worker(),
+            ),
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
             ),
             redirect_stdout(output),
         ):

@@ -590,25 +590,44 @@ class AdvisoryPathScopeTests(unittest.TestCase):
     def test_parent_policy_router_and_agent_prompts_are_never_route_scope(self) -> None:
         """Global and peer prompt context stays exclusively on the parent."""
 
-        root = Path(__file__).resolve().parents[1]
-        forbidden = (
-            "AGENTS.md",
-            ".ai",
-            ".ai/MASTER_AGENT.md",
-            ".ai/semantic-router.toml",
-            "docs/semantic-index.md",
-            ".github",
-            ".github/agents",
-            ".github/agents/MasterAgent.agent.md",
-            ".github/agents/MasterAgent-Read-Researcher.agent.md",
-            ".github/agents/MasterAgent-Plan-Reviewer.agent.md",
-        )
-        for relative in forbidden:
-            with self.subTest(path=relative), self.assertRaises(CopilotScopeRejected):
-                AdvisoryPathScope.bind(root, (relative,))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            docs = root / "docs"
+            docs.mkdir()
+            (docs / "advisory-subagents.md").write_text(
+                "bounded child guidance\n",
+                encoding="utf-8",
+            )
+            subprocess.run(("git", "init", "-q"), cwd=root, check=True)
+            subprocess.run(
+                ("git", "add", "docs/advisory-subagents.md"),
+                cwd=root,
+                check=True,
+            )
+            forbidden = (
+                "AGENTS.md",
+                ".ai",
+                ".ai/MASTER_AGENT.md",
+                ".ai/semantic-router.toml",
+                "docs/semantic-index.md",
+                ".github",
+                ".github/agents",
+                ".github/agents/MasterAgent.agent.md",
+                ".github/agents/MasterAgent-Read-Researcher.agent.md",
+                ".github/agents/MasterAgent-Plan-Reviewer.agent.md",
+            )
+            for relative in forbidden:
+                with (
+                    self.subTest(path=relative),
+                    self.assertRaises(CopilotScopeRejected),
+                ):
+                    AdvisoryPathScope.bind(root, (relative,))
 
-        allowed = AdvisoryPathScope.bind(root, ("docs/advisory-subagents.md",))
-        self.assertEqual(allowed.relative_paths, ("docs/advisory-subagents.md",))
+            allowed = AdvisoryPathScope.bind(root, ("docs/advisory-subagents.md",))
+            self.assertEqual(
+                allowed.relative_paths,
+                ("docs/advisory-subagents.md",),
+            )
 
     def test_search_and_list_cannot_cross_route_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
