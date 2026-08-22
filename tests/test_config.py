@@ -2,11 +2,17 @@
 
 import os
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from master_agent.auth import AuthMode, ResolvedAuth
-from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
+from master_agent.config import (
+    ConnectorConfig,
+    ConnectorCredentialProvider,
+    DeploymentType,
+    IntegrationConfig,
+)
 from master_agent.config_sources import resolve_config_source
 from master_agent.errors import ConfigurationError
 from master_agent.trust_store import capture_ca_bundle
@@ -107,6 +113,101 @@ class IntegrationConfigTests(unittest.TestCase):
                 "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
                 "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",
             }.issubset(config.credential_environment_variables())
+        )
+
+    def test_native_credential_source_metadata_is_validated_and_identity_bound(
+        self,
+    ) -> None:
+        connector = ConnectorConfig(
+            system="jira",
+            enabled=True,
+            deployment=DeploymentType.CLOUD,
+            base_url="https://example.atlassian.net",
+            base_url_env=None,
+            auth_mode=AuthMode.BASIC,
+            username_env="MASTER_AGENT_JIRA_USERNAME",
+            secret_env="MASTER_AGENT_JIRA_TOKEN",
+            extra={
+                "credential_provider": "windows-credential-manager",
+                "credential_target": "MasterAgent/production/jira",
+            },
+        )
+
+        self.assertEqual(
+            connector.credential_provider,
+            ConnectorCredentialProvider.WINDOWS_CREDENTIAL_MANAGER,
+        )
+        self.assertEqual(connector.credential_target, "MasterAgent/production/jira")
+        self.assertNotEqual(connector.identity, replace(connector, extra={}).identity)
+        invalid = (
+            {"credential_target": "MasterAgent/unselected"},
+            {"credential_provider": "windows-dpapi"},
+            {
+                "credential_provider": "windows-credential-manager",
+                "credential_target": "unscoped/jira",
+            },
+            {
+                "credential_provider": "windows-dpapi",
+                "credential_target": r"\\server\share\credentials.bin",
+            },
+            {
+                "credential_provider": "windows-dpapi",
+                "credential_target": r"C:\MasterAgent\..\credentials.bin",
+            },
+        )
+        for extra in invalid:
+            with self.subTest(extra=extra), self.assertRaises(ConfigurationError):
+                replace(connector, extra=extra)
+
+    def test_native_dpapi_declares_entra_and_token_file_credential_shapes(
+        self,
+    ) -> None:
+        common = {
+            "system": "microsoft",
+            "enabled": True,
+            "deployment": DeploymentType.CLOUD,
+            "base_url": "https://graph.microsoft.com/v1.0",
+            "base_url_env": None,
+            "username_env": None,
+            "ca_bundle_env": None,
+        }
+        client_credentials = ConnectorConfig(
+            **common,
+            auth_mode=AuthMode.OAUTH_APPLICATION,
+            secret_env=None,
+            extra={
+                "credential_provider": "windows-dpapi",
+                "credential_target": r"C:\MasterAgent\entra.dpapi",
+                "oauth_flow": "client_credentials",
+                "tenant_id_env": "MASTER_AGENT_ENTRA_TENANT_ID",
+                "client_id_env": "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
+                "client_secret_env": "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",
+                "scopes": ["https://graph.microsoft.com/.default"],
+            },
+        )
+        token_file = ConnectorConfig(
+            **common,
+            auth_mode=AuthMode.OAUTH_DELEGATED,
+            secret_env=None,
+            extra={
+                "credential_provider": "windows-dpapi",
+                "credential_target": r"C:\MasterAgent\delegated.dpapi",
+                "oauth_flow": "token_file",
+                "token_file_env": "MASTER_AGENT_GRAPH_TOKEN_FILE",
+            },
+        )
+
+        self.assertEqual(
+            client_credentials.credential_environment_variables(),
+            (
+                "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
+                "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",
+                "MASTER_AGENT_ENTRA_TENANT_ID",
+            ),
+        )
+        self.assertEqual(
+            token_file.credential_environment_variables(),
+            ("MASTER_AGENT_GRAPH_TOKEN_FILE",),
         )
 
     def test_enabled_connector_reports_missing_environment(self) -> None:

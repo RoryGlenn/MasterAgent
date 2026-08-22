@@ -231,13 +231,12 @@ absent.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- native Windows Credential Manager/DPAPI brokers, process supervision, Git
-  isolation, capsule isolation, organization trust-profile integration, and
-  hosted certification behind the released filesystem/locking/atomic-state
-  boundary;
+- native Windows process supervision, Git isolation, capsule isolation,
+  organization trust-profile integration, and hosted certification behind the
+  released filesystem/locking/atomic-state/credential-storage boundary;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
-- production credential-broker and external receipt/audit adapters;
+- additional organization secret-manager, receipt, and external audit adapters;
 - provider operations that cannot enforce an atomic concurrency precondition;
   and
 - any broad permission, merge, deletion, or arbitrary execution surface.

@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 from uuid import UUID
 
 from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
@@ -24,6 +25,9 @@ from master_agent.credential_broker import (
     LocalJsonCredentialProvider,
     ProviderOperationBinding,
     RuntimePrincipal,
+    WindowsCredentialAccount,
+    WindowsCredentialManagerProvider,
+    WindowsDpapiCredentialProvider,
 )
 from master_agent.credentials import CredentialStoreSnapshot
 from master_agent.errors import AuthenticationError, ConfigurationError, ValidationError
@@ -96,6 +100,72 @@ class CapsuleBrokerAndRoutingTests(unittest.TestCase):
                 credential_name="MASTER_AGENT_JIRA_TOKEN",
                 operation=operation,
             )
+
+    def test_windows_native_providers_are_production_and_exact_account_bound(
+        self,
+    ) -> None:
+        secret = "native-provider-secret-canary"
+        account = WindowsCredentialAccount(
+            target="MasterAgent/tests/account",
+            credential_names=("MASTER_AGENT_JIRA_TOKEN",),
+        )
+        cases = (
+            (
+                WindowsCredentialManagerProvider,
+                "windows-credential-manager",
+                account,
+            ),
+            (
+                WindowsDpapiCredentialProvider,
+                "windows-dpapi",
+                replace(account, target=r"C:\MasterAgent\credentials.bin"),
+            ),
+        )
+        for provider_type, storage_provider, selected_account in cases:
+            with self.subTest(provider=storage_provider):
+                backend = Mock()
+                backend.backend_id = "windows-native-test"
+                backend.load_credentials.return_value = {
+                    "MASTER_AGENT_JIRA_TOKEN": secret
+                }
+                provider = provider_type(
+                    {("jira", "account-7"): selected_account},
+                    backend=backend,
+                )
+                binding = replace(
+                    _provider_binding(),
+                    credential_provider_id=provider.provider_id,
+                )
+                broker = CredentialBroker(provider)
+                handle = broker.issue(
+                    capsule=binding,
+                    principal=_principal(),
+                    credential_name="MASTER_AGENT_JIRA_TOKEN",
+                    operation=_operation(),
+                )
+                adapter = _ProviderAdapter()
+                broker.invoke(
+                    handle=handle,
+                    capsule=binding,
+                    adapter=adapter,
+                    operation=_operation(),
+                    payload={},
+                )
+
+                self.assertTrue(provider.production_ready)
+                self.assertTrue(provider.healthy())
+                self.assertEqual(adapter.observed_secret, secret)
+                self.assertNotIn(secret, repr(provider))
+                backend.load_credentials.assert_called_once_with(
+                    provider=storage_provider,
+                    target=selected_account.target,
+                    allowed_names=("MASTER_AGENT_JIRA_TOKEN",),
+                )
+                with self.assertRaisesRegex(AuthenticationError, "not connected"):
+                    provider.resolve(
+                        principal=replace(_principal(), account_id="other-account"),
+                        credential_name="MASTER_AGENT_JIRA_TOKEN",
+                    )
 
     def test_connection_request_and_destination_constraints_bind_exact_run(
         self,

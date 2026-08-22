@@ -21,10 +21,18 @@ from uuid import UUID
 from master_agent.credentials import CredentialStoreSnapshot
 from master_agent.errors import AuthenticationError, ConfigurationError
 from master_agent.models import CapabilityCapsuleExecutionBinding
+from master_agent.platform_runtime import (
+    CredentialStorageBackend,
+    get_credential_storage_backend,
+)
 from master_agent.resource_limits import measure_json_resources
 
 CONNECTION_REQUEST_SCHEMA = "master-agent/capsule-connection-request@1"
 _MAX_ACTIVE_HANDLES = 128
+WINDOWS_CREDENTIAL_MANAGER_BROKER_PROVIDER_ID = "windows-credential-manager-production"
+WINDOWS_DPAPI_BROKER_PROVIDER_ID = "windows-dpapi-production"
+_WINDOWS_CREDENTIAL_MANAGER_STORAGE_PROVIDER = "windows-credential-manager"
+_WINDOWS_DPAPI_STORAGE_PROVIDER = "windows-dpapi"
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +185,138 @@ class LocalJsonCredentialProvider:
             credential_name=credential_name,
             principal=principal,
             _value=value,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsCredentialAccount:
+    """Reviewed native source and exact credential allowlist for one account."""
+
+    target: str
+    credential_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not self.target
+            or self.target != self.target.strip()
+            or not self.target.isprintable()
+            or "\x00" in self.target
+            or len(self.target) > 2048
+        ):
+            raise ConfigurationError("Windows credential account target is invalid")
+        names = tuple(sorted(set(self.credential_names)))
+        if (
+            not names
+            or len(names) != len(self.credential_names)
+            or any(not name or name != name.strip() for name in names)
+        ):
+            raise ConfigurationError("Windows credential account allowlist is invalid")
+        object.__setattr__(self, "credential_names", names)
+
+
+class _WindowsCredentialProvider:
+    """Production broker adapter over one native Windows storage provider."""
+
+    def __init__(
+        self,
+        accounts: Mapping[tuple[str, str], WindowsCredentialAccount],
+        *,
+        storage_provider: str,
+        provider_id: str,
+        backend: CredentialStorageBackend | None = None,
+    ) -> None:
+        if not accounts:
+            raise ConfigurationError("Windows credential provider accounts are empty")
+        self._accounts = dict(accounts)
+        self._storage_provider = storage_provider
+        self._provider_id = provider_id
+        self._backend = (
+            backend if backend is not None else get_credential_storage_backend()
+        )
+
+    @property
+    def provider_id(self) -> str:
+        return self._provider_id
+
+    @property
+    def production_ready(self) -> bool:
+        return True
+
+    def healthy(self) -> bool:
+        """Report adapter wiring without reading or rendering credential material."""
+
+        return bool(self._accounts and self._backend.backend_id)
+
+    def resolve(
+        self,
+        *,
+        principal: RuntimePrincipal,
+        credential_name: str,
+    ) -> CredentialMaterial:
+        try:
+            account = self._accounts[(principal.provider, principal.account_id)]
+        except KeyError as error:
+            raise AuthenticationError(
+                "the selected provider account is not connected"
+            ) from error
+        if credential_name not in account.credential_names:
+            raise AuthenticationError(
+                "the requested credential name is outside the account allowlist"
+            )
+        try:
+            values = self._backend.load_credentials(
+                provider=self._storage_provider,
+                target=account.target,
+                allowed_names=account.credential_names,
+            )
+        except (ConfigurationError, OSError, ValueError) as error:
+            raise AuthenticationError(
+                "the selected native credential source could not be resolved"
+            ) from error
+        value = values.get(credential_name)
+        if not isinstance(value, str) or not value:
+            raise AuthenticationError(
+                "the selected account lacks the requested credential name"
+            )
+        return CredentialMaterial(
+            provider_id=self.provider_id,
+            credential_name=credential_name,
+            principal=principal,
+            _value=value,
+        )
+
+
+class WindowsCredentialManagerProvider(_WindowsCredentialProvider):
+    """Production broker adapter for current-user Credential Manager entries."""
+
+    def __init__(
+        self,
+        accounts: Mapping[tuple[str, str], WindowsCredentialAccount],
+        *,
+        backend: CredentialStorageBackend | None = None,
+    ) -> None:
+        super().__init__(
+            accounts,
+            storage_provider=_WINDOWS_CREDENTIAL_MANAGER_STORAGE_PROVIDER,
+            provider_id=WINDOWS_CREDENTIAL_MANAGER_BROKER_PROVIDER_ID,
+            backend=backend,
+        )
+
+
+class WindowsDpapiCredentialProvider(_WindowsCredentialProvider):
+    """Production broker adapter for current-user DPAPI credential documents."""
+
+    def __init__(
+        self,
+        accounts: Mapping[tuple[str, str], WindowsCredentialAccount],
+        *,
+        backend: CredentialStorageBackend | None = None,
+    ) -> None:
+        super().__init__(
+            accounts,
+            storage_provider=_WINDOWS_DPAPI_STORAGE_PROVIDER,
+            provider_id=WINDOWS_DPAPI_BROKER_PROVIDER_ID,
+            backend=backend,
         )
 
 

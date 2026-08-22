@@ -106,7 +106,7 @@ Both progressive `doctor` and deployment `readiness` include an additive
 ```
 
 The complete map always includes `secure_filesystem`,
-`cross_process_locking`, `atomic_publication_recovery`,
+`cross_process_locking`, `atomic_publication_recovery`, `credential_storage`,
 `process_supervision`, `trusted_git`, and `capsule_isolation`. An unavailable
 entry also has a bounded, secret-free `reason`. Reading this object performs no
 protected-state or credential I/O and grants no authority.
@@ -119,8 +119,8 @@ On native Windows, package imports, `--help`, `--version`, `readiness`, and
 `doctor --require-level install` use the partial native runtime. Existing or
 explicit profiles and other restricted read inputs are opened through retained
 Win32 handles only after local-volume, object-identity, owner-SID, and
-effective-DACL validation. The filesystem, locking, and atomic-publication
-contracts are available; setup, restricted output, SQLite state, retention,
+effective-DACL validation. The filesystem, locking, atomic-publication, and
+credential-storage contracts are available; setup, restricted output, SQLite state, retention,
 tokens, configuration snapshots, capsule/plugin stores, and draft artifacts
 use the native state backend. Process supervision, trusted Git, and capsule
 isolation remain unavailable. A read, draft, effect, or enterprise level that

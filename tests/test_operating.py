@@ -839,6 +839,7 @@ class OperatingReadinessTests(unittest.TestCase):
                 "secure_filesystem",
                 "cross_process_locking",
                 "atomic_publication_recovery",
+                "credential_storage",
                 "process_supervision",
                 "trusted_git",
                 "capsule_isolation",

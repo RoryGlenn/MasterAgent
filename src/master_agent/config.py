@@ -11,7 +11,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import ParseResult, urlparse
@@ -64,6 +64,14 @@ class PrincipalAttestationAdapter(StrEnum):
     MICROSOFT_DELEGATED_USER = "microsoft_delegated_user"
 
 
+class ConnectorCredentialProvider(StrEnum):
+    """Reviewed connector credential-source adapters."""
+
+    ENVIRONMENT = "environment"
+    WINDOWS_CREDENTIAL_MANAGER = "windows-credential-manager"
+    WINDOWS_DPAPI = "windows-dpapi"
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectorConfig:
     """Unresolved configuration for one connector.
@@ -100,6 +108,62 @@ class ConnectorConfig:
         if self.max_response_bytes <= 0:
             raise ConfigurationError("max_response_bytes must be positive")
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
+        _validate_connector_credential_source(self)
+
+    @property
+    def credential_provider(self) -> ConnectorCredentialProvider:
+        """Return the explicitly reviewed credential source adapter."""
+
+        value = self.extra.get("credential_provider", "environment")
+        if not isinstance(value, str) or value != value.strip():
+            raise ConfigurationError(
+                f"connector {self.system} credential_provider is invalid"
+            )
+        try:
+            return ConnectorCredentialProvider(value)
+        except ValueError as error:
+            raise ConfigurationError(
+                f"connector {self.system} credential_provider is unsupported"
+            ) from error
+
+    @property
+    def credential_target(self) -> str | None:
+        """Return reviewed non-secret provider metadata, if configured."""
+
+        value = self.extra.get("credential_target")
+        if value is None:
+            return None
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or not value.isprintable()
+            or "\x00" in value
+            or len(value) > 2048
+        ):
+            raise ConfigurationError(
+                f"connector {self.system} credential_target is invalid"
+            )
+        return value
+
+    def credential_environment_variables(self) -> tuple[str, ...]:
+        """Return exact credential names this connector may resolve."""
+
+        names: set[str] = set()
+        for value in (self.username_env, self.secret_env):
+            if value:
+                names.add(value)
+        for key in (
+            "token_file_env",
+            "token_expires_at_env",
+            "tenant_id_env",
+            "client_id_env",
+            "client_secret_env",
+        ):
+            value = self.extra.get(key)
+            if isinstance(value, str) and value.strip():
+                names.add(value.strip())
+        return tuple(sorted(names))
 
     @property
     def identity(self) -> str:
@@ -649,19 +713,7 @@ class IntegrationConfig:
 
         names: set[str] = set()
         for connector in self.connectors.values():
-            for value in (connector.username_env, connector.secret_env):
-                if value:
-                    names.add(value)
-            for key in (
-                "token_file_env",
-                "token_expires_at_env",
-                "tenant_id_env",
-                "client_id_env",
-                "client_secret_env",
-            ):
-                value = connector.extra.get(key)
-                if isinstance(value, str) and value.strip():
-                    names.add(value.strip())
+            names.update(connector.credential_environment_variables())
         return tuple(sorted(names))
 
 
@@ -716,6 +768,53 @@ def _parse_connector(
     )
     _validate_environment_references(connector)
     return connector
+
+
+def _validate_connector_credential_source(config: ConnectorConfig) -> None:
+    """Validate one exact provider/target pair without opening the source."""
+
+    provider = config.credential_provider
+    target = config.credential_target
+    if provider is ConnectorCredentialProvider.ENVIRONMENT:
+        if target is not None:
+            raise ConfigurationError(
+                f"connector {config.system} environment credentials forbid "
+                "credential_target"
+            )
+        return
+    if target is None:
+        raise ConfigurationError(
+            f"connector {config.system} native credential provider requires "
+            "credential_target"
+        )
+    if not config.credential_environment_variables():
+        raise ConfigurationError(
+            f"connector {config.system} native credential provider has no declared "
+            "credential names"
+        )
+    if provider is ConnectorCredentialProvider.WINDOWS_CREDENTIAL_MANAGER:
+        if (
+            not target.startswith("MasterAgent/")
+            or target.endswith("/")
+            or len(target.encode("utf-8")) > 512
+        ):
+            raise ConfigurationError(
+                f"connector {config.system} Credential Manager target must be a "
+                "bounded MasterAgent namespace"
+            )
+        return
+    path = PureWindowsPath(target)
+    if (
+        not path.is_absolute()
+        or re.fullmatch(r"[A-Za-z]:", path.drive) is None
+        or len(path.parts) < 2
+        or target.endswith(("/", "\\"))
+        or any(part in {".", ".."} for part in path.parts[1:])
+    ):
+        raise ConfigurationError(
+            f"connector {config.system} DPAPI target must be an absolute local "
+            "Windows drive file"
+        )
 
 
 def _environment_value(

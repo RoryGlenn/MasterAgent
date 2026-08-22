@@ -53,6 +53,7 @@ def build_posix_runtime(
         (PlatformContract.SECURE_FILESYSTEM, filesystem),
         (PlatformContract.CROSS_PROCESS_LOCKING, locking),
         (PlatformContract.ATOMIC_PUBLICATION_RECOVERY, atomic),
+        (PlatformContract.CREDENTIAL_STORAGE, None),
         (PlatformContract.PROCESS_SUPERVISION, process),
         (PlatformContract.TRUSTED_GIT, git),
         (PlatformContract.CAPSULE_ISOLATION, capsules),

@@ -15,6 +15,7 @@ from typing import Any
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.platform_runtime import (
+    CredentialStorageBackend,
     PlatformContract,
     get_secure_filesystem_backend,
     require_platform_contract,
@@ -24,6 +25,40 @@ _MAX_STORE_BYTES = 1024 * 1024
 _MAX_CREDENTIALS = 64
 _MAX_VALUE_BYTES = 64 * 1024
 _SCHEMA = "master-agent/credential-store@1"
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialSourceBinding:
+    """Secret-free identity of one explicitly configured credential source."""
+
+    provider: str
+    target: str
+    backend: str
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("provider", self.provider),
+            ("target", self.target),
+            ("backend", self.backend),
+        ):
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or not value.isprintable()
+                or "\x00" in value
+                or len(value) > 2048
+            ):
+                raise ConfigurationError(f"credential source {name} is invalid")
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize only the reviewed non-secret source identity."""
+
+        return {
+            "provider": self.provider,
+            "target": self.target,
+            "backend": self.backend,
+        }
 
 
 def canonical_credential_store_path(path: Path) -> Path:
@@ -44,15 +79,47 @@ def canonical_credential_store_path(path: Path) -> Path:
 
 @dataclass(frozen=True, slots=True)
 class CredentialStoreSnapshot:
-    """An immutable, secret-redacted snapshot of one restricted JSON store."""
+    """An immutable, secret-redacted snapshot of one reviewed source selection."""
 
-    path: Path
+    path: Path | None
     _credentials: Mapping[str, str] = field(repr=False, compare=False)
+    source_bindings: tuple[CredentialSourceBinding, ...] = ()
+    explicit_selection: bool = False
+    selected_names: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "_credentials", MappingProxyType(dict(self._credentials))
         )
+        selected_names = self.selected_names or tuple(self._credentials)
+        if len(set(selected_names)) != len(selected_names) or any(
+            not isinstance(name, str) or not name for name in selected_names
+        ):
+            raise ConfigurationError("credential name selection is invalid")
+        selected_names = tuple(sorted(selected_names))
+        undeclared = sorted(set(self._credentials) - set(selected_names))
+        if undeclared:
+            raise ConfigurationError(
+                "credential values contain names outside the selected source"
+            )
+        object.__setattr__(self, "selected_names", selected_names)
+        sources = tuple(
+            sorted(
+                self.source_bindings,
+                key=lambda item: (item.provider, item.target, item.backend),
+            )
+        )
+        if len(set(sources)) != len(sources):
+            raise ConfigurationError("credential source selection contains duplicates")
+        if self.explicit_selection and not sources:
+            raise ConfigurationError(
+                "explicit credential selection requires a source binding"
+            )
+        if sources and self.path is not None:
+            raise ConfigurationError(
+                "native credential sources cannot be combined with a JSON path"
+            )
+        object.__setattr__(self, "source_bindings", sources)
 
     @classmethod
     def load(
@@ -134,11 +201,103 @@ class CredentialStoreSnapshot:
             )
         return cls(canonical, credentials)
 
+    @classmethod
+    def load_native(
+        cls,
+        backend: CredentialStorageBackend,
+        *,
+        provider: str,
+        target: str,
+        allowed_names: Sequence[str],
+    ) -> CredentialStoreSnapshot:
+        """Load one exact native source and bind only its non-secret identity."""
+
+        selected_names = tuple(dict.fromkeys(allowed_names))
+        if not selected_names:
+            raise ConfigurationError(
+                "native credential source has no declared credential names"
+            )
+        try:
+            values = backend.load_credentials(
+                provider=provider,
+                target=target,
+                allowed_names=selected_names,
+            )
+        except (ConfigurationError, OSError, ValueError) as error:
+            raise ConfigurationError(
+                "configured native credential source could not be loaded safely"
+            ) from error
+        if not isinstance(values, Mapping):
+            raise ConfigurationError(
+                "configured native credential source returned an invalid mapping"
+            )
+        credentials = (
+            _validate_credentials(values, allowed_names=selected_names)
+            if values
+            else {}
+        )
+        return cls(
+            path=None,
+            _credentials=credentials,
+            source_bindings=(
+                CredentialSourceBinding(
+                    provider=provider,
+                    target=target,
+                    backend=backend.backend_id,
+                ),
+            ),
+            explicit_selection=True,
+            selected_names=tuple(sorted(selected_names)),
+        )
+
+    @classmethod
+    def combine(
+        cls, snapshots: Sequence[CredentialStoreSnapshot]
+    ) -> CredentialStoreSnapshot:
+        """Combine disjoint explicitly selected native sources deterministically."""
+
+        selected = tuple(snapshots)
+        if not selected:
+            raise ConfigurationError("credential source selection must not be empty")
+        if any(not snapshot.explicit_selection for snapshot in selected):
+            raise ConfigurationError(
+                "implicit credential sources cannot be combined automatically"
+            )
+        credentials: dict[str, str] = {}
+        sources: list[CredentialSourceBinding] = []
+        sources_names: set[str] = set()
+        for snapshot in selected:
+            duplicate_names = sorted(set(sources_names) & set(snapshot.selected_names))
+            if duplicate_names:
+                raise ConfigurationError(
+                    "configured credential sources select the same declared names: "
+                    + ", ".join(duplicate_names)
+                )
+            credentials.update(snapshot._credentials)
+            sources.extend(snapshot.source_bindings)
+            sources_names.update(snapshot.selected_names)
+        return cls(
+            path=None,
+            _credentials=credentials,
+            source_bindings=tuple(sources),
+            explicit_selection=True,
+            selected_names=tuple(sorted(sources_names)),
+        )
+
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._credentials))
 
     def overlay(self, environ: Mapping[str, str]) -> dict[str, str]:
+        if self.explicit_selection:
+            selected = {name.casefold() for name in self.selected_names}
+            merged = {
+                name: value
+                for name, value in environ.items()
+                if name.casefold() not in selected
+            }
+            merged.update(self._credentials)
+            return merged
         collisions = sorted(name for name in self._credentials if environ.get(name, ""))
         if collisions:
             raise ConfigurationError(
@@ -148,6 +307,63 @@ class CredentialStoreSnapshot:
         merged = dict(environ)
         merged.update(self._credentials)
         return merged
+
+    def shadowed_ambient_names(self, environ: Mapping[str, str]) -> tuple[str, ...]:
+        """Return declared names shadowed by an explicit source, never their values."""
+
+        if not self.explicit_selection:
+            return ()
+        ambient = {
+            name.casefold()
+            for name, value in environ.items()
+            if isinstance(value, str) and value
+        }
+        return tuple(
+            sorted(name for name in self.selected_names if name.casefold() in ambient)
+        )
+
+
+def normalize_credential_environment(
+    environ: Mapping[str, str],
+    *,
+    declared_names: Sequence[str],
+    case_insensitive: bool | None = None,
+) -> dict[str, str]:
+    """Canonicalize declared Windows environment names and reject ambiguity."""
+
+    if case_insensitive is None:
+        case_insensitive = os.name == "nt"
+    merged = dict(environ)
+    if not case_insensitive:
+        return merged
+    canonical_by_folded: dict[str, str] = {}
+    for name in declared_names:
+        if not isinstance(name, str) or not name:
+            raise ConfigurationError("declared credential environment name is invalid")
+        folded = name.casefold()
+        previous = canonical_by_folded.get(folded)
+        if previous is not None and previous != name:
+            raise ConfigurationError(
+                "declared credential environment names are case-ambiguous: "
+                + ", ".join(sorted((previous, name)))
+            )
+        canonical_by_folded[folded] = name
+    for folded, canonical in canonical_by_folded.items():
+        matches = tuple(
+            (name, value) for name, value in merged.items() if name.casefold() == folded
+        )
+        populated = tuple((name, value) for name, value in matches if value)
+        if len(populated) > 1:
+            raise ConfigurationError(
+                "credential environment selection is case-ambiguous: " + canonical
+            )
+        for name, _value in matches:
+            merged.pop(name, None)
+        if populated:
+            merged[canonical] = populated[0][1]
+        elif matches:
+            merged[canonical] = ""
+    return merged
 
 
 def _read_restricted_file(path: Path) -> tuple[Path, bytes]:

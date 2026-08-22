@@ -1747,13 +1747,23 @@ class PlatformRuntimeTests(unittest.TestCase):
 
         self.assertEqual(runtime.status.platform, "linux")
         self.assertEqual(runtime.status.backend, "posix-linux")
-        self.assertTrue(runtime.supports(*tuple(PlatformContract)))
+        self.assertFalse(runtime.supports(*tuple(PlatformContract)))
+        self.assertTrue(
+            runtime.supports(
+                *(
+                    contract
+                    for contract in PlatformContract
+                    if contract is not PlatformContract.CREDENTIAL_STORAGE
+                )
+            )
+        )
         self.assertEqual(
             {str(item.contract): item.backend for item in runtime.status.capabilities},
             {
                 "secure_filesystem": "posix-descriptor-filesystem",
                 "cross_process_locking": "posix-flock",
                 "atomic_publication_recovery": "posix-atomic-publication",
+                "credential_storage": "posix-linux",
                 "process_supervision": "posix-rlimit",
                 "trusted_git": "posix-trusted-git",
                 "capsule_isolation": "linux-bubblewrap",
@@ -1772,6 +1782,9 @@ class PlatformRuntimeTests(unittest.TestCase):
             )
 
         macos = get_platform_runtime("darwin")
+        credential_status = macos.status.contract_status(
+            PlatformContract.CREDENTIAL_STORAGE
+        )
         capsule_status = macos.status.contract_status(
             PlatformContract.CAPSULE_ISOLATION
         )
@@ -1787,6 +1800,11 @@ class PlatformRuntimeTests(unittest.TestCase):
             )
         )
         self.assertFalse(capsule_status.available)
+        self.assertFalse(credential_status.available)
+        self.assertEqual(
+            credential_status.reason,
+            "native macos credential_storage backend is not implemented",
+        )
         self.assertEqual(capsule_status.backend, "posix-macos")
         self.assertEqual(
             capsule_status.reason,
@@ -2169,6 +2187,25 @@ status = platform_runtime_status('win32')
 assert status.platform == 'windows'
 assert status.backend == 'windows-unavailable'
 assert not blocked.intersection(sys.modules)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_platform_neutral_cli_import_does_not_load_windows_credentials(
+        self,
+    ) -> None:
+        source_root = ROOT / "src"
+        script = f"""
+import sys
+sys.path.insert(0, {os.fspath(source_root)!r})
+import master_agent.cli
+assert 'master_agent.platform_runtime.windows.credentials' not in sys.modules
 """
         completed = subprocess.run(
             [sys.executable, "-I", "-S", "-c", script],

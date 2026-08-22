@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0101-windows-credentials"
+title = "Native Windows credential storage and deterministic source selection"
+status = "implementing"
+github_issue = 101
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WINDOWS-CREDENTIALS-001"
+destination = "runtime/MA-WINDOWS-CREDENTIALS-001.md"
+source = "current/MA-WINDOWS-CREDENTIALS-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-PLATFORM-001"
+destination = "runtime/MA-PLATFORM-001.md"
+source = "current/MA-PLATFORM-001.md"

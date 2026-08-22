@@ -8,7 +8,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from master_agent import credentials as credentials_module
-from master_agent.credentials import CredentialStoreSnapshot
+from master_agent.credentials import (
+    CredentialStoreSnapshot,
+    normalize_credential_environment,
+)
 from master_agent.errors import ConfigurationError
 from tests.helpers import private_temporary_directory
 
@@ -17,6 +20,110 @@ _SECRET = "credential-store-secret-canary"
 
 
 class CredentialStoreTests(unittest.TestCase):
+    def test_windows_environment_names_are_canonicalized_case_insensitively(
+        self,
+    ) -> None:
+        observed = normalize_credential_environment(
+            {"master_agent_github_token": _SECRET, "PATH": "/bin"},
+            declared_names=(_NAME,),
+            case_insensitive=True,
+        )
+
+        self.assertEqual(observed[_NAME], _SECRET)
+        self.assertNotIn("master_agent_github_token", observed)
+        with self.assertRaisesRegex(ConfigurationError, "case-ambiguous") as raised:
+            normalize_credential_environment(
+                {
+                    _NAME: _SECRET,
+                    "master_agent_github_token": "another-secret",
+                },
+                declared_names=(_NAME,),
+                case_insensitive=True,
+            )
+        self.assertNotIn(_SECRET, str(raised.exception))
+        self.assertNotIn("another-secret", str(raised.exception))
+
+    def test_explicit_native_source_wins_and_reports_ambient_name_only(self) -> None:
+        backend = Mock()
+        backend.backend_id = "windows-native-test"
+        backend.load_credentials.return_value = {_NAME: _SECRET}
+        snapshot = CredentialStoreSnapshot.load_native(
+            backend,
+            provider="windows-credential-manager",
+            target="MasterAgent/tests/account",
+            allowed_names=(_NAME,),
+        )
+
+        ambient_secret = "ambient-secret-canary"
+        environ = snapshot.overlay(
+            {"master_agent_github_token": ambient_secret, "PATH": "/bin"}
+        )
+
+        self.assertEqual(environ[_NAME], _SECRET)
+        self.assertNotIn("master_agent_github_token", environ)
+        self.assertEqual(
+            snapshot.shadowed_ambient_names({_NAME: ambient_secret}), (_NAME,)
+        )
+        self.assertNotIn(_SECRET, repr(snapshot))
+        self.assertNotIn(ambient_secret, repr(snapshot))
+        self.assertEqual(
+            snapshot.source_bindings[0].to_dict(),
+            {
+                "provider": "windows-credential-manager",
+                "target": "MasterAgent/tests/account",
+                "backend": "windows-native-test",
+            },
+        )
+
+    def test_missing_explicit_native_name_never_falls_back_to_ambient(self) -> None:
+        backend = Mock()
+        backend.backend_id = "windows-native-test"
+        backend.load_credentials.return_value = {}
+        snapshot = CredentialStoreSnapshot.load_native(
+            backend,
+            provider="windows-credential-manager",
+            target="MasterAgent/tests/account",
+            allowed_names=(_NAME,),
+        )
+
+        ambient_secret = "ambient-fallback-secret-canary"
+        environ = snapshot.overlay(
+            {"master_agent_github_token": ambient_secret, "PATH": "/bin"}
+        )
+
+        self.assertNotIn(_NAME, environ)
+        self.assertNotIn("master_agent_github_token", environ)
+        self.assertEqual(
+            snapshot.shadowed_ambient_names(
+                {"master_agent_github_token": ambient_secret}
+            ),
+            (_NAME,),
+        )
+
+    def test_combining_native_sources_rejects_duplicate_declared_names(self) -> None:
+        snapshots = []
+        for provider, target in (
+            ("windows-credential-manager", "MasterAgent/tests/account"),
+            ("windows-dpapi", r"C:\MasterAgent\credentials.bin"),
+        ):
+            backend = Mock()
+            backend.backend_id = "windows-native-test"
+            backend.load_credentials.return_value = {_NAME: _SECRET}
+            snapshots.append(
+                CredentialStoreSnapshot.load_native(
+                    backend,
+                    provider=provider,
+                    target=target,
+                    allowed_names=(_NAME,),
+                )
+            )
+
+        with self.assertRaisesRegex(
+            ConfigurationError, "same declared names"
+        ) as raised:
+            CredentialStoreSnapshot.combine(snapshots)
+        self.assertNotIn(_SECRET, str(raised.exception))
+
     def test_windows_native_open_error_is_bounded(self) -> None:
         from master_agent.platform_runtime.windows.filesystem import (
             WindowsSecureFilesystemBackend,

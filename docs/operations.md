@@ -13,6 +13,12 @@ explicit profiles are read only after retained-handle, local-volume,
 object-identity, owner-SID, and DACL validation. The native atomic-state
 backend now satisfies `setup` and protected local persistence with explicit
 private DACLs, stable handle locks, bounded replacement, and restart recovery.
+The native `credential_storage` contract is also available: a connector may
+select current-user Credential Manager or a current-user DPAPI document through
+reviewed, non-secret configuration. DPAPI state contains only a bounded
+ciphertext envelope and uses the atomic backend. Same-name ambient variables
+are reported by name and ignored for that explicit source; ambiguous implicit
+case variants fail closed.
 An `execute` plan should proceed only when every contract its route needs is
 available in the report's `platform_runtime` section; process supervision,
 trusted Git, and capsule isolation remain separate fail-closed gates.
