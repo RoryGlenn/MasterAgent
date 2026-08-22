@@ -172,7 +172,11 @@ policy.
 
 TOML contains environment-variable **names**, never secret values. The runtime rejects credentials embedded in URLs and redacts query strings from errors.
 
-Development variables are documented in [`.env.example`](../.env.example). Persistent deployments should inject short-lived credentials through an organization-approved secret manager.
+Development variables are documented in [`.env.example`](../.env.example).
+Persistent POSIX deployments should inject short-lived credentials through an
+organization-approved secret manager. Native Windows may use the current-user
+Credential Manager or DPAPI adapters documented in
+[`phase-2c-authentication.md`](phase-2c-authentication.md).
 
 Capability capsules use a separate typed broker boundary. The existing
 restricted JSON snapshot is a development adapter only. Production capsule
@@ -180,8 +184,9 @@ readiness requires an organization-provided credential/OAuth adapter that
 attests its provider/account/principal binding and is explicitly marked
 production-ready. A capsule declares credential names and scopes but never
 contains values. Opaque handles are short-lived, single-use, and bound to the
-complete plan-selected capsule and destination. The shipped runtime does not
-include a production secret-manager adapter.
+complete plan-selected capsule and destination. The shipped production adapters
+are the native current-user Windows providers; other organization secret
+managers remain deployment integrations.
 
 Authenticated GitHub Cloud capabilities use `MASTER_AGENT_GITHUB_TOKEN` as a
 bearer token. The separate `github.public_repository.list` capability is

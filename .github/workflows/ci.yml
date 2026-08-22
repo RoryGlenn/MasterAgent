@@ -88,7 +88,7 @@ jobs:
         run: python scripts/validate_release.py
 
   windows-startup:
-    name: Windows 11 native filesystem and startup
+    name: Windows 11 native filesystem, credentials, and startup
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -121,6 +121,7 @@ jobs:
           $password = ConvertTo-SecureString $passwordText -AsPlainText -Force
           $credential = [PSCredential]::new($account, $password)
           $testRoot = "C:\MasterAgentStandardTests"
+          $crossContextPath = Join-Path $testRoot "cross-context.dpapi"
           $job = $null
 
           function Invoke-CheckedIcacls {
@@ -196,7 +197,7 @@ jobs:
               -Credential $credential `
               -WorkingDirectory $env:GITHUB_WORKSPACE `
               -ScriptBlock {
-                param($Python, $Cli, $Workspace, $TemporaryRoot)
+                param($Python, $Cli, $Workspace, $TemporaryRoot, $CrossContextPath)
                 $ErrorActionPreference = "Stop"
                 $env:TEMP = $TemporaryRoot
                 $env:TMP = $TemporaryRoot
@@ -211,7 +212,7 @@ jobs:
                 ) {
                   throw "native Windows tests received an administrator token"
                 }
-                $runner = 'import sys, unittest; suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_windows_platform_runtime"); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
+                $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_platform_runtime", "tests.test_windows_credentials")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
                 & $Python -c $runner
                 if ($LASTEXITCODE -ne 0) {
                   throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
@@ -221,12 +222,18 @@ jobs:
                 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $readinessPath)) {
                   throw "native Windows restricted publication smoke failed"
                 }
+                $writer = 'import sys; from master_agent.platform_runtime import get_credential_storage_backend; from master_agent.platform_runtime.windows import WINDOWS_DPAPI_PROVIDER; get_credential_storage_backend().store_credentials(provider=WINDOWS_DPAPI_PROVIDER, target=sys.argv[1], credentials={"MASTER_AGENT_CROSS_CONTEXT_SECRET": "cross-context-proof"})'
+                & $Python -c $writer $CrossContextPath
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $CrossContextPath)) {
+                  throw "standard-user DPAPI cross-context fixture failed"
+                }
               } `
               -ArgumentList @(
                 $env:MASTER_AGENT_WINDOWS_PYTHON,
                 $env:MASTER_AGENT_WINDOWS_CLI,
                 $env:GITHUB_WORKSPACE,
-                $testRoot
+                $testRoot,
+                $crossContextPath
               )
             $job | Wait-Job -Timeout 900 | Out-Null
             Receive-Job -Job $job
@@ -235,6 +242,11 @@ jobs:
             }
             if ($job.ChildJobs[0].JobStateInfo.Reason) {
               throw $job.ChildJobs[0].JobStateInfo.Reason
+            }
+            $reader = 'import sys; from master_agent.errors import ConfigurationError; from master_agent.platform_runtime import get_credential_storage_backend; from master_agent.platform_runtime.windows import WINDOWS_DPAPI_PROVIDER; secret = "cross-context-proof"; backend = get_credential_storage_backend(); code = "def prove():\n try:\n  backend.load_credentials(provider=WINDOWS_DPAPI_PROVIDER, target=sys.argv[1], allowed_names=(\"MASTER_AGENT_CROSS_CONTEXT_SECRET\",))\n except ConfigurationError as error:\n  assert secret not in str(error)\n  return\n raise AssertionError(\"different Windows user decrypted DPAPI state\")"; exec(code); prove()'
+            & $env:MASTER_AGENT_WINDOWS_PYTHON -c $reader $crossContextPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "DPAPI state did not fail closed across Windows user contexts"
             }
           }
           finally {

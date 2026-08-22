@@ -181,8 +181,8 @@ Controls:
 - platform-neutral package and CLI imports do not initialize Unix-only or other
   native backends;
 - `secure_filesystem`, `cross_process_locking`,
-  `atomic_publication_recovery`, `process_supervision`, `trusted_git`, and
-  `capsule_isolation` report independent stable availability and secret-free
+  `atomic_publication_recovery`, `credential_storage`, `process_supervision`,
+  `trusted_git`, and `capsule_isolation` report independent stable availability and secret-free
   reasons;
 - capsule isolation means executable OS containment: Linux selects the
   bubblewrap backend only when a trusted executable is available and otherwise
@@ -209,14 +209,21 @@ Controls:
 - Windows retained pair deletion and quarantine publish a bounded content-free
   intent before the first irreversible step, then accept only recorded source
   identities while completing the recorded final state;
+- Windows credential storage reads only configuration-declared names from
+  exact Generic Credential Manager targets or a versioned DPAPI document;
+  DPAPI omits machine scope, forbids UI, binds optional entropy to the canonical
+  path, and publishes ciphertext only through protected atomic state;
+- explicit native sources remove same-name ambient values using Windows
+  case-insensitive comparison and diagnose names only, while duplicate implicit
+  sources and case variants fail closed;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows native filesystem/locking/atomic-state and existing POSIX behavior
-  receive separate regression coverage, while the remaining Windows backend
+- Windows native filesystem/locking/atomic-state/credential-storage and existing
+  POSIX behavior receive separate regression coverage, while the remaining Windows backend
   routes remain planned.
 
 ### Excessive permissions
@@ -231,6 +238,10 @@ Controls:
   require an owner-controlled `0700` parent and `0600` regular file, reject
   ambient-variable collisions, and bind only the canonical path into applied
   execution; non-development environments require an approved secret manager;
+- native Windows deployments may instead select current-user Credential Manager
+  for individual named values or current-user DPAPI for one structured set;
+  connector identity binds only the provider and target, and neither mode
+  migrates or rewrites an existing JSON file;
 - Jira/Confluence credential fallback is limited to selected Cloud connectors
   using Basic authentication. A scoped gateway may reuse only the configured
   Atlassian account email in memory; product-specific scoped tokens never cross

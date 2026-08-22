@@ -90,7 +90,12 @@ REQUIRED_WINDOWS_PLATFORM_CAPABILITIES: Final = (
 REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
     capability
     for capability in REQUIRED_WINDOWS_PLATFORM_CAPABILITIES
-    if capability not in {"windows.filesystem", "windows.atomic_state_retention"}
+    if capability
+    not in {
+        "windows.filesystem",
+        "windows.atomic_state_retention",
+        "windows.credentials",
+    }
 )
 REQUIRED_AGENT_PROFILES: Final = {
     "master-agent": ("profile", ".github/agents/MasterAgent.agent.md"),
@@ -1328,6 +1333,9 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
         "windows.filesystem": ("src/master_agent/platform_runtime/windows/runtime.py"),
         "windows.atomic_state_retention": (
             "src/master_agent/platform_runtime/windows/atomic.py"
+        ),
+        "windows.credentials": (
+            "src/master_agent/platform_runtime/windows/credentials.py"
         ),
     }
     shipped_owner_ids: list[str] = []

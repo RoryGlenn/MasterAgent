@@ -9,6 +9,7 @@ from typing import Final
 from master_agent.platform_runtime.contracts import (
     AtomicPublicationRecoveryBackend,
     CapsuleIsolationBackend,
+    CredentialStorageBackend,
     CrossProcessLockingBackend,
     PlatformCapabilityUnavailable,
     PlatformContract,
@@ -83,6 +84,14 @@ def get_atomic_publication_recovery_backend(
     """Return the selected atomic-publication and recovery backend."""
 
     return get_platform_runtime(platform).require_atomic_publication_recovery()
+
+
+def get_credential_storage_backend(
+    platform: str | None = None,
+) -> CredentialStorageBackend:
+    """Return the selected native credential-storage backend."""
+
+    return get_platform_runtime(platform).require_credential_storage()
 
 
 def get_process_supervision_backend(

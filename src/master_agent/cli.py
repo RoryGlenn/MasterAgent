@@ -40,6 +40,7 @@ from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
 from master_agent.config import (
     ConnectorConfig,
+    ConnectorCredentialProvider,
     DeploymentType,
     IntegrationConfig,
     ResolvedExecutionTarget,
@@ -68,6 +69,7 @@ from master_agent.connectors.read_only import ReadOnlyConnector
 from master_agent.credentials import (
     CredentialStoreSnapshot,
     canonical_credential_store_path,
+    normalize_credential_environment,
 )
 from master_agent.direct_read import (
     DirectReadReport,
@@ -132,6 +134,7 @@ from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
     get_atomic_publication_recovery_backend,
+    get_credential_storage_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     platform_runtime_status,
@@ -2819,6 +2822,7 @@ def _bind_context(
     execution_environ = _credential_environment(
         credential_store,
         os.environ,
+        declared_names=integrations.credential_environment_variables(),
         compatible_names=_atlassian_credential_compatibility(
             integrations,
             configurations=configurations,
@@ -3292,6 +3296,7 @@ def _run(
         execution_environ = _credential_environment(
             credential_store,
             os.environ,
+            declared_names=integration_config.credential_environment_variables(),
             compatible_names=compatibility,
         )
         approved_path_bindings = (
@@ -3844,6 +3849,7 @@ def _run_direct_read(
         else _credential_environment(
             credential_store,
             os.environ,
+            declared_names=integrations.credential_environment_variables(),
             compatible_names=compatibility,
         )
     )
@@ -4081,26 +4087,59 @@ def _load_credential_store(
     credential_mappings: Sequence[str] = (),
     systems: set[str] | None = None,
 ) -> CredentialStoreSnapshot | None:
-    """Load an explicitly selected development-only connector credential store."""
+    """Load one reviewed JSON override or configured native credential source."""
 
-    if path is None:
-        if credential_mappings:
-            raise ConfigurationError("--credential-map requires --credentials-file")
-        return None
-    if connector_mode != "live":
+    if credential_mappings and path is None:
+        raise ConfigurationError("--credential-map requires --credentials-file")
+    if connector_mode != "live" and path is not None:
         raise ConfigurationError(
             "--credentials-file is available only with live connectors"
-        )
-    if governance.environment is not EnvironmentKind.DEVELOPMENT:
-        raise ConfigurationError(
-            "--credentials-file is restricted to the development environment; "
-            "use the approved secret manager for non-development execution"
         )
     configurations = (
         _configuration_names_for_systems(systems)
         if systems is not None
         else set(integrations.connectors)
     )
+    if path is None:
+        if connector_mode != "live":
+            return None
+        grouped: dict[tuple[str, str], set[str]] = {}
+        for name in sorted(configurations):
+            connector = integrations.connectors.get(name)
+            if connector is None or not connector.enabled:
+                continue
+            provider = connector.credential_provider
+            if provider is ConnectorCredentialProvider.ENVIRONMENT:
+                continue
+            target = connector.credential_target
+            if target is None:  # pragma: no cover - constructor validates this.
+                raise ConfigurationError(
+                    f"connector {name} native credential target is missing"
+                )
+            names = connector.credential_environment_variables()
+            grouped.setdefault((str(provider), target), set()).update(names)
+        if not grouped:
+            return None
+        backend = get_credential_storage_backend()
+        snapshots = tuple(
+            CredentialStoreSnapshot.load_native(
+                backend,
+                provider=provider,
+                target=target,
+                allowed_names=tuple(sorted(names)),
+            )
+            for (provider, target), names in sorted(grouped.items())
+        )
+        return (
+            snapshots[0]
+            if len(snapshots) == 1
+            else CredentialStoreSnapshot.combine(snapshots)
+        )
+    if governance.environment is not EnvironmentKind.DEVELOPMENT:
+        raise ConfigurationError(
+            "--credentials-file is restricted to the development environment; "
+            "use the approved secret manager for non-development execution"
+        )
     alias_configurations = configurations | _related_atlassian_configurations(
         integrations,
         configurations=configurations,
@@ -4121,9 +4160,14 @@ def _credential_environment(
     store: CredentialStoreSnapshot | None,
     environ: Mapping[str, str],
     *,
+    declared_names: Sequence[str] = (),
     compatible_names: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    merged = store.overlay(environ) if store is not None else dict(environ)
+    normalized = normalize_credential_environment(
+        environ,
+        declared_names=declared_names,
+    )
+    merged = store.overlay(normalized) if store is not None else normalized
     for destination, source in (compatible_names or {}).items():
         if not merged.get(destination) and merged.get(source):
             merged[destination] = merged[source]
@@ -4202,6 +4246,7 @@ def _readiness(
             else _credential_environment(
                 credential_store,
                 os.environ,
+                declared_names=integrations.credential_environment_variables(),
                 compatible_names=_atlassian_credential_compatibility(
                     integrations,
                     configurations=configurations,
@@ -4210,6 +4255,28 @@ def _readiness(
         ),
         egress_checks=parsed_egress_checks,
     )
+    if credential_store is not None and credential_store.source_bindings:
+        shadowed = credential_store.shadowed_ambient_names(os.environ)
+        report = replace(
+            report,
+            checks=(
+                *report.checks,
+                {
+                    "name": "credential_sources",
+                    "passed": True,
+                    "sources": [
+                        source.to_dict() for source in credential_store.source_bindings
+                    ],
+                },
+            ),
+            warnings=(
+                *report.warnings,
+                *(
+                    "configured credential source overrides ambient variable: " + name
+                    for name in shadowed
+                ),
+            ),
+        )
     payload = report.to_dict()
     print(f"environment: {_terminal_field(report.environment, max_characters=80)}")
     print(f"ready: {report.ready}")
@@ -4782,6 +4849,7 @@ def _discover(
         environ=_credential_environment(
             credential_store,
             os.environ,
+            declared_names=config.credential_environment_variables(),
             compatible_names=_atlassian_credential_compatibility(
                 config,
                 configurations=configurations,
@@ -4891,47 +4959,33 @@ def _connect(
         data_classification=data_classification,
     )
 
-    related_configurations = _related_atlassian_configurations(
-        effective,
-        configurations=configurations,
-    )
     credential_compatibility = _atlassian_credential_compatibility(
         effective,
         configurations=configurations,
     )
 
-    if credentials_file is not None:
-        if governance.environment is not EnvironmentKind.DEVELOPMENT:
-            raise ConfigurationError(
-                "--credentials-file is restricted to development; use the approved "
-                "secret manager for non-development execution"
-            )
-        store = CredentialStoreSnapshot.load_provider_compatible(
-            credentials_file,
-            allowed_names=effective.credential_environment_variables(),
-            aliases=_provider_credential_aliases(
-                effective,
-                configurations=configurations | related_configurations,
-                systems=systems,
-            ),
-            explicit_mappings=_parse_credential_mappings(credential_mappings),
-        )
+    store = _load_credential_store(
+        credentials_file,
+        integrations=effective,
+        governance=governance,
+        connector_mode="live",
+        credential_mappings=credential_mappings,
+        systems=systems,
+    )
+    ambient: Mapping[str, str] = os.environ
+    if store is not None and store.path is not None:
+        # Preserve the existing connect-only JSON override behavior. Other
+        # JSON consumers retain their collision check, and native configured
+        # providers apply their explicit reviewed precedence in ``overlay``.
         ambient = {
             name: value for name, value in os.environ.items() if name not in store.names
         }
-        environ = _credential_environment(
-            store,
-            ambient,
-            compatible_names=credential_compatibility,
-        )
-    else:
-        if credential_mappings:
-            raise ConfigurationError("--credential-map requires --credentials-file")
-        environ = _credential_environment(
-            None,
-            os.environ,
-            compatible_names=credential_compatibility,
-        )
+    environ = _credential_environment(
+        store,
+        ambient,
+        declared_names=effective.credential_environment_variables(),
+        compatible_names=credential_compatibility,
+    )
 
     if "microsoft" in configurations:
         microsoft = effective.connector("microsoft")

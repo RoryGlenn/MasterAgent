@@ -8,7 +8,7 @@ belong in backend modules, never here.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -24,6 +24,7 @@ class PlatformContract(StrEnum):
     SECURE_FILESYSTEM = "secure_filesystem"
     CROSS_PROCESS_LOCKING = "cross_process_locking"
     ATOMIC_PUBLICATION_RECOVERY = "atomic_publication_recovery"
+    CREDENTIAL_STORAGE = "credential_storage"
     PROCESS_SUPERVISION = "process_supervision"
     TRUSTED_GIT = "trusted_git"
     CAPSULE_ISOLATION = "capsule_isolation"
@@ -397,6 +398,38 @@ class AtomicPublicationRecoveryBackend(PlatformBackend, Protocol):
 
 
 @runtime_checkable
+class CredentialStorageBackend(PlatformBackend, Protocol):
+    """Native, non-ambient credential storage selected by reviewed metadata."""
+
+    def load_credentials(
+        self,
+        *,
+        provider: str,
+        target: str,
+        allowed_names: Sequence[str],
+    ) -> Mapping[str, str]:
+        """Load a bounded subset of exact declared credential names."""
+
+    def store_credentials(
+        self,
+        *,
+        provider: str,
+        target: str,
+        credentials: Mapping[str, str],
+    ) -> None:
+        """Persist one bounded exact credential mapping for trusted setup."""
+
+    def remove_credentials(
+        self,
+        *,
+        provider: str,
+        target: str,
+        credential_names: Sequence[str],
+    ) -> None:
+        """Remove only the selected credential names or protected document."""
+
+
+@runtime_checkable
 class ProcessSupervisionBackend(PlatformBackend, Protocol):
     """Native process limits and supervision required by capsule workers."""
 
@@ -517,6 +550,7 @@ class PlatformRuntime:
     secure_filesystem: SecureFilesystemBackend | None = None
     cross_process_locking: CrossProcessLockingBackend | None = None
     atomic_publication_recovery: AtomicPublicationRecoveryBackend | None = None
+    credential_storage: CredentialStorageBackend | None = None
     process_supervision: ProcessSupervisionBackend | None = None
     trusted_git: TrustedGitBackend | None = None
     capsule_isolation: CapsuleIsolationBackend | None = None
@@ -570,6 +604,14 @@ class PlatformRuntime:
             self.require_contract(PlatformContract.ATOMIC_PUBLICATION_RECOVERY),
         )
 
+    def require_credential_storage(self) -> CredentialStorageBackend:
+        """Return the native credential-storage backend or fail closed."""
+
+        return cast(
+            CredentialStorageBackend,
+            self.require_contract(PlatformContract.CREDENTIAL_STORAGE),
+        )
+
     def require_process_supervision(self) -> ProcessSupervisionBackend:
         """Return the process-supervision backend or fail closed."""
 
@@ -594,6 +636,7 @@ class PlatformRuntime:
                 PlatformContract.ATOMIC_PUBLICATION_RECOVERY: (
                     self.atomic_publication_recovery
                 ),
+                PlatformContract.CREDENTIAL_STORAGE: self.credential_storage,
                 PlatformContract.PROCESS_SUPERVISION: self.process_supervision,
                 PlatformContract.TRUSTED_GIT: self.trusted_git,
                 PlatformContract.CAPSULE_ISOLATION: self.capsule_isolation,

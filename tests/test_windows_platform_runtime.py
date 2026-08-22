@@ -39,6 +39,7 @@ from master_agent.platform_runtime.windows import (
     TRUSTED_INSTALLER_SID,
     WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
     WINDOWS_ATOMIC_BACKEND_ID,
+    WINDOWS_CREDENTIAL_STORAGE_BACKEND_ID,
     WINDOWS_DANGEROUS_WRITE_MASK,
     WINDOWS_RUNTIME_BACKEND_ID,
     NativeWindowsFileSnapshot,
@@ -1115,11 +1116,16 @@ assert 'msvcrt' not in sys.modules
                 "master_agent.platform_runtime.windows.runtime."
                 "probe_windows_atomic_backend"
             ) as atomic_probe,
+            patch(
+                "master_agent.platform_runtime.windows.runtime."
+                "probe_windows_credential_storage_backend"
+            ) as credential_probe,
         ):
             runtime = build_windows_runtime()
         filesystem_probe.assert_called_once_with()
         locking_probe.assert_called_once_with()
         atomic_probe.assert_called_once()
+        credential_probe.assert_called_once()
         self.assertEqual(runtime.status.backend, WINDOWS_RUNTIME_BACKEND_ID)
         self.assertTrue(runtime.supports(PlatformContract.SECURE_FILESYSTEM))
         self.assertTrue(runtime.supports(PlatformContract.CROSS_PROCESS_LOCKING))
@@ -1128,6 +1134,14 @@ assert 'msvcrt' not in sys.modules
         )
         self.assertTrue(atomic_status.available)
         self.assertEqual(atomic_status.backend, WINDOWS_ATOMIC_BACKEND_ID)
+        credential_status = runtime.status.contract_status(
+            PlatformContract.CREDENTIAL_STORAGE
+        )
+        self.assertTrue(credential_status.available)
+        self.assertEqual(
+            credential_status.backend,
+            WINDOWS_CREDENTIAL_STORAGE_BACKEND_ID,
+        )
         for contract in (
             PlatformContract.PROCESS_SUPERVISION,
             PlatformContract.TRUSTED_GIT,

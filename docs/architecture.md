@@ -105,12 +105,13 @@ runtime admission finish. Neither mode can self-approve or self-promote code.
 
 Platform-neutral package and CLI modules depend on a descriptive platform
 registry instead of importing Unix-only primitives at startup. The registry
-normalizes the host to one stable backend identity and reports six independent
+normalizes the host to one stable backend identity and reports seven independent
 contracts:
 
 - `secure_filesystem`;
 - `cross_process_locking`;
 - `atomic_publication_recovery`;
+- `credential_storage`;
 - `process_supervision`;
 - `trusted_git`; and
 - `capsule_isolation`.
@@ -131,8 +132,11 @@ reports
 filesystem property, not OS worker containment, and no native macOS isolation
 backend is certified. Native Windows selects `windows-native-partial` with
 `windows-handle-acl-filesystem`, `windows-lockfileex`, and
-`windows-handle-atomic-state`; process supervision, trusted Git, and capsule
-isolation retain bounded unavailable entries. A non-Windows host that
+`windows-handle-atomic-state`. Its
+`windows-credential-manager-current-user-dpapi` service provides exact Generic
+Credential Manager entries and current-user DPAPI documents; process
+supervision, trusted Git, and capsule isolation retain bounded unavailable
+entries. A non-Windows host that
 explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
@@ -169,9 +173,14 @@ verification, directory flush, and deterministic restart recovery. SQLite and
 the protected approval, retention, token, configuration, advisory, capsule,
 plugin, and draft stores select that backend. A stateful capability remains
 unavailable when another required contract reports unavailable, and its
-readiness issue is `runtime_defect`. The common platform, native Windows
-filesystem, and Windows atomic-state routes are released; the other five
-Windows implementation and hosted-certification routes remain planned.
+readiness issue is `runtime_defect`. DPAPI publishes only a bounded versioned
+ciphertext envelope through the same atomic backend and omits machine scope;
+Credential Manager stores one bounded UTF-8 value per declared name beneath a
+reviewed `MasterAgent/` namespace. Connector configuration binds the non-secret
+provider and target, while values stay in the trusted in-memory credential
+snapshot. The common platform, native Windows filesystem, Windows atomic-state,
+and Windows credential routes are released; the other four Windows
+implementation and hosted-certification routes remain planned.
 
 ## Repository discovery topology
 
