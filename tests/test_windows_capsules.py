@@ -67,7 +67,7 @@ class _FakeAppContainerApi:
             source_interpreter_sha256="a" * 64,
             source_worker_sha256="b" * 64,
             runtime_sha256="c" * 64,
-            readonly_sddl_sha256="d" * 64,
+            runtime_security_sha256="d" * 64,
         )
 
     def identity_components(
@@ -266,6 +266,29 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         self.assertIsNotNone(projection)
         assert projection is not None
         projection.worker.write_bytes(projection.worker.read_bytes() + b"\n# tamper\n")
+
+        with self.assertRaisesRegex(
+            ProcessSupervisionError,
+            "capsule_runtime_identity_changed",
+        ):
+            _ = self.worker.identity_components
+
+    def test_runtime_dacl_tamper_fails_closed(self) -> None:
+        _ = self.worker.identity_components
+        backend = self.worker._isolation_backend
+        projection = getattr(backend, "_projection", None)
+        api = getattr(backend, "_api", None)
+        self.assertIsNotNone(projection)
+        self.assertIsNotNone(api)
+        assert projection is not None and api is not None
+        api._set_sddl(  # type: ignore[attr-defined]
+            projection.worker,
+            _sddl(
+                owner_sid=api._filesystem.current_user_sid(),  # type: ignore[attr-defined]
+                appcontainer_sid=projection.sid_string,
+                writable=True,
+            ),
+        )
 
         with self.assertRaisesRegex(
             ProcessSupervisionError,

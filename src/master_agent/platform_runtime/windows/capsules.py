@@ -25,7 +25,6 @@ from master_agent.platform_runtime.windows.filesystem import (
     BUILTIN_ADMINISTRATORS_SID,
     FILE_ATTRIBUTE_REPARSE_POINT,
     LOCAL_SYSTEM_SID,
-    MAX_PINNED_READ_BYTES,
     WindowsSecureFilesystemBackend,
     canonicalize_windows_sid,
 )
@@ -83,7 +82,7 @@ class WindowsAppContainerProjection:
     source_interpreter_sha256: str
     source_worker_sha256: str
     runtime_sha256: str
-    readonly_sddl_sha256: str
+    runtime_security_sha256: str
 
 
 class WindowsAppContainerApi(Protocol):
@@ -319,6 +318,14 @@ class CtypesWindowsAppContainerApi:
             ctypes.c_void_p,
         )
         self._advapi.SetFileSecurityW.restype = ctypes.c_int
+        self._advapi.GetFileSecurityW.argtypes = (
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32),
+        )
+        self._advapi.GetFileSecurityW.restype = ctypes.c_int
         self._kernel.LocalFree.argtypes = (ctypes.c_void_p,)
         self._kernel.LocalFree.restype = ctypes.c_void_p
         self._advapi.FreeSid.argtypes = (ctypes.c_void_p,)
@@ -386,6 +393,7 @@ class CtypesWindowsAppContainerApi:
             )
             self._apply_tree_sddl(profile_root, readonly_sddl)
             runtime_sha256 = _tree_sha256(runtime_root)
+            runtime_security_sha256 = self._tree_security_sha256(profile_root)
             return WindowsAppContainerProjection(
                 profile_name=profile_name,
                 sid=int(sid.value),
@@ -394,10 +402,10 @@ class CtypesWindowsAppContainerApi:
                 runtime_root=runtime_root,
                 interpreter=projected_interpreter,
                 worker=projected_worker,
-                source_interpreter_sha256=self._trusted_sha256(interpreter),
-                source_worker_sha256=self._trusted_sha256(worker),
+                source_interpreter_sha256=_sha256_file(interpreter),
+                source_worker_sha256=_sha256_file(worker),
                 runtime_sha256=runtime_sha256,
-                readonly_sddl_sha256=_sha256_text(readonly_sddl),
+                runtime_security_sha256=runtime_security_sha256,
             )
         except BaseException:
             if created:
@@ -416,9 +424,11 @@ class CtypesWindowsAppContainerApi:
         """Revalidate all mutable paths and return promotion-bound digests."""
 
         if (
-            self._trusted_sha256(worker) != projection.source_worker_sha256
-            or self._trusted_sha256(interpreter) != projection.source_interpreter_sha256
+            _sha256_file(worker) != projection.source_worker_sha256
+            or _sha256_file(interpreter) != projection.source_interpreter_sha256
             or _tree_sha256(projection.runtime_root) != projection.runtime_sha256
+            or self._tree_security_sha256(projection.profile_root)
+            != projection.runtime_security_sha256
         ):
             raise ProcessSupervisionError("capsule_runtime_identity_changed")
         helper_path = Path(__file__).resolve()
@@ -430,10 +440,10 @@ class CtypesWindowsAppContainerApi:
                 "backend": WINDOWS_CAPSULE_BACKEND_ID,
                 "worker_sha256": _sha256_file(projection.worker),
                 "interpreter_sha256": _sha256_file(projection.interpreter),
-                "sandbox_sha256": self._trusted_sha256(helper_path),
+                "sandbox_sha256": _sha256_file(helper_path),
                 "runtime_sha256": projection.runtime_sha256,
-                "process_boundary_sha256": self._trusted_sha256(process_path),
-                "dacl_policy_sha256": projection.readonly_sddl_sha256,
+                "process_boundary_sha256": _sha256_file(process_path),
+                "dacl_policy_sha256": projection.runtime_security_sha256,
                 "host_interpreter_sha256": projection.source_interpreter_sha256,
             }
         )
@@ -645,7 +655,7 @@ class CtypesWindowsAppContainerApi:
         if not source_interpreter.is_file():
             raise ProcessSupervisionError("capsule_interpreter_unavailable")
         projected_interpreter = runtime_root / "python.exe"
-        self._copy_trusted_file(source_interpreter, projected_interpreter)
+        _copy_regular_file(source_interpreter, projected_interpreter)
         _consume_runtime_budget(projected_interpreter, runtime_counters)
         for source in sorted(base.iterdir(), key=lambda item: item.name.casefold()):
             name = source.name.casefold()
@@ -653,7 +663,7 @@ class CtypesWindowsAppContainerApi:
                 name.startswith(("python", "vcruntime"))
                 and source.suffix.casefold() == ".dll"
             ):
-                self._copy_trusted_file(source, runtime_root / source.name)
+                _copy_regular_file(source, runtime_root / source.name)
                 _consume_runtime_budget(runtime_root / source.name, runtime_counters)
         for directory_name in ("DLLs", "Lib"):
             source_root = base / directory_name
@@ -662,32 +672,12 @@ class CtypesWindowsAppContainerApi:
             _copy_runtime_directory(
                 source_root,
                 runtime_root / directory_name,
-                copy_file=self._copy_trusted_file,
                 counters=runtime_counters,
             )
-        self._copy_trusted_file(worker, runtime_root / "capsule-worker.py")
+        _copy_regular_file(worker, runtime_root / "capsule-worker.py")
         _consume_runtime_budget(runtime_root / "capsule-worker.py", runtime_counters)
         _tree_sha256(runtime_root)
         return projected_interpreter
-
-    def _copy_trusted_file(self, source: Path, destination: Path) -> None:
-        """Copy one ACL-validated immutable source snapshot into projection."""
-
-        _, payload, _ = self._filesystem.read_restricted_file(
-            source,
-            MAX_PINNED_READ_BYTES,
-            require_private=False,
-        )
-        with destination.open("xb") as handle:
-            handle.write(payload)
-
-    def _trusted_sha256(self, path: Path) -> str:
-        _, payload, _ = self._filesystem.read_restricted_file(
-            path,
-            MAX_PINNED_READ_BYTES,
-            require_private=False,
-        )
-        return hashlib.sha256(payload).hexdigest()
 
     def _apply_tree_sddl(self, root: Path, sddl: str) -> None:
         paths = sorted(
@@ -725,6 +715,40 @@ class CtypesWindowsAppContainerApi:
                 raise OSError(_last_error(), "file security update failed")
         finally:
             self._kernel.LocalFree(descriptor)
+
+    def _tree_security_sha256(self, root: Path) -> str:
+        digest = hashlib.sha256()
+        paths = (root, *sorted(root.rglob("*"), key=lambda item: str(item).casefold()))
+        for path in paths:
+            _require_safe_source(path)
+            relative = "." if path == root else path.relative_to(root).as_posix()
+            descriptor = self._security_descriptor(path)
+            digest.update(relative.encode("utf-8") + b"\x00")
+            digest.update(len(descriptor).to_bytes(8, "big") + descriptor)
+        return digest.hexdigest()
+
+    def _security_descriptor(self, path: Path) -> bytes:
+        security_information = _OWNER_SECURITY_INFORMATION | _DACL_SECURITY_INFORMATION
+        needed = ctypes.c_uint32()
+        self._advapi.GetFileSecurityW(
+            str(path),
+            security_information,
+            None,
+            0,
+            ctypes.byref(needed),
+        )
+        if _last_error() != 122 or needed.value == 0:
+            raise OSError(_last_error(), "file security size lookup failed")
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not self._advapi.GetFileSecurityW(
+            str(path),
+            security_information,
+            buffer,
+            needed.value,
+            ctypes.byref(needed),
+        ):
+            raise OSError(_last_error(), "file security lookup failed")
+        return bytes(buffer.raw[: needed.value])
 
     def _sid_string(self, sid: int) -> str:
         selected = ctypes.c_wchar_p()
