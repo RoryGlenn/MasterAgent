@@ -580,7 +580,13 @@ class CtypesWindowsAppContainerApi:
                     or result.output_truncated
                     or result.stdout.strip() != b"DENIED"
                 ):
-                    raise ProcessSupervisionError(f"appcontainer_{name}_probe_failed")
+                    diagnostic = result.stdout.strip().decode(
+                        "ascii", errors="backslashreplace"
+                    )[:64]
+                    suffix = f"_{diagnostic}" if diagnostic else ""
+                    raise ProcessSupervisionError(
+                        f"appcontainer_{name}_probe_failed{suffix}"
+                    )
                 results.append(MappingProxyType({"name": name, "status": "denied"}))
         finally:
             secret_path.unlink(missing_ok=True)
@@ -960,7 +966,7 @@ def _network_probe_source(host: str, *, family: int) -> str:
         " s.close()\n"
         "except OSError as error:\n"
         " code=int(error.winerror or error.errno or 0)\n"
-        "print('DENIED' if code in denied else 'ALLOWED')\n"
+        "print('DENIED' if code in denied else f'UNEXPECTED_{code}')\n"
     )
 
 

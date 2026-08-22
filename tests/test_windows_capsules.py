@@ -222,6 +222,7 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         self.assertIn("10047", source)
         self.assertNotIn("10061", source)
         self.assertIn("except OSError", source)
+        self.assertIn("UNEXPECTED_{code}", source)
 
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")
