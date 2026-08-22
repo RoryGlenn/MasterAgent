@@ -49,12 +49,13 @@ then includes only that route's canonical navigation fields in the sanitized
 envelope. It never sends aliases, routing fixtures, the agent registry, sibling
 metadata, the full manifest, or the generated index.
 
-Paths must be narrower than the repository root. A directory scope contains
-only its bounded tracked and non-ignored untracked regular-file inventory;
-ignored files, symlinks, `.git`, and `.master-agent` are absent. Parent-only
-context is also excluded: `AGENTS.md`, every `.ai` policy or manifest path,
-`docs/semantic-index.md`, and every `.github/agents` profile. A directory that
-would include one of those files is rejected as a whole.
+Each path must be an exact tracked or non-ignored untracked regular file linked
+or owned by the selected route or its recursively declared dependencies.
+Directory and ancestor widening is rejected before scope binding, worker
+construction, or budget access. Ignored files, symlinks, `.git`, and
+`.master-agent` are absent. Parent-only context is also excluded: `AGENTS.md`,
+every `.ai` policy or manifest path, `docs/semantic-index.md`, and every
+`.github/agents` profile.
 
 The flow is:
 

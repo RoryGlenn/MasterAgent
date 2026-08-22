@@ -9,8 +9,11 @@ Active
 MasterAgent MUST maintain one bounded machine-readable manifest that assigns
 every production Python module, test module, current behavioral requirement,
 configuration, CLI command, capability, connector module, checked-in agent
-profile, and declared platform capability to exactly one semantic route. Each
-route MUST record lifecycle, authoritative policy or specification,
+profile, and declared platform capability to exactly one semantic route. The
+configuration inventory MUST cover every repository TOML surface outside the
+specification lifecycle tree and ignored private, cache, or build roots,
+including packaged defaults and top-level supply-chain metadata. Each route
+MUST record lifecycle, authoritative policy or specification,
 implementation, tests, release gates, search aliases, and its owning agent.
 Validation MUST reject missing or duplicate ownership, stale or unsafe paths,
 cross-owned route links without an exact declared dependency,
@@ -25,7 +28,11 @@ without sibling prompt awareness. A brokered specialist call MUST bind exactly
 one validated parent-selected route before invoking a worker, and its readable
 scope MUST exclude the global policy, full manifest or generated index, and all
 parent or sibling profiles. The manifest and generated router MUST remain
-navigation data and MUST NOT grant runtime authority.
+navigation data and MUST NOT grant runtime authority. A commit- or explicit
+two-dot range-only review request MUST first route to the semantic router,
+which MUST derive a bounded, deterministic, read-only Git changed-path
+inventory and return every affected exact semantic route plus any explicitly
+unmapped path without requiring broad repository inspection.
 
 ## Rationale
 
@@ -61,6 +68,21 @@ specialist roles from becoming implicit authority.
 - WHEN the route is absent, unknown, duplicated, or its path scope includes the global routing corpus
 - THEN delegation fails before a worker is invoked
 
+### A commit-only review starts from bounded evidence
+
+- GIVEN an operator supplies only a commit identifier or `BASE..HEAD` range
+- WHEN semantic routing starts
+- THEN the request selects the semantic-router discovery path
+- AND bounded read-only Git discovery returns the exact changed paths, affected
+  semantic routes, and any unmapped paths
+
+### A governed TOML file cannot evade ownership
+
+- GIVEN a TOML configuration is added outside `config/` and outside `specs/`
+- WHEN semantic-router validation runs
+- THEN validation fails until the file has one exact configuration owner
+- AND specification change, archive, and template metadata remain excluded
+
 ## Implementation
 
 - `.ai/semantic-router.toml`
@@ -83,3 +105,5 @@ specialist roles from becoming implicit authority.
 ## History
 
 - Introduced by GitHub issue #114.
+- Closed commit-routing and out-of-tree configuration inventory gaps during
+  pull request #121 review.

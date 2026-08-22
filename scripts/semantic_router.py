@@ -10,8 +10,10 @@ import json
 import os
 import re
 import secrets
+import selectors
 import stat
 import statistics
+import subprocess
 import sys
 import time
 import tomllib
@@ -27,6 +29,10 @@ MAX_ITEMS: Final = 4_096
 MAX_WALK_ENTRIES: Final = 50_000
 MAX_STRING_LENGTH: Final = 4_096
 MAX_QUERY_LENGTH: Final = 2_048
+MAX_REVISION_LENGTH: Final = 256
+MAX_GIT_OUTPUT_BYTES: Final = 4 * 1024 * 1024
+MAX_CHANGED_PATHS: Final = MAX_WALK_ENTRIES
+GIT_TIMEOUT_SECONDS: Final = 15.0
 LIFECYCLES: Final = ("released", "implementing", "planned", "archived")
 AGENT_KINDS: Final = ("profile", "contract", "runtime")
 OWNERSHIP_CATEGORIES: Final = (
@@ -93,6 +99,7 @@ REQUIRED_AGENT_PROFILES: Final = {
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _PATH_PART = re.compile(r"^[A-Za-z0-9._-]+$")
 _TOKEN = re.compile(r"[a-z0-9]+")
+_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@{}^~:+-]{0,255}$")
 _IGNORED_DIRECTORY_NAMES: Final = {
     ".git",
     ".master-agent",
@@ -721,7 +728,12 @@ def collect_inventory(root: Path) -> dict[str, set[str]]:
     )
     tests = _bounded_file_inventory(trusted_root, "tests", ".py")
     requirements = _bounded_file_inventory(trusted_root, "specs/current", ".md")
-    configurations = _bounded_file_inventory(trusted_root, "config", ".toml")
+    configurations = _bounded_file_inventory(
+        trusted_root,
+        "",
+        ".toml",
+        excluded_first_parts=frozenset({"specs"}),
+    )
     connectors = _bounded_file_inventory(
         trusted_root, "src/master_agent/connectors", ".py"
     )
@@ -1039,6 +1051,12 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
                     f"{category} entry {item} cannot be owned by "
                     f"{owner_route.lifecycle} route {owner_id}"
                 )
+    for path, owner_id in ownership["configurations"].items():
+        owner_route = manifest.routes_by_id.get(owner_id)
+        if owner_route is not None and path not in owner_route.configuration:
+            errors.append(
+                f"configuration {path} is not linked by its owner route {owner_id}"
+            )
     route_tests = set(ownership["tests"].values())
     active_owners: set[str] = set()
     for category in (
@@ -1170,23 +1188,195 @@ def select_route(manifest: SemanticManifest, query: str) -> RouteMatch:
     return RouteMatch(route=route, score=score, matched_alias=alias)
 
 
-def route_payload(manifest: SemanticManifest, match: RouteMatch) -> dict[str, object]:
-    """Build the selected route and local role contract without sibling context.
+def _bounded_git_output(root: Path, arguments: Sequence[str], *, limit: int) -> bytes:
+    """Run one fixed read-only Git query with bounded output and duration."""
 
-    Parameters
-    ----------
-    manifest:
-        Parsed semantic-router manifest.
-    match:
-        Unambiguous selected route.
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_ALLOW_PROTOCOL": "",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "cat",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
+    )
+    command = [
+        "git",
+        "--no-pager",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "diff.external=",
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.ext.allow=never",
+        *arguments,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as exc:
+        raise ManifestError(f"cannot start bounded Git discovery: {exc}") from exc
+    selector = selectors.DefaultSelector()
+    output = bytearray()
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    try:
+        if process.stdout is None:
+            raise ManifestError("bounded Git discovery has no output stream")
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise ManifestError(
+                    f"bounded Git discovery exceeded {GIT_TIMEOUT_SECONDS:g} seconds"
+                )
+            chunk = os.read(
+                process.stdout.fileno(),
+                min(64 * 1024, limit + 1 - len(output)),
+            )
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > limit:
+                raise ManifestError(f"bounded Git discovery exceeds {limit} bytes")
+        try:
+            return_code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            raise ManifestError(
+                f"bounded Git discovery exceeded {GIT_TIMEOUT_SECONDS:g} seconds"
+            ) from exc
+    except BaseException:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            process.wait()
+        raise
+    finally:
+        selector.close()
+        if process.stdout is not None:
+            process.stdout.close()
+    if return_code != 0:
+        detail = (
+            bytes(output).decode("utf-8", errors="replace").replace("\x00", " ").strip()
+        )
+        if len(detail) > 512:
+            detail = detail[:509] + "..."
+        raise ManifestError(
+            f"bounded Git discovery failed with exit {return_code}"
+            + (f": {detail}" if detail else "")
+        )
+    return bytes(output)
 
-    Returns
-    -------
-    dict[str, object]
-        JSON-compatible selected-only discovery payload.
-    """
 
-    route = match.route
+def _resolve_commit(root: Path, revision: str) -> str:
+    """Resolve one bounded revision token to an immutable commit identifier."""
+
+    _expect_string(revision, "Git revision")
+    if len(revision) > MAX_REVISION_LENGTH or _REVISION.fullmatch(revision) is None:
+        raise ManifestError("Git revision is not a bounded safe token")
+    output = _bounded_git_output(
+        root,
+        ["rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}"],
+        limit=512,
+    )
+    resolved = output.decode("ascii", errors="strict").strip()
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", resolved) is None:
+        raise ManifestError("Git revision did not resolve to one commit identifier")
+    return resolved
+
+
+def changed_paths_for_revision(
+    root: Path, revision_spec: str
+) -> tuple[str | None, str, tuple[str, ...]]:
+    """Return bounded changed paths for one commit or an explicit two-dot range."""
+
+    _expect_string(revision_spec, "Git revision or range")
+    if len(revision_spec) > MAX_REVISION_LENGTH:
+        raise ManifestError(
+            f"Git revision or range exceeds {MAX_REVISION_LENGTH} characters"
+        )
+    if "..." in revision_spec or revision_spec.count("..") > 1:
+        raise ManifestError("Git review range must use exactly BASE..HEAD")
+    trusted_root = root.resolve(strict=True)
+    if ".." in revision_spec:
+        base_revision, head_revision = revision_spec.split("..", 1)
+        if not base_revision or not head_revision:
+            raise ManifestError("Git review range must include BASE and HEAD")
+        base = _resolve_commit(trusted_root, base_revision)
+        head = _resolve_commit(trusted_root, head_revision)
+        arguments = [
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-z",
+            base,
+            head,
+            "--",
+        ]
+    else:
+        base = None
+        head = _resolve_commit(trusted_root, revision_spec)
+        arguments = [
+            "diff-tree",
+            "--root",
+            "-m",
+            "--no-commit-id",
+            "--name-only",
+            "--no-renames",
+            "-r",
+            "-z",
+            head,
+            "--",
+        ]
+    output = _bounded_git_output(trusted_root, arguments, limit=MAX_GIT_OUTPUT_BYTES)
+    if output and not output.endswith(b"\x00"):
+        raise ManifestError("bounded Git changed-path output is not NUL terminated")
+    raw_paths = output[:-1].split(b"\x00") if output else []
+    if len(raw_paths) > MAX_CHANGED_PATHS:
+        raise ManifestError(
+            f"Git review contains more than {MAX_CHANGED_PATHS} changed paths"
+        )
+    paths: set[str] = set()
+    for raw_path in raw_paths:
+        try:
+            path = raw_path.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestError("Git changed path is not valid UTF-8") from exc
+        _expect_string(path, "Git changed path")
+        pure = PurePosixPath(path)
+        if pure.is_absolute() or pure.as_posix() != path:
+            raise ManifestError(f"Git changed path is not canonical: {path!r}")
+        if any(part in {"", ".", ".."} for part in pure.parts):
+            raise ManifestError(f"Git changed path is unsafe: {path!r}")
+        paths.add(path)
+    return base, head, tuple(sorted(paths))
+
+
+def _route_contract_payload(
+    manifest: SemanticManifest, route: RouteRecord
+) -> dict[str, object]:
+    """Build one route's selected-only navigation contract."""
+
     agent = manifest.agents_by_id.get(route.agent)
     if agent is None:
         raise ManifestError(f"route {route.id} references unknown agent {route.agent}")
@@ -1214,8 +1404,74 @@ def route_payload(manifest: SemanticManifest, match: RouteMatch) -> dict[str, ob
             "output_contract": agent.output_contract,
             "return_path": agent.return_path,
         },
-        "score": match.score,
-        "matched_alias": match.matched_alias,
+    }
+
+
+def route_payload(manifest: SemanticManifest, match: RouteMatch) -> dict[str, object]:
+    """Build the selected route and local role contract without sibling context.
+
+    Parameters
+    ----------
+    manifest:
+        Parsed semantic-router manifest.
+    match:
+        Unambiguous selected route.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-compatible selected-only discovery payload.
+    """
+
+    payload = _route_contract_payload(manifest, match.route)
+    payload.update({"score": match.score, "matched_alias": match.matched_alias})
+    return payload
+
+
+def changed_routes_payload(
+    manifest: SemanticManifest,
+    *,
+    revision_spec: str,
+    base: str | None,
+    head: str,
+    changed_paths: Sequence[str],
+) -> dict[str, object]:
+    """Map a bounded Git path inventory to every exact affected route."""
+
+    route_paths: dict[str, set[str]] = {}
+    unmapped_paths: list[str] = []
+    routes = manifest.routes_by_id
+    for path in changed_paths:
+        route_ids = {
+            category[path]
+            for name, category in manifest.ownership.items()
+            if name in PATH_OWNERSHIP_CATEGORIES and path in category
+        }
+        for route in manifest.routes:
+            if any(path in getattr(route, field) for field in ROUTE_PATH_FIELDS):
+                route_ids.add(route.id)
+        if path == manifest.generated_document:
+            route_ids.add("semantic-router")
+        if path.startswith(("specs/changes/", "specs/archive/", "specs/templates/")):
+            route_ids.add("specification-lifecycle")
+        known_route_ids = route_ids & set(routes)
+        if not known_route_ids:
+            unmapped_paths.append(path)
+            continue
+        for route_id in known_route_ids:
+            route_paths.setdefault(route_id, set()).add(path)
+    affected: list[dict[str, object]] = []
+    for route_id in sorted(route_paths):
+        payload = _route_contract_payload(manifest, routes[route_id])
+        payload["matched_paths"] = sorted(route_paths[route_id])
+        affected.append(payload)
+    return {
+        "revision": revision_spec,
+        "base": base,
+        "head": head,
+        "changed_paths": list(changed_paths),
+        "routes": affected,
+        "unmapped_paths": unmapped_paths,
     }
 
 
@@ -1698,6 +1954,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     route = commands.add_parser("route", help="select a semantic route")
     route.add_argument("query")
+    changes = commands.add_parser(
+        "changes", help="map one commit or BASE..HEAD range to affected routes"
+    )
+    changes.add_argument("revision")
     commands.add_parser("metrics", help="report non-gating router measurements")
     return parser
 
@@ -1740,6 +2000,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ManifestError("\n".join(errors))
             match = select_route(manifest, args.query)
             print(json.dumps(route_payload(manifest, match), sort_keys=True))
+            return 0
+        if args.command == "changes":
+            errors = validate_repository(root, manifest)
+            if errors:
+                raise ManifestError("\n".join(errors))
+            base, head, paths = changed_paths_for_revision(root, args.revision)
+            print(
+                json.dumps(
+                    changed_routes_payload(
+                        manifest,
+                        revision_spec=args.revision,
+                        base=base,
+                        head=head,
+                        changed_paths=paths,
+                    ),
+                    sort_keys=True,
+                )
+            )
             return 0
         if args.command == "metrics":
             errors = validate_repository(root, manifest)

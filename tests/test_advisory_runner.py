@@ -47,7 +47,7 @@ _FAKE_RUNNER = textwrap.dedent(
             return AdvisoryReport("bounded", (), ())
 
     runner.CopilotSdkAdvisoryWorker = lambda root, scope=None: Worker()
-    runner._validated_semantic_route = lambda root, route: ROUTE
+    runner._validated_semantic_route = lambda root, route, paths: ROUTE
     role = (
         AdvisoryRole.RESEARCH
         if sys.argv[3] == "research"
@@ -247,6 +247,12 @@ class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
             self.source / "src/master_agent/advisory.py",
             implementation,
         )
+        release_validator = self.root / "scripts/validate_release.py"
+        release_validator.parent.mkdir(parents=True)
+        shutil.copy2(
+            self.source / "scripts/validate_release.py",
+            release_validator,
+        )
         profiles = self.root / ".github/agents"
         profiles.mkdir(parents=True)
         for name in (
@@ -294,7 +300,7 @@ class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
                     self.root,
                     AdvisoryRole.RESEARCH,
                     "inspect one bounded file",
-                    ("src/master_agent/advisory.py",),
+                    ("scripts/validate_release.py",),
                     route=route,
                     goal_id="route-binding-goal",
                     state_directory=self.state,
@@ -325,6 +331,133 @@ class AdvisoryRunnerSemanticRouteTests(unittest.TestCase):
         self.assertNotIn("agent", route_payload)
         self.assertNotIn("aliases", route_payload)
         self.assertNotIn("routing_cases", route_payload)
+
+    def test_route_accepts_owned_file_not_repeated_in_navigation_slice(self) -> None:
+        """Exact ownership makes the full selected route available."""
+
+        allowed = self.root / "src/master_agent/advisory_budget.py"
+        shutil.copy2(
+            self.source / "src/master_agent/advisory_budget.py",
+            allowed,
+        )
+        with patch.object(
+            advisory_subagent._semantic_router,
+            "validate_repository",
+            return_value=[],
+        ):
+            route = advisory_subagent._validated_semantic_route(
+                self.root,
+                "agent-topology",
+                ("src/master_agent/advisory_budget.py",),
+            )
+
+        self.assertEqual(route.route, "agent-topology")
+
+    def test_route_accepts_file_from_explicit_dependency(self) -> None:
+        """A declared dependency contributes its governed file ownership."""
+
+        dependency = self.root / "scripts/bootstrap_agent.py"
+        shutil.copy2(self.source / "scripts/bootstrap_agent.py", dependency)
+        with patch.object(
+            advisory_subagent._semantic_router,
+            "validate_repository",
+            return_value=[],
+        ):
+            route = advisory_subagent._validated_semantic_route(
+                self.root,
+                "semantic-router",
+                ("scripts/bootstrap_agent.py",),
+            )
+
+        self.assertEqual(route.route, "semantic-router")
+
+    def test_unrelated_route_path_fails_before_scope_worker_and_budget(self) -> None:
+        """The reviewer example cannot expose a GitHub connector through the router."""
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            patch.object(
+                advisory_subagent.AdvisoryPathScope,
+                "bind",
+                side_effect=AssertionError("scope must not be bound"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=AssertionError("worker must not be created"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "AdvisoryBudgetStore",
+                side_effect=AssertionError("budget must not be opened"),
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect an unrelated connector",
+                (
+                    "scripts/semantic_router.py",
+                    "src/master_agent/connectors/github.py",
+                ),
+                route="semantic-router",
+                goal_id="unrelated-route-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "fallback")
+        self.assertEqual(
+            payload["reason"],
+            "advisory runner prerequisites failed closed",
+        )
+
+    def test_ancestor_path_fails_before_scope_worker_and_budget(self) -> None:
+        """A directory ancestor cannot widen a route to unrelated files."""
+
+        output = StringIO()
+        with (
+            patch.object(
+                advisory_subagent._semantic_router,
+                "validate_repository",
+                return_value=[],
+            ),
+            patch.object(
+                advisory_subagent.AdvisoryPathScope,
+                "bind",
+                side_effect=AssertionError("scope must not be bound"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "CopilotSdkAdvisoryWorker",
+                side_effect=AssertionError("worker must not be created"),
+            ),
+            patch.object(
+                advisory_subagent,
+                "AdvisoryBudgetStore",
+                side_effect=AssertionError("budget must not be opened"),
+            ),
+            redirect_stdout(output),
+        ):
+            result = advisory_subagent.run(
+                self.root,
+                AdvisoryRole.RESEARCH,
+                "inspect one route",
+                ("src/master_agent",),
+                route="agent-topology",
+                goal_id="ancestor-route-goal",
+                state_directory=self.state,
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "fallback")
 
     def test_missing_and_unknown_routes_fail_before_worker_creation(self) -> None:
         """No live adapter is constructed without one known exact route ID."""
@@ -517,7 +650,7 @@ class AdvisoryRunnerMutationTests(unittest.TestCase):
                         client_factory=lambda selected: Client(),
                     )
                 runner.CopilotSdkAdvisoryWorker = factory
-                runner._validated_semantic_route = lambda root, route: SemanticRouteSlice(
+                runner._validated_semantic_route = lambda root, route, paths: SemanticRouteSlice(
                     route="agent-topology",
                     title="Parent and bounded advisory topology",
                     lifecycle="released",

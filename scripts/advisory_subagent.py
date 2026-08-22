@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from master_agent.advisory import (
@@ -61,7 +62,7 @@ def run(
     root = root.resolve()
     selected_state = state_directory or root / ".master-agent/advisory"
     try:
-        semantic_route = _validated_semantic_route(root, route)
+        semantic_route = _validated_semantic_route(root, route, paths)
         scope = AdvisoryPathScope.bind(root, paths)
         inventory = load_agent_inventory(root)
         task_id = _task_id(goal_id, role, task, scope, semantic_route)
@@ -148,8 +149,9 @@ def _task_id(
 def _validated_semantic_route(
     root: Path,
     route_id: str | None,
+    requested_paths: Sequence[str],
 ) -> SemanticRouteSlice:
-    """Load one exact route from a fully validated semantic manifest."""
+    """Load one exact route and reject paths outside its dependency closure."""
 
     if not isinstance(route_id, str) or not route_id or route_id != route_id.strip():
         raise _semantic_router.ManifestError(
@@ -164,6 +166,7 @@ def _validated_semantic_route(
         raise _semantic_router.ManifestError(
             "parent-selected semantic route is unknown"
         )
+    _validate_requested_route_paths(manifest, selected.id, requested_paths)
     return SemanticRouteSlice(
         route=selected.id,
         title=selected.title,
@@ -176,6 +179,48 @@ def _validated_semantic_route(
         release_gates=selected.release_gates,
         dependencies=selected.dependencies,
     )
+
+
+def _validate_requested_route_paths(
+    manifest: _semantic_router.SemanticManifest,
+    selected_route_id: str,
+    requested_paths: Sequence[str],
+) -> None:
+    """Require exact files owned or linked by a route dependency closure."""
+
+    route_ids: set[str] = set()
+    pending = [selected_route_id]
+    routes = manifest.routes_by_id
+    while pending:
+        route_id = pending.pop()
+        if route_id in route_ids:
+            continue
+        route = routes.get(route_id)
+        if route is None:
+            raise _semantic_router.ManifestError("semantic route dependency is unknown")
+        route_ids.add(route_id)
+        pending.extend(route.dependencies)
+
+    allowed_paths = {
+        path
+        for route_id in route_ids
+        for field in _semantic_router.ROUTE_PATH_FIELDS
+        for path in getattr(routes[route_id], field)
+    }
+    for category in _semantic_router.PATH_OWNERSHIP_CATEGORIES:
+        allowed_paths.update(
+            path
+            for path, owner in manifest.ownership[category].items()
+            if owner in route_ids
+        )
+
+    if not requested_paths or any(
+        not isinstance(path, str) or path not in allowed_paths
+        for path in requested_paths
+    ):
+        raise CopilotScopeRejected(
+            "advisory path is outside the selected semantic route"
+        )
 
 
 def _print_fallback(reason: str) -> int:
@@ -213,7 +258,7 @@ def main() -> int:
         "--path",
         action="append",
         required=True,
-        help="Repository-relative file or directory in the technical route scope.",
+        help="Exact repository-relative file in the selected semantic route.",
     )
     parser.add_argument(
         "--state-dir",

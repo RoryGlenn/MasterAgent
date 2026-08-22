@@ -90,6 +90,10 @@ the parent selects one route and loads only its linked policy, specification,
 implementation, and verification slice. Exact inventory validation prevents a
 new module, test, requirement, command, capability, connector, configuration,
 profile, or platform area from silently inheriting an owner.
+Configuration discovery covers every repository TOML file except specification
+lifecycle metadata and ignored private, cache, or build roots, so packaged
+defaults, top-level package metadata, and supply-chain inputs cannot sit outside
+the exact ownership table.
 Implementation, test, and current-requirement links must agree with that exact
 owner. A route that intentionally references another route's shared
 configuration, authority, or release gate declares that owner as an exact
@@ -99,6 +103,12 @@ Generation opens the destination directory through no-follow descriptors,
 writes a private same-directory temporary file, and atomically replaces the
 index only after a complete synchronized write. A symbolic-link, non-regular,
 or raced destination cannot redirect generated content outside the repository.
+
+A commit-only review phrase selects the semantic-router route. The `changes`
+subcommand then resolves one commit or explicit `BASE..HEAD` range through a
+time- and output-bounded, read-only Git query and returns its exact changed
+paths, every affected route contract, and any unmapped path. This gives the
+parent a deterministic first hop without a broad preliminary repository scan.
 
 Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists

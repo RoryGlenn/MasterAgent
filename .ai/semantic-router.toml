@@ -78,11 +78,11 @@ lifecycle = "released"
 summary = "Validate exhaustive ownership, route one task, generate the compact index, and measure routing."
 authority = ["specs/current/development/MA-ROUTER-001.md", "AGENTS.md"]
 implementation = ["scripts/semantic_router.py"]
-configuration = []
+configuration = [".ai/semantic-router.toml"]
 tests = ["tests/test_semantic_router.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["semantic router", "ownership manifest", "agent topology manifest", "routing accuracy", "semantic index generation"]
+aliases = ["semantic router", "ownership manifest", "agent topology manifest", "routing accuracy", "semantic index generation", "review commit", "review revision"]
 agent = "master-agent"
 
 [[routes]]
@@ -120,7 +120,7 @@ lifecycle = "released"
 summary = "Own typed plans, policy, approvals, exact execution binding, orchestration, verification, and compensation."
 authority = [".ai/MASTER_AGENT.md", "docs/architecture.md"]
 implementation = ["src/master_agent/models.py", "src/master_agent/policy.py", "src/master_agent/orchestrator.py"]
-configuration = ["config/capabilities.toml", "config/governance.toml", "config/policy.toml"]
+configuration = ["config/capabilities.toml", "config/governance.toml", "config/policy.toml", "config/sources_of_truth.toml", "src/master_agent/defaults/capabilities.toml", "src/master_agent/defaults/governance.toml", "src/master_agent/defaults/policy.toml", "src/master_agent/defaults/sources_of_truth.toml"]
 tests = ["tests/test_orchestrator.py", "tests/test_policy.py", "tests/test_execution_context.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
@@ -134,7 +134,7 @@ lifecycle = "released"
 summary = "Own provider discovery, readiness, connector selection, and the in-memory direct-read path."
 authority = ["specs/current/runtime/MA-DIRECT-READ-001.md", "docs/phase-2-read-only.md"]
 implementation = ["src/master_agent/direct_read.py", "src/master_agent/discovery.py", "src/master_agent/readiness.py"]
-configuration = ["config/integrations.toml", "config/oauth.toml"]
+configuration = ["config/integrations.toml", "config/oauth.toml", "src/master_agent/defaults/integrations.toml", "src/master_agent/defaults/oauth.toml"]
 tests = ["tests/test_direct_read.py", "tests/test_discovery.py", "tests/test_oauth_readiness.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
@@ -232,7 +232,7 @@ lifecycle = "released"
 summary = "Own draft packages, weekly status, communication context, identity resolution, planners, and recurring registration."
 authority = ["docs/architecture.md", "docs/implementation-roadmap.md"]
 implementation = ["src/master_agent/workflows/draft_package.py", "src/master_agent/workflows/weekly_status.py", "src/master_agent/recurring.py"]
-configuration = ["config/draft-package.toml", "config/weekly-status.toml", "config/communication-context.toml", "config/recurring.toml", "config/identities.toml"]
+configuration = ["config/draft-package.toml", "config/weekly-status.toml", "config/communication-context.toml", "config/recurring.toml", "config/identities.toml", "src/master_agent/defaults/communication-context.toml", "src/master_agent/defaults/draft-package.toml", "src/master_agent/defaults/identities.toml", "src/master_agent/defaults/recurring.toml", "src/master_agent/defaults/weekly-status.toml"]
 tests = ["tests/test_draft_package.py", "tests/test_weekly_status.py", "tests/test_recurring.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
@@ -246,7 +246,7 @@ lifecycle = "released"
 summary = "Own retained publication, descriptor-safe expiry, orphan repair, citations, SQLite integrity, and audit verification."
 authority = ["specs/current/security/MA-RETENTION-001.md", "docs/operations.md"]
 implementation = ["src/master_agent/retention.py", "src/master_agent/evidence.py", "src/master_agent/audit.py"]
-configuration = ["config/retention.toml"]
+configuration = ["config/retention.toml", "src/master_agent/defaults/retention.toml"]
 tests = ["tests/test_retention.py", "tests/test_audit_safety.py", "tests/test_identity_and_citations.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
@@ -260,7 +260,7 @@ lifecycle = "released"
 summary = "Own local bootstrap, package metadata, source distributions, dependency evidence, and release assertions."
 authority = [".ai/FIRST_RUN.md", "docs/release-validation.md"]
 implementation = ["scripts/bootstrap_agent.py", "scripts/validate_release.py", "scripts/generate_sbom.py"]
-configuration = ["config/dependency-licenses.toml"]
+configuration = ["config/dependency-licenses.toml", "pyproject.toml", "src/master_agent/defaults/dependency-licenses.toml", "supply-chain/runtime-dependencies.toml"]
 tests = ["tests/test_agent_bootstrap.py", "tests/test_release_metadata.py", "tests/test_packaged_defaults.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = []
@@ -568,6 +568,7 @@ agent = "master-agent"
 "specs/current/security/MA-RETENTION-001.md" = "retention-audit"
 
 [ownership.configurations]
+".ai/semantic-router.toml" = "semantic-router"
 "config/capabilities.toml" = "governed-applied-run"
 "config/communication-context.toml" = "local-workflows"
 "config/dependency-licenses.toml" = "packaging-release"
@@ -581,6 +582,21 @@ agent = "master-agent"
 "config/retention.toml" = "retention-audit"
 "config/sources_of_truth.toml" = "governed-applied-run"
 "config/weekly-status.toml" = "local-workflows"
+"pyproject.toml" = "packaging-release"
+"src/master_agent/defaults/capabilities.toml" = "governed-applied-run"
+"src/master_agent/defaults/communication-context.toml" = "local-workflows"
+"src/master_agent/defaults/dependency-licenses.toml" = "packaging-release"
+"src/master_agent/defaults/draft-package.toml" = "local-workflows"
+"src/master_agent/defaults/governance.toml" = "governed-applied-run"
+"src/master_agent/defaults/identities.toml" = "local-workflows"
+"src/master_agent/defaults/integrations.toml" = "direct-read"
+"src/master_agent/defaults/oauth.toml" = "direct-read"
+"src/master_agent/defaults/policy.toml" = "governed-applied-run"
+"src/master_agent/defaults/recurring.toml" = "local-workflows"
+"src/master_agent/defaults/retention.toml" = "retention-audit"
+"src/master_agent/defaults/sources_of_truth.toml" = "governed-applied-run"
+"src/master_agent/defaults/weekly-status.toml" = "local-workflows"
+"supply-chain/runtime-dependencies.toml" = "packaging-release"
 
 [ownership.cli_commands]
 "approve" = "governed-applied-run"
@@ -747,6 +763,10 @@ agent = "master-agent"
 
 [[routing_cases]]
 query = "find the semantic router ownership manifest"
+route = "semantic-router"
+
+[[routing_cases]]
+query = "review commit b5f3997"
 route = "semantic-router"
 
 [[routing_cases]]

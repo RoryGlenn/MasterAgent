@@ -5,10 +5,11 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -71,6 +72,16 @@ class SemanticRouterTests(unittest.TestCase):
     def _manifest_and_errors(self) -> tuple[SemanticManifest, list[str]]:
         manifest = load_manifest(self.root)
         return manifest, validate_repository(self.root, manifest)
+
+    def _git(self, *arguments: str) -> str:
+        completed = subprocess.run(
+            ("git", *arguments),
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
 
     def test_checked_in_manifest_is_complete_and_generated(self) -> None:
         manifest, errors = self._manifest_and_errors()
@@ -139,6 +150,18 @@ class SemanticRouterTests(unittest.TestCase):
         self.assertEqual(
             inventory["platform_capabilities"], set(REQUIRED_PLATFORM_CAPABILITIES)
         )
+        self.assertTrue(
+            {
+                ".ai/semantic-router.toml",
+                "pyproject.toml",
+                "src/master_agent/defaults/capabilities.toml",
+                "src/master_agent/defaults/retention.toml",
+                "supply-chain/runtime-dependencies.toml",
+            }.issubset(inventory["configurations"])
+        )
+        self.assertFalse(
+            any(path.startswith("specs/") for path in inventory["configurations"])
+        )
 
     def test_unmapped_production_module_fails(self) -> None:
         fixture_directory = self.root / "maintenance_fixture"
@@ -191,6 +214,50 @@ class SemanticRouterTests(unittest.TestCase):
         _manifest, errors = self._manifest_and_errors()
 
         self.assertIn("unmapped configurations: config/unmapped-fixture.toml", errors)
+
+    def test_unmapped_configuration_outside_config_directory_fails(self) -> None:
+        fixture_directory = self.root / "maintenance_fixture"
+        fixture_directory.mkdir()
+        added = fixture_directory / "unmapped-fixture.toml"
+        added.write_text("enabled = false\n", encoding="utf-8")
+
+        _manifest, errors = self._manifest_and_errors()
+
+        self.assertIn(
+            "unmapped configurations: maintenance_fixture/unmapped-fixture.toml",
+            errors,
+        )
+
+    def test_specification_metadata_is_not_governed_configuration(self) -> None:
+        fixture_directory = self.root / "specs" / "changes" / "0999-fixture"
+        fixture_directory.mkdir(parents=True)
+        (fixture_directory / "change.toml").write_text(
+            'schema = "master-agent/change@1"\n', encoding="utf-8"
+        )
+
+        inventory = collect_inventory(self.root)
+
+        self.assertNotIn(
+            "specs/changes/0999-fixture/change.toml", inventory["configurations"]
+        )
+
+    def test_configuration_must_be_linked_by_its_owner_route(self) -> None:
+        self._rewrite(
+            ".ai/semantic-router.toml",
+            lambda value: value.replace(
+                'configuration = [".ai/semantic-router.toml"]',
+                "configuration = []",
+                1,
+            ),
+        )
+
+        _manifest, errors = self._manifest_and_errors()
+
+        self.assertIn(
+            "configuration .ai/semantic-router.toml is not linked by its owner "
+            "route semantic-router",
+            errors,
+        )
 
     def test_unmapped_capability_fails(self) -> None:
         self._rewrite(
@@ -310,7 +377,9 @@ class SemanticRouterTests(unittest.TestCase):
         self._rewrite(
             ".ai/semantic-router.toml",
             lambda value: value.replace(
-                'configuration = ["config/integrations.toml", "config/oauth.toml"]',
+                'configuration = ["config/integrations.toml", "config/oauth.toml", '
+                '"src/master_agent/defaults/integrations.toml", '
+                '"src/master_agent/defaults/oauth.toml"]',
                 'configuration = ["config/retention.toml"]',
                 1,
             ),
@@ -566,6 +635,14 @@ class SemanticRouterTests(unittest.TestCase):
         self.assertGreater(match.score, 0)
         self.assertEqual(match.matched_alias, "direct read")
 
+    def test_commit_only_query_routes_to_bounded_discovery(self) -> None:
+        manifest = load_manifest(self.root)
+
+        match = select_route(manifest, "review commit b5f3997")
+
+        self.assertEqual(match.route.id, "semantic-router")
+        self.assertEqual(match.matched_alias, "review commit")
+
     def test_ambiguous_routing_fixture_fails(self) -> None:
         marker = 'aliases = ["advisory sdk",'
         self._rewrite(
@@ -615,6 +692,118 @@ class SemanticRouterTests(unittest.TestCase):
         metrics_result = json.loads(output.getvalue())
         self.assertEqual(metrics_status, 0)
         self.assertEqual(metrics_result["routing_fixture_accuracy"], 1.0)
+
+    def test_changes_cli_rejects_unsafe_or_ambiguous_revisions(self) -> None:
+        for revision, expected in (
+            ("--output=outside", "bounded safe token"),
+            ("HEAD...HEAD", "must use exactly BASE..HEAD"),
+            ("..HEAD", "must include BASE and HEAD"),
+            ("HEAD..", "must include BASE and HEAD"),
+        ):
+            with self.subTest(revision=revision):
+                error = io.StringIO()
+                arguments = ["--root", str(self.root), "changes"]
+                if revision.startswith("-"):
+                    arguments.append("--")
+                arguments.append(revision)
+                with redirect_stderr(error):
+                    status = main(arguments)
+                self.assertEqual(status, 1)
+                self.assertIn(expected, error.getvalue())
+
+    def test_changes_cli_never_lazy_fetches_missing_promisor_objects(self) -> None:
+        """Untrusted partial-clone config cannot execute a remote helper."""
+
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", "scripts/semantic_router.py")
+        self._git("commit", "-qm", "promisor fixture")
+        head = self._git("rev-parse", "HEAD")
+        marker = Path(self.temporary.name) / "remote-helper-executed"
+        self._git("config", "extensions.partialClone", "origin")
+        self._git("config", "remote.origin.promisor", "true")
+        self._git("config", "remote.origin.url", f"ext::touch {marker}")
+        self._git("config", "protocol.ext.allow", "always")
+        commit_object = self.root / ".git" / "objects" / head[:2] / head[2:]
+        self.assertTrue(commit_object.is_file())
+        commit_object.unlink()
+
+        error = io.StringIO()
+        with redirect_stderr(error):
+            status = main(["--root", str(self.root), "changes", "HEAD"])
+
+        self.assertEqual(status, 1)
+        self.assertIn("bounded Git discovery failed", error.getvalue())
+        self.assertFalse(marker.exists())
+
+    def test_changes_cli_maps_one_commit_and_an_explicit_range(self) -> None:
+        self._git("init", "-q")
+        self._git("config", "user.name", "Semantic Router Test")
+        self._git("config", "user.email", "router@example.invalid")
+        self._git("add", "scripts/semantic_router.py", "config/policy.toml")
+        self._git("commit", "-qm", "baseline")
+        base = self._git("rev-parse", "HEAD")
+
+        self._rewrite(
+            "scripts/semantic_router.py", lambda value: value + "\n# review fixture\n"
+        )
+        self._git("add", "scripts/semantic_router.py")
+        self._git("commit", "-qm", "change router")
+        router_head = self._git("rev-parse", "HEAD")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["--root", str(self.root), "changes", router_head])
+        result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertIsNone(result["base"])
+        self.assertEqual(result["head"], router_head)
+        self.assertEqual(result["changed_paths"], ["scripts/semantic_router.py"])
+        self.assertEqual(
+            [route["route"] for route in result["routes"]], ["semantic-router"]
+        )
+        self.assertEqual(result["unmapped_paths"], [])
+
+        self._rewrite("config/policy.toml", lambda value: value + "\n# range fixture\n")
+        self._git("add", "config/policy.toml")
+        self._git("commit", "-qm", "change policy")
+        final_head = self._git("rev-parse", "HEAD")
+
+        output = io.StringIO()
+        revision_range = f"{base}..{final_head}"
+        with redirect_stdout(output):
+            status = main(["--root", str(self.root), "changes", revision_range])
+        result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["base"], base)
+        self.assertEqual(result["head"], final_head)
+        self.assertEqual(
+            result["changed_paths"],
+            ["config/policy.toml", "scripts/semantic_router.py"],
+        )
+        self.assertEqual(
+            [route["route"] for route in result["routes"]],
+            ["governed-applied-run", "semantic-router"],
+        )
+        self.assertEqual(result["unmapped_paths"], [])
+
+        unmapped = self.root / "review-notes.txt"
+        unmapped.write_text("unmapped review fixture\n", encoding="utf-8")
+        self._git("add", "review-notes.txt")
+        self._git("commit", "-qm", "add unmapped review path")
+        unmapped_head = self._git("rev-parse", "HEAD")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = main(["--root", str(self.root), "changes", unmapped_head])
+        result = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertEqual(result["routes"], [])
+        self.assertEqual(result["unmapped_paths"], ["review-notes.txt"])
 
     def test_manifest_path_must_remain_inside_repository(self) -> None:
         outside = Path(self.temporary.name) / "outside.toml"

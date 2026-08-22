@@ -213,7 +213,8 @@ The base installation remains usable without that extra; unavailable specialist
 delegation falls back to the selected MasterAgent parent.
 
 The selected parent invokes the adapter with one opaque goal ID reused across
-all attempts for that operator goal and at least one repository-relative path:
+all attempts for that operator goal and at least one repository-relative
+governed file:
 
 ```bash
 .venv/bin/python scripts/advisory_subagent.py research \
@@ -226,12 +227,13 @@ all attempts for that operator goal and at least one repository-relative path:
 
 The parent must pass exactly one `--route ROUTE_ID` from its semantic-router
 hop. The runner fully validates the manifest and exact stable ID before worker
-startup, then sends only that route's canonical navigation fields. It creates
-ignored private state under `.master-agent/advisory/` by default. The same goal
-ID shares at most three research attempts and one plan review across retries,
-concurrent commands, and process restarts. A path must name an existing tracked
-or non-ignored untracked file or directory and must be narrower than the
-repository root. Unsafe route, state, scope, SDK, result, or repository races
+startup, then sends only that route's canonical navigation fields. Every path
+must be an exact tracked or non-ignored untracked regular file linked or owned
+by the selected route or its recursively declared dependencies; directory and
+ancestor widening is rejected. It creates ignored private state under
+`.master-agent/advisory/` by default. The same goal ID shares at most three
+research attempts and one plan review across retries, concurrent commands, and
+process restarts. Unsafe route, state, scope, SDK, result, or repository races
 return a content-minimized parent fallback.
 
 The core package deliberately omits the local Office and draft renderers. If
