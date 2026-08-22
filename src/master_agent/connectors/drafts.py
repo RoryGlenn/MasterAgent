@@ -1179,7 +1179,7 @@ def _pinned_name(directory: PinnedDirectory, path: Path) -> str:
         try:
             supplied = validate_windows_drive_path(path.parent).canonical
             pinned = validate_windows_drive_path(directory.path).canonical
-            same_parent = supplied.casefold() == pinned.casefold()
+            same_parent = supplied == pinned
         except (ConfigurationError, TypeError, ValueError):
             same_parent = False
     if not same_parent or path.name in {"", ".", ".."}:

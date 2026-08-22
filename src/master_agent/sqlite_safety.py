@@ -621,8 +621,7 @@ class _WindowsPinnedSQLiteDatabase:
                 selected = validate_windows_drive_path(path)
                 parent = validate_windows_drive_path(self._parent_pin.path)
                 if (
-                    "\\".join(selected.components[:-1]).casefold()
-                    != "\\".join(parent.components).casefold()
+                    selected.components[:-1] != parent.components
                     or selected.drive != parent.drive
                 ):
                     raise ConfigurationError(

@@ -1650,14 +1650,15 @@ def _create_private_child(parent: Path, name: str) -> Path:
         filesystem = get_secure_filesystem_backend()
         if not isinstance(filesystem, WindowsSecureFilesystemBackend):
             raise ConfigurationError("native Windows secure filesystem is unavailable")
-        child_path = parent_path / name
-        try:
-            existing = filesystem.pin_directory(child_path, require_private=True)
-        except FileNotFoundError:
-            return atomic.ensure_private_directory(child_path)
-        else:
-            existing.close()
-            raise FileExistsError(name)
+        with (
+            filesystem.pin_directory(
+                parent_path,
+                require_private=True,
+            ) as pinned_parent,
+            pinned_parent.create_private_directory(name) as created,
+        ):
+            pinned_parent.flush_directory()
+            return created.path
     descriptor = os.open(parent_path, _directory_flags())
     child = -1
     try:

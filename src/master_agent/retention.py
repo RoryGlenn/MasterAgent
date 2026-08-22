@@ -5305,7 +5305,7 @@ def _windows_retained_child(
         raise ConfigurationError(
             "retained evidence must use a native Windows path"
         ) from error
-    if supplied_parent.casefold() != pinned_parent.casefold():
+    if supplied_parent != pinned_parent:
         raise ConfigurationError(
             "retained evidence must be an immediate child of its pinned parent"
         )

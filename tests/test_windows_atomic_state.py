@@ -9,7 +9,7 @@ import unittest
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent import (
     advisory_budget,
@@ -19,6 +19,7 @@ from master_agent import (
     oauth,
     operating,
     retention,
+    sqlite_safety,
 )
 from master_agent.advisory import AdvisoryRole
 from master_agent.advisory_budget import AdvisoryBudgetStore
@@ -87,6 +88,7 @@ class _AtomicFilesystemApi:
         self.fail_replace_before: str | None = None
         self.fail_flush_once: str | None = None
         self.race_destination_before_replace: tuple[str, bytes] | None = None
+        self.race_directory_before_create: str | None = None
         self._add_directory("C:\\")
         self._add_directory(r"C:\Secure")
 
@@ -217,6 +219,12 @@ class _AtomicFilesystemApi:
         if not parent.is_directory or parent.path is None:
             raise NotADirectoryError(name)
         path = parent.path.rstrip("\\") + "\\" + name
+        if (
+            self.race_directory_before_create is not None
+            and path.casefold() == self.race_directory_before_create.casefold()
+        ):
+            self.race_directory_before_create = None
+            self._add_directory(path)
         self._require_absent(path)
         selected = self._add_directory(path)
         self.created_sddl.append(security_descriptor_sddl)
@@ -541,6 +549,64 @@ class WindowsAtomicStateTests(unittest.TestCase):
         self.assertTrue(completed.wait(1.0))
         thread.join(timeout=1.0)
         self.assertFalse(thread.is_alive())
+
+    def test_operating_run_directory_creation_rejects_a_raced_peer(self) -> None:
+        api, backend = _backend()
+        child = Path("C:/Secure/" + "a" * 32)
+        real_ensure = backend.ensure_private_directory
+
+        def race_after_legacy_absence_check(path: Path) -> Path:
+            if str(path).replace("/", "\\") == str(child).replace("/", "\\"):
+                api._add_directory("C:\\Secure\\" + "a" * 32)
+            return real_ensure(path)
+
+        api.race_directory_before_create = "C:\\Secure\\" + "a" * 32
+        with (
+            patch.object(
+                backend,
+                "ensure_private_directory",
+                side_effect=race_after_legacy_absence_check,
+            ),
+            patch.object(
+                operating,
+                "get_atomic_publication_recovery_backend",
+                return_value=backend,
+            ),
+            patch.object(
+                operating,
+                "get_secure_filesystem_backend",
+                return_value=backend.filesystem,
+            ),
+            self.assertRaises(FileExistsError),
+        ):
+            operating._create_private_child(Path("C:/Secure"), "a" * 32)
+
+    def test_unicode_casefold_aliases_do_not_cross_pinned_parents(self) -> None:
+        pinned = Mock()
+        pinned.path = Path("C:/Stra\u00dfe")
+        pinned.object_identity.platform = "windows"
+        pinned.duplicate.return_value = pinned
+        sibling = Path("C:/Strasse/state.sqlite3")
+
+        with self.assertRaisesRegex(ConnectorError, "escaped the output root"):
+            drafts._pinned_name(pinned, Path("C:/Strasse/artifact.json"))
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "immediate child of its pinned parent",
+        ):
+            sqlite_safety._WindowsPinnedSQLiteDatabase(
+                sibling,
+                atomic=Mock(),
+                parent_directory=pinned,
+            )
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "immediate child of its pinned parent",
+        ):
+            retention._windows_retained_child(
+                pinned,
+                Path("C:/Strasse/evidence.json"),
+            )
 
     def test_sqlite_serializes_through_the_windows_backend(self) -> None:
         api, backend = _backend()
