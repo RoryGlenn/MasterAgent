@@ -779,8 +779,10 @@ class NativeWindowsApi:
             buffer,
             ctypes.POINTER(_FILE_RENAME_INFO_EX),
         ).contents
-        information.Flags = _FILE_RENAME_POSIX_SEMANTICS | (
-            _FILE_RENAME_REPLACE_IF_EXISTS if replace_existing else 0
+        information.Flags = (
+            _FILE_RENAME_POSIX_SEMANTICS | _FILE_RENAME_REPLACE_IF_EXISTS
+            if replace_existing
+            else 0
         )
         information.RootDirectory = _HANDLE(parent_handle)
         information.FileNameLength = len(encoded)
