@@ -288,7 +288,6 @@ jobs:
           }
 
           $unavailableContracts = @(
-            "process_supervision",
             "trusted_git",
             "capsule_isolation"
           )
@@ -304,6 +303,9 @@ jobs:
             }
             if ($report -notmatch 'atomic_publication_recovery: available \(windows-handle-atomic-state\)') {
               throw "platform runtime did not report native Windows atomic state"
+            }
+            if ($report -notmatch 'process_supervision: available \(windows-job-object\)') {
+              throw "platform runtime did not report native Windows process supervision"
             }
             foreach ($contractName in $unavailableContracts) {
               if ($report -notmatch "$contractName`: unavailable \(windows-native-partial\)") {
