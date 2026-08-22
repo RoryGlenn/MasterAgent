@@ -23,6 +23,7 @@ from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import AgentAction, ChangePlan, ExecutionContext
 from master_agent.platform_runtime import (
     PlatformContract,
+    get_atomic_publication_recovery_backend,
     get_secure_filesystem_backend,
     require_persistent_state_platform,
     require_platform_contract,
@@ -538,6 +539,23 @@ def _publish_restricted_bytes(
         raise ConfigurationError("restricted artifact escaped its private directory")
     if len(payload) > _MAX_REQUEST_BYTES:
         raise ValidationError("restricted artifact exceeds the 8 MiB limit")
+    if directory.object_identity.platform == "windows":
+        atomic = get_atomic_publication_recovery_backend()
+        with atomic.open_transaction(
+            directory.path / name,
+            max_bytes=_MAX_REQUEST_BYTES,
+            create=True,
+        ) as transaction:
+            existing = transaction.read_bytes()
+            if existing is not None:
+                if reuse_identical and existing == payload:
+                    return
+                raise ConfigurationError(
+                    "restricted artifact already exists; use a fresh private output name"
+                )
+            transaction.publish_bytes(payload, expected=None)
+            directory.validate()
+            return
     parent = directory.fileno()
     descriptor = -1
     created_identity: tuple[int, int, int, int, int] | None = None

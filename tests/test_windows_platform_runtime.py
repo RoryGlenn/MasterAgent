@@ -6,10 +6,12 @@ import ctypes
 import errno
 import hashlib
 import os
+import secrets
 import subprocess
 import sys
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -36,12 +38,14 @@ from master_agent.platform_runtime.windows import (
     OWNER_RIGHTS_SID,
     TRUSTED_INSTALLER_SID,
     WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
+    WINDOWS_ATOMIC_BACKEND_ID,
     WINDOWS_DANGEROUS_WRITE_MASK,
     WINDOWS_RUNTIME_BACKEND_ID,
     NativeWindowsFileSnapshot,
     NativeWindowsSecurity,
     NativeWindowsVolume,
     WindowsAccessAllowedAce,
+    WindowsAtomicPublicationRecoveryBackend,
     WindowsCrossProcessLockingBackend,
     WindowsDacl,
     WindowsDaclPolicy,
@@ -62,6 +66,14 @@ from master_agent.platform_runtime.windows import (
 from master_agent.platform_runtime.windows import native as windows_native
 from master_agent.platform_runtime.windows.locking import _NativeWindowsLockApi
 from master_agent.platform_runtime.windows.native import NativeWindowsApi
+from master_agent.retention import (
+    PersistenceMode,
+    RetentionConfig,
+    RetentionRule,
+    purge_expired_evidence,
+    write_retained_text,
+)
+from master_agent.sqlite_safety import PinnedSQLiteDatabase, path_entry_exists
 
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
@@ -655,6 +667,90 @@ assert 'msvcrt' not in sys.modules
         self.assertEqual(api.write_file(0x1234, b"payload"), 7)
         self.assertEqual(calls, [(0x1234, b"payload", 7, None)])
 
+    def test_native_directory_flush_uses_the_retained_file_object(self) -> None:
+        calls: list[int] = []
+
+        def flush_file(handle: ctypes.c_void_p, _status: object) -> int:
+            calls.append(int(handle.value or 0))
+            return 0
+
+        api = object.__new__(NativeWindowsApi)
+        api._ntdll = SimpleNamespace(
+            NtFlushBuffersFile=flush_file,
+            RtlNtStatusToDosError=lambda _status: 5,
+        )
+        api.flush_directory(0x1234)
+        self.assertEqual(calls, [0x1234])
+
+        api._ntdll.NtFlushBuffersFile = lambda *_args: -1
+        with self.assertRaisesRegex(OSError, "NtFlushBuffersFile failed") as failure:
+            api.flush_directory(0x1234)
+        self.assertEqual(failure.exception.errno, 5)
+
+    def test_native_rename_uses_the_aligned_ex_structure(self) -> None:
+        observed: list[tuple[int, int, int, int, int, bytes]] = []
+
+        def replace_file(
+            source: ctypes.c_void_p,
+            information_class: int,
+            buffer: object,
+            size: int,
+        ) -> int:
+            information = ctypes.cast(
+                buffer,
+                ctypes.POINTER(windows_native._FILE_RENAME_INFO_EX),
+            ).contents
+            observed.append(
+                (
+                    int(source.value or 0),
+                    information_class,
+                    int(information.RootDirectory or 0),
+                    information.Flags,
+                    size,
+                    ctypes.string_at(
+                        ctypes.addressof(information)
+                        + windows_native._FILE_RENAME_INFO_EX.FileName.offset,
+                        information.FileNameLength,
+                    ),
+                )
+            )
+            return 1
+
+        api = object.__new__(NativeWindowsApi)
+        api._kernel32 = SimpleNamespace(SetFileInformationByHandle=replace_file)
+        api.replace_file(
+            0x1234,
+            0x5678,
+            "x",
+            replace_existing=False,
+        )
+        self.assertEqual(
+            observed,
+            [
+                (
+                    0x1234,
+                    22,
+                    0x5678,
+                    windows_native._FILE_RENAME_POSIX_SEMANTICS,
+                    ctypes.sizeof(windows_native._FILE_RENAME_INFO_EX),
+                    "x".encode("utf-16-le"),
+                )
+            ],
+        )
+
+        observed.clear()
+        api.replace_file(
+            0x1234,
+            0x5678,
+            "x",
+            replace_existing=True,
+        )
+        self.assertEqual(
+            observed[0][3],
+            windows_native._FILE_RENAME_POSIX_SEMANTICS
+            | windows_native._FILE_RENAME_REPLACE_IF_EXISTS,
+        )
+
     def test_native_ordinal_comparison_uses_null_terminated_unicode_inputs(
         self,
     ) -> None:
@@ -704,6 +800,7 @@ assert 'msvcrt' not in sys.modules
         def exercise(failure: str) -> None:
             events: list[str] = []
             state = {"entry": False, "delete_pending": False}
+            share_access: list[int] = []
 
             def convert_descriptor(
                 _sddl: object,
@@ -726,6 +823,7 @@ assert 'msvcrt' not in sys.modules
                     created,
                     ctypes.POINTER(ctypes.c_void_p),
                 ).contents.value = 0x1234
+                share_access.append(int(_args[5]))
                 state["entry"] = True
                 events.append("create")
                 return 0
@@ -779,6 +877,7 @@ assert 'msvcrt' not in sys.modules
                 events.index("delete-disposition"),
                 events.index("close"),
             )
+            self.assertEqual(share_access, [0x00000007])
             self.assertFalse(state["entry"])
 
         for failure in ("file-type", "inheritability"):
@@ -902,15 +1001,24 @@ assert 'msvcrt' not in sys.modules
                 "master_agent.platform_runtime.windows.runtime."
                 "probe_windows_locking_backend"
             ) as locking_probe,
+            patch(
+                "master_agent.platform_runtime.windows.runtime."
+                "probe_windows_atomic_backend"
+            ) as atomic_probe,
         ):
             runtime = build_windows_runtime()
         filesystem_probe.assert_called_once_with()
         locking_probe.assert_called_once_with()
+        atomic_probe.assert_called_once()
         self.assertEqual(runtime.status.backend, WINDOWS_RUNTIME_BACKEND_ID)
         self.assertTrue(runtime.supports(PlatformContract.SECURE_FILESYSTEM))
         self.assertTrue(runtime.supports(PlatformContract.CROSS_PROCESS_LOCKING))
+        atomic_status = runtime.status.contract_status(
+            PlatformContract.ATOMIC_PUBLICATION_RECOVERY
+        )
+        self.assertTrue(atomic_status.available)
+        self.assertEqual(atomic_status.backend, WINDOWS_ATOMIC_BACKEND_ID)
         for contract in (
-            PlatformContract.ATOMIC_PUBLICATION_RECOVERY,
             PlatformContract.PROCESS_SUPERVISION,
             PlatformContract.TRUSTED_GIT,
             PlatformContract.CAPSULE_ISOLATION,
@@ -1483,6 +1591,104 @@ class WindowsNativeStandardUserIntegrationTests(unittest.TestCase):
                     )
             finally:
                 os.rmdir(alias)
+
+    def test_native_atomic_state_create_update_recover_and_remove(self) -> None:
+        filesystem = WindowsSecureFilesystemBackend()
+        locking = WindowsCrossProcessLockingBackend()
+        atomic = WindowsAtomicPublicationRecoveryBackend(
+            filesystem=filesystem,
+            locking=locking,
+        )
+        state_root = Path(os.environ["TEMP"]) / ("atomic-state-" + secrets.token_hex(8))
+        atomic.ensure_private_directory(state_root)
+        state_path = state_root / "state.json"
+        with atomic.open_transaction(
+            state_path,
+            max_bytes=1024,
+            create=True,
+        ) as transaction:
+            first = transaction.publish_bytes(b'{"value":1}\n', expected=None)
+        with filesystem.pin_file(state_path, require_private=True) as pinned:
+            with pinned.duplicate_target_handle() as target_handle:
+                security = NativeWindowsApi().file_security(target_handle.value)
+            self.assertTrue(security.dacl_protected)
+        with atomic.open_transaction(
+            state_path,
+            max_bytes=1024,
+            create=False,
+        ) as transaction:
+            self.assertEqual(transaction.read_bytes(), b'{"value":1}\n')
+            second = transaction.publish_bytes(
+                b'{"value":2}\n',
+                expected=first,
+            )
+        with atomic.open_transaction(
+            state_path,
+            max_bytes=1024,
+            create=False,
+        ) as transaction:
+            self.assertEqual(transaction.read_bytes(), b'{"value":2}\n')
+            self.assertTrue(transaction.remove(expected=second))
+        with self.assertRaises(FileNotFoundError):
+            filesystem.pin_file(state_path, require_private=True)
+
+    def test_native_sqlite_and_retention_lifecycles(self) -> None:
+        state_root = Path(os.environ["TEMP"]) / (
+            "persistent-state-" + secrets.token_hex(8)
+        )
+        atomic = build_windows_runtime().require_atomic_publication_recovery()
+        atomic.ensure_private_directory(state_root)
+
+        database_path = state_root / "state.sqlite3"
+        database = PinnedSQLiteDatabase(database_path)
+        try:
+            with database.connect() as connection:
+                connection.execute("CREATE TABLE values_table (value TEXT NOT NULL)")
+                connection.execute("INSERT INTO values_table VALUES ('created')")
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE values_table SET value = 'updated' WHERE value = 'created'"
+                )
+                self.assertEqual(
+                    connection.execute("SELECT value FROM values_table").fetchone(),
+                    ("updated",),
+                )
+        finally:
+            database.close(remove_created=True)
+        self.assertFalse(path_entry_exists(database_path))
+
+        retention_root = state_root / "retained"
+        atomic.ensure_private_directory(retention_root)
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        config = RetentionConfig(
+            default=RetentionRule(
+                pattern="*",
+                ttl_hours=1,
+                persistence=PersistenceMode.EXPLICIT_CONTENT,
+            ),
+            rules=(),
+        )
+        evidence, sidecar = write_retained_text(
+            retention_root / "evidence.txt",
+            "retained",
+            evidence_type="test/full",
+            config=config,
+            now=created,
+        )
+        preview = purge_expired_evidence(
+            retention_root,
+            now=created + timedelta(hours=2),
+            dry_run=True,
+        )
+        self.assertEqual(preview.expired_manifests, 1)
+        applied = purge_expired_evidence(
+            retention_root,
+            now=created + timedelta(hours=2),
+            dry_run=False,
+        )
+        self.assertEqual(applied.errors, ())
+        self.assertFalse(path_entry_exists(evidence))
+        self.assertFalse(path_entry_exists(sidecar))
 
 
 @unittest.skipUnless(sys.platform == "win32", "requires native Windows APIs")

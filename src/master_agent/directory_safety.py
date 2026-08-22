@@ -405,6 +405,137 @@ class PinnedDirectory:
 
         self._finalizer()
 
+    def list_children(self) -> tuple[str, ...]:
+        """Return a validated deterministic snapshot of immediate child names."""
+
+        with self._lock:
+            self.validate()
+            names = tuple(sorted(os.listdir(self._descriptors[-1])))
+            self.validate()
+            return names
+
+    def read_child_bytes(
+        self,
+        relative: Path | str,
+        *,
+        max_bytes: int,
+        require_private: bool = True,
+    ) -> tuple[Path, bytes, PlatformObjectIdentity]:
+        """Open, validate, and bounded-read one immediate regular file child."""
+
+        child = Path(relative)
+        if (
+            child.is_absolute()
+            or len(child.parts) != 1
+            or child.name in {"", ".", ".."}
+            or isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or max_bytes < 0
+        ):
+            raise ConfigurationError("runtime file child request is invalid")
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                child.name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=self.fileno(),
+            )
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (require_private and opened.st_uid != os.geteuid())
+                or (require_private and stat.S_IMODE(opened.st_mode) != 0o600)
+                or opened.st_size > max_bytes
+            ):
+                raise ConfigurationError(
+                    "runtime file child is not a bounded private regular file"
+                )
+            payload = bytearray()
+            remaining = opened.st_size
+            while remaining:
+                block = os.read(descriptor, min(remaining, 1024 * 1024))
+                if not block:
+                    raise ConfigurationError("runtime file child changed during read")
+                payload.extend(block)
+                remaining -= len(block)
+            if os.read(descriptor, 1):
+                raise ConfigurationError("runtime file child changed during read")
+            final = os.fstat(descriptor)
+            public = os.stat(
+                child.name,
+                dir_fd=self.fileno(),
+                follow_symlinks=False,
+            )
+            opened_identity = _file_stat_identity(opened)
+            if (
+                _file_stat_identity(final) != opened_identity
+                or _file_stat_identity(public) != opened_identity
+            ):
+                raise ConfigurationError("runtime file child changed during read")
+            self.validate()
+            return (
+                self.path / child.name,
+                bytes(payload),
+                PlatformObjectIdentity.from_posix(
+                    kind=FilesystemObjectKind.FILE,
+                    device=opened.st_dev,
+                    inode=opened.st_ino,
+                    owner=opened.st_uid,
+                    mode=stat.S_IMODE(opened.st_mode),
+                ),
+            )
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def inspect_child(
+        self,
+        relative: Path | str,
+        *,
+        require_private: bool = True,
+    ) -> tuple[FilesystemObjectKind, PlatformObjectIdentity, int]:
+        """Return one immediate child's no-follow kind, identity, and size."""
+
+        child = Path(relative)
+        if (
+            child.is_absolute()
+            or len(child.parts) != 1
+            or child.name in {"", ".", ".."}
+        ):
+            raise ConfigurationError("runtime child request is invalid")
+        self.validate()
+        value = os.stat(
+            child.name,
+            dir_fd=self.fileno(),
+            follow_symlinks=False,
+        )
+        if stat.S_ISDIR(value.st_mode):
+            kind = FilesystemObjectKind.DIRECTORY
+            if require_private:
+                _validate_private_directory(value)
+        elif stat.S_ISREG(value.st_mode):
+            kind = FilesystemObjectKind.FILE
+            if (
+                value.st_nlink != 1
+                or (require_private and value.st_uid != os.geteuid())
+                or (require_private and stat.S_IMODE(value.st_mode) != 0o600)
+            ):
+                raise ConfigurationError("runtime file child is not private")
+        else:
+            raise ConfigurationError("runtime child has an unsupported file type")
+        identity = PlatformObjectIdentity.from_posix(
+            kind=kind,
+            device=value.st_dev,
+            inode=value.st_ino,
+            owner=value.st_uid,
+            mode=stat.S_IMODE(value.st_mode),
+        )
+        self.validate()
+        return kind, identity, value.st_size
+
     def __enter__(self) -> Self:
         self.validate()
         return self
@@ -597,6 +728,42 @@ class _WindowsPinnedDirectory(PinnedDirectory):
                 _platform_identity_from_windows(native_child.identity),
             )
 
+    def inspect_child(
+        self,
+        relative: Path | str,
+        *,
+        require_private: bool = True,
+    ) -> tuple[FilesystemObjectKind, PlatformObjectIdentity, int]:
+        """Return a retained native child's exact kind, identity, and size."""
+
+        child = Path(relative)
+        if child.is_absolute() or len(child.parts) != 1:
+            raise ConfigurationError(
+                "runtime child must be one normalized relative component"
+            )
+        failures: list[BaseException] = []
+        for kind in (FilesystemObjectKind.DIRECTORY, FilesystemObjectKind.FILE):
+            try:
+                native_child = self._native.pin_child(
+                    child.name,
+                    kind=kind.value,
+                    require_private=require_private,
+                )
+            except (OSError, ConfigurationError) as error:
+                failures.append(error)
+                continue
+            with native_child:
+                return (
+                    kind,
+                    _platform_identity_from_windows(native_child.identity),
+                    cast(int, native_child.size),
+                )
+        if failures:
+            raise ConfigurationError(
+                "runtime child could not be opened safely"
+            ) from failures[-1]
+        raise ConfigurationError("runtime child could not be opened safely")
+
 
 def _platform_identity_from_windows(native: Any) -> PlatformObjectIdentity:
     from master_agent.platform_runtime.windows.filesystem import WindowsObjectKind
@@ -635,6 +802,22 @@ def _windows_native_identity(identity: PlatformObjectIdentity) -> Any:
         dacl_sha256=cast(str, identity.dacl_sha256),
         trust_policy_sha256=cast(str, identity.trust_policy_sha256),
         kind=WindowsObjectKind.DIRECTORY,
+    )
+
+
+def _file_stat_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int]:
+    """Return the POSIX identity fields used for one bounded child read."""
+
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        stat.S_IMODE(value.st_mode),
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
     )
 
 

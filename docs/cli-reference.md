@@ -48,17 +48,13 @@ checks; this does not relax publication rules for other output paths.
 | `weekly-status` | Reserved direct weekly-status package entry point | Disabled before config, credentials, connectors, or audit access |
 | `identity-resolve` | Resolve a configured person or provider identifier | Local identity-map read; optional local JSON output |
 | `retain-evidence` | Persist evidence under the selected retention rule | Local create-only evidence and sidecar output; never contacts a provider |
-| `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; on POSIX, `--apply` locks the pinned root and discovered evidence parents, descriptor-rescans, and recoverably deletes only complete validated expired pairs; Windows preview and apply are capability-gated |
-| `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; POSIX `--apply` recoverably moves exact descriptor-validated identities into a private same-filesystem quarantine; Windows preview and apply are capability-gated |
+| `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; POSIX uses pinned descriptors and a private pair stage, while Windows uses retained handles and a content-free exact-identity recovery intent |
+| `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; `--apply` uses exact native identities and private quarantine on POSIX or Windows |
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
 | `scan` | Scan supplied text or a local file for prompt-injection indicators | Local read/analysis only; displayed excerpts are terminal-safe and bounded while raw input is not printed |
 | `audit-verify` | Verify an existing SQLite audit hash chain | Read-only verification; missing or malformed state is rejected without creation |
-
-All `evidence-prune` execution remains unavailable on Windows until equivalent
-native filesystem, locking, and atomic-state guarantees are implemented.
-`evidence-repair` preview and apply remain unavailable under the same boundary.
 
 ## Progressive operating modes
 
@@ -123,12 +119,13 @@ On native Windows, package imports, `--help`, `--version`, `readiness`, and
 `doctor --require-level install` use the partial native runtime. Existing or
 explicit profiles and other restricted read inputs are opened through retained
 Win32 handles only after local-volume, object-identity, owner-SID, and
-effective-DACL validation. The filesystem and locking contracts are available;
-atomic publication, process, Git, and capsule isolation remain unavailable.
-`install_ready` therefore describes the neutral installation surface, not
-permission to persist state. A read, draft, effect, or enterprise level that
-depends on an unavailable contract stays false; execution never falls back to
-a weaker backend.
+effective-DACL validation. The filesystem, locking, and atomic-publication
+contracts are available; setup, restricted output, SQLite state, retention,
+tokens, configuration snapshots, capsule/plugin stores, and draft artifacts
+use the native state backend. Process supervision, trusted Git, and capsule
+isolation remain unavailable. A read, draft, effect, or enterprise level that
+depends on one of those contracts stays false; execution never falls back to a
+weaker backend.
 
 The report is also content-free: it confirms only that a delegated token-file
 reference is configured and nonblank; it does not inspect, open, or parse the
@@ -358,15 +355,17 @@ offer an alternate execution path.
 ## Evidence expiration maintenance
 
 `evidence-prune` accepts one owner-controlled retention root. Preview and apply
-use a bounded descriptor-relative scan, reject symlinks and unsafe file or
-directory identities, validate the exact sidecar schema and evidence digest,
-and report candidates in deterministic sidecar order. Apply additionally
-acquires the root and every discovered evidence-parent retention lock, repeats
-the exact scan, and refuses mutation if the tree changed or any validation was
-incomplete.
+use a bounded native-identity scan, reject aliases and unsafe file or directory
+identities, validate the exact sidecar schema and evidence digest, and report
+candidates in deterministic sidecar order. Apply additionally acquires the
+root and every discovered evidence-parent retention lock on POSIX or the
+tree-wide retained-handle coordinator on Windows, then refuses new mutation if
+recovery, scanning, or pair validation is incomplete.
 
 Deletion is limited to an evidence file and its canonical sibling
-`*.retention.json` sidecar. A private `.retention-prune` transaction binds both
-inodes so an interrupted apply can be completed or rolled back by a later
-apply. Preview reports a pending transaction without changing it. Do not edit
-or remove this internal transaction state manually.
+`*.retention.json` sidecar. POSIX uses a private `.retention-prune` stage that
+binds both inodes. Windows publishes a bounded, content-free
+`.master-agent-retention.transaction` intent that binds both native identities
+before either removal. A later apply completes only the recorded final state;
+preview reports pending recovery without changing it. Do not edit or remove
+internal transaction state manually.

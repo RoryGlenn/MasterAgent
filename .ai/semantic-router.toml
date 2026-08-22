@@ -312,14 +312,14 @@ agent = "master-agent"
 [[routes]]
 id = "windows-atomic-state"
 title = "Windows atomic state and retention"
-lifecycle = "planned"
+lifecycle = "released"
 summary = "Windows 11 atomic state, approval, token persistence, and retention transactions."
-authority = ["specs/current/runtime/MA-PLATFORM-001.md", "docs/implementation-roadmap.md"]
-implementation = []
+authority = ["specs/changes/0100-windows-atomic-state/current/MA-WINDOWS-ATOMIC-STATE-001.md", "specs/changes/0100-windows-atomic-state/current/MA-PLATFORM-001.md", "specs/changes/0100-windows-atomic-state/current/MA-RETENTION-001.md", "docs/implementation-roadmap.md"]
+implementation = ["src/master_agent/platform_runtime/windows/atomic.py"]
 configuration = []
-tests = []
-release_gates = []
-dependencies = ["platform-runtime"]
+tests = ["tests/test_windows_atomic_state.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
 aliases = ["windows atomic state", "windows.atomic state retention", "windows atomic state and retention"]
 agent = "master-agent"
 
@@ -493,6 +493,7 @@ agent = "master-agent"
 "src/master_agent/platform_runtime/posix/process.py" = "platform-runtime"
 "src/master_agent/platform_runtime/posix/runtime.py" = "platform-runtime"
 "src/master_agent/platform_runtime/windows/__init__.py" = "platform-runtime"
+"src/master_agent/platform_runtime/windows/atomic.py" = "windows-atomic-state"
 "src/master_agent/plugins.py" = "packaging-release"
 "src/master_agent/policy.py" = "governed-applied-run"
 "src/master_agent/provider_egress.py" = "provider-security"
@@ -598,6 +599,7 @@ agent = "master-agent"
 "tests/test_teams_connector.py" = "microsoft-connectors"
 "tests/test_terminal.py" = "provider-security"
 "tests/test_weekly_status.py" = "local-workflows"
+"tests/test_windows_atomic_state.py" = "windows-atomic-state"
 "tests/test_windows_platform_runtime.py" = "windows-filesystem"
 "tests/test_write_connectors.py" = "governed-applied-run"
 

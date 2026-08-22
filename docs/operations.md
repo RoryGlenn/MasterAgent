@@ -10,12 +10,12 @@ secrets, or provider content and does not grant authority by itself.
 On native Windows, package import, help/version, deployment readiness, and
 `doctor --require-level install` use the partial native runtime. Existing or
 explicit profiles are read only after retained-handle, local-volume,
-object-identity, owner-SID, and DACL validation. `setup` still requires secure
-filesystem, cross-process locking, and atomic publication/recovery, so it stays
-blocked until the atomic backend is available. An `execute` plan should proceed
-only when every contract its route needs is available in the report's
-`platform_runtime` section. The command fails closed rather than using a weaker
-backend.
+object-identity, owner-SID, and DACL validation. The native atomic-state
+backend now satisfies `setup` and protected local persistence with explicit
+private DACLs, stable handle locks, bounded replacement, and restart recovery.
+An `execute` plan should proceed only when every contract its route needs is
+available in the report's `platform_runtime` section; process supervision,
+trusted Git, and capsule isolation remain separate fail-closed gates.
 
 1. Run `master-agent setup` once for the selected profile. This prepares only
    owner-private local paths and does not contact a provider.
@@ -81,7 +81,8 @@ deployment, and normal runtime admission complete.
 8. Verify the audit chain.
 9. Retain full evidence only when policy requires it.
 
-Approval requests are mode `0600`, create-only, and secret-free. They bind no
+Approval requests are create-only, secret-free, and private: mode `0600` on
+POSIX or an explicit protected current-user DACL on Windows. They bind no
 new authority: the referenced plan, action manifests, execution context,
 authority configuration digest, and request fingerprint are revalidated before
 signing and again before resume. A partial dual approval produces a new request
@@ -132,8 +133,8 @@ the request JSON as approval.
 - Approval TTLs should be minutes, not days.
 - Recurring execution is disabled; do not install or repair scheduler locks.
 
-On POSIX, preview an owner-controlled retained-evidence root before explicitly
-applying expiration:
+Preview an owner-controlled retained-evidence root before explicitly applying
+expiration. On POSIX, for example:
 
 ```bash
 master-agent evidence-prune --root /private/retained-evidence
@@ -159,7 +160,8 @@ and locks every descendant record parent, and rescans before classifying or
 quarantining an orphan. If a child publication is active—even after its
 manifest appears—repair fails closed and moves neither file.
 
-Each expired pair is removed through a private `.retention-prune` transaction.
+On POSIX, each expired pair is removed through a private `.retention-prune`
+transaction.
 If an interruption leaves a transaction, preview reports that apply recovery
 is required; repeat the apply command under the same root. The recovery path is
 bounded and uses the same evidence-parent locks. Apply can normalize an exact
@@ -174,10 +176,16 @@ Do not delete or edit staging state manually. A completed repeated apply is an
 honest successful no-op, and result records contain paths and status rather
 than retained evidence bytes.
 
-All `evidence-prune` execution remains unavailable on Windows until native
-filesystem identity, locking, and atomic-state guarantees are implemented.
-Windows retention preview, apply, and orphan repair remain unavailable under
-that same boundary.
+On Windows 11, the same commands use retained Win32 directory/file handles,
+owner-SID and protected-DACL validation, `LockFileEx` coordination, and the
+native atomic-state ledger. Before pair deletion or orphan quarantine starts,
+apply writes one bounded, content-free
+`.master-agent-retention.transaction` intent containing the exact source
+identities and required final state. If interrupted, preview reports that
+recovery is pending and remains non-mutating; repeat the matching command with
+`--apply` to complete only the recorded all-absent or
+destination-present/source-absent state. Do not edit the marker or its private
+atomic bookkeeping files manually.
 Pruning enforces the expiration already recorded in each sidecar; it does not
 make or change legal-hold decisions. Confirm that the selected root is eligible
 under the organization's retention and legal-hold policy before apply.

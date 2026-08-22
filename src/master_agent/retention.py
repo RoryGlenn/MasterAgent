@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 import tomllib
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -17,12 +19,18 @@ from pathlib import Path
 from typing import Any, Self
 
 from master_agent.config_sources import ConfigSource
-from master_agent.directory_safety import PinnedDirectory
+from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError, StructuredDataTypeError
 from master_agent.evidence import content_digest
 from master_agent.platform_runtime import (
+    AtomicPublicationRecoveryBackend,
+    AtomicStateIdentity,
+    AtomicStateTransaction,
+    FilesystemObjectKind,
     LockMode,
     PlatformContract,
+    PlatformObjectIdentity,
+    get_atomic_publication_recovery_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     require_platform_contract,
@@ -44,6 +52,13 @@ _RETENTION_PRUNE_MARKER_NAME = "transaction.json"
 _RETENTION_PRUNE_EVIDENCE_NAME = "evidence"
 _RETENTION_PRUNE_SIDECAR_NAME = "sidecar"
 _RETENTION_PRUNE_TRANSACTION_SCHEMA = "master-agent/evidence-prune-transaction@1"
+_WINDOWS_RETENTION_TRANSACTION_NAME = ".master-agent-retention.transaction"
+_WINDOWS_RETENTION_TRANSACTION_SCHEMA = "master-agent/windows-retention-transaction@1"
+_MAX_WINDOWS_RETENTION_TRANSACTION_BYTES = 64 * 1024
+_WINDOWS_ATOMIC_METADATA_PATTERN = re.compile(
+    r"\.master-agent-[0-9a-f]{32}\.(?:ledger|lock)\Z",
+    re.ASCII,
+)
 _MAX_REPAIR_FILE_BYTES = 64 * 1024 * 1024
 _MAX_REPAIR_DEPTH = 64
 _MAX_PRUNE_TRANSACTION_ENTRIES = 4
@@ -278,6 +293,58 @@ class _RetainedEvidencePair:
 
 
 @dataclass(frozen=True, slots=True)
+class _WindowsRetainedFileRecord:
+    """One handle-validated Windows retained file discovered under a root."""
+
+    relative_parts: tuple[str, ...]
+    identity: PlatformObjectIdentity
+    size: int
+
+    @property
+    def name(self) -> str:
+        return self.relative_parts[-1]
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsRetainedEvidencePair:
+    """One fully validated Windows retained evidence pair."""
+
+    evidence: _WindowsRetainedFileRecord
+    evidence_identity: AtomicStateIdentity
+    sidecar: _WindowsRetainedFileRecord
+    sidecar_identity: AtomicStateIdentity
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsRetentionTransactionRecord:
+    """One content-free exact source binding in a Windows retention intent."""
+
+    relative_parts: tuple[str, ...]
+    identity: AtomicStateIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsRetentionTransaction:
+    """Durable intent used to finish one Windows pair removal or quarantine."""
+
+    operation: str
+    sources: tuple[_WindowsRetentionTransactionRecord, ...]
+    destination_parts: tuple[str, ...] | None
+    expires_at: str | None
+    selected_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowsRetentionRecovery:
+    """Content-free paths affected while completing a retained Windows intent."""
+
+    operation: str
+    source_paths: tuple[str, ...]
+    destination_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _PruneTransaction:
     """Content-free recovery binding for one staged expiration transaction."""
 
@@ -304,7 +371,7 @@ class _PruneTransaction:
         }
 
 
-class RetainedJSONReservation:
+class _PosixRetainedJSONReservation:
     """Create-only retained JSON names held across an external operation.
 
     The persistent retention lock is acquired and both final names are proven
@@ -519,6 +586,202 @@ class RetainedJSONReservation:
             )
 
 
+class _WindowsRetainedJSONReservation:
+    """Hold Windows native target locks across an external effect and commit."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        evidence_type: str,
+        config: RetentionConfig,
+        include_content: bool,
+        now: datetime | None = None,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        self._rule = _permitted_rule(
+            config,
+            evidence_type=evidence_type,
+            include_content=include_content,
+        )
+        self._evidence_type = evidence_type
+        self._include_content = include_content
+        self._created_at = _aware_utc(now)
+        self._pinned = pin_directory(parent_directory or path.parent)
+        self._atomic = _windows_atomic_backend()
+        self._stack = ExitStack()
+        self._transactions: dict[str, AtomicStateTransaction] = {}
+        self._owned: list[tuple[AtomicStateTransaction, AtomicStateIdentity]] = []
+        self._committed = False
+        self._closed = False
+        try:
+            self._evidence_name = path.name
+            self._path = _windows_retained_child(self._pinned, path)
+            sidecar_name = _retention_sidecar_path(path).name
+            self._sidecar = _windows_child_path(self._pinned, sidecar_name)
+            self._stack.enter_context(
+                self._atomic.open_transaction(
+                    _windows_child_path(self._pinned, _RETENTION_FLOCK_NAME),
+                    max_bytes=0,
+                    create=True,
+                )
+            )
+            for target in sorted(
+                (self._path, self._sidecar),
+                key=lambda item: item.name.casefold(),
+            ):
+                transaction = self._stack.enter_context(
+                    self._atomic.open_transaction(
+                        target,
+                        max_bytes=_MAX_REPAIR_FILE_BYTES,
+                        create=True,
+                    )
+                )
+                if transaction.identity is not None:
+                    raise ConfigurationError(
+                        "retained evidence destination already exists"
+                    )
+                self._transactions[target.name] = transaction
+            self._pinned.validate()
+        except BaseException:
+            self._stack.close()
+            self._pinned.close()
+            self._closed = True
+            raise
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def sidecar(self) -> Path:
+        return self._sidecar
+
+    def commit(self, payload: Mapping[str, Any]) -> tuple[Path, Path]:
+        if self._closed or self._committed:
+            raise ConfigurationError("retained evidence reservation is not active")
+        output = dict(payload) if self._include_content else _metadata_only(payload)
+        evidence_payload, normalized = _serialize_retained_json(output)
+        citations = normalized.get("citations", [])
+        citation_ids = tuple(
+            str(item.get("citation_id"))
+            for item in citations
+            if isinstance(item, Mapping) and item.get("citation_id")
+        )
+        _, manifest = _build_manifest(
+            Path(self._evidence_name),
+            evidence_type=self._evidence_type,
+            rule=self._rule,
+            created=self._created_at,
+            content_included=self._include_content,
+            digest=content_digest(normalized),
+            citation_ids=citation_ids,
+        )
+        content_by_name = {
+            self._sidecar.name: (
+                json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+            ).encode("utf-8"),
+            self._path.name: evidence_payload,
+        }
+        try:
+            self._pinned.validate()
+            for name, content in content_by_name.items():
+                transaction = self._transactions[name]
+                identity = transaction.publish_bytes(content, expected=None)
+                self._owned.append((transaction, identity))
+            self._pinned.validate()
+            self._committed = True
+            return self._path, self._sidecar
+        except BaseException as error:
+            try:
+                self._rollback_and_close()
+            except ConfigurationError as rollback_error:
+                raise rollback_error from error
+            if isinstance(error, ConfigurationError):
+                raise
+            if not isinstance(error, Exception):
+                raise
+            raise ConfigurationError(
+                f"retained evidence commit failed: {type(error).__name__}"
+            ) from error
+
+    def close(self) -> None:
+        self._rollback_and_close()
+
+    def _rollback_and_close(self) -> None:
+        if self._closed:
+            return
+        rollback_errors: list[str] = []
+        if not self._committed:
+            for transaction, identity in reversed(self._owned):
+                try:
+                    if transaction.identity == identity:
+                        transaction.remove(expected=identity)
+                except (ConfigurationError, OSError) as error:
+                    rollback_errors.append(type(error).__name__)
+        self._owned.clear()
+        self._transactions.clear()
+        self._stack.close()
+        self._pinned.close()
+        self._closed = True
+        if rollback_errors:
+            raise ConfigurationError(
+                "retained evidence reservation rollback was incomplete: "
+                + ", ".join(rollback_errors)
+            )
+
+
+class RetainedJSONReservation:
+    """Select the native create-only retained JSON reservation."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        evidence_type: str,
+        config: RetentionConfig,
+        include_content: bool,
+        now: datetime | None = None,
+        parent_directory: PinnedDirectory | None = None,
+    ) -> None:
+        _require_retention_platform()
+        implementation: type[
+            _PosixRetainedJSONReservation | _WindowsRetainedJSONReservation
+        ]
+        if _uses_windows_atomic_backend():
+            implementation = _WindowsRetainedJSONReservation
+        else:
+            implementation = _PosixRetainedJSONReservation
+        self._implementation = implementation(
+            path,
+            evidence_type=evidence_type,
+            config=config,
+            include_content=include_content,
+            now=now,
+            parent_directory=parent_directory,
+        )
+
+    @property
+    def path(self) -> Path:
+        return self._implementation.path
+
+    @property
+    def sidecar(self) -> Path:
+        return self._implementation.sidecar
+
+    def commit(self, payload: Mapping[str, Any]) -> tuple[Path, Path]:
+        return self._implementation.commit(payload)
+
+    def close(self) -> None:
+        self._implementation.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
 def write_retained_json(
     path: Path,
     payload: Mapping[str, Any],
@@ -640,10 +903,12 @@ def purge_expired_evidence(
     """Preview or apply bounded descriptor-safe expiration cleanup."""
 
     _require_retention_platform()
-    if os.name == "nt":
-        raise ConfigurationError(
-            "evidence pruning is unavailable on Windows until native filesystem "
-            "identity and atomic-state guarantees are enabled"
+    if _uses_windows_atomic_backend():
+        return _purge_expired_evidence_windows(
+            root,
+            now=now,
+            dry_run=dry_run,
+            max_manifests=max_manifests,
         )
     return _purge_expired_evidence_locked(
         root,
@@ -665,6 +930,7 @@ def _purge_expired_evidence_locked(
     if max_manifests <= 0:
         raise ValueError("max_manifests must be positive")
     current = _aware_utc(now)
+    display_root = Path(os.path.abspath(os.path.expanduser(os.fspath(root))))
     with PinnedDirectory.open(root) as pinned:
         root_descriptor = pinned.fileno()
         existing_lock_missing = False
@@ -871,13 +1137,17 @@ def _purge_expired_evidence_locked(
                     "retention publication began during the preview; rescan required"
                 )
             expired_pairs = [pair for pair in pairs if pair.expires_at <= current]
-            removed = [path for pair in recovered for path in pair]
+            removed = [
+                str(display_root.joinpath(*Path(path).relative_to(pinned.path).parts))
+                for pair in recovered
+                for path in pair
+            ]
             if not errors:
                 if dry_run:
                     removed.extend(
                         path
                         for pair in expired_pairs
-                        for path in _pair_display_paths(pinned.path, pair)
+                        for path in _pair_display_paths(display_root, pair)
                     )
                 else:
                     for pair in expired_pairs:
@@ -893,7 +1163,7 @@ def _purge_expired_evidence_locked(
                                 f"{display}: deletion failed: {type(error).__name__}"
                             )
                             break
-                        removed.extend(_pair_display_paths(pinned.path, pair))
+                        removed.extend(_pair_display_paths(display_root, pair))
             pinned.validate()
             return RetentionPurgeResult(
                 scanned_manifests=scanned_manifests + len(recovered),
@@ -930,6 +1200,12 @@ def repair_orphaned_evidence(
     """Detect or recoverably quarantine orphaned retained evidence."""
 
     _require_retention_platform()
+    if _uses_windows_atomic_backend():
+        return _repair_orphaned_evidence_windows(
+            root,
+            dry_run=dry_run,
+            max_files=max_files,
+        )
     return _repair_orphaned_evidence_locked(
         root,
         dry_run=dry_run,
@@ -947,6 +1223,7 @@ def _repair_orphaned_evidence_locked(
 
     if max_files <= 0:
         raise ValueError("max_files must be positive")
+    display_root = Path(os.path.abspath(os.path.expanduser(os.fspath(root))))
     with PinnedDirectory.open(root) as pinned:
         root_descriptor = pinned.fileno()
         existing_lock_missing = False
@@ -1095,13 +1372,13 @@ def _repair_orphaned_evidence_locked(
             elif not dry_run and orphans:
                 quarantined, quarantine_errors = _quarantine_records_at(
                     root_descriptor,
-                    pinned.path,
+                    display_root,
                     orphans,
                 )
                 errors.extend(quarantine_errors)
             pinned.validate()
             orphan_paths = tuple(
-                str(pinned.path.joinpath(*record.relative_parts)) for record in orphans
+                str(display_root.joinpath(*record.relative_parts)) for record in orphans
             )
             return RetentionRepairResult(
                 scanned_files=len(records),
@@ -1127,6 +1404,1000 @@ def _repair_orphaned_evidence_locked(
                             os.close(lock_descriptor)
                     finally:
                         _release_retention_directory_hierarchy(hierarchy_locks)
+
+
+def _purge_expired_evidence_windows(
+    root: Path,
+    *,
+    now: datetime | None,
+    dry_run: bool,
+    max_manifests: int,
+) -> RetentionPurgeResult:
+    """Preview or remove expired pairs through native Windows transactions."""
+
+    if max_manifests <= 0:
+        raise ValueError("max_manifests must be positive")
+    current = _aware_utc(now)
+    atomic = _windows_atomic_backend()
+    with PinnedDirectory.open(root) as pinned, ExitStack() as stack:
+        if not _enter_windows_retention_coordinator(
+            stack,
+            pinned,
+            atomic=atomic,
+            create=not dry_run,
+        ):
+            records, scan_errors = _scan_retained_files_windows(
+                pinned,
+                max_files=max_manifests * 2 + 1,
+            )
+            if not records and not scan_errors:
+                return RetentionPurgeResult(0, 0, (), (), dry_run)
+            return RetentionPurgeResult(
+                scanned_manifests=0,
+                expired_manifests=0,
+                removed_files=(),
+                errors=("retention transaction lock is missing or unsafe",),
+                dry_run=True,
+            )
+        recovery: _WindowsRetentionRecovery | None = None
+        recovery_errors: list[str] = []
+        try:
+            recovery = _recover_windows_retention_transaction(
+                pinned,
+                atomic=atomic,
+                dry_run=dry_run,
+            )
+            if recovery is not None and recovery.operation == "pending":
+                recovery_errors.append(
+                    "pending Windows retention transaction requires apply recovery"
+                )
+                recovery = None
+        except (
+            ConfigurationError,
+            OSError,
+            StructuredDataTypeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            recovery_errors.append(
+                f"pending Windows retention recovery failed: {type(error).__name__}"
+            )
+        records, scan_errors = _scan_retained_files_windows(
+            pinned,
+            max_files=max_manifests * 2 + 1,
+        )
+        pairs, pair_errors, scanned_manifests = _plan_retained_pairs_windows(
+            pinned,
+            records,
+            max_manifests=max_manifests,
+        )
+        expired = tuple(pair for pair in pairs if pair.expires_at <= current)
+        errors = [*recovery_errors, *scan_errors, *pair_errors]
+        removed: list[str] = []
+        recovered_pairs = 0
+        if recovery is not None and recovery.operation == "remove_pair":
+            removed.extend(recovery.source_paths)
+            recovered_pairs = 1
+        if dry_run:
+            for pair in expired:
+                removed.extend(_windows_pair_display_paths(pinned, pair))
+        elif errors:
+            errors.append(
+                "expiration removal refused because native recovery or validation "
+                "was incomplete"
+            )
+        else:
+            for pair in expired:
+                try:
+                    removed.extend(
+                        _remove_windows_retained_pair(
+                            pinned,
+                            pair,
+                            atomic=atomic,
+                        )
+                    )
+                except (ConfigurationError, OSError) as error:
+                    display = "/".join(pair.sidecar.relative_parts)
+                    errors.append(
+                        f"{display}: expiration removal failed: {type(error).__name__}"
+                    )
+        pinned.validate()
+        return RetentionPurgeResult(
+            scanned_manifests=scanned_manifests,
+            expired_manifests=len(expired) + recovered_pairs,
+            removed_files=tuple(removed),
+            errors=tuple(errors),
+            dry_run=dry_run,
+        )
+
+
+def _repair_orphaned_evidence_windows(
+    root: Path,
+    *,
+    dry_run: bool,
+    max_files: int,
+) -> RetentionRepairResult:
+    """Detect and quarantine Windows orphans without pathname reopening."""
+
+    if max_files <= 0:
+        raise ValueError("max_files must be positive")
+    atomic = _windows_atomic_backend()
+    with PinnedDirectory.open(root) as pinned, ExitStack() as stack:
+        if not _enter_windows_retention_coordinator(
+            stack,
+            pinned,
+            atomic=atomic,
+            create=not dry_run,
+        ):
+            records, scan_errors = _scan_retained_files_windows(
+                pinned,
+                max_files=max_files,
+            )
+            if not records and not scan_errors:
+                return RetentionRepairResult(0, (), (), (), dry_run)
+            return RetentionRepairResult(
+                scanned_files=len(records),
+                orphaned_files=(),
+                quarantined_files=(),
+                errors=("retention transaction lock is missing or unsafe",),
+                dry_run=True,
+            )
+        recovery: _WindowsRetentionRecovery | None = None
+        recovery_errors: list[str] = []
+        try:
+            recovery = _recover_windows_retention_transaction(
+                pinned,
+                atomic=atomic,
+                dry_run=dry_run,
+            )
+            if recovery is not None and recovery.operation == "pending":
+                recovery_errors.append(
+                    "pending Windows retention transaction requires apply recovery"
+                )
+                recovery = None
+        except (
+            ConfigurationError,
+            OSError,
+            StructuredDataTypeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            recovery_errors.append(
+                f"pending Windows retention recovery failed: {type(error).__name__}"
+            )
+        records, scan_errors = _scan_retained_files_windows(
+            pinned,
+            max_files=max_files,
+        )
+        pairs, classification_errors, _ = _plan_retained_pairs_windows(
+            pinned,
+            records,
+            max_manifests=max_files,
+        )
+        paired = {pair.evidence.relative_parts for pair in pairs} | {
+            pair.sidecar.relative_parts for pair in pairs
+        }
+        orphans = tuple(
+            record for record in records if record.relative_parts not in paired
+        )
+        blocking_errors = [*recovery_errors, *scan_errors]
+        errors = [*blocking_errors, *classification_errors]
+        quarantined: list[str] = []
+        if (
+            recovery is not None
+            and recovery.operation == "quarantine"
+            and recovery.destination_path is not None
+        ):
+            quarantined.append(recovery.destination_path)
+        if not dry_run and blocking_errors:
+            errors.append("quarantine refused because the native scan was incomplete")
+        elif not dry_run:
+            quarantine_root = _windows_descendant_path(
+                pinned.path,
+                (_RETENTION_QUARANTINE_NAME,),
+            )
+            atomic.ensure_private_directory(quarantine_root)
+            for record in orphans:
+                try:
+                    quarantined.append(
+                        _quarantine_windows_retained_record(
+                            pinned,
+                            quarantine_root,
+                            record,
+                            atomic=atomic,
+                        )
+                    )
+                except (ConfigurationError, OSError, UnicodeError) as error:
+                    display = "/".join(record.relative_parts)
+                    errors.append(
+                        f"{display}: quarantine failed: {type(error).__name__}"
+                    )
+        pinned.validate()
+        orphan_paths = tuple(
+            str(_windows_descendant_path(pinned.path, record.relative_parts))
+            for record in orphans
+        )
+        return RetentionRepairResult(
+            scanned_files=len(records),
+            orphaned_files=orphan_paths,
+            quarantined_files=tuple(quarantined),
+            errors=tuple(errors),
+            dry_run=dry_run,
+        )
+
+
+def _enter_windows_retention_coordinator(
+    stack: ExitStack,
+    pinned: PinnedDirectory,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+    create: bool,
+) -> bool:
+    """Enter the tree-wide Windows lock, returning false for absent dry-run state."""
+
+    try:
+        stack.enter_context(
+            atomic.open_transaction(
+                _windows_child_path(pinned, _RETENTION_FLOCK_NAME),
+                max_bytes=0,
+                create=create,
+            )
+        )
+    except ConfigurationError:
+        if create:
+            raise
+        return False
+    pinned.validate()
+    return True
+
+
+def _scan_retained_files_windows(
+    root: PinnedDirectory,
+    *,
+    max_files: int,
+) -> tuple[list[_WindowsRetainedFileRecord], list[str]]:
+    """Recursively enumerate private Windows files through retained handles."""
+
+    records: list[_WindowsRetainedFileRecord] = []
+    errors: list[str] = []
+    visited_entries = 0
+    truncated = False
+
+    def visit(directory: PinnedDirectory, prefix: tuple[str, ...]) -> None:
+        nonlocal visited_entries, truncated
+        if len(prefix) > _MAX_REPAIR_DEPTH:
+            truncated = True
+            return
+        try:
+            names = directory.list_children()
+        except (ConfigurationError, OSError) as error:
+            errors.append(
+                f"{'/'.join(prefix) or '.'}: scan failed: {type(error).__name__}"
+            )
+            return
+        for name in names:
+            if _is_windows_retention_metadata(name):
+                continue
+            if name == _RETENTION_QUARANTINE_NAME:
+                continue
+            if name == _RETENTION_PRUNE_STAGE_NAME:
+                continue
+            if visited_entries >= max_files:
+                truncated = True
+                return
+            visited_entries += 1
+            relative = (*prefix, name)
+            try:
+                kind, identity, size = directory.inspect_child(
+                    name,
+                    require_private=True,
+                )
+                if kind is FilesystemObjectKind.DIRECTORY:
+                    if len(relative) > _MAX_REPAIR_DEPTH:
+                        errors.append(f"{'/'.join(relative)}: directory is too deep")
+                        continue
+                    with directory.pin_child(name) as child:
+                        visit(child, relative)
+                elif kind is FilesystemObjectKind.FILE:
+                    records.append(
+                        _WindowsRetainedFileRecord(
+                            relative_parts=relative,
+                            identity=identity,
+                            size=size,
+                        )
+                    )
+                else:  # pragma: no cover - the common API has two object kinds.
+                    errors.append(
+                        f"{'/'.join(relative)}: unsupported retained file type"
+                    )
+            except (ConfigurationError, OSError) as error:
+                errors.append(
+                    f"{'/'.join(relative)}: scan failed: {type(error).__name__}"
+                )
+        directory.validate()
+
+    visit(root, ())
+    if truncated:
+        errors.append(f"native scan exceeded the {max_files}-entry limit")
+    return records, errors
+
+
+def _plan_retained_pairs_windows(
+    root: PinnedDirectory,
+    records: list[_WindowsRetainedFileRecord],
+    *,
+    max_manifests: int,
+) -> tuple[list[_WindowsRetainedEvidencePair], list[str], int]:
+    """Validate Windows sidecars, evidence content, and exact native identities."""
+
+    by_relative = {record.relative_parts: record for record in records}
+    sidecars = tuple(
+        sorted(
+            (
+                record
+                for record in records
+                if record.name.casefold().endswith(".retention.json")
+            ),
+            key=lambda record: tuple(part.casefold() for part in record.relative_parts),
+        )
+    )
+    errors: list[str] = []
+    if len(sidecars) > max_manifests:
+        errors.append(f"retention scan exceeded the {max_manifests}-manifest limit")
+    paired_evidence: set[tuple[str, ...]] = set()
+    pairs: list[_WindowsRetainedEvidencePair] = []
+    for sidecar in sidecars[:max_manifests]:
+        display = "/".join(sidecar.relative_parts)
+        try:
+            sidecar_payload, sidecar_identity = _read_windows_retained_record(
+                root,
+                sidecar,
+            )
+            raw = _load_json_bytes(sidecar_payload)
+            if not isinstance(raw, Mapping):
+                raise StructuredDataTypeError("retention sidecar must be a JSON object")
+            evidence_name, expires_at = _validate_retention_manifest(
+                raw,
+                sidecar_name=sidecar.name,
+            )
+            evidence_relative = (*sidecar.relative_parts[:-1], evidence_name)
+            evidence = by_relative.get(evidence_relative)
+            if evidence is None:
+                raise ValueError("retention evidence file is missing")
+            if evidence_relative in paired_evidence:
+                raise ValueError("retention evidence has conflicting sidecars")
+            evidence_payload, evidence_identity = _read_windows_retained_record(
+                root,
+                evidence,
+            )
+            _verify_windows_retained_content(evidence, evidence_payload, raw)
+            paired_evidence.add(evidence_relative)
+            pairs.append(
+                _WindowsRetainedEvidencePair(
+                    evidence=evidence,
+                    evidence_identity=evidence_identity,
+                    sidecar=sidecar,
+                    sidecar_identity=sidecar_identity,
+                    expires_at=expires_at,
+                )
+            )
+        except (
+            ConfigurationError,
+            OSError,
+            StructuredDataTypeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as error:
+            errors.append(f"{display}: invalid retained pair: {type(error).__name__}")
+    return pairs, errors, len(sidecars)
+
+
+def _read_windows_retained_record(
+    root: PinnedDirectory,
+    record: _WindowsRetainedFileRecord,
+) -> tuple[bytes, AtomicStateIdentity]:
+    with _open_windows_relative_parent(root, record.relative_parts[:-1]) as parent:
+        _path, payload, identity = parent.read_child_bytes(
+            record.name,
+            max_bytes=_MAX_REPAIR_FILE_BYTES,
+            require_private=True,
+        )
+        if identity != record.identity or len(payload) != record.size:
+            raise ConfigurationError("retained Windows file identity changed")
+        return payload, AtomicStateIdentity(
+            object_identity=identity,
+            content_sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+        )
+
+
+def _open_windows_relative_parent(
+    root: PinnedDirectory,
+    relative_parts: tuple[str, ...],
+) -> PinnedDirectory:
+    current = root.duplicate()
+    try:
+        for part in relative_parts:
+            following = current.pin_child(part)
+            current.close()
+            current = following
+        current.validate()
+        return current
+    except BaseException:
+        current.close()
+        raise
+
+
+def _verify_windows_retained_content(
+    record: _WindowsRetainedFileRecord,
+    payload: bytes,
+    manifest: Mapping[str, Any],
+) -> None:
+    expected = manifest.get("content_digest")
+    if not isinstance(expected, str):
+        raise TypeError("retention content digest is invalid")
+    text = payload.decode("utf-8")
+    value: Any = (
+        _load_json_bytes(payload)
+        if Path(record.name).suffix.casefold() == ".json"
+        else text
+    )
+    if content_digest(value) != expected:
+        raise ValueError("retention content digest does not match evidence")
+
+
+def _remove_windows_retained_pair(
+    root: PinnedDirectory,
+    pair: _WindowsRetainedEvidencePair,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+) -> tuple[str, str]:
+    entries = (
+        (pair.evidence, pair.evidence_identity),
+        (pair.sidecar, pair.sidecar_identity),
+    )
+    intent = _WindowsRetentionTransaction(
+        operation="remove_pair",
+        sources=tuple(
+            _WindowsRetentionTransactionRecord(
+                relative_parts=record.relative_parts,
+                identity=identity,
+            )
+            for record, identity in entries
+        ),
+        destination_parts=None,
+        expires_at=pair.expires_at.isoformat(),
+        selected_at=datetime.now(UTC).isoformat(),
+    )
+    with ExitStack() as stack:
+        transactions: list[
+            tuple[
+                _WindowsRetainedFileRecord,
+                AtomicStateIdentity,
+                AtomicStateTransaction,
+            ]
+        ] = []
+        for record, expected in sorted(
+            entries,
+            key=lambda item: tuple(part.casefold() for part in item[0].relative_parts),
+        ):
+            transaction = stack.enter_context(
+                atomic.open_transaction(
+                    _windows_descendant_path(root.path, record.relative_parts),
+                    max_bytes=_MAX_REPAIR_FILE_BYTES,
+                    create=False,
+                )
+            )
+            if transaction.identity != expected:
+                raise ConfigurationError(
+                    "retained Windows generation changed before expiration"
+                )
+            transactions.append((record, expected, transaction))
+        marker = stack.enter_context(
+            atomic.open_transaction(
+                _windows_retention_transaction_path(root),
+                max_bytes=_MAX_WINDOWS_RETENTION_TRANSACTION_BYTES,
+                create=True,
+            )
+        )
+        if marker.identity is not None:
+            raise ConfigurationError(
+                "another Windows retention transaction requires recovery"
+            )
+        marker_identity = marker.publish_bytes(
+            _format_windows_retention_transaction(intent),
+            expected=None,
+        )
+        for _record, expected, transaction in transactions:
+            transaction.remove(expected=expected)
+        if any(transaction.identity is not None for _, _, transaction in transactions):
+            raise ConfigurationError(
+                "retained Windows pair removal did not reach the recorded state"
+            )
+        marker.remove(expected=marker_identity)
+    root.validate()
+    return _windows_pair_display_paths(root, pair)
+
+
+def _quarantine_windows_retained_record(
+    root: PinnedDirectory,
+    quarantine_root: Path,
+    record: _WindowsRetainedFileRecord,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+) -> str:
+    payload, source_identity = _read_windows_retained_record(root, record)
+    identity_material = json.dumps(
+        {
+            "identity": record.identity.to_dict(),
+            "relative_parts": record.relative_parts,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    prefix = hashlib.sha256(identity_material).hexdigest()
+    destination_name = f"{prefix}.quarantine"
+    destination_parts = (_RETENTION_QUARANTINE_NAME, destination_name)
+    destination = _windows_descendant_path(root.path, destination_parts)
+    if destination != _windows_descendant_path(quarantine_root, (destination_name,)):
+        raise ConfigurationError("Windows quarantine root identity is inconsistent")
+    source = _windows_descendant_path(root.path, record.relative_parts)
+    intent = _WindowsRetentionTransaction(
+        operation="quarantine",
+        sources=(
+            _WindowsRetentionTransactionRecord(
+                relative_parts=record.relative_parts,
+                identity=source_identity,
+            ),
+        ),
+        destination_parts=destination_parts,
+        expires_at=None,
+        selected_at=datetime.now(UTC).isoformat(),
+    )
+    with ExitStack() as stack:
+        source_transaction = stack.enter_context(
+            atomic.open_transaction(
+                source,
+                max_bytes=_MAX_REPAIR_FILE_BYTES,
+                create=False,
+            )
+        )
+        if source_transaction.identity != source_identity:
+            raise ConfigurationError(
+                "orphaned Windows generation changed before quarantine"
+            )
+        destination_transaction = stack.enter_context(
+            atomic.open_transaction(
+                destination,
+                max_bytes=_MAX_REPAIR_FILE_BYTES,
+                create=True,
+            )
+        )
+        marker = stack.enter_context(
+            atomic.open_transaction(
+                _windows_retention_transaction_path(root),
+                max_bytes=_MAX_WINDOWS_RETENTION_TRANSACTION_BYTES,
+                create=True,
+            )
+        )
+        if marker.identity is not None:
+            raise ConfigurationError(
+                "another Windows retention transaction requires recovery"
+            )
+        marker_identity = marker.publish_bytes(
+            _format_windows_retention_transaction(intent),
+            expected=None,
+        )
+        _finish_windows_quarantine_transactions(
+            source_transaction,
+            destination_transaction,
+            source_identity=source_identity,
+            source_payload=payload,
+        )
+        marker.remove(expected=marker_identity)
+    root.validate()
+    return str(destination)
+
+
+def _recover_windows_retention_transaction(
+    root: PinnedDirectory,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+    dry_run: bool,
+) -> _WindowsRetentionRecovery | None:
+    """Inspect or finish the one coordinator-serialized Windows intent."""
+
+    matching = tuple(
+        name
+        for name in root.list_children()
+        if name.casefold() == _WINDOWS_RETENTION_TRANSACTION_NAME.casefold()
+    )
+    if not matching:
+        return None
+    if matching != (_WINDOWS_RETENTION_TRANSACTION_NAME,):
+        raise ConfigurationError("Windows retention transaction name is unsafe")
+    if dry_run:
+        return _WindowsRetentionRecovery(operation="pending", source_paths=())
+    with atomic.open_transaction(
+        _windows_retention_transaction_path(root),
+        max_bytes=_MAX_WINDOWS_RETENTION_TRANSACTION_BYTES,
+        create=False,
+    ) as marker:
+        payload = marker.read_bytes()
+        marker_identity = marker.identity
+        if payload is None or marker_identity is None:
+            raise ConfigurationError("Windows retention transaction disappeared")
+        intent = _parse_windows_retention_transaction(payload)
+        if intent.operation == "remove_pair":
+            source_paths = _finish_windows_remove_pair(
+                root,
+                intent,
+                atomic=atomic,
+            )
+            destination_path = None
+        elif intent.operation == "quarantine":
+            destination_path = _finish_windows_quarantine(
+                root,
+                intent,
+                atomic=atomic,
+            )
+            source_paths = tuple(
+                str(_windows_descendant_path(root.path, item.relative_parts))
+                for item in intent.sources
+            )
+        else:  # pragma: no cover - the parser rejects every other operation.
+            raise ConfigurationError("Windows retention operation is invalid")
+        marker.remove(expected=marker_identity)
+        root.validate()
+        return _WindowsRetentionRecovery(
+            operation=intent.operation,
+            source_paths=source_paths,
+            destination_path=destination_path,
+        )
+
+
+def _finish_windows_remove_pair(
+    root: PinnedDirectory,
+    intent: _WindowsRetentionTransaction,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+) -> tuple[str, ...]:
+    """Complete the recorded old-to-absent state for an exact pair."""
+
+    with ExitStack() as stack:
+        transactions: list[
+            tuple[_WindowsRetentionTransactionRecord, AtomicStateTransaction]
+        ] = []
+        for source in sorted(
+            intent.sources,
+            key=lambda item: tuple(part.casefold() for part in item.relative_parts),
+        ):
+            transaction = stack.enter_context(
+                atomic.open_transaction(
+                    _windows_descendant_path(root.path, source.relative_parts),
+                    max_bytes=_MAX_REPAIR_FILE_BYTES,
+                    create=False,
+                )
+            )
+            if transaction.identity not in {None, source.identity}:
+                raise ConfigurationError(
+                    "recorded Windows retention source changed during recovery"
+                )
+            transactions.append((source, transaction))
+        for source, transaction in transactions:
+            if transaction.identity is not None:
+                transaction.remove(expected=source.identity)
+        if any(transaction.identity is not None for _, transaction in transactions):
+            raise ConfigurationError(
+                "recorded Windows retention pair remains incomplete"
+            )
+    root.validate()
+    return tuple(
+        str(_windows_descendant_path(root.path, item.relative_parts))
+        for item in intent.sources
+    )
+
+
+def _finish_windows_quarantine(
+    root: PinnedDirectory,
+    intent: _WindowsRetentionTransaction,
+    *,
+    atomic: AtomicPublicationRecoveryBackend,
+) -> str:
+    """Complete one recorded exact-source move into private quarantine."""
+
+    source = intent.sources[0]
+    assert intent.destination_parts is not None
+    destination_parent = _windows_descendant_path(
+        root.path,
+        intent.destination_parts[:-1],
+    )
+    atomic.ensure_private_directory(destination_parent)
+    with ExitStack() as stack:
+        source_transaction = stack.enter_context(
+            atomic.open_transaction(
+                _windows_descendant_path(root.path, source.relative_parts),
+                max_bytes=_MAX_REPAIR_FILE_BYTES,
+                create=False,
+            )
+        )
+        destination_transaction = stack.enter_context(
+            atomic.open_transaction(
+                _windows_descendant_path(root.path, intent.destination_parts),
+                max_bytes=_MAX_REPAIR_FILE_BYTES,
+                create=True,
+            )
+        )
+        if source_transaction.identity not in {None, source.identity}:
+            raise ConfigurationError(
+                "recorded Windows quarantine source changed during recovery"
+            )
+        source_payload = (
+            None
+            if source_transaction.identity is None
+            else source_transaction.read_bytes()
+        )
+        _finish_windows_quarantine_transactions(
+            source_transaction,
+            destination_transaction,
+            source_identity=source.identity,
+            source_payload=source_payload,
+        )
+    root.validate()
+    return str(_windows_descendant_path(root.path, intent.destination_parts))
+
+
+def _finish_windows_quarantine_transactions(
+    source: AtomicStateTransaction,
+    destination: AtomicStateTransaction,
+    *,
+    source_identity: AtomicStateIdentity,
+    source_payload: bytes | None,
+) -> None:
+    """Reach destination-present/source-absent from the two recorded states."""
+
+    if source.identity not in {None, source_identity}:
+        raise ConfigurationError("Windows quarantine source identity changed")
+    if source_payload is not None and (
+        len(source_payload) != source_identity.size
+        or hashlib.sha256(source_payload).hexdigest() != source_identity.content_sha256
+    ):
+        raise ConfigurationError("Windows quarantine source content changed")
+    destination_payload = destination.read_bytes()
+    if destination_payload is None:
+        if source_payload is None:
+            raise ConfigurationError(
+                "Windows quarantine transaction lost both recorded generations"
+            )
+        destination_identity = destination.publish_bytes(
+            source_payload,
+            expected=None,
+        )
+    else:
+        existing_identity = destination.identity
+        if existing_identity is None:
+            raise ConfigurationError("Windows quarantine destination disappeared")
+        destination_identity = existing_identity
+    destination_content = (
+        destination_payload if destination_payload is not None else source_payload
+    )
+    assert destination_content is not None
+    if (
+        destination_identity.content_sha256 != source_identity.content_sha256
+        or destination_identity.size != source_identity.size
+        or hashlib.sha256(destination_content).hexdigest()
+        != source_identity.content_sha256
+    ):
+        raise ConfigurationError("Windows quarantine destination is occupied")
+    if source.identity is not None:
+        source.remove(expected=source_identity)
+    if source.identity is not None or destination.identity != destination_identity:
+        raise ConfigurationError("Windows quarantine transaction is incomplete")
+
+
+def _windows_retention_transaction_path(root: PinnedDirectory) -> Path:
+    return _windows_child_path(root, _WINDOWS_RETENTION_TRANSACTION_NAME)
+
+
+def _format_windows_retention_transaction(
+    value: _WindowsRetentionTransaction,
+) -> bytes:
+    document = {
+        "destination_parts": (
+            None if value.destination_parts is None else list(value.destination_parts)
+        ),
+        "expires_at": value.expires_at,
+        "operation": value.operation,
+        "schema": _WINDOWS_RETENTION_TRANSACTION_SCHEMA,
+        "selected_at": value.selected_at,
+        "sources": [
+            {
+                "identity": _windows_retention_identity_to_dict(item.identity),
+                "relative_parts": list(item.relative_parts),
+            }
+            for item in value.sources
+        ],
+    }
+    payload = (
+        json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    if len(payload) > _MAX_WINDOWS_RETENTION_TRANSACTION_BYTES:
+        raise ConfigurationError("Windows retention transaction exceeds its limit")
+    return payload
+
+
+def _parse_windows_retention_transaction(
+    payload: bytes,
+) -> _WindowsRetentionTransaction:
+    if (
+        not payload
+        or len(payload) > _MAX_WINDOWS_RETENTION_TRANSACTION_BYTES
+        or not payload.endswith(b"\n")
+    ):
+        raise ConfigurationError("Windows retention transaction is torn")
+    raw = _load_json_bytes(payload)
+    expected_keys = {
+        "destination_parts",
+        "expires_at",
+        "operation",
+        "schema",
+        "selected_at",
+        "sources",
+    }
+    if not isinstance(raw, Mapping) or set(raw) != expected_keys:
+        raise ConfigurationError("Windows retention transaction is malformed")
+    if raw["schema"] != _WINDOWS_RETENTION_TRANSACTION_SCHEMA:
+        raise ConfigurationError("Windows retention transaction schema is invalid")
+    operation = raw["operation"]
+    selected_at = raw["selected_at"]
+    if not isinstance(operation, str) or not isinstance(selected_at, str):
+        raise ConfigurationError("Windows retention transaction is malformed")
+    _validated_manifest_timestamp(selected_at)
+    raw_sources = raw["sources"]
+    if not isinstance(raw_sources, list):
+        raise ConfigurationError("Windows retention transaction is malformed")
+    sources: list[_WindowsRetentionTransactionRecord] = []
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, Mapping) or set(raw_source) != {
+            "identity",
+            "relative_parts",
+        }:
+            raise ConfigurationError("Windows retention transaction is malformed")
+        sources.append(
+            _WindowsRetentionTransactionRecord(
+                relative_parts=_parse_windows_transaction_parts(
+                    raw_source["relative_parts"]
+                ),
+                identity=_parse_windows_retention_identity(raw_source["identity"]),
+            )
+        )
+    raw_destination = raw["destination_parts"]
+    destination_parts = (
+        None
+        if raw_destination is None
+        else _parse_windows_transaction_parts(raw_destination)
+    )
+    raw_expires = raw["expires_at"]
+    if raw_expires is not None and not isinstance(raw_expires, str):
+        raise ConfigurationError("Windows retention transaction is malformed")
+    if operation == "remove_pair":
+        if (
+            len(sources) != 2
+            or destination_parts is not None
+            or raw_expires is None
+            or sources[0].relative_parts[:-1] != sources[1].relative_parts[:-1]
+        ):
+            raise ConfigurationError("Windows pair transaction is inconsistent")
+        _validated_manifest_timestamp(raw_expires)
+    elif operation == "quarantine":
+        if (
+            len(sources) != 1
+            or destination_parts is None
+            or len(destination_parts) != 2
+            or destination_parts[0].casefold() != _RETENTION_QUARANTINE_NAME.casefold()
+            or raw_expires is not None
+        ):
+            raise ConfigurationError("Windows quarantine transaction is inconsistent")
+    else:
+        raise ConfigurationError("Windows retention operation is invalid")
+    if len({item.relative_parts for item in sources}) != len(sources):
+        raise ConfigurationError("Windows retention transaction sources conflict")
+    return _WindowsRetentionTransaction(
+        operation=operation,
+        sources=tuple(sources),
+        destination_parts=destination_parts,
+        expires_at=raw_expires,
+        selected_at=selected_at,
+    )
+
+
+def _parse_windows_transaction_parts(value: object) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > _MAX_REPAIR_DEPTH
+        or any(
+            not isinstance(part, str)
+            or not part
+            or part in {".", ".."}
+            or "\\" in part
+            or "/" in part
+            or ":" in part
+            or "\x00" in part
+            for part in value
+        )
+    ):
+        raise ConfigurationError("Windows retention path binding is invalid")
+    return tuple(value)
+
+
+def _windows_retention_identity_to_dict(
+    value: AtomicStateIdentity,
+) -> dict[str, object]:
+    return {
+        "content_sha256": value.content_sha256,
+        "object_identity": value.object_identity.to_dict(),
+        "size": value.size,
+    }
+
+
+def _parse_windows_retention_identity(value: object) -> AtomicStateIdentity:
+    if not isinstance(value, Mapping) or set(value) != {
+        "content_sha256",
+        "object_identity",
+        "size",
+    }:
+        raise ConfigurationError("Windows retention identity is malformed")
+    raw_object = value["object_identity"]
+    if not isinstance(raw_object, Mapping):
+        raise ConfigurationError("Windows retention identity is malformed")
+    try:
+        identity = AtomicStateIdentity(
+            object_identity=PlatformObjectIdentity.from_dict(raw_object),
+            content_sha256=value["content_sha256"],
+            size=value["size"],
+        )
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError("Windows retention identity is malformed") from error
+    if identity.object_identity.platform != "windows":
+        raise ConfigurationError("Windows retention identity platform is invalid")
+    return identity
+
+
+def _windows_pair_display_paths(
+    root: PinnedDirectory,
+    pair: _WindowsRetainedEvidencePair,
+) -> tuple[str, str]:
+    return (
+        str(_windows_descendant_path(root.path, pair.evidence.relative_parts)),
+        str(_windows_descendant_path(root.path, pair.sidecar.relative_parts)),
+    )
+
+
+def _windows_descendant_path(
+    root: Path,
+    relative_parts: tuple[str, ...],
+) -> Path:
+    rendered = str(root).rstrip("\\")
+    if relative_parts:
+        rendered += "\\" + "\\".join(relative_parts)
+    return Path(rendered)
+
+
+def _is_windows_retention_metadata(name: str) -> bool:
+    folded = name.casefold()
+    return bool(
+        folded == _RETENTION_FLOCK_NAME.casefold()
+        or folded == _WINDOWS_RETENTION_TRANSACTION_NAME.casefold()
+        or _WINDOWS_ATOMIC_METADATA_PATTERN.fullmatch(folded)
+        or folded.startswith((".master-agent-tmp-", ".master-agent-ledger-"))
+    )
 
 
 def _scan_retained_files_at(
@@ -3816,6 +5087,9 @@ def _atomic_write_files_at(
 ) -> None:
     """Stage and create-only publish retained siblings under one lock."""
 
+    if parent_directory.object_identity.platform == "windows":
+        _atomic_write_files_at_windows(files, parent_directory)
+        return
     targets = tuple(files)
     content_by_name = {target.name: content for target, content in files.items()}
     if any(
@@ -3900,6 +5174,142 @@ def _atomic_write_files_at(
             _release_retention_directory_hierarchy(hierarchy_locks)
         finally:
             pinned.close()
+
+
+def _atomic_write_files_at_windows(
+    files: Mapping[Path, bytes],
+    parent_directory: PinnedDirectory,
+) -> None:
+    """Create retained siblings under native Windows locks with exact rollback."""
+
+    targets = tuple(files)
+    if not targets:
+        raise ValueError("at least one retained file is required")
+    canonical_files: dict[Path, bytes] = {}
+    for target, content in files.items():
+        canonical = _windows_retained_child(parent_directory, target)
+        if canonical in canonical_files:
+            raise ConfigurationError("retained evidence names must be distinct")
+        if len(content) > _MAX_REPAIR_FILE_BYTES:
+            raise ConfigurationError(
+                "retained evidence exceeds the descriptor validation size limit"
+            )
+        canonical_files[canonical] = content
+    atomic = _windows_atomic_backend()
+    owned: list[tuple[AtomicStateTransaction, AtomicStateIdentity]] = []
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(
+                atomic.open_transaction(
+                    _windows_child_path(parent_directory, _RETENTION_FLOCK_NAME),
+                    max_bytes=0,
+                    create=True,
+                )
+            )
+            transactions: dict[Path, AtomicStateTransaction] = {}
+            for target in sorted(
+                canonical_files,
+                key=lambda item: item.name.casefold(),
+            ):
+                transaction = stack.enter_context(
+                    atomic.open_transaction(
+                        target,
+                        max_bytes=_MAX_REPAIR_FILE_BYTES,
+                        create=True,
+                    )
+                )
+                if transaction.identity is not None:
+                    raise ConfigurationError(
+                        "retained evidence destination already exists"
+                    )
+                transactions[target] = transaction
+            parent_directory.validate()
+            publish_order = sorted(
+                canonical_files,
+                key=lambda item: (
+                    not item.name.casefold().endswith(".retention.json"),
+                    item.name.casefold(),
+                ),
+            )
+            try:
+                for target in publish_order:
+                    transaction = transactions[target]
+                    identity = transaction.publish_bytes(
+                        canonical_files[target],
+                        expected=None,
+                    )
+                    owned.append((transaction, identity))
+                parent_directory.validate()
+            except BaseException as error:
+                rollback_errors: list[str] = []
+                for transaction, identity in reversed(owned):
+                    try:
+                        if transaction.identity == identity:
+                            transaction.remove(expected=identity)
+                    except (ConfigurationError, OSError) as rollback_error:
+                        rollback_errors.append(type(rollback_error).__name__)
+                if rollback_errors:
+                    raise ConfigurationError(
+                        "retained evidence commit failed and rollback was incomplete: "
+                        + ", ".join(rollback_errors)
+                    ) from error
+                raise
+    except BaseException as error:
+        if isinstance(error, ConfigurationError):
+            raise
+        if not isinstance(error, Exception):
+            raise
+        raise ConfigurationError(
+            f"retained evidence commit failed: {type(error).__name__}"
+        ) from error
+
+
+def _uses_windows_atomic_backend() -> bool:
+    return (
+        get_atomic_publication_recovery_backend().backend_id
+        == "windows-handle-atomic-state"
+    )
+
+
+def _windows_atomic_backend() -> AtomicPublicationRecoveryBackend:
+    backend = get_atomic_publication_recovery_backend()
+    if backend.backend_id != "windows-handle-atomic-state":
+        raise ConfigurationError("native Windows atomic state is unavailable")
+    return backend
+
+
+def _windows_child_path(directory: PinnedDirectory, name: str) -> Path:
+    if name in {"", ".", ".."} or Path(name).name != name:
+        raise ConfigurationError("retained evidence filename is unsafe")
+    return Path(str(directory.path).rstrip("\\") + "\\" + name)
+
+
+def _windows_retained_child(
+    directory: PinnedDirectory,
+    target: Path,
+) -> Path:
+    from master_agent.platform_runtime.windows.filesystem import (
+        validate_windows_drive_path,
+    )
+
+    if target.name in {"", ".", ".."} or Path(target.name).name != target.name:
+        raise ConfigurationError(
+            "retained evidence must be an immediate child of its pinned parent"
+        )
+    try:
+        supplied_parent = validate_windows_drive_path(target.parent).canonical
+        pinned_parent = validate_windows_drive_path(directory.path).canonical
+    except ConfigurationError:
+        raise
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError(
+            "retained evidence must use a native Windows path"
+        ) from error
+    if supplied_parent.casefold() != pinned_parent.casefold():
+        raise ConfigurationError(
+            "retained evidence must be an immediate child of its pinned parent"
+        )
+    return _windows_child_path(directory, target.name)
 
 
 def _commit_restricted_files_at(

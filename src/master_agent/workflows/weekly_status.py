@@ -8,12 +8,15 @@ import tomllib
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from master_agent.citations import citation_index
 from master_agent.config import DeploymentType
 from master_agent.config_sources import ConfigSource
+from master_agent.connectors.drafts import write_artifact_bundle
+from master_agent.directory_safety import pin_directory
 from master_agent.errors import ConfigurationError
 from master_agent.models import (
     AgentAction,
@@ -23,7 +26,10 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
-from master_agent.platform_runtime import require_persistent_state_platform
+from master_agent.platform_runtime import (
+    get_atomic_publication_recovery_backend,
+    require_persistent_state_platform,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,9 +244,9 @@ def render_weekly_status_package(
 ) -> WeeklyStatusArtifacts:
     """Render local evidence, Markdown, and PowerPoint artifacts.
 
-    Retrieved source content is written only to the explicitly selected output
-    directory. Files are permission-restricted where the host supports POSIX
-    modes. The audit database receives hashes and metadata only.
+    Retrieved source content is written only to the explicitly selected,
+    platform-protected output directory. The audit database receives hashes
+    and metadata only.
 
     Parameters
     ----------
@@ -258,55 +264,61 @@ def render_weekly_status_package(
     """
 
     require_persistent_state_platform()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    evidence_path = output_dir / "weekly-status-evidence.json"
-    markdown_path = output_dir / "weekly-status.md"
-    powerpoint_path = output_dir / "weekly-status.pptx"
-    manifest_path = output_dir / "manifest.json"
-
-    evidence_path.write_text(
-        json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
+    root = get_atomic_publication_recovery_backend().ensure_private_directory(
+        output_dir
     )
-
+    evidence_bytes = (
+        json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n"
+    ).encode("utf-8")
     data = _package_data(report)
-    markdown_path.write_text(
-        _render_markdown(settings, data),
-        encoding="utf-8",
-    )
-    _write_powerpoint(powerpoint_path, settings, data)
+    markdown_bytes = _render_markdown(settings, data).encode("utf-8")
+    powerpoint_bytes = _render_powerpoint(settings, data)
+    with pin_directory(root) as directory:
+        root = directory.path
+        evidence_path = root / "weekly-status-evidence.json"
+        markdown_path = root / "weekly-status.md"
+        powerpoint_path = root / "weekly-status.pptx"
+        manifest_path = root / "manifest.json"
+        manifest = {
+            "schema": "master-agent/weekly-status-manifest@1",
+            "project": settings.project_name,
+            "run_id": str(report.run_id),
+            "plan_id": str(report.plan_id),
+            "plan_fingerprint": report.plan_fingerprint,
+            "successful": report.successful,
+            "artifacts": {
+                evidence_path.name: hashlib.sha256(evidence_bytes).hexdigest(),
+                markdown_path.name: hashlib.sha256(markdown_bytes).hexdigest(),
+                powerpoint_path.name: hashlib.sha256(powerpoint_bytes).hexdigest(),
+            },
+            "source_urls": data["source_urls"],
+            "citations": data["citations"],
+            "citation_ids": [item["citation_id"] for item in data["citations"]],
+            "security_findings": data["security_findings"],
+        }
+        manifest_bytes = (
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+        write_artifact_bundle(
+            directory,
+            (
+                (evidence_path, evidence_bytes, "application/json"),
+                (markdown_path, markdown_bytes, "text/markdown"),
+                (
+                    powerpoint_path,
+                    powerpoint_bytes,
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                ),
+                (manifest_path, manifest_bytes, "application/json"),
+            ),
+        )
 
-    manifest = {
-        "schema": "master-agent/weekly-status-manifest@1",
-        "project": settings.project_name,
-        "run_id": str(report.run_id),
-        "plan_id": str(report.plan_id),
-        "plan_fingerprint": report.plan_fingerprint,
-        "successful": report.successful,
-        "artifacts": {
-            evidence_path.name: _sha256_file(evidence_path),
-            markdown_path.name: _sha256_file(markdown_path),
-            powerpoint_path.name: _sha256_file(powerpoint_path),
-        },
-        "source_urls": data["source_urls"],
-        "citations": data["citations"],
-        "citation_ids": [item["citation_id"] for item in data["citations"]],
-        "security_findings": data["security_findings"],
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-    for path in (evidence_path, markdown_path, powerpoint_path, manifest_path):
-        _restrict_permissions(path)
-
-    return WeeklyStatusArtifacts(
-        evidence_json=evidence_path,
-        markdown=markdown_path,
-        powerpoint=powerpoint_path,
-        manifest_json=manifest_path,
-    )
+        return WeeklyStatusArtifacts(
+            evidence_json=evidence_path,
+            markdown=markdown_path,
+            powerpoint=powerpoint_path,
+            manifest_json=manifest_path,
+        )
 
 
 def _package_data(report: RunReport) -> dict[str, Any]:
@@ -478,11 +490,10 @@ def _render_markdown(
     return "\n".join(lines)
 
 
-def _write_powerpoint(
-    path: Path,
+def _render_powerpoint(
     settings: WeeklyStatusSettings,
     data: Mapping[str, Any],
-) -> None:
+) -> bytes:
     try:
         from pptx import Presentation
         from pptx.enum.text import PP_ALIGN
@@ -567,7 +578,9 @@ def _write_powerpoint(
     if not source_bullets:
         source_bullets = [str(url)[:180] for url in data["source_urls"][:12]]
     add_bullets("Evidence sources", source_bullets)
-    presentation.save(str(path))
+    output = BytesIO()
+    presentation.save(output)
+    return output.getvalue()
 
 
 def _citation_marker(value: Mapping[str, Any]) -> str:
@@ -619,19 +632,3 @@ def _strict_bool(
     if not isinstance(value, bool):
         raise ConfigurationError(f"workflow setting must be boolean: {key}")
     return value
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _restrict_permissions(path: Path) -> None:
-    try:
-        path.chmod(0o600)
-    except OSError:
-        # Windows and some mounted filesystems do not implement POSIX modes.
-        pass

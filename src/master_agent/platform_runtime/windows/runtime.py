@@ -12,6 +12,10 @@ from master_agent.platform_runtime.contracts import (
     PlatformRuntime,
     PlatformRuntimeStatus,
 )
+from master_agent.platform_runtime.windows.atomic import (
+    WindowsAtomicPublicationRecoveryBackend,
+    probe_windows_atomic_backend,
+)
 from master_agent.platform_runtime.windows.filesystem import (
     WindowsSecureFilesystemBackend,
     probe_windows_filesystem_backend,
@@ -33,10 +37,15 @@ def build_windows_runtime() -> PlatformRuntime:
     probe_windows_locking_backend()
     filesystem = WindowsSecureFilesystemBackend()
     locking = WindowsCrossProcessLockingBackend()
+    probe_windows_atomic_backend(filesystem=filesystem, locking=locking)
+    atomic = WindowsAtomicPublicationRecoveryBackend(
+        filesystem=filesystem,
+        locking=locking,
+    )
     services: tuple[tuple[PlatformContract, PlatformBackend | None], ...] = (
         (PlatformContract.SECURE_FILESYSTEM, filesystem),
         (PlatformContract.CROSS_PROCESS_LOCKING, locking),
-        (PlatformContract.ATOMIC_PUBLICATION_RECOVERY, None),
+        (PlatformContract.ATOMIC_PUBLICATION_RECOVERY, atomic),
         (PlatformContract.PROCESS_SUPERVISION, None),
         (PlatformContract.TRUSTED_GIT, None),
         (PlatformContract.CAPSULE_ISOLATION, None),
@@ -66,4 +75,5 @@ def build_windows_runtime() -> PlatformRuntime:
         ),
         secure_filesystem=filesystem,
         cross_process_locking=locking,
+        atomic_publication_recovery=atomic,
     )

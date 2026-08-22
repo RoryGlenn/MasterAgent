@@ -81,6 +81,8 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
+            "/src/master_agent/platform_runtime/windows/atomic.py",
+            "/tests/test_windows_atomic_state.py",
         ):
             with self.subTest(suffix=suffix):
                 self.assertIn(
@@ -88,7 +90,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                     report.errors,
                 )
 
-    def test_wheel_requires_the_actual_posix_capsule_worker(self) -> None:
+    def test_wheel_requires_native_runtime_implementations(self) -> None:
         with TemporaryDirectory() as directory:
             archive_path = Path(directory) / "minimal.whl"
             with zipfile.ZipFile(archive_path, mode="w"):
@@ -99,6 +101,11 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(
             "release archive is missing required file: "
             "master_agent/platform_runtime/posix/capsule_worker.py",
+            report.errors,
+        )
+        self.assertIn(
+            "release archive is missing required file: "
+            "master_agent/platform_runtime/windows/atomic.py",
             report.errors,
         )
 
@@ -262,7 +269,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("run: python -m pip install", workflow)
         self.assertNotIn("\n          python -m pip install", workflow)
 
-    def test_ci_smokes_the_installed_windows_package_without_publication(self) -> None:
+    def test_ci_smokes_installed_windows_restricted_publication(self) -> None:
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         start = workflow.index("  windows-startup:")
@@ -287,12 +294,14 @@ class ReleaseMetadataTests(unittest.TestCase):
             "windows-native-partial",
             "windows-handle-acl-filesystem",
             "windows-lockfileex",
+            "windows-handle-atomic-state",
             "secure_filesystem",
             "capsule_isolation",
+            "readiness --output $readinessPath",
+            "native Windows restricted publication smoke failed",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, job)
-        self.assertNotIn("--output", job)
         self.assertNotIn("setup --", job)
 
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:

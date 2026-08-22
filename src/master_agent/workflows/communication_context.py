@@ -12,6 +12,8 @@ from typing import Any
 
 from master_agent.citations import citation_index
 from master_agent.config_sources import ConfigSource
+from master_agent.connectors.drafts import write_artifact_bundle
+from master_agent.directory_safety import PinnedDirectory, pin_directory
 from master_agent.errors import ConfigurationError
 from master_agent.identity import IdentityRegistry, PersonIdentity
 from master_agent.models import (
@@ -22,7 +24,11 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
-from master_agent.platform_runtime import require_persistent_state_platform
+from master_agent.platform_runtime import (
+    get_atomic_publication_recovery_backend,
+    require_persistent_state_platform,
+)
+from master_agent.resource_limits import MAX_LOCAL_ARTIFACT_BYTES
 from master_agent.retention import (
     RetentionConfig,
     write_retained_json,
@@ -212,7 +218,9 @@ def render_communication_context_package(
     """Render retained JSON evidence, Markdown, and an integrity manifest."""
 
     require_persistent_state_platform()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = get_atomic_publication_recovery_backend().ensure_private_directory(
+        output_dir
+    )
     payloads = [
         dict(action.result.after)
         for action in report.actions
@@ -269,14 +277,6 @@ def render_communication_context_package(
             for action in report.actions
         ],
     }
-    evidence_path, sidecar = write_retained_json(
-        output_dir / "communication-context-evidence.json",
-        evidence,
-        evidence_type="communication-context/package",
-        config=retention,
-        include_content=True,
-    )
-
     markdown_content = _render_markdown(
         settings,
         people=people,
@@ -287,50 +287,68 @@ def render_communication_context_package(
         findings=findings,
         warnings=warnings,
     )
-    markdown_path, markdown_sidecar = write_retained_text(
-        output_dir / "communication-context.md",
-        markdown_content,
-        evidence_type="communication-context/markdown",
-        config=retention,
-        citation_ids=tuple(
-            str(item["citation_id"]) for item in citations if item.get("citation_id")
-        ),
-    )
+    with pin_directory(output_dir) as directory:
+        root = directory.path
+        evidence_path, sidecar = write_retained_json(
+            root / "communication-context-evidence.json",
+            evidence,
+            evidence_type="communication-context/package",
+            config=retention,
+            include_content=True,
+            parent_directory=directory,
+        )
+        markdown_path, markdown_sidecar = write_retained_text(
+            root / "communication-context.md",
+            markdown_content,
+            evidence_type="communication-context/markdown",
+            config=retention,
+            citation_ids=tuple(
+                str(item["citation_id"])
+                for item in citations
+                if item.get("citation_id")
+            ),
+            parent_directory=directory,
+        )
 
-    manifest_path = output_dir / "manifest.json"
-    manifest = {
-        "schema": "master-agent/communication-context-manifest@1",
-        "run_id": str(report.run_id),
-        "plan_id": str(report.plan_id),
-        "successful": report.successful,
-        "files": {
-            evidence_path.name: _sha256_file(evidence_path),
-            sidecar.name: _sha256_file(sidecar),
-            markdown_path.name: _sha256_file(markdown_path),
-            markdown_sidecar.name: _sha256_file(markdown_sidecar),
-        },
-        "counts": {
-            "people": len(people),
-            "messages": len(messages),
-            "chats": len(chats),
-            "teams": len(teams),
-            "citations": len(citations),
-            "security_findings": len(findings),
-            "warnings": len(warnings),
-        },
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    _restrict(manifest_path)
-    return CommunicationContextArtifacts(
-        evidence_json=evidence_path,
-        evidence_retention_sidecar=sidecar,
-        markdown=markdown_path,
-        markdown_retention_sidecar=markdown_sidecar,
-        manifest_json=manifest_path,
-    )
+        manifest_path = root / "manifest.json"
+        manifest = {
+            "schema": "master-agent/communication-context-manifest@1",
+            "run_id": str(report.run_id),
+            "plan_id": str(report.plan_id),
+            "successful": report.successful,
+            "files": {
+                path.name: _sha256_child(directory, path)
+                for path in (
+                    evidence_path,
+                    sidecar,
+                    markdown_path,
+                    markdown_sidecar,
+                )
+            },
+            "counts": {
+                "people": len(people),
+                "messages": len(messages),
+                "chats": len(chats),
+                "teams": len(teams),
+                "citations": len(citations),
+                "security_findings": len(findings),
+                "warnings": len(warnings),
+            },
+        }
+        manifest_bytes = (
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        ).encode("utf-8")
+        write_artifact_bundle(
+            directory,
+            ((manifest_path, manifest_bytes, "application/json"),),
+        )
+        return CommunicationContextArtifacts(
+            evidence_json=evidence_path,
+            evidence_retention_sidecar=sidecar,
+            markdown=markdown_path,
+            markdown_retention_sidecar=markdown_sidecar,
+            manifest_json=manifest_path,
+        )
 
 
 def _render_markdown(
@@ -483,16 +501,12 @@ def _optional_text(value: Any) -> str | None:
     return rendered or None
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _sha256_child(directory: PinnedDirectory, path: Path) -> str:
+    """Hash one bounded private child through the retained output directory."""
 
-
-def _restrict(path: Path) -> None:
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    _selected, payload, _identity = directory.read_child_bytes(
+        path.name,
+        max_bytes=MAX_LOCAL_ARTIFACT_BYTES,
+        require_private=True,
+    )
+    return hashlib.sha256(payload).hexdigest()

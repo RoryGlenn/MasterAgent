@@ -6,6 +6,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import secrets
 import stat
 import sys
 import tempfile
@@ -129,6 +131,7 @@ from master_agent.platform_runtime import (
     LockMode,
     PlatformContract,
     PlatformRuntimeStatus,
+    get_atomic_publication_recovery_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     platform_runtime_status,
@@ -4291,11 +4294,16 @@ def _demo() -> int:
 
     require_persistent_state_platform()
     workspace = _new_demo_workspace()
-    workspace.chmod(0o700)
     artifacts = workspace / "artifacts"
     state = workspace / "state"
-    artifacts.mkdir(mode=0o700)
-    state.mkdir(mode=0o700)
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        atomic.ensure_private_directory(artifacts)
+        atomic.ensure_private_directory(state)
+    else:
+        workspace.chmod(0o700)
+        artifacts.mkdir(mode=0o700)
+        state.mkdir(mode=0o700)
     database = state / "audit.sqlite3"
 
     print("mode: safe local demonstration (no credentials or provider writes)")
@@ -4316,6 +4324,12 @@ def _new_demo_workspace() -> Path:
     require_persistent_state_platform()
     runtime_root = Path.home() / ".master-agent"
     product_root = runtime_root / "MasterAgent"
+    atomic = get_atomic_publication_recovery_backend()
+    if atomic.backend_id == "windows-handle-atomic-state":
+        atomic.ensure_private_directory(product_root)
+        return atomic.ensure_private_directory(
+            product_root / f"demo-{secrets.token_hex(16)}"
+        )
     runtime_root.mkdir(mode=0o700, exist_ok=True)
     product_root.mkdir(mode=0o700, exist_ok=True)
     with PinnedDirectory.open(product_root) as pinned_root:
@@ -4340,15 +4354,34 @@ def _draft_package(
         database_parent = resources.enter_context(
             PinnedDirectory.open(database.expanduser().absolute().parent)
         )
-        if output_directory.identity == database_parent.identity:
+        if output_directory.object_identity == database_parent.object_identity:
             raise ConfigurationError(
                 "draft artifact and audit database directories must be distinct"
             )
-        get_cross_process_locking_backend().acquire(
-            output_directory.fileno(),
-            mode=LockMode.EXCLUSIVE,
-        )
-        if os.listdir(output_directory.fileno()):
+        if output_directory.object_identity.platform == "windows":
+            atomic = get_atomic_publication_recovery_backend()
+            resources.enter_context(
+                atomic.open_transaction(
+                    Path(
+                        str(output_directory.path).rstrip("\\")
+                        + "\\.master-agent-draft-package"
+                    ),
+                    max_bytes=0,
+                    create=True,
+                )
+            )
+            output_names = tuple(
+                name
+                for name in output_directory.list_children()
+                if not _is_windows_atomic_metadata_name(name)
+            )
+        else:
+            get_cross_process_locking_backend().acquire(
+                output_directory.fileno(),
+                mode=LockMode.EXCLUSIVE,
+            )
+            output_names = tuple(os.listdir(output_directory.fileno()))
+        if output_names:
             raise ConfigurationError(
                 "draft artifact directory must be empty; use a fresh directory"
             )
@@ -6361,6 +6394,16 @@ def _load_approval(path: Path) -> Approval:
 
 def _optional_path(value: str | None) -> Path | None:
     return Path(value) if value is not None else None
+
+
+def _is_windows_atomic_metadata_name(name: str) -> bool:
+    """Return whether one child is private atomic-backend bookkeeping."""
+
+    folded = name.casefold()
+    return bool(
+        re.fullmatch(r"\.master-agent-[0-9a-f]{32}\.(?:ledger|lock)", folded)
+        or folded.startswith((".master-agent-ledger-", ".master-agent-tmp-"))
+    )
 
 
 def _terminal_field(

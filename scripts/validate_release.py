@@ -337,48 +337,52 @@ _PUBLIC_READ_FORBIDDEN_CLAIMS = {
 
 _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     Path("CHANGELOG.md"): (
-        "Enable descriptor-safe expiration deletion",
-        "preview, apply, and orphan repair remain capability-gated",
+        "Add native Windows atomic local-state and retention persistence",
+        "content-free exact-identity intent",
     ),
     Path("docs/architecture.md"): (
         "Expiration preview and explicit POSIX deletion share",
         "every discovered evidence-parent lock",
         "content-free transaction before either public name",
+        "Native Windows uses retained handles",
     ),
     Path("docs/cli-reference.md"): (
         "## Evidence expiration maintenance",
         "every discovered evidence-parent retention lock",
-        "All `evidence-prune` execution remains unavailable on Windows",
-        "Windows preview and apply are capability-gated",
+        ".master-agent-retention.transaction",
+        "retained handles and a content-free exact-identity recovery intent",
     ),
     Path("docs/configuration.md"): (
         "## Retention and expiry",
         "Changing `retention.toml` later does not",
         "root and discovered evidence-parent locks",
+        "bounded content-free intent",
     ),
     Path("docs/implementation-roadmap.md"): (
-        "Complete on POSIX; native Windows retention preview/apply/repair gated",
-        "native Windows filesystem/ACL and locking tranche is implemented",
+        "Complete on POSIX and native Windows",
+        "native Windows filesystem/ACL, locking, and atomic local-state tranche",
     ),
     Path("docs/operations.md"): (
         "repeat the apply command under the same root",
         "bounded and uses the same evidence-parent locks",
-        "All `evidence-prune` execution remains unavailable on Windows",
-        "Windows retention preview, apply, and orphan repair remain unavailable",
+        ".master-agent-retention.transaction",
+        "destination-present/source-absent state",
     ),
     Path("docs/phase-2b-communication-context.md"): (
-        "same bounded descriptor-relative validation plan",
+        "bounded native-identity validation plan",
         "discovered evidence-parent retention lock",
+        "content-free exact-identity intent",
     ),
     Path("docs/release-validation.md"): (
         "POSIX retained-evidence expiration tests prove",
-        "apply, and orphan repair remain capability-gated",
+        "Windows tests separately",
+        "content-free native intent",
     ),
     Path("docs/threat-model.md"): (
         "every discovered evidence-parent",
         "broad, path-based, or unvalidated recursive evidence deletion",
-        "native Windows filesystem/locking tranche is not full runtime",
-        "orphan repair remain unavailable",
+        "native Windows filesystem/locking/atomic-state tranche is not full",
+        "bounded content-free",
     ),
 }
 
@@ -386,9 +390,20 @@ _RETENTION_PRUNE_FORBIDDEN_CURRENT_CLAIMS = {
     Path("docs/architecture.md"): ("expiry deletion remains preview-only",),
     Path("docs/cli-reference.md"): (
         "`--apply` is disabled before traversal or deletion",
+        "Windows preview and apply are capability-gated",
+        "All `evidence-prune` execution remains unavailable on Windows",
     ),
-    Path("docs/implementation-roadmap.md"): ("destructive retention pruning",),
-    Path("docs/operations.md"): ("Evidence expiry deletion remains preview-only",),
+    Path("docs/configuration.md"): (
+        "Windows retention preview, apply, and orphan repair remain gated",
+    ),
+    Path("docs/implementation-roadmap.md"): (
+        "destructive retention pruning",
+        "native Windows retention preview/apply/repair gated",
+    ),
+    Path("docs/operations.md"): (
+        "Evidence expiry deletion remains preview-only",
+        "Windows retention preview, apply, and orphan repair remain unavailable",
+    ),
     Path("docs/phase-2b-communication-context.md"): (
         "Expiry deletion remains preview-only",
         "`evidence-prune --apply` still fails before traversal",
@@ -397,6 +412,10 @@ _RETENTION_PRUNE_FORBIDDEN_CURRENT_CLAIMS = {
         "expiry deletion remains preview-only",
         "expiry deletion is preview-only",
         "destructive recursive evidence pruning",
+        "Windows retention preview, apply, and orphan repair remain unavailable",
+    ),
+    Path("docs/release-validation.md"): (
+        "Windows retention preview, apply, and orphan repair remain capability-gated",
     ),
 }
 
@@ -658,6 +677,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "master_agent/__init__.py",
             "master_agent/capsule_worker.py",
             "master_agent/platform_runtime/posix/capsule_worker.py",
+            "master_agent/platform_runtime/windows/atomic.py",
             "master_agent/defaults/capabilities.toml",
             "master_agent/defaults/dependency-licenses.toml",
         )
@@ -707,6 +727,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/tests/test_capability_capsules.py",
             "/tests/test_capsule_broker_and_routing.py",
             "/tests/test_release_metadata.py",
+            "/tests/test_windows_atomic_state.py",
             "/tests/test_live_connector_workflow.py",
             "/tests/test_semantic_router.py",
             "/tests/test_advisory_integration.py",
@@ -718,6 +739,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
+            "/src/master_agent/platform_runtime/windows/atomic.py",
         )
         source_members = tuple(PurePosixPath(name) for name in names)
         source_roots = {

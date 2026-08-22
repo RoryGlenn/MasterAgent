@@ -73,7 +73,7 @@ unsafe surfaces remain deliberately non-routable.
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
 | Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation and `LockFileEx`, while atomic state, process, Git, capsule, and hosted certification remain planned |
+| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, and handle-relative atomic local-state recovery, while Credential Manager/DPAPI, process, Git, capsule isolation, and full certification remain planned |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -297,11 +297,13 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\master-agent.exe doctor --require-level install
 ```
 
-These commands initialize no workplace connector and do not claim that a
+These commands initialize no workplace connector and do not claim that every
 stateful operation is available. Native Windows selects
 `windows-native-partial`: retained Win32 handles, volume/file identity, owner
 SID and effective-DACL validation provide `secure_filesystem`, while
-`windows-lockfileex` provides `cross_process_locking`. Trusted bounded reads of
+`windows-lockfileex` provides `cross_process_locking` and
+`windows-handle-atomic-state` provides protected, bounded local-state
+publication and deterministic recovery. Trusted bounded reads of
 local configuration, credentials, token files, CA bundles, approval requests,
 capsules, and plugin distributions can use that filesystem boundary. It
 rejects UNC/device namespaces, reparse or cloud objects, unsafe names,
@@ -310,11 +312,13 @@ using pathname-only or POSIX emulation. Retained system ancestors may permit
 only unrelated child creation; deletion, metadata, ACL, owner, generic-write,
 and replacement authority remain rejected and policy-bound.
 
-The `platform_runtime` report also names `atomic_publication_recovery`,
-`process_supervision`, `trusted_git`, and `capsule_isolation`; those contracts
-remain unavailable. Setup, retention, persistent state, and any dependent
-readiness level therefore stay false with `runtime_defect` and execution stops
-instead of using a weaker compatibility path.
+The `platform_runtime` report marks `atomic_publication_recovery` available.
+Setup, SQLite-backed state, approval and readiness output, retained evidence,
+OAuth token files, configuration snapshots, capsule/plugin stores, and draft
+artifacts use that native backend rather than POSIX emulation. Process
+supervision, trusted Git, and capsule isolation remain unavailable; an
+operation that needs one of them still stops with `runtime_defect` instead of
+using a weaker compatibility path.
 On POSIX hosts, capsule isolation is also reported precisely: Linux selects
 the bubblewrap implementation only when a trusted executable is available and
 otherwise reports the contract unavailable; macOS reports it unavailable until

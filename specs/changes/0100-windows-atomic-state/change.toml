@@ -1,0 +1,26 @@
+schema = "master-agent/change@1"
+id = "0100-windows-atomic-state"
+title = "Native Windows atomic local state and recovery"
+status = "implementing"
+github_issue = 100
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WINDOWS-ATOMIC-STATE-001"
+destination = "runtime/MA-WINDOWS-ATOMIC-STATE-001.md"
+source = "current/MA-WINDOWS-ATOMIC-STATE-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-PLATFORM-001"
+destination = "runtime/MA-PLATFORM-001.md"
+source = "current/MA-PLATFORM-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-RETENTION-001"
+destination = "security/MA-RETENTION-001.md"
+source = "current/MA-RETENTION-001.md"

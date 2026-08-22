@@ -130,9 +130,10 @@ reports
 `capsule_isolation` unavailable because owner/group artifact trust is a secure-
 filesystem property, not OS worker containment, and no native macOS isolation
 backend is certified. Native Windows selects `windows-native-partial` with
-`windows-handle-acl-filesystem` and `windows-lockfileex`; atomic publication,
-process supervision, trusted Git, and capsule isolation retain bounded
-unavailable entries. A non-Windows host that explicitly inspects Windows uses
+`windows-handle-acl-filesystem`, `windows-lockfileex`, and
+`windows-handle-atomic-state`; process supervision, trusted Git, and capsule
+isolation retain bounded unavailable entries. A non-Windows host that
+explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
 
@@ -161,13 +162,16 @@ the stricter writer/private policy. Approval bindings serialize the exact
 versioned Windows identity and policy digest and compare them again at
 execution. The filesystem backend can also publish a new private file only
 with an explicit protected DACL, bounded write/flush and readback, namespace
-revalidation, and exact-created-identity cleanup; it cannot replace an existing
-name or satisfy crash recovery. A stateful capability
-remains unavailable when atomic publication or another required contract
-reports unavailable, and
-its readiness issue is `runtime_defect`. The common platform and native
-Windows-filesystem routes are released; the other six Windows implementation
-and hosted-certification routes remain planned.
+revalidation, and exact-created-identity cleanup. The atomic backend adds a
+stable handle lock, same-parent handle-relative replacement, a protected
+integrity-checked old/new ledger, destination identity/content/DACL
+verification, directory flush, and deterministic restart recovery. SQLite and
+the protected approval, retention, token, configuration, advisory, capsule,
+plugin, and draft stores select that backend. A stateful capability remains
+unavailable when another required contract reports unavailable, and its
+readiness issue is `runtime_defect`. The common platform, native Windows
+filesystem, and Windows atomic-state routes are released; the other five
+Windows implementation and hosted-certification routes remain planned.
 
 ## Repository discovery topology
 
@@ -214,8 +218,8 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-The common platform-runtime and Windows-filesystem routes are released, while
-the other six Windows routes remain `planned`; a generated index cannot present
+The common platform-runtime, Windows-filesystem, and Windows atomic-state
+routes are released, while the other five Windows routes remain `planned`; a generated index cannot present
 those native backends or hosted certification as released until their own
 implementation changes advance the manifest under validation.
 
@@ -542,9 +546,12 @@ is removed. The common source parent is fsynced with both public names absent
 before recovery links are discarded, allowing a later apply to complete or
 roll back interrupted staging without losing deletion durability. Pending
 transactions beneath a nested retention root make an ancestor scan fail closed
-until the exact child root is recovered. Native Windows retention preview,
-apply, and orphan repair remain unavailable until equivalent filesystem and
-atomic-state contracts exist.
+until the exact child root is recovered. Native Windows uses retained handles
+and the same tree-wide cooperative lock, then records an exact content-free
+pair-removal or quarantine intent before the first irreversible step. A later
+apply accepts only the recorded source identities and completes the all-absent
+or destination-present/source-absent state; preview reports pending recovery
+without mutating it.
 
 Descriptor-relative orphan repair participates in the same selected-root,
 ancestor, and descendant-parent lock handshake. It repeats the bounded scan

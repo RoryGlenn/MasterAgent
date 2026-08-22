@@ -34,11 +34,13 @@
 
 The operating-system service account, installed Master Agent runtime, and
 private runtime directories are part of the trusted computing base. Descriptor
-pins, restrictive ownership/modes, create-only publication, and transaction
-locks guard common pathname-substitution and concurrency attacks. A local,
-unkeyed SQLite database cannot authenticate a malicious same-UID process that
-replaces the complete database, ledger, and lock state with a different
-self-consistent set. Production readiness therefore still requires an external
+or retained-handle pins, restrictive POSIX modes or Windows DACLs, create-only
+publication, and transaction locks guard common pathname-substitution and
+concurrency attacks. Local integrity digests are not an independent
+authentication secret: a malicious same-UID process or same-SID process that
+can replace the complete database, ledger, lock, and private-key state while
+the runtime is stopped can construct a different self-consistent set.
+Production readiness therefore still requires an external
 tamper-resistant audit sink and isolated or broker-attested credentials; local
 SQLite is a development boundary, not protection from a compromised service
 account.
@@ -199,17 +201,23 @@ Controls:
 - Windows create-only publication attaches a protected DACL during exclusive
   creation, bounds and flushes the write, reads back and revalidates the same
   identity, and cleans up only the exact file created by the failed attempt;
-- Windows whole-file shared and exclusive locks use `LockFileEx`, while atomic
-  publication and every higher incomplete contract remain unavailable;
+- Windows whole-file shared and exclusive locks use `LockFileEx`; atomic
+  publication uses stable handle locks, protected exclusive temporary and
+  ledger files, same-parent handle-relative replacement, exact old/new
+  identity and digest reconciliation, post-publication owner/DACL checks, and
+  retained-directory flushes;
+- Windows retained pair deletion and quarantine publish a bounded content-free
+  intent before the first irreversible step, then accept only recorded source
+  identities while completing the recorded final state;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows native filesystem/locking and existing POSIX behavior receive
-  separate regression coverage, while the remaining Windows backend routes
-  remain planned.
+- Windows native filesystem/locking/atomic-state and existing POSIX behavior
+  receive separate regression coverage, while the remaining Windows backend
+  routes remain planned.
 
 ### Excessive permissions
 
@@ -619,12 +627,11 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- the native Windows filesystem/locking tranche is not full runtime
-  certification: stateful operations remain unavailable where atomic
-  publication/recovery, process, Git, or capsule contracts are absent. Native
-  Windows retention preview, apply, and orphan repair remain unavailable;
-  expiration quarantine intentionally retains orphaned bytes until an operator
-  reviews and removes them;
+- the native Windows filesystem/locking/atomic-state tranche is not full
+  runtime certification: operations still remain unavailable where process,
+  Git, capsule isolation, credential-broker, or certification contracts are
+  absent. Expiration quarantine intentionally retains orphaned bytes until an
+  operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;
 - a legitimate human approval may authorize a harmful plan;
 - provider acceptance does not guarantee human receipt or downstream interpretation;

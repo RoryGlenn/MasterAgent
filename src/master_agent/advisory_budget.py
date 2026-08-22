@@ -20,8 +20,10 @@ from master_agent.advisory import (
 from master_agent.directory_safety import DirectoryIdentity, PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.platform_runtime import (
+    AtomicPublicationRecoveryBackend,
     LockMode,
     PlatformContract,
+    get_atomic_publication_recovery_backend,
     get_cross_process_locking_backend,
     get_secure_filesystem_backend,
     require_platform_contract,
@@ -66,14 +68,31 @@ class AdvisoryBudgetStore:
     def __init__(self, state_directory: Path, repository_root: Path) -> None:
         _require_advisory_budget_platform()
         self._repository_digest = _repository_identity(repository_root)
-        selected = Path(os.path.abspath(os.fspath(state_directory.expanduser())))
         try:
-            with _create_and_pin_private_directory(selected) as pinned:
-                self._key = _load_or_create_key(pinned)
-                self._database = PinnedSQLiteDatabase(
-                    Path(_DATABASE_NAME),
-                    parent_directory=pinned,
+            atomic = get_atomic_publication_recovery_backend()
+            if atomic.backend_id == "windows-handle-atomic-state":
+                from master_agent.platform_runtime.windows.filesystem import (
+                    validate_windows_drive_path,
                 )
+
+                selected = Path(
+                    validate_windows_drive_path(state_directory.expanduser()).canonical
+                )
+                atomic.ensure_private_directory(selected)
+                self._key = _load_or_create_windows_key(selected, atomic)
+                self._database = PinnedSQLiteDatabase(
+                    selected / _DATABASE_NAME,
+                )
+            else:
+                selected = Path(
+                    os.path.abspath(os.fspath(state_directory.expanduser()))
+                )
+                with _create_and_pin_private_directory(selected) as pinned:
+                    self._key = _load_or_create_key(pinned)
+                    self._database = PinnedSQLiteDatabase(
+                        Path(_DATABASE_NAME),
+                        parent_directory=pinned,
+                    )
         except (ConfigurationError, OSError, sqlite3.Error) as error:
             raise AdvisoryBudgetStateError(
                 "advisory budget state could not be opened safely"
@@ -426,6 +445,26 @@ def _load_or_create_key(directory: PinnedDirectory) -> bytes:
             locking.release(parent_descriptor)
         finally:
             os.close(parent_descriptor)
+
+
+def _load_or_create_windows_key(
+    directory: Path,
+    atomic: AtomicPublicationRecoveryBackend,
+) -> bytes:
+    """Load or create the exact private HMAC key through native state I/O."""
+
+    with atomic.open_transaction(
+        directory / _KEY_NAME,
+        max_bytes=_KEY_BYTES,
+        create=True,
+    ) as transaction:
+        payload = transaction.read_bytes()
+        if payload is None:
+            payload = secrets.token_bytes(_KEY_BYTES)
+            transaction.publish_bytes(payload, expected=None)
+        if len(payload) != _KEY_BYTES:
+            raise AdvisoryBudgetStateError("advisory budget key has an invalid length")
+        return payload
 
 
 def _validated_key_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:

@@ -1986,7 +1986,7 @@ persistence = "explicit_content"
             self.assertEqual(recovered.errors, ())
             self.assertEqual(
                 set(recovered.removed_files),
-                {str(evidence.resolve()), str(sidecar.resolve())},
+                {str(evidence), str(sidecar)},
             )
             self.assertEqual(tuple(stage.iterdir()), ())
 
@@ -2571,16 +2571,40 @@ persistence = "explicit_content"
                 )
             repair.assert_called_once_with(root, dry_run=False, max_files=10_000)
 
-    def test_windows_prune_is_capability_gated_before_traversal(self) -> None:
+    def test_windows_prune_delegates_to_the_native_atomic_backend(self) -> None:
+        expected = retention.RetentionPurgeResult(
+            scanned_manifests=0,
+            expired_manifests=0,
+            removed_files=(),
+            errors=(),
+            dry_run=False,
+        )
         with (
             TemporaryDirectory() as directory,
-            patch.object(retention.os, "name", "nt"),
-            patch.object(retention, "_purge_expired_evidence_locked") as purge,
-            self.assertRaisesRegex(ConfigurationError, "unavailable on Windows"),
+            patch.object(
+                retention,
+                "_uses_windows_atomic_backend",
+                return_value=True,
+            ),
+            patch.object(
+                retention,
+                "_purge_expired_evidence_windows",
+                return_value=expected,
+            ) as windows_purge,
+            patch.object(retention, "_purge_expired_evidence_locked") as posix_purge,
         ):
-            purge_expired_evidence(Path(directory), dry_run=False)
+            self.assertIs(
+                purge_expired_evidence(Path(directory), dry_run=False),
+                expected,
+            )
 
-        purge.assert_not_called()
+        windows_purge.assert_called_once_with(
+            Path(directory),
+            now=None,
+            dry_run=False,
+            max_manifests=10_000,
+        )
+        posix_purge.assert_not_called()
 
 
 def _citation_id(system: str, resource_type: str, resource_id: str) -> str:
