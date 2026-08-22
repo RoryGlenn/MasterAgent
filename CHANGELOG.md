@@ -9,9 +9,9 @@
   while operations that need an unavailable native backend fail before state,
   credentials, connectors, or provider access. Existing POSIX filesystem,
   locking, atomic-state, process, and Git semantics remain unchanged; Linux
-  reports bubblewrap capsule isolation, while macOS truthfully reports that
-  contract unavailable. All seven native Windows implementation/certification
-  routes remain planned.
+  reports bubblewrap capsule isolation only when a trusted executable is
+  selected and otherwise reports that contract unavailable, as does macOS. All
+  seven native Windows implementation/certification routes remain planned.
 
 - Harden credentialed connector evidence behind a manual-only, reviewed-
   default-branch workflow with separate protected read, effect, and GitHub

@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import unittest
@@ -1816,6 +1817,70 @@ class PlatformRuntimeTests(unittest.TestCase):
                 )
 
             invalid_discovery.assert_not_called()
+
+        with TemporaryDirectory() as raw:
+            original_directory = Path.cwd()
+            try:
+                for name in ("first", "second"):
+                    directory = Path(raw) / name
+                    directory.mkdir()
+                    relative_executable = directory / "bwrap"
+                    relative_executable.write_bytes(b"trusted test executable")
+                    relative_executable.chmod(0o700)
+                    os.chdir(directory)
+                    with (
+                        self.subTest(directory=name),
+                        patch(
+                            "master_agent.platform_runtime.posix.capsules.shutil.which"
+                        ) as relative_discovery,
+                        self.assertRaisesRegex(
+                            PlatformCapabilityUnavailable,
+                            f"^{reason}$",
+                        ),
+                    ):
+                        get_capsule_isolation_backend(
+                            "linux",
+                            executable="bwrap",
+                        )
+
+                    relative_discovery.assert_not_called()
+            finally:
+                os.chdir(original_directory)
+
+        from master_agent.platform_runtime.posix.capsules import (
+            select_linux_bubblewrap_backend,
+        )
+
+        filesystem = Mock()
+        filesystem.effective_user_id.return_value = 501
+        filesystem.group_is_private_to_owner.return_value = True
+        metadata = Mock(
+            st_mode=stat.S_IFREG | 0o720,
+            st_uid=0,
+            st_gid=0,
+            st_nlink=1,
+        )
+        selected_path = Mock(spec=Path)
+        selected_path.is_absolute.return_value = True
+        selected_path.resolve.return_value = selected_path
+        selected_path.lstat.return_value = metadata
+        with (
+            patch(
+                "master_agent.platform_runtime.posix.capsules.Path",
+                return_value=selected_path,
+            ),
+            patch(
+                "master_agent.platform_runtime.posix.capsules.os.access",
+                return_value=True,
+            ),
+        ):
+            mismatched = select_linux_bubblewrap_backend(
+                filesystem=filesystem,
+                executable="/root-owned/group-writable/bwrap",
+            )
+
+        self.assertIsNone(mismatched)
+        filesystem.group_is_private_to_owner.assert_not_called()
 
     def test_capsule_worker_selects_only_real_or_explicit_isolation(self) -> None:
         from master_agent.capsule_runtime import CapsuleWorker

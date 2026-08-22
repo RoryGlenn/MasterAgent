@@ -123,8 +123,10 @@ stateful backend.
 
 Linux and macOS use the top-level `posix-linux` and `posix-macos` identities.
 Both select `posix-descriptor-filesystem`, `posix-flock`,
-`posix-atomic-publication`, `posix-rlimit`, and `posix-trusted-git`. Linux also
-selects `linux-bubblewrap` for executable capsule isolation. macOS reports
+`posix-atomic-publication`, `posix-rlimit`, and `posix-trusted-git`. Linux
+selects `linux-bubblewrap` for executable capsule isolation only when a trusted
+executable is available and otherwise reports that contract unavailable. macOS
+reports
 `capsule_isolation` unavailable because owner/group artifact trust is a secure-
 filesystem property, not OS worker containment, and no native macOS isolation
 backend is certified. Windows uses `windows-unavailable` until a native

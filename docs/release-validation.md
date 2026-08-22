@@ -60,7 +60,9 @@ handling, and independent verification.
   performs no protected-state or credential I/O. Required operations reject an
   unavailable contract before protected state, credentials, connectors, or
   provider access and never select a weaker fallback. Linux capsule isolation
-  reports bubblewrap; macOS reports that contract unavailable rather than
+  reports bubblewrap only when a trusted executable is selected and otherwise
+  reports that contract unavailable; macOS also reports it unavailable rather
+  than
   treating owner/group artifact trust as executable containment. Existing
   certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,

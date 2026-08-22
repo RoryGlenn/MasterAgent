@@ -34,8 +34,11 @@ def select_linux_bubblewrap_backend(
     candidate = executable if executable is not None else shutil.which("bwrap")
     if not candidate:
         return None
+    unresolved = Path(candidate)
+    if not unresolved.is_absolute():
+        return None
     try:
-        resolved = Path(candidate).resolve(strict=True)
+        resolved = unresolved.resolve(strict=True)
         metadata = resolved.lstat()
     except (OSError, RuntimeError):
         return None
@@ -48,11 +51,14 @@ def select_linux_bubblewrap_backend(
     permissions = stat.S_IMODE(metadata.st_mode)
     if permissions & stat.S_IWOTH:
         return None
-    if permissions & stat.S_IWGRP and not filesystem.group_is_private_to_owner(
-        owner_id=metadata.st_uid,
-        group_id=metadata.st_gid,
-    ):
-        return None
+    if permissions & stat.S_IWGRP:
+        if metadata.st_uid != filesystem.effective_user_id():
+            return None
+        if not filesystem.group_is_private_to_owner(
+            owner_id=metadata.st_uid,
+            group_id=metadata.st_gid,
+        ):
+            return None
     if not os.access(resolved, os.X_OK):
         return None
     return LinuxBubblewrapCapsuleIsolationBackend(executable=resolved)

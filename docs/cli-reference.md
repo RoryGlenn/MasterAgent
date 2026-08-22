@@ -113,9 +113,10 @@ The complete map always includes `secure_filesystem`,
 `process_supervision`, `trusted_git`, and `capsule_isolation`. An unavailable
 entry also has a bounded, secret-free `reason`. Reading this object performs no
 protected-state or credential I/O and grants no authority.
-Linux reports the `linux-bubblewrap` capsule-isolation implementation. macOS
-reports `capsule_isolation` unavailable; its owner/group artifact checks belong
-to `secure_filesystem` and do not certify executable containment.
+Linux reports the `linux-bubblewrap` capsule-isolation implementation only when
+a trusted executable is selected and otherwise reports it unavailable. macOS
+also reports `capsule_isolation` unavailable; its owner/group artifact checks
+belong to `secure_filesystem` and do not certify executable containment.
 
 On Windows, package imports, `--help`, `--version`, `readiness`, and the bounded
 absent-profile result from `doctor --require-level install` remain usable before

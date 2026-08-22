@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0126-truthful-bubblewrap-availability"
+title = "Truthful bubblewrap availability"
+status = "archived"
+github_issue = 126
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-PLATFORM-001"
+destination = "runtime/MA-PLATFORM-001.md"
+source = "current/MA-PLATFORM-001.md"
