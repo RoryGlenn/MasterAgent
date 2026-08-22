@@ -82,7 +82,7 @@ unsafe surfaces remain deliberately non-routable.
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
 | Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
-| Capability capsule promotion | Signed test/local promotion for dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, and production activation remain fail closed |
+| Capability import and capsule promotion | Read-only declarative custom-agent inspection plus signed test/local promotion for explicitly selected dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
 | Semantic ownership | Exact machine-readable module, test, requirement, command, capability, connector, profile, configuration, and platform routing with generated-index drift checks implemented |
 
@@ -107,7 +107,7 @@ The catalog contains **82 typed capabilities**:
 | SharePoint/OneDrive | sites, drives, folders, metadata, and bounded text | local files and decks | replacement remains disabled pending exact atomic provider preconditions |
 | OneNote | notebooks, sections, and pages | generated HTML/proposals | writes remain disabled pending target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | publishing follows the separately governed SharePoint path |
-| Capability capsules | promoted pure reads | promoted deterministic local generation | provider/side-effect and dependent capsule execution disabled |
+| Capability imports/capsules | declarative preview and promoted pure reads | explicitly selected, promoted deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
 
 ## Core safety properties
 
@@ -137,8 +137,10 @@ The catalog contains **82 typed capabilities**:
 - **Evidence discipline:** normal audit records store bounded metadata and
   digests; full content requires an explicit retention rule.
 - **Generated-code isolation:** Capability capsule promotion uses signed
-  lifecycle records and Linux bubblewrap. Raw plugins and unsafe capsules do
-  not become executable. See
+  lifecycle records and Linux bubblewrap. Foreign-agent inspection executes no
+  imported content and can create only a signed quarantine for one explicit
+  compatible ability. Raw plugins, whole agents, and unsafe capsules do not
+  become executable. See
   [`docs/capability-capsules.md`](docs/capability-capsules.md).
 
 ## Requirements

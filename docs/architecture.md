@@ -296,6 +296,16 @@ separate roles sign the ordered lifecycle from quarantine through validation,
 review, publication, and enablement; deprecation and revocation append new
 terminal states.
 
+A foreign custom-agent capability enters through an earlier descriptive gate.
+The versioned self-contained export is captured as immutable bytes and parsed
+without loading or running its embedded source. Inspection classifies
+references, compatible pure capsules, catalog conflicts, unsupported surfaces,
+and unsafe authority or executable requirements. Selecting one compatible
+ability requires its exact previewed source digest and derives a capsule policy
+identity that binds that digest and the declared publisher. The result is only
+an installed signed quarantine; it does not create a catalog definition or
+routing card.
+
 The current worker admits only dependency-free pure read/local-generation
 capsules. It executes their AST-restricted program in Linux bubblewrap with no
 network, no ambient environment, read-only runtime mounts, an ephemeral work

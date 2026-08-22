@@ -71,10 +71,17 @@ _DEFAULT_CONFIG_FILES = frozenset(
         "governance.toml",
         "oauth.toml",
         "draft-package.toml",
+        "dependency-licenses.toml",
         "recurring.toml",
         "organization-profile.toml",
     }
 )
+
+
+def snapshot_explicit_file(path: Path) -> ConfigSnapshot:
+    """Capture one owner-controlled regular file as bounded immutable bytes."""
+
+    return _trusted_explicit_file(path)
 
 
 def resolve_config_source(

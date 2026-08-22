@@ -22,6 +22,14 @@ worker admits only dependency-free pure read/local-generation capabilities;
 provider and side-effect gaps still use reviewed first-party typed connectors.
 See [`capability-capsules.md`](capability-capsules.md).
 
+A foreign custom-agent export may describe one of these pure typed capsules,
+but inspection grants nothing. MasterAgent first produces a source-digest-bound
+compatibility preview. Only an explicitly selected safe ability may enter the
+signed quarantine state, and it remains absent from the catalog and routing
+until the same independent promotion lifecycle completes. Raw prompts, whole
+agents, tools, workflows, plugins, credentials, approvals, and identity are not
+capability imports.
+
 ## Domain-specific capabilities
 
 Capabilities preserve the semantics required for policy and verification:

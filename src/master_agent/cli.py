@@ -32,6 +32,8 @@ from master_agent.audit import AuditLog, implemented_audit_sink
 from master_agent.auth import AuthMode
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
+from master_agent.capability_import import inspect_agent_capabilities
+from master_agent.capsules import LicensePolicy
 from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
 from master_agent.config import (
@@ -45,6 +47,7 @@ from master_agent.config_sources import (
     ConfigSnapshot,
     ConfigSource,
     resolve_config_source,
+    snapshot_explicit_file,
 )
 from master_agent.connectors.base import ClosableConnector
 from master_agent.connectors.bitbucket import BitbucketConnector
@@ -326,6 +329,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if args.command == "plugins":
             return _plugins(output=args.output)
+        if args.command == "capability-import":
+            return _capability_import_preview(
+                source_path=args.source,
+                capabilities_path=args.capabilities,
+                dependency_licenses_path=args.dependency_licenses,
+                output=args.output,
+            )
         if args.command == "readiness":
             return _readiness(
                 integrations_path=args.integrations,
@@ -779,6 +789,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="list installed connector plugins without importing plugin code",
     )
     plugins.add_argument("--output", type=Path)
+
+    capability_import = subparsers.add_parser(
+        "capability-import",
+        help="preview a declarative custom-agent export without executing it",
+    )
+    capability_import.add_argument("source", type=Path)
+    capability_import.add_argument("--capabilities", type=Path, default=None)
+    capability_import.add_argument(
+        "--dependency-licenses",
+        type=Path,
+        default=None,
+        help="dependency license policy used for compatibility classification",
+    )
+    capability_import.add_argument("--output", type=Path)
 
     readiness = subparsers.add_parser(
         "readiness",
@@ -3993,6 +4017,39 @@ def _plugins(*, output: Path | None) -> int:
     if output is not None:
         _write_json(output, PluginLock(plugins=plugins).to_dict())
         print(f"wrote {output}")
+    return 0
+
+
+def _capability_import_preview(
+    *,
+    source_path: Path,
+    capabilities_path: Path | None,
+    dependency_licenses_path: Path | None,
+    output: Path | None,
+) -> int:
+    """Inspect a foreign declarative export without loading or executing it."""
+
+    source = snapshot_explicit_file(source_path)
+    catalog = CapabilityCatalog.from_toml(
+        resolve_config_source(capabilities_path, "capabilities.toml")
+    )
+    license_policy = LicensePolicy.from_toml(
+        resolve_config_source(
+            dependency_licenses_path,
+            "dependency-licenses.toml",
+        )
+    )
+    preview = inspect_agent_capabilities(
+        source,
+        catalog=catalog,
+        license_policy=license_policy,
+    )
+    payload = preview.to_dict()
+    if output is not None:
+        _write_json(output, payload)
+        print(f"wrote {output}")
+    else:
+        print(json.dumps(payload, indent=2, ensure_ascii=True))
     return 0
 
 

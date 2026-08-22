@@ -454,6 +454,34 @@ Controls:
 The complete demonstrated boundary and explicit production exclusions are in
 [`capability-capsules.md`](capability-capsules.md).
 
+### Malicious custom-agent capability import
+
+A foreign agent export may contain prompt injection, hidden code, substituted
+dependencies, recursive agents, or claims to the source agent's credentials,
+identity, approval, and trust.
+
+Controls:
+
+- accept only one owner-controlled, regular, bounded, self-contained versioned
+  JSON snapshot and reject symlinks, unsafe permissions, duplicate keys,
+  unknown fields, malformed identifiers, controls, and unbounded structures;
+- treat descriptions, constraints, requirements, and embedded source as data
+  and never run a prompt, program, hook, plugin, shell command, network call, or
+  original agent during inspection;
+- compare exact dependency declarations with the embedded lock, SBOM, notices,
+  and license policy and statically reject forbidden source constructs;
+- classify existing-name shadowing, unsupported surfaces, imported authority,
+  recursion, and inconsistencies before selection;
+- require exactly one explicit safely importable ability and the previewed
+  source SHA-256, then re-snapshot and reclassify before any write;
+- bind the exact source digest and declared publisher into the derived capsule
+  policy identity, while treating the publisher as unverified until the normal
+  independent publisher authority signs promotion;
+- install only the signed quarantine state; catalog and routing construction
+  still require the final independently signed enabled state; and
+- use append-only deprecation or revocation to remove future routing without
+  erasing promotion history.
+
 ### Malicious connector plugin
 
 An installed plugin may execute code, leak data, or claim broad capabilities.

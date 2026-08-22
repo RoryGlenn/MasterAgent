@@ -11,6 +11,92 @@ read/local-generation programs. Provider access and side effects remain
 blocked before connector construction until a reviewed provider adapter can
 satisfy the destination, readback, idempotency, and compensation contracts.
 
+## Importing a capability from another agent
+
+MasterAgent can inspect a version 1 declarative custom-agent export without
+running the other agent or its code:
+
+```bash
+master-agent capability-import \
+  /trusted/imports/agent-capabilities.json \
+  --output /trusted/reviews/agent-capabilities-preview.json
+```
+
+The command captures the exact regular file as immutable bytes, rejects
+symlinks, unsafe permissions, duplicate JSON keys, unknown fields, malformed or
+unbounded data, and then compares every declared ability with the installed
+typed catalog and dependency-license policy. It does not construct a capsule
+worker, import a module, run an embedded program or prompt, resolve a
+credential, connect to a provider, invoke a hook, or alter the catalog.
+
+The self-contained JSON document uses schema
+`master-agent/custom-agent-capabilities@1`. Its top-level fields are
+`schema`, `agent_id`, `agent_version`, `publisher`, and `abilities`. Each
+ability declares:
+
+- a unique `name` and one `kind`: `capability`, `reference`, `skill`, `tool`,
+  `workflow`, or `agent`;
+- a bounded display `description`;
+- `proposed_mapping`, which is a typed capability ID for `capability` and
+  `reference` records;
+- an exact dependency list, bounded constraints, and canonical requirements;
+  and
+- for `capability` only, a self-contained `capsule` with the normal spec,
+  source, dependency lock, software bill of materials (SBOM), tests,
+  verification, compensation, and notice artifacts.
+
+The preview preserves the declared publisher and SHA-256 digest of the exact
+source bytes, but neither value is trusted merely because it was declared. It
+classifies every ability as:
+
+- `already_supported` — a reference maps to a typed capability that is already
+  installed, so nothing should be copied;
+- `safely_importable` — one dependency-free pure capability is eligible for
+  explicit quarantine, not execution;
+- `conflicting` — the mapping would shadow an existing typed capability;
+- `unsupported` — the ability needs a raw skill, tool, workflow, provider,
+  side effect, or third-party dependency outside the current capsule boundary;
+  or
+- `unsafe` — the export requests authority or executable behavior such as
+  credentials, approval, identity, background access, hooks, shell, network,
+  plugins, recursion, hidden source behavior, or inconsistent dependencies.
+
+Selection is deliberately separate from preview. The current CLI is
+preview-only. A trusted development integration calls
+`quarantine_selected_ability` with exactly one ability name, the previewed
+source digest, the current catalog and license policy, and an authenticated
+generator authority. The function takes a fresh immutable snapshot,
+reclassifies it, rejects source drift, replaces the foreign provenance string
+with an exact `agent-import:sha256:...` binding, signs the first manifest, and
+installs only `quarantined`. It cannot batch-select, self-sign, promote, or add
+the ability to planning or routing.
+
+An imported quarantine follows the same independent lifecycle below.
+`promote_quarantined` validates the exact installed bundle before the trusted
+validator, sandbox validator, reviewer, and publisher may advance it. Only the
+final `enabled` manifest creates a catalog definition and routing card. An
+update is a new semantic version plus a newly previewed source digest.
+`disable` appends deprecation; `remove` appends revocation. Both stop future
+resolution and routing while retaining the immutable history.
+
+Importing is different from the other ways an agent may be mentioned:
+
+- **Import** copies one typed ability as untrusted data into quarantine and
+  makes it local only after independent promotion.
+- **Reference** says an ability maps to a capability MasterAgent already owns;
+  it imports no code.
+- **Delegate** would leave execution with the original agent behind a separate
+  governed isolation and authority boundary. Capability import does not
+  implement or authorize delegation.
+- A raw prompt, complete agent, plugin, MCP server, hook, or skill package is
+  neither a typed capability nor an import shortcut.
+
+Prompt-like descriptions remain inert preview text. The only behavior hints
+that can later affect routing are the capsule spec's bounded `intents` and
+`negative_intents`; they become eligible only after independent review and
+signing, and the deterministic router treats them as lexical data rather than
+instructions or authority.
+
 ## Demonstrated lifecycle
 
 The lifecycle is:
@@ -194,5 +280,6 @@ Provider/network and side-effect capsules, arbitrary HTTP, arbitrary shell,
 raw entry-point plugin execution, automatic self-promotion, generated-code
 approval, and live credentials during validation are intentionally blocked.
 The executable acceptance flow and adversarial cases are in
+[`test_capability_import.py`](../tests/test_capability_import.py),
 [`test_capability_capsules.py`](../tests/test_capability_capsules.py) and
 [`test_capsule_broker_and_routing.py`](../tests/test_capsule_broker_and_routing.py).
