@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -62,6 +63,10 @@ class CapabilityPromotionService:
         approval_control: AuthenticatedApprovalControl | None = None,
         external_audit_sink: ExternalReceiptSink | None = None,
     ) -> None:
+        selected_environment = _environment_kind(
+            environment,
+            context="capsule promotion environment",
+        )
         required = frozenset(
             {
                 CapsuleRole.GENERATOR,
@@ -77,7 +82,12 @@ class CapabilityPromotionService:
         for role, authority in authorities.items():
             if role not in authority.roles:
                 raise ConfigurationError("capsule promotion authority role drifted")
-        if environment == str(EnvironmentKind.PRODUCTION):
+        worker_sha256 = worker.identity_sha256
+        if validator.worker_sha256 != worker_sha256:
+            raise ConfigurationError(
+                "capsule validator worker differs from the promotion worker"
+            )
+        if selected_environment is EnvironmentKind.PRODUCTION:
             readiness = assess_capsule_readiness(
                 environment=EnvironmentKind.PRODUCTION,
                 worker=worker,
@@ -93,9 +103,10 @@ class CapabilityPromotionService:
         self._store = store
         self._trust = trust
         self._worker = worker
+        self._worker_sha256 = worker_sha256
         self._validator = validator
         self._authorities = dict(authorities)
-        self._environment = environment
+        self._environment = selected_environment
 
     def promote(
         self,
@@ -113,8 +124,8 @@ class CapabilityPromotionService:
         quarantined = create_quarantined_manifest(
             bundle,
             authority=self._authorities[CapsuleRole.GENERATOR],
-            environment=self._environment,
-            worker_sha256=self._worker.identity_sha256,
+            environment=str(self._environment),
+            worker_sha256=self._worker_sha256,
             now=now,
         )
         self._store.install(bundle, quarantined, trust=self._trust)
@@ -132,6 +143,18 @@ class CapabilityPromotionService:
         if quarantined.state is not CapsuleState.QUARANTINED:
             raise ConfigurationError(
                 "existing capsule promotion must start from quarantine"
+            )
+        quarantine_environment = _environment_kind(
+            quarantined.environment,
+            context="capsule quarantine environment",
+        )
+        if quarantine_environment is not self._environment:
+            raise ConfigurationError(
+                "capsule quarantine environment differs from the promotion service"
+            )
+        if quarantined.worker_sha256 != self._worker_sha256:
+            raise ConfigurationError(
+                "capsule quarantine worker differs from the promotion worker"
             )
         if self._authorities[CapsuleRole.PUBLISHER].subject != bundle.spec.publisher:
             raise ConfigurationError(
@@ -155,6 +178,16 @@ class CapabilityPromotionService:
                 "selected quarantine is not the latest installed capsule state"
             )
         evidence = self._validator.validate(bundle)
+        _require_worker_evidence(
+            evidence.validation,
+            expected_sha256=self._worker_sha256,
+            context="capsule validation evidence",
+        )
+        _require_worker_evidence(
+            evidence.sandbox,
+            expected_sha256=self._worker_sha256,
+            context="capsule sandbox evidence",
+        )
         tested = advance_manifest(
             quarantined,
             CapsuleState.TESTED,
@@ -256,3 +289,24 @@ class CapabilityPromotionService:
         """Remove future routing by revocation while retaining immutable history."""
 
         return self.revoke(manifest, now=now)
+
+
+def _environment_kind(value: str, *, context: str) -> EnvironmentKind:
+    """Parse one exact deployment environment or fail closed."""
+
+    try:
+        return EnvironmentKind(value)
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError(f"{context} is unsupported") from error
+
+
+def _require_worker_evidence(
+    evidence: Mapping[str, object],
+    *,
+    expected_sha256: str,
+    context: str,
+) -> None:
+    """Bind signed promotion evidence to the authorized execution worker."""
+
+    if evidence.get("worker_sha256") != expected_sha256:
+        raise ConfigurationError(f"{context} worker identity differs from promotion")

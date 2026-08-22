@@ -16,6 +16,7 @@ from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.capability_import import (
     AGENT_IMPORT_SCHEMA,
     ImportClassification,
+    ImportedQuarantine,
     inspect_agent_capabilities,
     quarantine_selected_ability,
 )
@@ -41,6 +42,7 @@ from master_agent.capsules import (
 from master_agent.cli import main
 from master_agent.config_sources import ConfigSnapshot, snapshot_explicit_file
 from master_agent.errors import ConfigurationError, ValidationError
+from master_agent.governance import EnvironmentKind
 from master_agent.models import RiskLevel
 from tests.helpers import private_temporary_directory
 
@@ -120,7 +122,7 @@ class CapabilityImportTests(unittest.TestCase):
                 store=store,
                 authority=authorities[CapsuleRole.GENERATOR],
                 trust=trust,
-                environment="test",
+                environment=str(EnvironmentKind.NON_PRODUCTION),
                 worker_sha256=worker.identity_sha256,
             )
 
@@ -139,7 +141,7 @@ class CapabilityImportTests(unittest.TestCase):
                 worker=worker,
                 validator=_StaticValidator(),
                 authorities=authorities,
-                environment="test",
+                environment=str(EnvironmentKind.NON_PRODUCTION),
             )
             result = service.promote_quarantined(
                 imported.bundle,
@@ -192,7 +194,7 @@ class CapabilityImportTests(unittest.TestCase):
                 store=store,
                 authority=authorities[CapsuleRole.GENERATOR],
                 trust=trust,
-                environment="test",
+                environment=str(EnvironmentKind.NON_PRODUCTION),
                 worker_sha256=worker.identity_sha256,
             )
             self.assertEqual(updated.manifest.spec.version, "2.0.0")
@@ -200,6 +202,160 @@ class CapabilityImportTests(unittest.TestCase):
                 updated.source_sha256,
                 imported.source_sha256,
             )
+
+    def test_promotion_rejects_environment_drift_and_unknown_labels(self) -> None:
+        authorities, trust = _authorities(
+            environments=frozenset(
+                {
+                    str(EnvironmentKind.NON_PRODUCTION),
+                    str(EnvironmentKind.PRODUCTION),
+                }
+            )
+        )
+        worker = _StaticWorker()
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            imported = _imported_quarantine(
+                root,
+                authorities=authorities,
+                trust=trust,
+                environment=str(EnvironmentKind.PRODUCTION),
+                worker_sha256=worker.identity_sha256,
+            )
+            service = CapabilityPromotionService(
+                store=CapsuleStore(root / "capsules"),
+                trust=trust,
+                worker=worker,
+                validator=_StaticValidator(),
+                authorities=authorities,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+            )
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "quarantine environment differs",
+            ):
+                service.promote_quarantined(imported.bundle, imported.manifest)
+            self.assertEqual(
+                len(
+                    CapsuleStore(root / "capsules").manifests(
+                        imported.manifest.spec.capability_id,
+                        imported.manifest.spec.version,
+                        trust=trust,
+                    )
+                ),
+                1,
+            )
+
+        with (
+            private_temporary_directory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "environment is unsupported"),
+        ):
+            CapabilityPromotionService(
+                store=CapsuleStore(Path(directory) / "unused"),
+                trust=trust,
+                worker=worker,
+                validator=_StaticValidator(),
+                authorities=authorities,
+                environment="test",
+            )
+
+    def test_promotion_rejects_worker_and_evidence_identity_drift(self) -> None:
+        authorities, trust = _authorities(
+            environments=frozenset({str(EnvironmentKind.NON_PRODUCTION)})
+        )
+        worker = _StaticWorker()
+        alternate_worker_sha256 = "c" * 64
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            imported = _imported_quarantine(
+                root,
+                authorities=authorities,
+                trust=trust,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+                worker_sha256=alternate_worker_sha256,
+            )
+            store = CapsuleStore(root / "capsules")
+            service = CapabilityPromotionService(
+                store=store,
+                trust=trust,
+                worker=worker,
+                validator=_StaticValidator(),
+                authorities=authorities,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "quarantine worker differs",
+            ):
+                service.promote_quarantined(imported.bundle, imported.manifest)
+            self.assertEqual(
+                len(
+                    store.manifests(
+                        imported.manifest.spec.capability_id,
+                        imported.manifest.spec.version,
+                        trust=trust,
+                    )
+                ),
+                1,
+            )
+
+        with (
+            private_temporary_directory() as directory,
+            self.assertRaisesRegex(ConfigurationError, "validator worker differs"),
+        ):
+            CapabilityPromotionService(
+                store=CapsuleStore(Path(directory) / "unused"),
+                trust=trust,
+                worker=worker,
+                validator=_StaticValidator(worker_sha256=alternate_worker_sha256),
+                authorities=authorities,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+            )
+
+        for evidence_field in ("validation", "sandbox"):
+            with (
+                self.subTest(evidence_field=evidence_field),
+                private_temporary_directory() as directory,
+            ):
+                root = Path(directory)
+                imported = _imported_quarantine(
+                    root,
+                    authorities=authorities,
+                    trust=trust,
+                    environment=str(EnvironmentKind.NON_PRODUCTION),
+                    worker_sha256=worker.identity_sha256,
+                )
+                store = CapsuleStore(root / "capsules")
+                service = CapabilityPromotionService(
+                    store=store,
+                    trust=trust,
+                    worker=worker,
+                    validator=_StaticValidator(
+                        evidence_worker_sha256=alternate_worker_sha256,
+                        drifted_evidence=evidence_field,
+                    ),
+                    authorities=authorities,
+                    environment=str(EnvironmentKind.NON_PRODUCTION),
+                )
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    f"{evidence_field} evidence worker identity differs",
+                ):
+                    service.promote_quarantined(
+                        imported.bundle,
+                        imported.manifest,
+                    )
+                self.assertEqual(
+                    len(
+                        store.manifests(
+                            imported.manifest.spec.capability_id,
+                            imported.manifest.spec.version,
+                            trust=trust,
+                        )
+                    ),
+                    1,
+                )
 
     def test_untrusted_prompts_hidden_code_dependencies_authority_and_drift_fail_closed(
         self,
@@ -492,6 +648,36 @@ def _write_source(
     return path
 
 
+def _imported_quarantine(
+    root: Path,
+    *,
+    authorities: Mapping[CapsuleRole, CapsuleAuthority],
+    trust: CapsuleTrustStore,
+    environment: str,
+    worker_sha256: str,
+) -> ImportedQuarantine:
+    source_path = _write_source(root, _package([_ability("greeting")]))
+    catalog = CapabilityCatalog({})
+    license_policy = _license_policy()
+    preview = inspect_agent_capabilities(
+        snapshot_explicit_file(source_path),
+        catalog=catalog,
+        license_policy=license_policy,
+    )
+    return quarantine_selected_ability(
+        source_path,
+        expected_source_sha256=preview.package.source_sha256,
+        ability_name="greeting",
+        catalog=catalog,
+        license_policy=license_policy,
+        store=CapsuleStore(root / "capsules"),
+        authority=authorities[CapsuleRole.GENERATOR],
+        trust=trust,
+        environment=environment,
+        worker_sha256=worker_sha256,
+    )
+
+
 def _license_policy() -> LicensePolicy:
     return LicensePolicy(
         allowed_spdx=frozenset({"LicenseRef-MasterAgent-Proprietary", "MIT"}),
@@ -499,7 +685,10 @@ def _license_policy() -> LicensePolicy:
     )
 
 
-def _authorities() -> tuple[dict[CapsuleRole, CapsuleAuthority], CapsuleTrustStore]:
+def _authorities(
+    *,
+    environments: frozenset[str] = frozenset({"test", "non_production"}),
+) -> tuple[dict[CapsuleRole, CapsuleAuthority], CapsuleTrustStore]:
     subjects = {
         CapsuleRole.GENERATOR: "import-generator",
         CapsuleRole.VALIDATOR: "validator",
@@ -513,7 +702,7 @@ def _authorities() -> tuple[dict[CapsuleRole, CapsuleAuthority], CapsuleTrustSto
             key_id=f"test-{role}",
             subject=subject,
             roles=frozenset({role}),
-            environments=frozenset({"test"}),
+            environments=environments,
             secret=hashlib.sha256(f"import:{role}".encode()).digest(),
         )
         for role, subject in subjects.items()
@@ -539,16 +728,35 @@ class _StaticWorker:
 
 
 class _StaticValidator:
+    def __init__(
+        self,
+        *,
+        worker_sha256: str = _StaticWorker.identity_sha256,
+        evidence_worker_sha256: str | None = None,
+        drifted_evidence: str | None = None,
+    ) -> None:
+        self.worker_sha256 = worker_sha256
+        self._evidence_worker_sha256 = evidence_worker_sha256 or worker_sha256
+        self._drifted_evidence = drifted_evidence
+
     def validate(self, bundle: CapsuleBundle) -> CapsuleValidation:
+        validation_worker = self.worker_sha256
+        sandbox_worker = self.worker_sha256
+        if self._drifted_evidence == "validation":
+            validation_worker = self._evidence_worker_sha256
+        if self._drifted_evidence == "sandbox":
+            sandbox_worker = self._evidence_worker_sha256
         return CapsuleValidation(
             validation={
                 "schema": "test/capsule-validation@1",
                 "artifact_sha256": bundle.artifact_sha256,
+                "worker_sha256": validation_worker,
                 "status": "passed",
             },
             sandbox={
                 "schema": "test/capsule-sandbox@1",
                 "artifact_sha256": bundle.artifact_sha256,
+                "worker_sha256": sandbox_worker,
                 "status": "passed",
             },
         )

@@ -48,6 +48,7 @@ from master_agent.capsules import (
     create_quarantined_manifest,
 )
 from master_agent.errors import ConfigurationError, ConnectorError, ValidationError
+from master_agent.governance import EnvironmentKind
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
@@ -655,7 +656,7 @@ def _promote(
         worker=worker,
         validator=validator,
         authorities=authorities,
-        environment="test",
+        environment=str(EnvironmentKind.NON_PRODUCTION),
     )
     return service.promote(_bundle()), store, trust
 
@@ -674,7 +675,7 @@ def _authorities() -> tuple[dict[CapsuleRole, CapsuleAuthority], CapsuleTrustSto
             key_id=f"test-{role}",
             subject=subject,
             roles=frozenset({role}),
-            environments=frozenset({"test"}),
+            environments=frozenset({"test", str(EnvironmentKind.NON_PRODUCTION)}),
             secret=hashlib.sha256(f"secret:{role}".encode()).digest(),
         )
         for role, subject in subjects.items()

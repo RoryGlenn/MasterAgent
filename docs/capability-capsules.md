@@ -79,6 +79,14 @@ update is a new semantic version plus a newly previewed source digest.
 `disable` appends deprecation; `remove` appends revocation. Both stop future
 resolution and routing while retaining the immutable history.
 
+Promotion accepts only the canonical `development`, `non_production`, and
+`production` environment names. The signed quarantine must name the same
+environment as the promotion service, so a production capsule cannot enter
+through a non-production service and skip production readiness. Promotion also
+binds one worker identity across the signed quarantine, promotion worker,
+validator, validation evidence, and sandbox evidence. A missing or different
+environment or worker identity fails before a promoted state is appended.
+
 Importing is different from the other ways an agent may be mentioned:
 
 - **Import** copies one typed ability as untrusted data into quarantine and
@@ -268,7 +276,9 @@ time:
 4. an external tamper-resistant receipt/audit sink.
 
 Credential, approval, and audit adapters must each pass a bounded live health
-probe; configuration booleans alone do not satisfy promotion readiness.
+probe; configuration booleans alone do not satisfy promotion readiness. The
+readiness decision uses the same canonical environment that is signed into the
+quarantine and all later manifests.
 
 Only the worker is bundled as a production-capable component. The repository
 provides typed interfaces for the other controls, not a configured production
