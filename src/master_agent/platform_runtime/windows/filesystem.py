@@ -373,6 +373,7 @@ class _WindowsFilesystemApi(Protocol):
         directory: bool,
         readable: bool,
         writable: bool = False,
+        replacement_handoff: bool = False,
     ) -> int: ...
 
     def close_handle(self, handle: int) -> None: ...
@@ -908,6 +909,7 @@ class PinnedWindowsPath:
         *,
         kind: WindowsObjectKind | str,
         require_private: bool = True,
+        _replacement_handoff: bool = False,
     ) -> PinnedWindowsPath:
         """Pin one exact immediate child while retaining duplicated ancestors."""
 
@@ -915,6 +917,8 @@ class PinnedWindowsPath:
         selected_kind = _coerce_object_kind(kind)
         if not isinstance(require_private, bool):
             raise TypeError("Windows path privacy requirement must be a boolean")
+        if not isinstance(_replacement_handoff, bool):
+            raise TypeError("Windows replacement handoff flag must be a boolean")
         with self._lock:
             self._require_open()
             if not self._is_directory:
@@ -942,6 +946,7 @@ class PinnedWindowsPath:
                             selected_kind is WindowsObjectKind.DIRECTORY
                             and require_private
                         ),
+                        replacement_handoff=_replacement_handoff,
                     ),
                 )
                 duplicated.append(child)
@@ -1497,7 +1502,8 @@ class CreatedWindowsFile:
                     raise WindowsPathSecurityError(
                         "created Windows file changed before publication"
                     )
-                self._pin._api.flush_file(self._pin._handles[-1].value)
+                if not self._namespace_moved:
+                    self._pin._api.flush_file(self._pin._handles[-1].value)
                 self._pin.validate()
                 identity = self._pin.identity
                 self._pin.close()
@@ -1544,6 +1550,8 @@ class CreatedWindowsFile:
                     "prepared Windows file is not a child of the replacement parent"
                 )
             observed: PinnedWindowsPath | None = None
+            handoff: PinnedWindowsPath | None = None
+            published: PinnedWindowsPath | None = None
             try:
                 if expected_identity is None:
                     _require_component_absent(
@@ -1577,26 +1585,45 @@ class CreatedWindowsFile:
                 self._pin.validate()
                 parent._api.flush_file(self._pin._handles[-1].value)
                 parent.flush_directory()
-                with parent.pin_child(
+                expected_published_identity = self._pin.identity
+                handoff = parent.pin_child(
                     child_name,
                     kind=WindowsObjectKind.FILE,
                     require_private=True,
-                ) as published:
-                    published.validate()
-                    if published.identity != self._pin.identity:
-                        raise WindowsPathSecurityError(
-                            "Windows replacement destination identity is indeterminate"
-                        )
-                    payload = published.read_bytes(self._max_bytes)
-                    if (
-                        len(payload) != self._write_size
-                        or hashlib.sha256(payload).hexdigest() != self._write_sha256
-                    ):
-                        raise WindowsPathSecurityError(
-                            "Windows replacement destination content is indeterminate"
-                        )
+                    _replacement_handoff=True,
+                )
+                handoff.validate()
+                if handoff.identity != expected_published_identity:
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination identity is indeterminate"
+                    )
+                self._pin.close()
+                published = parent.pin_child(
+                    child_name,
+                    kind=WindowsObjectKind.FILE,
+                    require_private=True,
+                )
+                published.validate()
+                if published.identity != expected_published_identity:
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination identity is indeterminate"
+                    )
+                payload = published.read_bytes(self._max_bytes)
+                if (
+                    len(payload) != self._write_size
+                    or hashlib.sha256(payload).hexdigest() != self._write_sha256
+                ):
+                    raise WindowsPathSecurityError(
+                        "Windows replacement destination content is indeterminate"
+                    )
+                self._pin = published
+                published = None
                 return self._pin.identity
             finally:
+                if published is not None:
+                    published.close()
+                if handoff is not None:
+                    handoff.close()
                 if observed is not None:
                     observed.close()
 

@@ -326,10 +326,13 @@ class NativeWindowsApi:
         directory: bool,
         readable: bool,
         writable: bool = False,
+        replacement_handoff: bool = False,
     ) -> int:
-        """Open a path without following its final reparse point or sharing delete."""
+        """Open a path without following its final reparse point."""
 
         selected = validate_windows_drive_path(path)
+        if not isinstance(replacement_handoff, bool):
+            raise TypeError("Windows replacement handoff flag must be a boolean")
         desired_access = (
             _GENERIC_READ if readable else _READ_CONTROL | _FILE_READ_ATTRIBUTES
         )
@@ -340,7 +343,9 @@ class NativeWindowsApi:
         raw_handle = self._kernel32.CreateFileW(
             selected.extended,
             desired_access,
-            _FILE_SHARE_READ | (_FILE_SHARE_WRITE if directory else 0),
+            _FILE_SHARE_READ
+            | (_FILE_SHARE_WRITE if directory or replacement_handoff else 0)
+            | (_FILE_SHARE_DELETE if replacement_handoff else 0),
             None,
             _OPEN_EXISTING,
             _FILE_FLAG_BACKUP_SEMANTICS

@@ -164,7 +164,10 @@ class _FakeFilesystemApi:
         directory: bool,
         readable: bool,
         writable: bool = False,
+        replacement_handoff: bool = False,
     ) -> int:
+        if not isinstance(replacement_handoff, bool):
+            raise TypeError("replacement_handoff must be a boolean")
         known = path in self.directories or path in self.content
         if not known:
             raise FileNotFoundError(path)
@@ -676,17 +679,19 @@ assert 'msvcrt' not in sys.modules
 
     def test_native_flushable_directory_open_requests_write_data(self) -> None:
         desired_access: list[int] = []
+        share_access: list[int] = []
 
         def create_file(
             _path: str,
             access: int,
-            _share: int,
+            share: int,
             _security: object | None,
             _creation: int,
             _flags: int,
             _template: object | None,
         ) -> int:
             desired_access.append(access)
+            share_access.append(share)
             return 0x1234
 
         api = object.__new__(NativeWindowsApi)
@@ -715,6 +720,27 @@ assert 'msvcrt' not in sys.modules
         )
         self.assertNotEqual(desired_access[0] & windows_native._FILE_WRITE_DATA, 0)
         self.assertEqual(desired_access[1] & windows_native._FILE_WRITE_DATA, 0)
+        self.assertEqual(share_access, [0x00000003, 0x00000003])
+
+        self.assertEqual(
+            api.open_path(
+                r"C:\Secure\state.json",
+                directory=False,
+                readable=True,
+                replacement_handoff=True,
+            ),
+            0x1234,
+        )
+        self.assertEqual(share_access[-1], 0x00000007)
+        self.assertEqual(
+            api.open_path(
+                r"C:\Secure\state.json",
+                directory=False,
+                readable=True,
+            ),
+            0x1234,
+        )
+        self.assertEqual(share_access[-1], 0x00000001)
 
     def test_native_directory_flush_uses_the_retained_file_object(self) -> None:
         calls: list[int] = []
