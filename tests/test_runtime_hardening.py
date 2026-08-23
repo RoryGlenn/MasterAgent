@@ -37,6 +37,7 @@ from master_agent.models import (
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import govern_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -681,6 +682,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             actions=(missing, middle, final),
             created_by="test",
         )
+        plan = govern_test_plan(plan)
         connector = _StateConnector(
             system="ok",
             capabilities=frozenset({"ok.item.read"}),
@@ -709,6 +711,7 @@ class CoreRuntimeHardeningTests(unittest.TestCase):
             created_by="test",
             compensate_on_failure=True,
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             audit = AuditLog(Path(directory) / "audit.sqlite3")
             report = _orchestrator(
@@ -808,7 +811,9 @@ def _read_action(
 
 
 def _plan(action: AgentAction) -> ChangePlan:
-    return ChangePlan(goal="test", actions=(action,), created_by="test")
+    return govern_test_plan(
+        ChangePlan(goal="test", actions=(action,), created_by="test")
+    )
 
 
 if __name__ == "__main__":

@@ -135,6 +135,7 @@ from master_agent.models import (
     ExecutionContext,
     ResourceRef,
     RiskLevel,
+    SystemsAssessment,
 )
 from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
 from master_agent.oauth_config import OAuthFlow, OAuthProfiles
@@ -153,6 +154,10 @@ from master_agent.operating import (
     require_operating_plan,
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
+from master_agent.planners.base import (
+    bind_fast_path_governance,
+    bind_systems_governance,
+)
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
@@ -4566,6 +4571,31 @@ def _capability_run(
         created_by=principal,
         execution_context=context,
     )
+    plan = bind_systems_governance(
+        plan,
+        SystemsAssessment(
+            desired_outcome=intent,
+            current_behavior="the selected capability has not yet processed the request",
+            constraint="one authenticated request must remain bound to one promoted capsule",
+            stocks=("selected capsule and provider target state",),
+            flows=("authenticated request through the activated capsule",),
+            feedback_loops=(
+                "connector verification determines the final action state",
+            ),
+            delays=("provider response and independent verification latency",),
+            leverage_point="the single governed capsule execution boundary",
+            simplest_intervention="execute only the selected capsule action",
+            success_metric="the action completes and its result verifies independently",
+            failure_condition="policy, execution, or verification does not succeed",
+            unintended_consequences=(
+                "a provider-side effect could become indeterminate after a transport failure",
+            ),
+            removable_complexity=("the per-run capsule activation",),
+            low_risk=False,
+            reversible=manifest.spec.risk is not RiskLevel.DESTRUCTIVE,
+            well_understood=True,
+        ),
+    )
     audit = AuditLog(database)
     try:
         report = WorkflowOrchestrator(
@@ -6200,6 +6230,14 @@ def _github_repositories(
         actions=(action,),
         created_by="direct-user",
     )
+    plan = bind_fast_path_governance(
+        plan,
+        current_behavior="repository visibility is not yet listed for this request",
+        constraint="one bounded GitHub repository query is required",
+        leverage_point="the typed read-only GitHub connector",
+        success_metric="the bounded repository list is returned and verified",
+        failure_condition="the provider read is denied, incomplete, or unverified",
+    )
     catalog = CapabilityCatalog.from_toml(
         resolve_config_source(None, "capabilities.toml")
     )
@@ -6374,6 +6412,14 @@ def _bitbucket_repositories(
         goal=f"List public repositories in Bitbucket workspace {workspace}.",
         actions=(action,),
         created_by="direct-user",
+    )
+    plan = bind_fast_path_governance(
+        plan,
+        current_behavior="public workspace repositories are not yet listed",
+        constraint="one bounded anonymous Bitbucket query is required",
+        leverage_point="the typed read-only Bitbucket connector",
+        success_metric="the bounded public repository list is returned and verified",
+        failure_condition="the provider read is denied, incomplete, or unverified",
     )
     catalog = CapabilityCatalog.from_toml(
         resolve_config_source(None, "capabilities.toml")
@@ -7296,6 +7342,11 @@ def _print_direct_read_report(report: DirectReadReport) -> None:
             max_characters=_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS,
         )
         print(f"  result: {rendered}")
+    print(
+        "systems review: "
+        f"metric={report.systems_review.metric_status}, "
+        f"reassessment_required={report.systems_review.reassessment_required}"
+    )
     print(f"successful: {report.successful}")
 
 

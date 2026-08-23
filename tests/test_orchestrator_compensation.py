@@ -29,6 +29,7 @@ from master_agent.models import (
 from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import govern_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -192,6 +193,7 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 created_by="test",
                 compensate_on_failure=True,
             )
+            plan = govern_test_plan(plan)
             orchestrator, approval, audit = _runtime(root, sources_path, registry, plan)
 
             report = orchestrator.run(
@@ -224,6 +226,7 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 created_by="test",
                 compensate_on_failure=True,
             )
+            plan = govern_test_plan(plan)
             orchestrator, approval, _ = _runtime(root, sources_path, registry, plan)
 
             report = orchestrator.run(plan, approvals=(approval,), dry_run=False)
@@ -255,6 +258,7 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 created_by="test",
                 compensate_on_failure=True,
             )
+            plan = govern_test_plan(plan)
             orchestrator, approval, _ = _runtime(
                 root,
                 sources_path,
@@ -290,6 +294,7 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 created_by="test",
                 compensate_on_failure=True,
             )
+            plan = govern_test_plan(plan)
             orchestrator, approval, audit = _runtime(
                 root,
                 sources_path,
@@ -325,6 +330,7 @@ class OrchestratorCompensationTests(unittest.TestCase):
                 actions=(action,),
                 created_by="test",
             )
+            plan = govern_test_plan(plan)
             orchestrator, approval, _ = _runtime(root, sources_path, registry, plan)
 
             report = orchestrator.run(plan, approvals=(approval,), dry_run=False)

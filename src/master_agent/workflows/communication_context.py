@@ -24,6 +24,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.planners.base import bind_fast_path_governance
 from master_agent.platform_runtime import (
     get_atomic_publication_recovery_backend,
     require_persistent_state_platform,
@@ -201,10 +202,18 @@ def build_communication_context_plan(
         justification="List bounded joined Teams metadata for the requested identity.",
         dependencies=(resolve_action.action_id,),
     )
-    return ChangePlan(
+    plan = ChangePlan(
         goal=f"Prepare read-only communication context: {settings.name}",
         actions=(resolve_action, outlook_action, chats_action, teams_action),
         created_by="registered-workflow:communication-context",
+    )
+    return bind_fast_path_governance(
+        plan,
+        current_behavior="communication context is gathered manually by provider",
+        constraint="identity resolution and bounded retrieval require repeated lookups",
+        leverage_point="resolve once and perform read-only bounded queries",
+        success_metric="verified context is returned for the selected identity only",
+        failure_condition="identity is ambiguous or any query is unverified or out of scope",
     )
 
 

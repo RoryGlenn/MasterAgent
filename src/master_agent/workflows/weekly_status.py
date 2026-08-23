@@ -26,6 +26,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.planners.base import bind_fast_path_governance
 from master_agent.platform_runtime import (
     get_atomic_publication_recovery_backend,
     require_persistent_state_platform,
@@ -219,10 +220,18 @@ def build_weekly_status_read_plan(
         justification="Read the canonical project-status narrative from Confluence.",
     )
 
-    return ChangePlan(
+    plan = ChangePlan(
         goal=f"Collect the read-only weekly status package for {settings.project_name}.",
         created_by="registered_workflow:weekly_status_v2",
         actions=(jira, bitbucket, confluence),
+    )
+    return bind_fast_path_governance(
+        plan,
+        current_behavior="weekly status evidence is gathered separately from each provider",
+        constraint="manual evidence collection delays status preparation",
+        leverage_point="one bounded read-only collection plan",
+        success_metric="all configured status sources return verified read evidence",
+        failure_condition="a source is unavailable, unverified, or exceeds its bound",
     )
 
 

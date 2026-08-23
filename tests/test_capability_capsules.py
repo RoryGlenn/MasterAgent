@@ -65,7 +65,7 @@ from master_agent.platform_runtime.windows.filesystem import (
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.receipts import ReceiptSigner
 from master_agent.registry import ConnectorRegistry
-from tests.helpers import private_temporary_directory
+from tests.helpers import govern_test_plan, private_temporary_directory
 
 
 class _FakeWindowsBundlePin:
@@ -785,26 +785,28 @@ def _policy(
 
 
 def _plan(context: ExecutionContext) -> ChangePlan:
-    return ChangePlan(
-        goal="Generate a deterministic greeting.",
-        actions=(
-            AgentAction(
-                capability="synthetic.greeting.generate",
-                target=ResourceRef(
-                    system="synthetic",
-                    resource_type="capsule_request",
-                    resource_id="greeting-1",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Generate a deterministic greeting.",
+            actions=(
+                AgentAction(
+                    capability="synthetic.greeting.generate",
+                    target=ResourceRef(
+                        system="synthetic",
+                        resource_type="capsule_request",
+                        resource_id="greeting-1",
+                    ),
+                    parameters={"name": "Rahul"},
+                    risk=RiskLevel.LOCAL_GENERATION,
+                    authority_source=AuthoritySource.DIRECT_USER,
+                    requires_approval=False,
+                    idempotency_key="capsule:greeting:1",
+                    justification="The operator requested a greeting.",
                 ),
-                parameters={"name": "Rahul"},
-                risk=RiskLevel.LOCAL_GENERATION,
-                authority_source=AuthoritySource.DIRECT_USER,
-                requires_approval=False,
-                idempotency_key="capsule:greeting:1",
-                justification="The operator requested a greeting.",
             ),
-        ),
-        created_by="test",
-        execution_context=context,
+            created_by="test",
+            execution_context=context,
+        )
     )
 
 

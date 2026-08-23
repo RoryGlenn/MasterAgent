@@ -32,6 +32,7 @@ from master_agent.models import (
 from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import govern_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,6 +61,7 @@ class AuditSafetyTests(unittest.TestCase):
             actions=(action,),
             created_by="test",
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
             registry = ConnectorRegistry()
@@ -148,6 +150,7 @@ class AuditSafetyTests(unittest.TestCase):
                 ),
             ),
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
             registry = ConnectorRegistry()

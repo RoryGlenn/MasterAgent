@@ -23,7 +23,7 @@ from master_agent.models import (
     ResourceRef,
     RiskLevel,
 )
-from tests.helpers import private_temporary_directory
+from tests.helpers import govern_test_plan, private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 _ALICE_SECRET = "alice-approval-secret-" + "a" * 32
@@ -462,10 +462,12 @@ def _plan() -> ChangePlan:
         idempotency_key="test-resumable-approval",
         justification="Exercise the authenticated approval handoff.",
     )
-    return ChangePlan(
-        goal="Test approval handoff",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Test approval handoff",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 

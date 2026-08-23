@@ -47,6 +47,7 @@ from master_agent.provider_egress import (
     ProviderDataRoute,
 )
 from tests.fakes import ExpectedRequest, QueueTransport
+from tests.helpers import govern_test_plan
 
 _CAPABILITY = "provider.item.read"
 _CONFIG_IDENTITY = "a" * 64
@@ -199,6 +200,10 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertEqual(
             report.to_dict()["schema"], "master-agent/direct-read-report@1"
         )
+        self.assertEqual(report.systems_review.metric_status, "not_observed")
+        self.assertFalse(report.systems_review.stop_condition_checked)
+        self.assertTrue(report.systems_review.reassessment_required)
+        self.assertIn("systems_review", report.to_dict())
         transport.assert_drained()
 
     def test_confidential_direct_read_is_denied_before_provider_access(self) -> None:
@@ -645,10 +650,12 @@ def _action(resource_id: str) -> AgentAction:
 
 
 def _plan(*actions: AgentAction) -> ChangePlan:
-    return ChangePlan(
-        goal="Read directly requested provider resources.",
-        actions=actions,
-        created_by="direct-user",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Read directly requested provider resources.",
+            actions=actions,
+            created_by="direct-user",
+        )
     )
 
 

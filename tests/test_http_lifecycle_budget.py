@@ -38,6 +38,7 @@ from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
 from tests.fakes import ExpectedRequest, QueueTransport
+from tests.helpers import govern_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -159,11 +160,13 @@ class HttpLifecycleBudgetTests(unittest.TestCase):
 
         with TemporaryDirectory() as directory:
             report = _orchestrator(Path(directory), connector).run(
-                ChangePlan(
-                    goal="Read with one lifecycle budget.",
-                    actions=(action,),
-                    created_by="test",
-                    execution_context=_execution_context(),
+                govern_test_plan(
+                    ChangePlan(
+                        goal="Read with one lifecycle budget.",
+                        actions=(action,),
+                        created_by="test",
+                        execution_context=_execution_context(),
+                    )
                 ),
                 dry_run=False,
             )
@@ -197,12 +200,14 @@ class HttpLifecycleBudgetTests(unittest.TestCase):
 
         with TemporaryDirectory() as directory:
             report = _orchestrator(Path(directory), connector, governed=False).run(
-                ChangePlan(
-                    goal="Fail after one reversible write.",
-                    actions=(first, failed),
-                    created_by="test",
-                    compensate_on_failure=True,
-                    execution_context=_execution_context(),
+                govern_test_plan(
+                    ChangePlan(
+                        goal="Fail after one reversible write.",
+                        actions=(first, failed),
+                        created_by="test",
+                        compensate_on_failure=True,
+                        execution_context=_execution_context(),
+                    )
                 ),
                 dry_run=False,
             )

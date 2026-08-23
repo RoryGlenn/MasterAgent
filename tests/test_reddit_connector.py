@@ -35,6 +35,7 @@ from master_agent.oauth import (
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
 from tests.fakes import ExpectedRequest, QueueTransport
+from tests.helpers import govern_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -271,8 +272,10 @@ class RedditConnectorTests(unittest.TestCase):
         )
 
         report = session.execute(
-            ChangePlan(
-                goal="Search Reddit.", actions=(action,), created_by="direct-user"
+            govern_test_plan(
+                ChangePlan(
+                    goal="Search Reddit.", actions=(action,), created_by="direct-user"
+                )
             )
         )
 

@@ -44,6 +44,11 @@ from master_agent.models import (
     ConnectorExecutionBinding,
     ExecutionResult,
     RiskLevel,
+    SystemsPostExecutionReview,
+)
+from master_agent.planners.base import (
+    build_systems_post_execution_review,
+    enforce_systems_governance,
 )
 from master_agent.policy import PolicyEngine
 from master_agent.provider_egress import (
@@ -128,6 +133,7 @@ class RunReport:
     plan_fingerprint: str
     dry_run: bool
     actions: tuple[ActionReport, ...]
+    systems_review: SystemsPostExecutionReview | None = None
 
     @property
     def successful(self) -> bool:
@@ -152,7 +158,7 @@ class RunReport:
     def to_dict(self) -> dict[str, object]:
         """Serialize the run report and retrieved evidence."""
 
-        return {
+        payload: dict[str, object] = {
             "run_id": str(self.run_id),
             "plan_id": str(self.plan_id),
             "plan_fingerprint": self.plan_fingerprint,
@@ -161,6 +167,9 @@ class RunReport:
             "compensated": self.compensated,
             "actions": [item.to_dict() for item in self.actions],
         }
+        if self.systems_review is not None:
+            payload["systems_review"] = self.systems_review.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> RunReport:
@@ -174,12 +183,22 @@ class RunReport:
             if not isinstance(item, Mapping):
                 raise StructuredDataTypeError("run report action must be an object")
             actions.append(ActionReport.from_dict(item))
+        raw_review = data.get("systems_review")
+        if raw_review is not None and not isinstance(raw_review, Mapping):
+            raise StructuredDataTypeError(
+                "run report systems_review must be an object or null"
+            )
         return cls(
             run_id=UUID(str(data["run_id"])),
             plan_id=UUID(str(data["plan_id"])),
             plan_fingerprint=str(data["plan_fingerprint"]),
             dry_run=_strict_bool(data.get("dry_run"), "run report dry_run"),
             actions=tuple(actions),
+            systems_review=(
+                SystemsPostExecutionReview.from_dict(raw_review)
+                if isinstance(raw_review, Mapping)
+                else None
+            ),
         )
 
 
@@ -240,8 +259,16 @@ class WorkflowOrchestrator:
         # creates a private, recursively immutable snapshot whose fingerprint
         # is the exact artifact evaluated by policy and passed to connectors.
         plan = ChangePlan.from_dict(plan.to_dict())
-        run_id = uuid4()
         approvals_tuple = tuple(approvals)
+        systems_decision = enforce_systems_governance(
+            plan,
+            policy=self._policy,
+            approvals=approvals_tuple,
+        )
+        systems_assessment = plan.systems_assessment
+        if systems_assessment is None:  # pragma: no cover - enforced above.
+            raise ValidationError("plan is missing a systems governance assessment")
+        run_id = uuid4()
         reports: list[ActionReport] = []
         state_by_id: dict[UUID, ActionState] = {}
         side_effects_may_have_occurred: list[_ExecutedAction] = []
@@ -261,6 +288,10 @@ class WorkflowOrchestrator:
                 "workflow_id": plan.workflow_id,
                 "workflow_fingerprint": plan.workflow_fingerprint,
                 "compensate_on_failure": plan.compensate_on_failure,
+                "systems_assessment_fingerprint": systems_assessment.fingerprint,
+                "systems_decision_fingerprint": systems_decision.fingerprint,
+                "systems_route": systems_decision.route,
+                "systems_complexity_score": systems_decision.complexity_score,
                 **(
                     {
                         "capsule_bindings": [
@@ -948,6 +979,12 @@ class WorkflowOrchestrator:
                     dry_run=dry_run,
                 )
 
+        systems_review = build_systems_post_execution_review(
+            assessment=systems_assessment,
+            decision=systems_decision,
+            states=(item.state for item in reports),
+            dry_run=dry_run,
+        )
         self._audit.record(
             run_id=run_id,
             plan_id=plan.plan_id,
@@ -958,6 +995,7 @@ class WorkflowOrchestrator:
                 "compensated": any(
                     report.state is ActionState.COMPENSATED for report in reports
                 ),
+                "systems_review": systems_review.to_dict(),
             },
         )
 
@@ -967,6 +1005,7 @@ class WorkflowOrchestrator:
             plan_fingerprint=plan.fingerprint,
             dry_run=dry_run,
             actions=tuple(reports),
+            systems_review=systems_review,
         )
 
     def authenticated_approvals(

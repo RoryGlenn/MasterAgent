@@ -35,6 +35,7 @@ from master_agent.models import (
 from master_agent.operating import install_organization_profile
 from master_agent.platform_runtime import platform_runtime_status
 from tests.fakes import ScriptedTransport
+from tests.helpers import govern_test_plan
 
 _APPROVAL_SECRET = "operating-approval-secret-" + "a" * 32
 
@@ -1645,10 +1646,12 @@ def _read_plan(capability: str) -> ChangePlan:
         idempotency_key=f"operating-read:{capability}",
         justification="Read one explicitly requested public repository listing.",
     )
-    return ChangePlan(
-        goal="Read public repository metadata.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Read public repository metadata.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1668,10 +1671,12 @@ def _public_github_plan(username: str) -> ChangePlan:
         idempotency_key=f"github:public:{username}",
         justification="Read explicitly requested public repositories.",
     )
-    return ChangePlan(
-        goal=f"Read public repositories for {username}.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal=f"Read public repositories for {username}.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1691,10 +1696,12 @@ def _jira_read_plan() -> ChangePlan:
         idempotency_key="jira:read:ENG-1",
         justification="Read one explicitly requested issue.",
     )
-    return ChangePlan(
-        goal="Read Jira issue ENG-1.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Read Jira issue ENG-1.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1714,10 +1721,12 @@ def _public_bitbucket_plan(workspace: str) -> ChangePlan:
         idempotency_key=f"bitbucket:public:{workspace}",
         justification="Read explicitly requested public repositories.",
     )
-    return ChangePlan(
-        goal=f"Read public repositories for {workspace}.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal=f"Read public repositories for {workspace}.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1742,10 +1751,12 @@ def _projection_only_plan() -> ChangePlan:
         idempotency_key="teams:projection-only",
         justification="Exercise deterministic source-of-truth admission.",
     )
-    return ChangePlan(
-        goal="Draft a governed projection.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Draft a governed projection.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1768,10 +1779,12 @@ def _draft_plan() -> ChangePlan:
         idempotency_key="operating-draft:one",
         justification="Create a local review artifact only.",
     )
-    return ChangePlan(
-        goal="Create one local draft.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Create one local draft.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -1795,10 +1808,12 @@ def _effect_plan() -> ChangePlan:
         idempotency_key="operating-effect:one",
         justification="Verify the exact profile-bound approval handoff.",
     )
-    return ChangePlan(
-        goal="Create one approved test page.",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Create one approved test page.",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 

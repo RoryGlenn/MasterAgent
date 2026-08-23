@@ -9,6 +9,7 @@ from master_agent.models import (
     ResourceRef,
     RiskLevel,
 )
+from master_agent.planners.base import bind_fast_path_governance
 
 
 def build_weekly_status_plan() -> ChangePlan:
@@ -144,8 +145,16 @@ def build_weekly_status_plan() -> ChangePlan:
         dependencies=(powerpoint.action_id,),
     )
 
-    return ChangePlan(
+    plan = ChangePlan(
         goal="Prepare the weekly project status package without publishing or sending.",
         created_by="registered_workflow:weekly_status_v1",
         actions=(jira, bitbucket, confluence, powerpoint, teams, outlook),
+    )
+    return bind_fast_path_governance(
+        plan,
+        current_behavior="weekly evidence and drafts are assembled manually",
+        constraint="manual cross-system collection and draft preparation time",
+        leverage_point="bounded retrieval followed by local-only generation",
+        success_metric="all requested local draft artifacts are produced without publication",
+        failure_condition="any provider read fails or any artifact is published or sent",
     )
