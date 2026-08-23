@@ -364,6 +364,55 @@ class WorkMemoryTests(unittest.TestCase):
             self.assertEqual(verification.event_count, 2)
             self.assertEqual(verification.work_count, 2)
 
+    def test_concurrent_start_waits_for_exposed_empty_generation(self) -> None:
+        with private_temporary_directory() as directory:
+            database = Path(directory) / "work-memory.sqlite3"
+            creator_reached_schema = threading.Event()
+            release_creator = threading.Event()
+            waiter_observed_empty = threading.Event()
+            original_initialize = WorkMemory._initialize
+
+            def controlled_initialize(
+                memory: WorkMemory,
+                *,
+                create_schema: bool,
+            ) -> None:
+                if create_schema:
+                    creator_reached_schema.set()
+                    if not release_creator.wait(timeout=5):
+                        raise AssertionError("concurrent creator was not released")
+                try:
+                    original_initialize(memory, create_schema=create_schema)
+                except WorkMemoryError as error:
+                    if str(error) == work_memory._UNINITIALIZED_JOURNAL_MESSAGE:
+                        waiter_observed_empty.set()
+                        release_creator.set()
+                    raise
+
+            def start(index: int) -> None:
+                with WorkMemory(database) as memory:
+                    memory.start(
+                        work_id=f"issue-exposed-{index}",
+                        issue=f"#exposed-{index}",
+                        summary=f"Exposed generation start {index}.",
+                    )
+
+            with (
+                patch.object(WorkMemory, "_initialize", new=controlled_initialize),
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                creator = executor.submit(start, 0)
+                self.assertTrue(creator_reached_schema.wait(timeout=5))
+                waiter = executor.submit(start, 1)
+                self.assertTrue(waiter_observed_empty.wait(timeout=5))
+                creator.result(timeout=5)
+                waiter.result(timeout=5)
+
+            verification = WorkMemory.verify_existing(database)
+            self.assertTrue(verification.valid, verification.message)
+            self.assertEqual(verification.event_count, 2)
+            self.assertEqual(verification.work_count, 2)
+
     def test_hash_tampering_deletion_and_schema_drift_are_detected(self) -> None:
         for mutation, expected in (
             (

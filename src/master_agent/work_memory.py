@@ -295,6 +295,16 @@ class WorkMemory:
             ) from error
         try:
             self._initialize(create_schema=self._database.created)
+        except WorkMemoryError as error:
+            self._database.close(remove_created=True)
+            if (
+                create
+                and not create_database
+                and str(error) == _UNINITIALIZED_JOURNAL_MESSAGE
+            ):
+                self._wait_for_concurrent_initialization(database)
+                return
+            raise
         except BaseException:
             self._database.close(remove_created=True)
             raise
@@ -328,7 +338,8 @@ class WorkMemory:
             if attempt + 1 < _INITIALIZATION_RACE_ATTEMPTS:
                 time.sleep(_INITIALIZATION_RACE_DELAY_SECONDS)
         raise WorkMemoryError(
-            "concurrent work-memory initialization did not complete safely"
+            "work-memory database does not contain an initialized journal after "
+            "the bounded concurrent initialization wait"
         ) from last_error
 
     def close(self) -> None:
