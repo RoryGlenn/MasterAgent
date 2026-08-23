@@ -77,6 +77,13 @@ deployment's configuration, exact installed capabilities, private state root,
 and disabled-at-rest effect gates. Install it for the service account, then
 check each progressive level without opening a provider connection:
 
+Keep ordinary configuration user-private. When policy must instead be owned by
+deployment administrators and read-only to the employee, add a matching
+`[configuration_trust.NAME]` table to the private profile with the exact
+content SHA-256 and approved POSIX UID/GID or Windows SID writers. Confirm the
+employee cannot write the file or its retained parent. Never reuse that trust
+table for credentials, executable provenance, or writable state.
+
 ```bash
 master-agent setup \
   --profile /trusted/config/organization-profile.toml \
@@ -118,6 +125,14 @@ writable ancestors fail closed. Ensure Python 3.12 or newer, the `venv` module,
 long-path host policy, and a supported local filesystem are available. WSL is
 a separate Linux deployment and follows the POSIX path, permission, and
 bubblewrap requirements.
+
+Bootstrap reuse also requires the versioned local attestation to match a fresh
+source/build and dependency-policy digest, project version, launcher,
+distributions, and every installed file. It verifies POSIX permissions and
+extended ACLs or retained Windows DACLs and compares the complete runtime
+digest before executing the isolated interpreter probe. A legacy marker or any
+mismatch is preserved and repaired at the reported side-by-side path; use the
+launcher printed on the final `command:` line.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:

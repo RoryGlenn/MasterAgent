@@ -2651,7 +2651,11 @@ def _resolve_operating_configuration(
 
     selected = profile.configuration_path(name)
     try:
-        return resolve_config_source(selected, default_filename)
+        return resolve_config_source(
+            selected,
+            default_filename,
+            organization_trust=profile.configuration_trust_policy(name),
+        )
     except ConfigurationError as error:
         category = (
             OperatingFailureCategory.MISSING_ORGANIZATION_SETUP

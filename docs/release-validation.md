@@ -33,7 +33,11 @@ handling, and independent verification.
   it at a spaced, Unicode, long local path, executes
   `Scripts\master-agent.exe`, and runs the source bootstrap twice under a
   fresh non-administrator account to prove source installation and
-  idempotency.
+  idempotency. Bootstrap regressions prove that legacy markers, changed
+  dependency policy, altered installed files, wrong package versions, links,
+  unsafe POSIX/Windows write authority, and malformed attestations are
+  preserved rather than executed, while a matching environment is hashed
+  before its isolated probe and then reused.
 - The hosted Windows 11 ARM job is a required Python 3.12, 3.13, and 3.14
   matrix. A failure in any native Windows, artifact, behavioral-specification,
   or release-validation step blocks merge.
@@ -85,6 +89,12 @@ certification evidence.
 - The strict organization profile, capability-scoped doctor report, employee
   and developer boundaries, private setup, one-command read/effect routing, and
   exact-profile approval resume are covered by positive and adversarial tests.
+- Organization-managed read-only configuration is bound by the private profile
+  to an exact digest and bounded platform writer allowlists. POSIX effective
+  user/group tests and Windows retained owner/DACL tests prove user exclusion,
+  approved support-principal admission, inherited-policy compatibility,
+  untrusted-writer rejection, replacement detection, and secret-free trust
+  reporting. Credentials and writable state retain separate trust paths.
 - The platform runtime reports exact `secure_filesystem`,
   `cross_process_locking`, `atomic_publication_recovery`,
   `process_supervision`, `trusted_git`, and `capsule_isolation` status with

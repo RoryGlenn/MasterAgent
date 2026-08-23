@@ -667,9 +667,10 @@ Controls:
   deployment work, not demonstrated guarantees;
 - native Windows implementation and hosted matrix evidence are not live x64
   release certification: the skip-intolerant adversarial registry also keeps
-  organization-trust and enterprise-network cases explicitly blocked on #111
-  and #112, and the protected workflow remains unproven until those cases and
-  an enrolled clean standard-user Windows 11 x64 runner complete it. Operations
+  managed-host organization ACL, endpoint-security, and application-control
+  cases explicitly blocked on #106, and enterprise-network cases on #112. The
+  protected workflow remains unproven until those cases and an enrolled clean
+  standard-user Windows 11 x64 runner complete it. Operations
   also remain unavailable where another required runtime or credential-broker
   contract is absent. Expiration
   quarantine intentionally retains orphaned bytes until an

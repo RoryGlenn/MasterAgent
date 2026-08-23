@@ -55,8 +55,11 @@ fail closed. An immutable retained ancestor may permit unrelated child
 creation, but never child deletion, metadata, generic-write, ACL, owner, or
 replacement authority. The exact ancestor/target policy is approval-bound. The
 default trust policy admits only the effective user and fixed operating-system
-administration principals; organization-managed SID allowlists are not enabled
-until their separate trust-profile change is complete.
+administration principals. A private organization profile may instead select
+an organization-managed read-only configuration by binding its exact content
+digest and approved writer SIDs. That policy excludes implicit current-user
+trust while retaining the same local-volume, handle, reparse, DACL, and
+replacement checks.
 
 The packaged `local-default` profile is `employee`/`live`, keeps writes and
 communications off, and lists only anonymous public repository reads and
@@ -90,6 +93,7 @@ The schema is exact:
 | `communications_enabled` | separate profile-level send gate; still subordinate to exact approval and provider gates |
 | `capabilities` | unique bounded dotted names forming the installed capability allowlist |
 | `[configuration]` | optional reviewed paths keyed by the supported names below |
+| `[configuration_trust.NAME]` | optional exact organization-managed digest and platform writer policy for the matching configured name |
 
 `[configuration]` accepts only `approval_authorities`, `capabilities`,
 `communication_context`, `draft_package`, `governance`, `identities`,
@@ -119,6 +123,43 @@ policy = "/var/lib/master-agent/private-config/policy.toml"
 sources_of_truth = "/var/lib/master-agent/private-config/sources_of_truth.toml"
 approval_authorities = "/var/lib/master-agent/private-config/approval-authorities.toml"
 ```
+
+That default is the `user-private` trust class. For read-only company policy
+owned by deployment administrators, add a trust table under the same private
+organization profile. The managed file does not authorize itself: its table
+must name the matching `[configuration]` entry, declare
+`class = "organization-managed"`, bind the exact lowercase SHA-256, and list
+bounded writer identities for every platform where the profile is deployed:
+
+```toml
+[configuration]
+policy = "/opt/example-company/master-agent/policy.toml"
+
+[configuration_trust.policy]
+class = "organization-managed"
+sha256 = "2b6d7f0b1f8f8d39aa1bb614e1115f3b36f73156f84dcd4fa706a11b7e23b211"
+posix_uids = [0]
+posix_gids = [0]
+windows_sids = ["S-1-5-21-111111111-222222222-333333333-4100"]
+```
+
+On POSIX, the selected file and parent must be owned by a configured non-user
+UID. Owner write is permitted for that administrator; group write is permitted
+only for a configured GID when the effective process is not a member. Other
+write and any extended ACL fail because named POSIX ACL principals are not part
+of this bounded schema. On Windows, each retained ancestor and the file must be
+owned and writable only by the configured SIDs or fixed Windows administration
+principals; the effective user is deliberately excluded. A missing platform
+writer policy, link/reparse traversal, remote namespace, replacement, digest
+mismatch, effective-user write, or untrusted writer fails before parsing.
+The user-private class likewise rejects symbolic parent traversal and extended
+ACLs rather than treating owner/mode bits as complete write-authority evidence.
+
+Trust is not transferable between resource classes. Managed-configuration
+policy never authorizes credential files, executable environments, or writable
+effect state. Readiness reports only `user-private` with
+`owner-and-write-authority`, or `organization-managed` with
+`content-and-writer-bound`; it does not render digests or principal IDs.
 
 The profile contains paths and gates, never credential or signing-secret
 values. Employee mode rejects a missing or unlisted capability before it loads

@@ -46,7 +46,7 @@ class WindowsAdversarialRunnerTests(unittest.TestCase):
         self.assertEqual(hosted | certification, REQUIRED_INVARIANTS)
         self.assertEqual(
             {item.blocking_issue for item in cases if item.blocking_issue is not None},
-            {107, 111, 112},
+            {106, 112},
         )
 
     def test_missing_duplicate_unknown_and_unresolvable_cases_fail_closed(self) -> None:

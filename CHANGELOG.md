@@ -1,13 +1,23 @@
 # Changelog
 
+- Add explicit `user-private` and `organization-managed` configuration trust.
+  A private organization profile can bind exact managed bytes to bounded POSIX
+  UID/GID or Windows SID writer policies; effective-user or untrusted write,
+  replacement, links/reparse paths, and digest drift fail closed. Trust-class
+  reporting omits digests and principals, while credentials and writable state
+  remain separate. Bootstrap now replaces marker-only reuse with a versioned
+  source/dependency/version/runtime attestation, an isolated `-I -S`
+  interpreter check, and independent installed-file hashing; legacy, broken,
+  or changed environments are preserved and repaired side by side.
+
 - Add a machine-checked 52-invariant Windows adversarial registry with exact
   hosted-safe and protected-certification test groups. Required test skips,
   missing or renamed IDs, expected-reason mismatches, and unresolved managed-
   workstation dependencies now fail the gate. Native AppContainer evidence
   additionally probes named-pipe and parent-handle access; real Defender/CFA,
-  AppLocker/WDAC, organization-trust, and enterprise-network evidence remains
-  explicitly blocked on #107, #111, and #112 rather than being treated as
-  optional.
+  AppLocker/WDAC, and organization-trust managed-host evidence remains blocked
+  on #106, while enterprise-network evidence remains blocked on #112 rather
+  than being treated as optional.
 
 - Add a required Windows 11 ARM Python 3.12–3.14 pull-request matrix and a
   protected Windows 11 x64 release-certification workflow. The x64 gate checks

@@ -364,6 +364,8 @@ class _WindowsFilesystemApi(Protocol):
 
     def current_user_sid(self) -> str: ...
 
+    def current_token_is_member(self, sid: str) -> bool: ...
+
     def volume_information(self, root: str) -> NativeWindowsVolume: ...
 
     def open_path(
@@ -1716,14 +1718,18 @@ class WindowsSecureFilesystemBackend:
         self,
         *,
         additional_trusted_sids: tuple[str, ...] = (),
+        trust_current_user: bool = True,
         _api: _WindowsFilesystemApi | None = None,
     ) -> None:
         if not isinstance(additional_trusted_sids, tuple):
             raise TypeError("additional trusted Windows SIDs must be a tuple")
+        if not isinstance(trust_current_user, bool):
+            raise TypeError("current-user Windows trust selection must be a boolean")
         normalized_additional_sids = _canonicalize_trusted_principal_sids(
             additional_trusted_sids
         )
         self._additional_trusted_sids = normalized_additional_sids
+        self._trust_current_user = trust_current_user
         self._injected_api = _api
         self._api_lock = threading.Lock()
         self._selected_api: _WindowsFilesystemApi | None = None
@@ -1733,6 +1739,40 @@ class WindowsSecureFilesystemBackend:
         """Return the explicit normalized trust extension supplied by policy."""
 
         return self._additional_trusted_sids
+
+    @property
+    def trust_current_user(self) -> bool:
+        """Return whether this immutable policy admits the effective user."""
+
+        return self._trust_current_user
+
+    def for_organization_managed_configuration(
+        self,
+        trusted_writer_sids: tuple[str, ...],
+    ) -> WindowsSecureFilesystemBackend:
+        """Create a read-only managed-config policy on the same native API."""
+
+        if not trusted_writer_sids:
+            raise ValueError("managed Windows writer SID allowlist is empty")
+        api = self._native_api()
+        selected = WindowsSecureFilesystemBackend(
+            additional_trusted_sids=trusted_writer_sids,
+            trust_current_user=False,
+            _api=api,
+        )
+        if any(
+            api.current_token_is_member(sid)
+            for sid in (
+                LOCAL_SYSTEM_SID,
+                BUILTIN_ADMINISTRATORS_SID,
+                TRUSTED_INSTALLER_SID,
+                *selected.additional_trusted_sids,
+            )
+        ):
+            raise ValueError(
+                "managed Windows writer policy includes the effective user token"
+            )
+        return selected
 
     def pin_directory(
         self,
@@ -1857,15 +1897,18 @@ class WindowsSecureFilesystemBackend:
             return self._selected_api
 
     def _trusted_sids(self, api: _WindowsFilesystemApi) -> frozenset[str]:
-        return frozenset(
-            (
-                canonicalize_windows_sid(api.current_user_sid()),
-                LOCAL_SYSTEM_SID,
-                BUILTIN_ADMINISTRATORS_SID,
-                TRUSTED_INSTALLER_SID,
-                *self._additional_trusted_sids,
-            )
+        current_user_sid = canonicalize_windows_sid(api.current_user_sid())
+        selected = (
+            LOCAL_SYSTEM_SID,
+            BUILTIN_ADMINISTRATORS_SID,
+            TRUSTED_INSTALLER_SID,
+            *self._additional_trusted_sids,
         )
+        if self._trust_current_user:
+            selected = (current_user_sid, *selected)
+        else:
+            selected = tuple(sid for sid in selected if sid != current_user_sid)
+        return frozenset(selected)
 
     def _pin(
         self,

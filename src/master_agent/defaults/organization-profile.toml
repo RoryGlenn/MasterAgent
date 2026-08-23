@@ -25,4 +25,7 @@ capabilities = [
 
 # Empty paths select the wheel-packaged safe defaults. Organization deployments
 # should set reviewed absolute paths for the configuration files they replace.
+# A matching [configuration_trust.NAME] table may bind administrator-managed
+# read-only bytes to an exact SHA-256 and POSIX/Windows writer allowlists. It
+# never applies to credentials or writable state.
 [configuration]

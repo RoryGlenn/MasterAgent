@@ -51,13 +51,14 @@ security identifiers (SIDs), credentials, proxy details, or native diagnostic
 text.
 
 Six managed-workstation entries are explicit blockers until their owning
-features or evidence are complete: Defender/Controlled Folder Access and
-AppLocker/WDAC remain blocked on #107 until real managed-host fixtures replace
-mocked error injection; organization ACL inheritance and approved support or
-endpoint-detection-and-response (EDR) principals depend on #111; authenticated
-proxy and enterprise certificate-authority behavior depend on #112. The
-certification runner reports those issue numbers and fails. Do not remove,
-skip, or relabel those entries to obtain a green run.
+features or evidence are complete. Defender/Controlled Folder Access,
+AppLocker/WDAC, organization ACL inheritance, and approved support or
+endpoint-detection-and-response (EDR) principals are blocked on #106 until real
+managed-host fixtures and an enrolled standard-user runner replace mocked or
+hosted-safe policy evidence. Authenticated proxy and enterprise
+certificate-authority behavior depend on #112. The certification runner
+reports those issue numbers and fails. Do not remove, skip, or relabel those
+entries to obtain a green run.
 
 ## Provision the external runner
 
