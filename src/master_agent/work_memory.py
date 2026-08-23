@@ -61,9 +61,17 @@ _WORK_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#-]*\Z")
 _SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?:"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\b(?:proxy-)?authorization\s*:\s*\S+(?:\s+\S+)?|"
+    r"\b(?:basic|digest|aws4-hmac-sha256)\s+[A-Za-z0-9+/=,_:-]{8,}|"
     r"\bbearer\s+\S+|"
-    r"\b(?:password|passwd|api[_-]?key|client[_-]?secret|token)\s*[:=]\s*\S+|"
-    r"\b(?:ghp_|github_pat_|sk-proj-|sk-)[A-Za-z0-9_-]{8,}"
+    r"\b(?:password|passwd|api[_-]?key|client[_-]?secret|access[_-]?token|"
+    r"refresh[_-]?token|id[_-]?token|auth[_-]?token|secret|token)\s*[:=]\s*\S+|"
+    r"\b(?:aws_(?:access_key_id|secret_access_key|session_token)|"
+    r"azure_client_secret|accountkey|sharedaccesssignature)\s*[:=]\s*\S+|"
+    r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b|"
+    r"\bAIza[A-Za-z0-9_-]{32,}\b|"
+    r"\bxox[baprs]-[A-Za-z0-9-]{8,}\b|"
+    r"\b(?:gh[pousr]_|github_pat_|sk-proj-|sk-|sk_(?:live|test)_)[A-Za-z0-9_-]{8,}"
     r")",
     re.IGNORECASE,
 )

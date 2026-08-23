@@ -140,6 +140,26 @@ class WorkMemoryTests(unittest.TestCase):
                         kind=WorkEventKind.DECISION,
                         summary="token=secret-value",
                     )
+                for credential in (
+                    "Authorization: Basic dXNlcjpwYXNz",
+                    "AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+                    "AWS_SECRET_ACCESS_KEY=example-secret-value",
+                    "SharedAccessSignature=example-signature-value",
+                    "xoxb-1234567890-secret",
+                    "AIza1234567890abcdefghijklmnopqrstuvwxyz",
+                ):
+                    with (
+                        self.subTest(credential=credential),
+                        self.assertRaisesRegex(
+                            ValueError,
+                            "sensitive",
+                        ),
+                    ):
+                        memory.record(
+                            work_id="issue-2",
+                            kind=WorkEventKind.DECISION,
+                            summary=credential,
+                        )
                 with self.assertRaisesRegex(ValueError, "unsafe"):
                     memory.record(
                         work_id="issue-2",
@@ -147,6 +167,10 @@ class WorkMemoryTests(unittest.TestCase):
                         summary="Remember a review.",
                         reference="https://example.test/review?view=full",
                     )
+                self.assertEqual(
+                    memory.show("issue-2").journal_event_count,
+                    1,
+                )
                 with self.assertRaisesRegex(ValueError, "invalid or sensitive"):
                     memory.record(
                         work_id="issue-2",
