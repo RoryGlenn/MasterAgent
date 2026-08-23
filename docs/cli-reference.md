@@ -419,9 +419,10 @@ rejects an occupied output and a prospective output that exceeds the restricted
 size boundary without committing the event. It holds the output reservation
 through journal commit and publication. `record` never initializes a missing
 database or its bookkeeping state; `start` validates all retained fields before
-initializing one. If an existing journal is missing its native transaction lock
-or integrity ledger, every mutating action fails without recreating the missing
-bookkeeping.
+initializing one and initializes the journal schema only when it exclusively
+created that database. An existing empty database is not repurposed. If an
+existing journal is missing its native transaction lock or integrity ledger,
+every mutating action fails without recreating the missing bookkeeping.
 
 The database admits at most 1,024 events so a maximum-size journal remains
 inside the native 8 MiB state boundary on every supported platform. Its

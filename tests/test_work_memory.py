@@ -417,6 +417,21 @@ class WorkMemoryTests(unittest.TestCase):
                 WorkMemory.show_existing(database, "issue-6")
             self.assertFalse(database.exists())
 
+    def test_start_does_not_repurpose_existing_empty_pinned_database(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "existing.sqlite3"
+            state = PinnedSQLiteDatabase(database)
+            state.close()
+
+            with self.assertRaisesRegex(WorkMemoryError, "initialized journal"):
+                WorkMemory(database)
+
+            self.assertTrue(database.exists())
+            self.assertTrue((root / ".existing.sqlite3.master-agent.lock").exists())
+            self.assertTrue((root / ".existing.sqlite3.master-agent.flock").exists())
+            self.assertFalse(WorkMemory.verify_existing(database).valid)
+
     @unittest.skipIf(os.name == "nt", "POSIX bookkeeping fixture")
     def test_start_does_not_repair_missing_journal_bookkeeping(self) -> None:
         with private_temporary_directory() as directory:

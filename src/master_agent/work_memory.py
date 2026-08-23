@@ -269,7 +269,7 @@ class WorkMemory:
                 "work-memory database could not be opened safely"
             ) from error
         try:
-            self._initialize(create_schema=create)
+            self._initialize(create_schema=self._database.created)
         except BaseException:
             self._database.close(remove_created=True)
             raise
