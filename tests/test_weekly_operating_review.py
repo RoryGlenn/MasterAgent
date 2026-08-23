@@ -174,7 +174,8 @@ class WeeklyOperatingReviewTests(unittest.TestCase):
         )
         environment.start()
         self.addCleanup(environment.stop)
-        with tempfile.TemporaryDirectory(dir="/private/tmp") as raw:
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        with tempfile.TemporaryDirectory(dir=temp_root) as raw:
             root = Path(raw).resolve()
             for name in (
                 "claim",
