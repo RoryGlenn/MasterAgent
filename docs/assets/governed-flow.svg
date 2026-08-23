@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
+  <title id="title">MasterAgent governed workflow</title>
+  <desc id="desc">A request becomes a typed plan, passes policy and source checks, receives exact approval when needed, runs through a registered connector, and ends with independent verification and audit evidence.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#0d1530"/>
+      <stop offset="1" stop-color="#17102b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#45d6ff"/>
+      <stop offset="0.55" stop-color="#7c7cff"/>
+      <stop offset="1" stop-color="#b06cff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6cdcff"/>
+    </marker>
+    <style>
+      .eyebrow { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 2.4px; fill: #78ddff; }
+      .headline { font: 750 38px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f5f7ff; }
+      .subtitle { font: 400 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #aeb8d3; }
+      .step { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.7px; fill: #7685ad; }
+      .card-title { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #f6f8ff; }
+      .card-copy { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #aeb8d3; }
+      .foot { font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c7d0e8; }
+      .bypass { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #65e6c4; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="520" rx="28" fill="url(#background)"/>
+  <circle cx="1100" cy="70" r="180" fill="#593aa8" opacity="0.1"/>
+  <circle cx="90" cy="480" r="210" fill="#087da2" opacity="0.09"/>
+  <path d="M0 122 H1280" stroke="#24304e" opacity="0.6"/>
+
+  <text x="54" y="48" class="eyebrow">MASTERAGENT</text>
+  <text x="54" y="91" class="headline">The model proposes. The runtime proves.</text>
+  <text x="54" y="119" class="subtitle">One governed path from intent to verified evidence.</text>
+
+  <g transform="translate(40 178)">
+    <g>
+      <rect width="165" height="150" rx="18" fill="#111c32" stroke="#2b3b5e"/>
+      <circle cx="28" cy="29" r="15" fill="#172a45" stroke="#4fdcff"/>
+      <path d="M21 29h14M28 22v14" stroke="#77e4ff" stroke-width="2" stroke-linecap="round"/>
+      <text x="20" y="66" class="step">01</text>
+      <text x="20" y="93" class="card-title">Request</text>
+      <text x="20" y="118" class="card-copy">A person asks for</text>
+      <text x="20" y="138" class="card-copy">a real outcome.</text>
+    </g>
+
+    <path d="M170 75 H193" stroke="#6cdcff" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(201)">
+      <rect width="165" height="150" rx="18" fill="#121d36" stroke="#344875"/>
+      <path d="M20 24h25v20H20zM26 30h13M26 36h9" fill="none" stroke="#8d9cff" stroke-width="2" stroke-linecap="round"/>
+      <text x="20" y="66" class="step">02</text>
+      <text x="20" y="93" class="card-title">Typed plan</text>
+      <text x="20" y="118" class="card-copy">Targets and actions</text>
+      <text x="20" y="138" class="card-copy">become immutable.</text>
+    </g>
+
+    <path d="M371 75 H394" stroke="#6cdcff" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(402)">
+      <rect width="165" height="150" rx="18" fill="#141d39" stroke="#46518a"/>
+      <path d="M31 20l14 6v10c0 9-6 14-14 18-8-4-14-9-14-18V26z" fill="none" stroke="#a48cff" stroke-width="2"/>
+      <path d="M25 36l4 4 8-9" fill="none" stroke="#67e3c2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="20" y="66" class="step">03</text>
+      <text x="20" y="91" class="card-title">Policy + truth</text>
+      <text x="20" y="118" class="card-copy">Capability, risk, and</text>
+      <text x="20" y="138" class="card-copy">source checks decide.</text>
+    </g>
+
+    <path d="M572 75 H595" stroke="#6cdcff" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(603)">
+      <rect width="165" height="150" rx="18" fill="#1e1b34" stroke="#71508d"/>
+      <circle cx="31" cy="34" r="15" fill="#30203d" stroke="#ffbd68"/>
+      <path d="M24 34l5 5 9-11" fill="none" stroke="#ffc979" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="20" y="66" class="step">04 · IF REQUIRED</text>
+      <text x="20" y="93" class="card-title">Exact approval</text>
+      <text x="20" y="118" class="card-copy">One authenticated</text>
+      <text x="20" y="138" class="card-copy">plan fingerprint.</text>
+    </g>
+
+    <path d="M773 75 H796" stroke="#6cdcff" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(804)">
+      <rect width="165" height="150" rx="18" fill="#101f35" stroke="#2e6582"/>
+      <path d="M18 27h26v18H18zM23 32h16M23 38h10" fill="none" stroke="#69dcff" stroke-width="2" stroke-linecap="round"/>
+      <text x="20" y="66" class="step">05</text>
+      <text x="20" y="91" class="card-title">Connector</text>
+      <text x="20" y="118" class="card-copy">Only the registered</text>
+      <text x="20" y="138" class="card-copy">typed path runs.</text>
+    </g>
+
+    <path d="M974 75 H997" stroke="#6cdcff" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(1005)">
+      <rect width="165" height="150" rx="18" fill="#102627" stroke="#2b8b78"/>
+      <circle cx="31" cy="34" r="16" fill="#123936" stroke="#5be1bd" filter="url(#glow)"/>
+      <path d="M23 34l5 5 10-12" fill="none" stroke="#8af2d5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="20" y="66" class="step">06</text>
+      <text x="20" y="91" class="card-title">Verify + audit</text>
+      <text x="20" y="118" class="card-copy">Re-read the result;</text>
+      <text x="20" y="138" class="card-copy">record safe evidence.</text>
+    </g>
+
+    <path d="M485 160 C520 225 860 225 887 160" fill="none" stroke="#59dfba" stroke-width="2" stroke-dasharray="6 7" marker-end="url(#arrow)" opacity="0.9"/>
+    <rect x="615" y="194" width="166" height="31" rx="15" fill="#102d31" stroke="#2f7f70"/>
+    <text x="698" y="215" text-anchor="middle" class="bypass">safe reads can skip approval</text>
+  </g>
+
+  <g transform="translate(55 458)">
+    <circle cx="4" cy="-5" r="4" fill="#56dafd"/>
+    <text x="18" y="0" class="foot">No arbitrary tools</text>
+    <circle cx="249" cy="-5" r="4" fill="#9f83ff"/>
+    <text x="263" y="0" class="foot">No conversational approval</text>
+    <circle cx="545" cy="-5" r="4" fill="#ffbd68"/>
+    <text x="559" y="0" class="foot">No silent overwrite</text>
+    <circle cx="790" cy="-5" r="4" fill="#5be1bd"/>
+    <text x="804" y="0" class="foot">No success without verification</text>
+  </g>
+</svg>

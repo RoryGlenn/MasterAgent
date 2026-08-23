@@ -1,5 +1,10 @@
 # Phase 3 — Draft-Only Output
 
+This is the boundary behind MasterAgent's credential-free demonstration and
+real local review packages. New users can run it end to end in the
+[quickstart](quickstart.md); this page remains the exact artifact and acceptance
+contract.
+
 ## Goal
 
 Prepare a complete cross-system change package without changing any provider or repository.

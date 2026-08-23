@@ -32,7 +32,7 @@
   credential, approval, signing, or code-promotion authority;
 - local artifact/workspace roots are explicit security boundaries.
 
-The operating-system service account, installed Master Agent runtime, and
+The operating-system service account, installed MasterAgent runtime, and
 private runtime directories are part of the trusted computing base. Descriptor
 or retained-handle pins, restrictive POSIX modes or Windows DACLs, create-only
 publication, and transaction locks guard common pathname-substitution and

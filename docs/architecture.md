@@ -2,7 +2,15 @@
 
 ## Design objective
 
-Master Agent is a governed workflow runtime, not one omnipotent model process. The planning layer proposes typed work. Deterministic code decides whether that work is permitted, executes only registered capabilities, verifies the resulting state, and records evidence.
+MasterAgent is a governed workflow runtime, not one omnipotent model process. The planning layer proposes typed work. Deterministic code decides whether that work is permitted, executes only registered capabilities, verifies the resulting state, and records evidence.
+
+<p align="center">
+  <img src="assets/governed-flow.svg" alt="A request becomes a typed plan, passes policy and source checks, receives exact approval when needed, runs through a registered connector, and ends with independent verification and audit evidence" width="100%" />
+</p>
+
+For the product-level explanation and first runnable path, start with the
+[project overview](../README.md) and [quickstart](quickstart.md). This document
+is the maintainer-level source for components, sequence, and trust boundaries.
 
 ## Runtime flow
 

@@ -1,5 +1,11 @@
 # Deployment Runbook
 
+This runbook is for operators moving from a verified local installation to an
+organization-controlled environment. Complete the credential-free
+[quickstart](quickstart.md) first; then progress one readiness level and one
+provider at a time. The [documentation index](index.md) identifies the
+canonical reference behind each step.
+
 ## 1. Establish ownership
 
 Replace the example organization, security owner, retention owner, system owners, and communications owner in `config/governance.toml`.

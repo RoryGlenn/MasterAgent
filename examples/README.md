@@ -4,6 +4,11 @@ These files are synthetic, credential-free documentation fixtures. UUIDs,
 timestamps, and run IDs are snapshots; capability names, schemas, safety
 states, and command behavior must match the current release.
 
+If you want a guided runnable result rather than reading fixtures, use the
+[credential-free quickstart](../docs/quickstart.md). The
+[use-case guide](../docs/use-cases.md) explains how these examples relate to
+real provider reads, drafts, approved effects, and recurring work.
+
 - `weekly-status-plan.json`, `weekly-status-live-plan.json`, and
   `communication-context-live-plan.json` use the current `ChangePlan@2.0`
   schema.

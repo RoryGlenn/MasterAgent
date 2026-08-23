@@ -1,90 +1,170 @@
-# Master Agent
+<p align="center">
+  <img src="docs/assets/masteragent-hero.webp" alt="Five abstract work streams pass through visible safety gates, converge in a compass-shaped orchestration core, and leave as one verified path" width="100%" />
+</p>
+
+# MasterAgent
+
+[![CI](https://github.com/RoryGlenn/MasterAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/RoryGlenn/MasterAgent/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB.svg)](https://www.python.org/downloads/)
+[![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-7c7cff.svg)](CHANGELOG.md)
+[![License: Proprietary](https://img.shields.io/badge/license-proprietary-334155.svg)](LICENSE)
+
+**Coordinate work across your stack without handing the model a master key.**
+
+**Ask for the outcome. Keep policy, approval, execution, and verification in
+deterministic code.**
+
+MasterAgent turns a user request into typed, reviewable actions across Jira,
+Confluence, Bitbucket, GitHub, Reddit, Outlook, Microsoft Teams,
+SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. An AI can
+help plan the work; it cannot grant itself access, invent a tool, change an
+approved action, or claim success without an independent check.
 
 **Version 1.0.0 — governed enterprise-agent runtime**
 
-Master Agent is a Python control plane for coordinating enterprise work across
-Jira, Confluence, Bitbucket, GitHub, Outlook, Microsoft Teams,
-SharePoint/OneDrive, OneNote, PowerPoint, and local Git workspaces. An AI planner
-can propose work, but deterministic code owns capability selection, policy,
-approval, execution, verification, compensation, retention, and audit.
+[Quickstart](docs/quickstart.md) · [Use cases](docs/use-cases.md) ·
+[How it works](#how-it-works) · [Documentation](docs/index.md) ·
+[Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md)
+
+## One request. One governed path.
+
+<p align="center">
+  <img src="docs/assets/governed-flow.svg" alt="A request becomes a typed plan, passes policy and source checks, receives exact approval when needed, runs through a registered connector, and ends with independent verification and audit evidence" width="100%" />
+</p>
+
+Read-only work can skip approval when policy permits it. Work that changes a
+provider must retain the exact reviewed plan, pass every runtime gate, and use
+an authenticated approval artifact when required. Retrieved pages, messages,
+issues, and source code are always data—not instructions or authority.
+
+## What can you do with it?
+
+| Goal | What MasterAgent does | What it does not do |
+|---|---|---|
+| Understand a public GitHub footprint | Lists a named user's public repositories anonymously and verifies public visibility | Load an ambient token or persist provider content |
+| Build a weekly status | Reads reviewed Jira, Confluence, Bitbucket, or GitHub sources and returns citations | Change a provider or treat retrieved text as authority |
+| Prepare a review package | Generates Jira/Confluence proposals, Outlook/Teams drafts, a deck, patch, and integrity manifest locally | Publish, send, commit, or upload the package |
+| Make a supported change | Binds the target and current state, requests exact approval, executes a registered connector, and re-reads the result | Silently overwrite newer state or pretend several providers are one transaction |
+| Run a recurring review | Authenticates one exact occurrence and reuses the normal policy/approval path | Let a schedule add authority, infer recipients, or bypass a fence |
+| Add a missing pure capability | Inspects without execution, quarantines one compatible ability, and requires independent signed promotion | Run a whole foreign agent, raw plugin, provider effect, or self-promoted capsule |
+
+See [Use cases](docs/use-cases.md) for concrete prompts, commands, prerequisites,
+and boundaries.
+
+## Quickstart
+
+### Use the repository agent
+
+Open the repository root in a supported GitHub Copilot IDE, select
+**MasterAgent**, and ask:
 
 ```text
-User request
-    ↓
-Typed immutable ChangePlan
-    ↓
-Capability catalog + governance + source-of-truth checks
-    ↓
-Exact-plan human approval where required
-    ↓
-Deterministic connector execution
-    ↓
-Independent verification
-    ↓
-Compensation + audit + retained evidence
+Help me get started with MasterAgent and tell me what is safe to do.
 ```
 
-The model cannot grant itself access, add an unreviewed capability, change an
-approved plan, send arbitrary HTTP requests, treat retrieved content as
-authority, or silently overwrite newer provider state.
+On the first ordinary prompt, MasterAgent runs the bounded local bootstrap when
+needed, then continues to the requested outcome. A repository-inspection,
+diagnosis-only, or explicit no-local-change prompt does not install anything.
 
-## Development plane and runtime plane
-
-MasterAgent deliberately separates **changing the software** from **using the
-software**:
+The success boundary is deliberately plain:
 
 ```text
-Development plane
-GitHub issue → behavioral change specification → code/tests
-             → Docs Agent maintenance → verification
-             → archive → maintained current requirements
-
-Runtime plane
-User/workflow request → ChangePlan → policy/governance → approval
-                      → connector execution → verification/audit
+MasterAgent is ready locally. No workplace connection has been opened, and write actions are still off.
 ```
 
-- Agent and instruction files define **how coding agents work**.
-- GitHub issues hold discussion, priority, and problem context.
-- [`specs/current/`](specs/current/) records **required current behavior**.
-- [`specs/changes/`](specs/changes/) records active behavioral deltas, design,
-  and implementation tasks.
-- [`.ai/DOCS_AGENT.md`](.ai/DOCS_AGENT.md) defines the evidence-aware
-  documentation completion gate for non-trivial repository changes.
-- [`.ai/semantic-router.toml`](.ai/semantic-router.toml) assigns exact
-  repository ownership; its generated [semantic index](docs/semantic-index.md)
-  is the compact first discovery hop after minimum authority policy.
-- Tests provide executable evidence.
-- A runtime `ChangePlan` binds exact provider effects and approvals.
+The exact behavior lives in the
+[first-run contract](.ai/FIRST_RUN.md) and
+[force-multiplier contract](.ai/AUTONOMY.md).
 
-Specifications govern changes to MasterAgent. `ChangePlan` governs actions
-performed by MasterAgent. Specifications are development data and never grant
-capabilities, credentials, approval, or provider authority. See
-[Development specifications](docs/development-specifications.md) and the
-[specification workflow](specs/README.md).
+### Use the local CLI
 
-## Release status
+From a source checkout on macOS or Ubuntu 24.04:
 
-The v1 governed runtime and provider contracts are implemented. Incomplete or
-unsafe surfaces remain deliberately non-routable.
+```bash
+python3 scripts/bootstrap_agent.py
+.venv/bin/master-agent doctor
+```
 
-| Area | Current status |
-|---|---|
-| Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
-| Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
-| Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, atomic local-state recovery, current-user credentials, Job Object supervision, trusted Git, and AppContainer pure-capsule isolation; three-version hosted CI and a protected x64 certification workflow are implemented, while live x64 certification remains gated on an enrolled clean standard-user runner |
-| Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
-| Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
-| Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
-| Approved reversible writes | Narrow Jira, Confluence, Bitbucket, and GitHub operations implemented; unsafe or non-atomic mutations remain disabled |
-| External communication | Exact-approved Outlook sends and Teams messages/replies implemented behind separate gates |
-| Recurring workflows | Authenticated exact occurrence artifacts, single-host fenced claims, approval resume, conservative recovery, and the local-only Weekly Operating Review are implemented; all registrations remain disabled by default |
-| Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
-| Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
-| Capability import and capsule promotion | Installed CLI supports read-only inspection, exact selection, signed test/local promotion, policy-first routing, governed execution, immutable updates, disable, and revoke for dependency-free pure capabilities; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
-| Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
-| Semantic ownership | Exact machine-readable module, test, requirement, command, capability, connector, profile, configuration, and platform routing with generated-index drift checks implemented |
+On native Windows 11 PowerShell:
+
+```powershell
+py -3.12 scripts\bootstrap_agent.py
+.\.venv\Scripts\master-agent.exe doctor
+```
+
+Bootstrap may preserve an untrusted or mismatched `.venv` and print a
+digest-named side-by-side launcher. Always use the exact path from its final
+`command:` line. Setup and `doctor` are offline; missing optional provider
+credentials do not make the local installation unhealthy.
+
+Follow the [credential-free quickstart](docs/quickstart.md) for expected output,
+Windows paths, and the first anonymous provider read.
+
+## See it work without credentials
+
+Install the optional local renderers into the same environment, then run the
+safe demonstration:
+
+```bash
+.venv/bin/python -m pip install -e '.[drafts]'
+.venv/bin/master-agent demo
+```
+
+The command creates a fresh private workspace below the current user's
+MasterAgent data root. It generates Jira, Confluence, Outlook, Teams,
+PowerPoint, and patch artifacts, writes an integrity manifest, and verifies the
+audit chain.
+
+Nothing is published, sent, committed, uploaded, or connected to a workplace
+system.
+
+## How it works
+
+MasterAgent separates a flexible planning layer from a deterministic execution
+layer:
+
+1. A user or registered workflow states an outcome.
+2. A planner builds typed actions inside an immutable `ChangePlan`.
+3. The runtime checks the capability catalog, organization governance, risk,
+   source-of-truth rules, model-context data handling, provider identity, and
+   current target state.
+4. Approval-required actions pause on a private request bound to the exact plan
+   fingerprint and action IDs.
+5. Only the registered typed connector executes each permitted action.
+6. MasterAgent independently re-reads the result, reports partial success
+   honestly, compensates only when a typed safe precondition exists, and writes
+   retention-aware audit evidence.
+
+This is a control plane, not an omnipotent model process. There is no arbitrary
+HTTP, arbitrary shell, force push, autonomous merge, broad delete, or generic
+permission-management path.
+
+The full component and trust-boundary view is in
+[Architecture](docs/architecture.md).
+
+## Safety by construction
+
+- **Fail closed:** installing the package enables no workplace access.
+- **Least-authorized routing:** anonymous public reads do not load credentials;
+  authenticated reads and effects activate only the selected provider.
+- **Typed capabilities:** every action and result has an explicit catalog
+  contract. There is no generic execute-anything escape hatch.
+- **Immutable approval:** any effect-bearing plan change invalidates approval.
+- **No silent overwrite:** version and content preconditions stop stale writes.
+- **No false transactions:** partial multi-system success is explicit.
+- **Prompt-injection boundary:** retrieved content never supplies authority,
+  approval, tools, targets, or recipients.
+- **Provider-data boundary:** data classification, destination, tenancy,
+  schema, minimization, and size are checked before content returns to a model.
+- **Evidence discipline:** normal audit state stores bounded metadata and
+  digests; full content needs an explicit retention rule.
+- **No weak platform fallback:** protected work stops when the host lacks an
+  equivalent secure native backend.
+- **Generated-code quarantine:** Capability capsule promotion uses signed
+  lifecycle records and Linux bubblewrap or the reviewed Windows AppContainer
+  path. See [`docs/capability-capsules.md`](docs/capability-capsules.md).
+
+Review the complete [Threat model](docs/threat-model.md).
 
 ## Capability surface
 
@@ -98,444 +178,23 @@ The catalog contains **96 typed capabilities**:
 
 | Domain | Read | Draft/local generation | Approved effects |
 |---|---|---|---|
-| Jira | issue search/read and server info | issue/comment/transition proposals | narrow version-aware mutations; unsupported atomic operations remain disabled |
-| Confluence | page search/read | page create/update proposals | version-aware Cloud/Data Center page operations and bounded Cloud space creation |
-| Reddit | purpose-scoped search, content, rules, history, inbox | post/comment/reply Markdown | separate communication credential for exact approved post/comment/reply; edit/delete quarantined pending provider CAS |
-| Bitbucket | public workspace repositories, authenticated repositories, pull requests, changes, and CI status | branch plans and source patches | pull-request creation; merge and local-Git publication disabled |
-| GitHub | public/authenticated repositories, repository metadata, pull requests, and checks | — | issue and pull-request creation; unsafe administration disabled |
+| Jira | issue search/read and server info | issue, comment, and transition proposals | narrow version-aware mutations; unsupported atomic operations remain disabled |
+| Confluence | page search/read | page create/update proposals | version-aware page operations and bounded Cloud space creation |
+| Reddit | purpose-scoped search, content, rules, history, and inbox | post, comment, and reply Markdown | exact approved post/comment/reply; edit/delete remain disabled pending provider compare-and-swap |
+| Bitbucket | public or authenticated repositories, pull requests, changes, and CI status | branch plans and source patches | pull-request creation; merge and local-Git publication disabled |
+| GitHub | public/authenticated repositories, metadata, pull requests, and checks | — | issue and pull-request creation; unsafe administration disabled |
 | Outlook | folders, messages, and allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
 | Teams | chats, teams, channels, messages, and replies | message draft | chat/channel sends and channel replies |
-| SharePoint/OneDrive | sites, drives, folders, metadata, and bounded text | local files and decks | replacement remains disabled pending exact atomic provider preconditions |
-| OneNote | notebooks, sections, and pages | generated HTML/proposals | writes remain disabled pending target-aware DOM verification |
+| SharePoint/OneDrive | sites, drives, folders, metadata, and bounded text | local files and decks | replacement disabled pending exact atomic provider preconditions |
+| OneNote | notebooks, sections, and pages | generated HTML/proposals | writes disabled pending target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | publishing follows the separately governed SharePoint path |
-| Capability imports/capsules | declarative preview and policy-routed promoted pure reads | CLI-selected, promoted, routed, and governed deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
+| Capability capsules | declarative preview and routed promoted pure reads | deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
 
-## Core safety properties
+The [Integration matrix](docs/integration-matrix.md) is the canonical compact
+provider view. [Capability contract](docs/capability-contract.md) defines the
+exact runtime envelope.
 
-- **Fail closed:** installing the package enables no workplace access.
-- **No weak platform fallback:** an operation that lacks an equivalent secure
-  native backend stops before protected state, credentials, connectors, or
-  provider access; safe package inspection and offline diagnostics remain
-  usable.
-- **Independent live gates:** a runtime flag, provider-specific configuration,
-  and catalog/governance permission must all permit an effect.
-- **Immutable approval:** approval binds to one SHA-256 plan fingerprint and
-  exact action IDs. Any effect-bearing mutation invalidates it.
-- **Authenticated separation:** governance can require zero, one, or two
-  distinct human approvers.
-- **Version preconditions:** modifying operations stop when reviewed provider
-  state is stale.
-- **No false transactions:** partial multi-system success is explicit.
-  Compensation runs only where a typed adapter can enforce its precondition.
-- **Prompt-injection boundary:** retrieved messages, pages, issues, notes,
-  attachments, and source are untrusted data.
-- **Provider-data return boundary:** every provider read is classified and
-  approved for the configured model destination and tenancy before provider
-  content is requested. The same binding is rechecked before a schema-bound,
-  minimized, size-limited copy is returned.
-- **Constrained networking and source control:** no arbitrary HTTP, arbitrary
-  shell, force push, protected-branch write, or autonomous merge path exists.
-- **Evidence discipline:** normal audit records store bounded metadata and
-  digests; full content requires an explicit retention rule.
-- **Generated-code isolation:** Capability capsule promotion uses signed
-  lifecycle records and Linux bubblewrap. Foreign-agent inspection executes no
-  imported content and can create only a signed quarantine for one explicit
-  compatible ability. Raw plugins, whole agents, and unsafe capsules do not
-  become executable. See
-  [`docs/capability-capsules.md`](docs/capability-capsules.md).
-
-## Requirements
-
-- Python 3.12 or newer.
-- Ubuntu 24.04 LTS, macOS, native Windows 11, or WSL for the documented setup
-  commands. Native Windows and WSL use separate environments and path rules.
-- Linux bubblewrap only when validating or executing capability capsules.
-- Approved provider endpoints and credentials only for the selected
-  authenticated capability. Anonymous public-data capabilities neither require
-  nor load credentials.
-- Organization-specific applications, scopes, retention, governance, and
-  secrets before authenticated production deployment.
-
-## Use as a GitHub Copilot custom agent
-
-Open the repository root in a supported Copilot IDE and select **MasterAgent**
-from the agents dropdown. The repository profile is
-[`.github/agents/MasterAgent.agent.md`](.github/agents/MasterAgent.agent.md).
-
-Send an ordinary prompt such as:
-
-```text
-Help me get started with MasterAgent and tell me what is safe to do.
-```
-
-The first operational prompt runs the bounded, idempotent
-`scripts/bootstrap_agent.py` setup and reports:
-
-```text
-MasterAgent is ready locally. No workplace connection has been opened, and write actions are still off.
-```
-
-A repository-inspection, diagnosis-only, or explicit no-local-change prompt
-does not install anything. The detailed behavior lives in the
-[first-run contract](.ai/FIRST_RUN.md) and
-[force-multiplier contract](.ai/AUTONOMY.md).
-
-The checked-in advisory profiles now define a fail-closed contract for GitHub-host children. Direct GitHub-host advisory invocation is disabled: the parent has no `agent` tool and both children are non-user- and non-model-invocable. MasterAgent can instead run the Researcher or Plan Reviewer through the optional current broker-owned Copilot SDK adapter. Every live specialist call passes through the repository-owned advisory integration harness, including an authenticated cross-process goal budget, context sanitization, required minimum path scope, a content-address-verified immutable-HEAD semantic manifest and profile inventory, repository-owned scoped read/search tools, non-converting exact tracked/staged/untracked-content binding, and parent citation re-read. If the optional adapter is unavailable or fails closed, complete the same work directly in the parent; it completes the same research or review directly rather than weakening the boundary. See the [advisory and documentation specialist contracts](docs/advisory-subagents.md).
-
-For every non-trivial repository change, the selected parent also applies the
-[Docs Agent contract](.ai/DOCS_AGENT.md) after implementation and tests but
-before completion. It updates affected authoritative documentation or records a
-justified `no_change`; a material requirement, test, implementation, or
-documentation conflict returns `needs_review` rather than being documented as
-intent. This is direct parent work, not a live GitHub-host child-agent path.
-
-A missing safe repository capability is implementation work, not a reason to
-stop with “the connector is read-only.” MasterAgent adds the smallest complete
-typed path, verification or compensation, tests, configuration, and
-documentation, then resumes the original goal. Credentials, genuinely
-ambiguous provider targets, and authenticated exact-plan approval remain real
-operator boundaries.
-
-## Install
-
-### From a source distribution
-
-**Machine: Ubuntu 24.04 or macOS development computer**
-
-```bash
-tar -xzf master_agent-1.0.0.tar.gz
-cd master_agent-1.0.0
-
-umask 077
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-master-agent readiness
-```
-
-To enable the optional broker-owned Researcher and Plan Reviewer adapter in a
-development checkout, install the separate subagent extra:
-
-```bash
-python -m pip install -e '.[subagents]'
-```
-
-The base installation remains usable without that extra; unavailable specialist
-delegation falls back to the selected MasterAgent parent.
-
-The selected parent invokes the adapter with one opaque goal ID reused across
-all attempts for that operator goal and at least one repository-relative
-governed file:
-
-```bash
-.venv/bin/python scripts/advisory_subagent.py research \
-  --goal-id 550e8400-e29b-41d4-a716-446655440000 \
-  --route agent-topology \
-  --task "Trace the advisory budget implementation" \
-  --path src/master_agent/advisory.py \
-  --path src/master_agent/advisory_budget.py
-```
-
-The parent must pass exactly one `--route ROUTE_ID` from its semantic-router
-hop. The runner fully validates the manifest and exact stable ID before worker
-startup, then sends only that route's canonical navigation fields. Every path
-must be an exact tracked or non-ignored untracked regular file linked or owned
-by the selected route or its recursively declared dependencies; directory and
-ancestor widening is rejected. It creates ignored private state under
-`.master-agent/advisory/` by default. The same goal ID shares at most three
-research attempts and one plan review across retries, concurrent commands, and
-process restarts. Unsafe route, state, scope, SDK, result, or repository races
-return a content-minimized parent fallback.
-
-The core package deliberately omits the local Office and draft renderers. If
-you need `demo` or `draft-package`, add the optional extra to the same virtual
-environment:
-
-```bash
-.venv/bin/python -m pip install -e '.[drafts]'
-```
-
-### From a wheel
-
-**Machine: Ubuntu 24.04 or macOS development computer**
-
-```bash
-umask 077
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install ./master_agent-1.0.0-py3-none-any.whl
-
-master-agent readiness
-master-agent plugins
-```
-
-Explicit CLI paths override packaged safe defaults. The current working
-directory is never an implicit configuration source.
-
-Prepare the default private employee profile and check what this installation
-can actually do:
-
-```bash
-master-agent setup --non-interactive
-master-agent doctor
-```
-
-Neither command contacts a workplace provider. Missing credentials for an
-optional provider are reported under that provider's read or effect level; they
-do not make `install_ready` false.
-
-### Native Windows 11 installation and runtime
-
-Use a standard-user PowerShell session; activation is neither required nor
-recommended. A source checkout can run the same idempotent first-run bootstrap
-used on POSIX:
-
-```powershell
-py -3.12 scripts\bootstrap_agent.py
-.\.venv\Scripts\master-agent.exe doctor --require-level install
-```
-
-From a built wheel, use the native interpreter and console launcher paths:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\master_agent-1.0.0-py3-none-any.whl
-.\.venv\Scripts\master-agent.exe --version
-.\.venv\Scripts\master-agent.exe readiness
-.\.venv\Scripts\master-agent.exe doctor --require-level install
-```
-
-A source distribution works the same way after extraction:
-
-```powershell
-tar -xzf .\master_agent-1.0.0.tar.gz
-Set-Location .\master_agent-1.0.0
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .
-.\.venv\Scripts\master-agent.exe readiness
-```
-
-For an internal/offline wheelhouse, keep index credentials in the approved pip
-configuration and use only local paths on the command line:
-
-```powershell
-py -3.12 scripts\bootstrap_agent.py --no-index `
-  --find-links C:\ApprovedPackages
-```
-
-Bootstrap never rewrites or executes an unattested `.venv`; a legacy marker is
-not sufficient. Reuse requires a fresh isolated interpreter check plus exact
-source, dependency-policy, project-version, launcher, distribution, and
-installed-file identity. A collision or mismatch produces a managed
-`.venv-master-agent-<digest>` beside it. Use the exact launcher shown on
-bootstrap's final `command:` line rather than assuming the selected path is
-`.venv`. Runtime configuration and state default to
-`%LOCALAPPDATA%\MasterAgent`, never the checkout or current working directory.
-An explicit reviewed profile may select a different private local path.
-
-These commands initialize no workplace connector and do not claim that every
-stateful operation is available. Native Windows selects
-`windows-native-partial`: retained Win32 handles, volume/file identity, owner
-SID and effective-DACL validation provide `secure_filesystem`, while
-`windows-lockfileex` provides `cross_process_locking` and
-`windows-handle-atomic-state` provides protected, bounded local-state
-publication and deterministic recovery. Trusted bounded reads of
-local configuration, credentials, token files, CA bundles, approval requests,
-capsules, and plugin distributions can use that filesystem boundary. It
-rejects UNC/device namespaces, reparse or cloud objects, unsafe names,
-unsupported volumes, and untrusted writers of selected targets rather than
-using pathname-only or POSIX emulation. Retained system ancestors may permit
-only unrelated child creation; deletion, metadata, ACL, owner, generic-write,
-and replacement authority remain rejected and policy-bound.
-
-The `platform_runtime` report marks `atomic_publication_recovery` available.
-Setup, SQLite-backed state, approval and readiness output, retained evidence,
-OAuth token files, configuration snapshots, capsule/plugin stores, and draft
-artifacts use that native backend rather than POSIX emulation. Process
-supervision, trusted Git, and dependency-free pure capsule isolation use the
-native Job Object, trusted-Git, and AppContainer backends. A missing exact
-contract still stops with `runtime_defect` instead of using a weaker
-compatibility path.
-On POSIX hosts, capsule isolation is also reported precisely: Linux selects
-the bubblewrap implementation only when a trusted executable is available and
-otherwise reports the contract unavailable; macOS reports it unavailable until
-a native executable-containment backend exists.
-Native Windows uses `windows-appcontainer`; WSL is Linux and therefore requires
-the trusted bubblewrap path.
-Reading an existing or explicitly selected organization profile is a protected
-filesystem operation. Native Windows reads it only through the retained-handle
-and ACL boundary. Organization-managed trusted-writer policy remains a later
-deployment feature; the current default admits only the effective user and
-fixed operating-system administration principals.
-
-Native operation requires a local drive and filesystem supported by the
-retained-handle backend. UNC and device namespaces, reparse points (including
-symlinked or cloud-placeholder paths), unsafe names, unsupported filesystems,
-and directories writable by untrusted principals fail closed. Long paths must
-be enabled by Windows host policy. WSL installations are separate Linux
-installations and use `.venv/bin`, POSIX permissions, and the Linux containment
-requirements; do not mix a WSL environment with a native Windows checkout.
-
-## Progressive employee workflow
-
-Most people should use the organization profile and the high-level `execute`
-command. The profile supplies reviewed configuration locations and the exact
-installed capabilities employees may request, so those paths and flags do not
-need to be repeated for every plan.
-
-```bash
-master-agent setup --non-interactive
-master-agent doctor
-master-agent execute change-plan.json
-```
-
-`doctor` reports independent `install_ready`, `read_ready`, `draft_ready`,
-`effect_ready`, and `enterprise_ready` levels. A healthy local installation can
-therefore be ready even when no workplace account is connected, effects are
-disabled, or the external controls required for an enterprise deployment are
-absent. Its additive `platform_runtime` section reports the platform family,
-backend identity, and per-contract availability without reading protected state
-or credentials.
-
-`execute` is one front door over the existing deterministic runtime. An allowed
-single-provider read stays in memory and creates no audit, artifact, or
-approval state. Draft and effect work receives only the required private local
-state. When policy requires approval, the command returns one exact-plan
-request; after a trusted operator supplies its authenticated artifact, resume
-through the same command:
-
-```bash
-master-agent execute \
-  --resume /absolute/state/runs/<opaque>/artifacts/approval-request-<fingerprints>.json \
-  --approval /absolute/state/approvals/approval-rory.json
-```
-
-Employee mode can use only the installed capability allowlist. It does not
-write or promote missing capability code. Trusted developer mode can support
-explicit repository scaffolding, but generated effect code remains quarantined
-until review, tests, specification archival, signing, deployment, and normal
-runtime admission complete. Neither mode supplies credentials or approval, and
-high-impact capabilities remain disabled at rest.
-
-## Quick safe demonstration
-
-Install the optional draft-rendering extra before running the local
-review-package workflow:
-
-```bash
-.venv/bin/python -m pip install -e '.[drafts]'
-```
-
-Then run the credential-free demonstration:
-
-```bash
-master-agent demo
-```
-
-The command creates a fresh private workspace under
-`~/.master-agent/MasterAgent/`, generates Jira, Confluence, Outlook, Teams,
-PowerPoint, and patch artifacts, writes an integrity manifest, and verifies the
-audit chain. Nothing is published, sent, committed, or uploaded.
-
-## Readiness, discovery, and connection
-
-For an employee-facing, capability-scoped answer, start with:
-
-```bash
-master-agent doctor
-```
-
-The older `readiness` command remains the detailed configuration and deployment
-diagnostic used by automation and maintainers.
-
-Configuration-only readiness performs no network requests:
-
-```bash
-master-agent readiness \
-  --integrations config/integrations.toml \
-  --capabilities config/capabilities.toml \
-  --governance config/governance.toml \
-  --oauth config/oauth.toml
-```
-
-To check one planned provider/classification against the active model-context
-destination and tenancy without making a network request, also supply its
-credential source and selector:
-
-```bash
-master-agent readiness \
-  --integrations config/integrations.toml \
-  --capabilities config/capabilities.toml \
-  --governance config/governance.toml \
-  --credentials-file /absolute/path/to/private-credentials.json \
-  --egress-check jira:internal
-```
-
-Inspect available connectors without activating them:
-
-```bash
-master-agent discover --integrations config/integrations.toml
-```
-
-Missing credentials or optional provider configuration are shown as setup
-information and do not make ordinary discovery fail. Use `--require-ready`
-when a script or deployment check must return nonzero until the selected
-connectors are ready.
-
-Probe or connect only the systems needed for the requested operation:
-
-```bash
-master-agent connect \
-  --systems jira,confluence,github \
-  --data-classification internal \
-  --credentials-file /absolute/path/to/private-credentials.json
-```
-
-For Atlassian Cloud, an operator-provided UI URL can be normalized and bound
-for one invocation without changing persistent configuration. Jira and
-Confluence scoped API tokens use their exact
-`api.atlassian.com/ex/{product}/{cloudId}` gateway root plus a separate
-credential-free tenant `web_base_url`; the override changes only that browser
-root and cannot replace or escape the product/cloud-ID API boundary:
-
-```bash
-master-agent connect \
-  --systems confluence \
-  --data-classification internal \
-  --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
-  --credentials-file /absolute/path/to/private-credentials.json
-```
-
-Reuse the exact `--connector-url` during `bind-context` and `run --apply` so the
-destination remains approval-bound.
-
-Atlassian scoped tokens are product-specific: Jira and Confluence may share the
-account email in memory, but never each other's scoped token. Bitbucket Cloud
-API tokens use the Atlassian account email; private legacy app-password
-configuration may retain its explicit username.
-
-### Direct, verified provider reads
-
-For a plan that was created for a direct user request and contains only
-read-only actions for one built-in provider, use the explicit direct-read mode:
-
-```bash
-master-agent run direct-read-plan.json \
-  --direct-read \
-  --credentials-file /absolute/path/to/private-credentials.json
-```
-
-This mode builds one live typed read connector in memory, checks the plan and
-connector binding, and independently re-reads the provider result. It prints a
-policy-sanitized, schema-bound terminal result and content-free egress metadata,
-and does not create an audit database, runtime
-manifest, draft artifact, or result file. The plan must have direct-user
-authority, one provider, an explicit `data_classification` on every serialized
-read action, and no approval-required action; plugin, capsule,
-write, send, administrative, and scheduled work is rejected. Provider effects
-still use the bound `run --apply` workflow below.
-
-### Anonymous public repository reads
+## Public reads and provider connections
 
 Anonymous public-data capabilities neither require nor load credentials.
 
@@ -546,178 +205,202 @@ master-agent bitbucket-repositories --workspace WORKSPACE
 
 These commands route through `github.public_repository.list` and
 `bitbucket.public_repository.list`, ignore ambient provider credentials, bound
-the response, classify it as `public`, and independently verify that returned
-repositories are public. They use the same provider-data return boundary as
-other reads and print the sanitized result without persisting provider data.
+the response, classify it as public, and independently verify the result.
 
-Use the authenticated `master-agent github-repositories` path only for “my
-repositories,” private repositories, or other account-visible data. That route
-classifies the result as `internal` and applies the same boundary.
-
-## Exact-plan approval and execution
-
-A provider effect is prepared as an immutable plan, bound to the exact runtime
-configuration, inspected, and then executed only after its required approval
-and gates are present. `master-agent execute PLAN` performs these stages for an
-ordinary user. The commands below remain the low-level automation and debugging
-interface.
+For account-visible or private data, select only the systems needed for the
+goal and supply an already-issued private credential file:
 
 ```bash
-master-agent bind-context change-plan.json \
-  --connector-mode live \
-  --integrations /trusted/config/integrations.toml \
-  --capabilities /trusted/config/capabilities.toml \
-  --governance /trusted/config/governance.toml \
-  --policy /trusted/config/policy.toml \
-  --sources-of-truth /trusted/config/sources_of_truth.toml \
-  --approval-authorities /trusted/config/approval-authorities.toml \
-  --output bound-change-plan.json
-
-master-agent inspect bound-change-plan.json
+master-agent connect \
+  --systems jira,confluence,github \
+  --data-classification internal \
+  --credentials-file /absolute/path/to/private-credentials.json
 ```
 
-When approval is missing, an applied run emits a private, create-only request
-that contains the exact non-secret resume surface:
+An Atlassian Cloud UI URL can be normalized and bound for one invocation
+without changing persistent configuration:
+
+```bash
+master-agent connect \
+  --systems confluence \
+  --data-classification internal \
+  --connector-url confluence=https://tenant.atlassian.net/wiki/spaces \
+  --credentials-file /absolute/path/to/private-credentials.json
+```
+
+Reuse the exact connector URL during context binding and apply so the
+destination remains approval-bound. See [Configuration](docs/configuration.md)
+and [GitHub connector quickstart](docs/github-connector-quickstart.md).
+
+## Exact-plan approval and effects
+
+The ordinary employee front door is:
+
+```bash
+master-agent setup --non-interactive
+master-agent doctor
+master-agent execute change-plan.json
+```
+
+An allowed single-provider read can stay in memory with no audit, artifact, or
+approval state. Draft and effect work receives only the private local state it
+needs. If policy requires approval, the same `execute` command can resume the
+exact saved request after a trusted operator supplies its authenticated
+artifact.
+
+The lower-level approval workflow remains available for automation and
+diagnosis:
 
 ```bash
 master-agent inspect-approval-request /absolute/state/drafts/approval-request.json
 
 master-agent approve-request /absolute/state/drafts/approval-request.json \
-  --key-id rory \
+  --key-id OPERATOR_KEY_ID \
   --expected-fingerprint REQUEST_FINGERPRINT \
-  --output /absolute/state/approvals/approval-rory.json
+  --output /absolute/state/approvals/approval.json
 
 master-agent resume-approval /absolute/state/drafts/approval-request.json \
   --expected-fingerprint REQUEST_FINGERPRINT \
-  --approval /absolute/state/approvals/approval-rory.json
+  --approval /absolute/state/approvals/approval.json
 ```
 
-Conversational approval is never a substitute for the authenticated artifact.
-See the [CLI reference](docs/cli-reference.md),
-[operations guide](docs/operations.md), and
-[deployment runbook](docs/deployment-runbook.md) for full command contracts and
-production setup.
+MasterAgent may inspect and resume the request, but it never impersonates the
+trusted approval authority. Conversational assent is direction, not an
+authenticated approval artifact.
 
-## Behavioral specification workflow
+A missing safe repository capability is implementation work, not a final
+answer that “the connector is read-only.” The development parent adds the
+smallest complete typed path, tests, configuration, verification or
+compensation, and documentation, then resumes the original outcome. That rule
+removes code barriers, not credential, target, policy, or authenticated
+approval boundaries.
 
-Non-trivial changes to observable, architectural, or security-relevant
-MasterAgent behavior use the repository-native specification lifecycle:
+See [Operations](docs/operations.md) and the
+[Deployment runbook](docs/deployment-runbook.md).
+
+## Repository agent and advisory specialists
+
+The repository-scoped profile is
+[`.github/agents/MasterAgent.agent.md`](.github/agents/MasterAgent.agent.md).
+The checked-in advisory profiles now define a fail-closed contract.
+
+Direct GitHub-host advisory invocation is disabled. Optional live Researcher
+and Plan Reviewer calls must pass through the repository-owned advisory integration harness with an authenticated cross-process goal budget, one
+parent-selected `--route ROUTE_ID`, minimum path scope, immutable repository
+binding, sanitized context, read/search-only tools, structured output, and
+parent citation re-read.
+
+If that adapter is unavailable or fails closed, the selected parent must
+complete the same work directly; it completes the same research or review directly instead of weakening the boundary. Details are in
+[Advisory specialist safety](docs/advisory-subagents.md).
+
+For every non-trivial repository change, the selected parent also applies the
+[Docs Agent contract](.ai/DOCS_AGENT.md). A material conflict returns
+`needs_review` rather than turning an apparent defect into documented intent.
+
+## Development plane and runtime plane
+
+MasterAgent keeps changing the software separate from using the software:
 
 ```text
-draft → proposed → accepted → implementing → verifying → archived
+Development plane
+Issue → behavioral change specification → code and tests
+      → documentation review → validation → archived requirement delta
+
+Runtime plane
+Request → immutable ChangePlan → policy and governance → exact approval
+        → registered connector → verification, compensation, and audit
 ```
 
-```bash
-python scripts/specs.py validate
-python scripts/specs.py status
-python scripts/specs.py archive <change-id>
-```
+Specifications govern changes to MasterAgent. A runtime `ChangePlan` governs
+actions performed by MasterAgent. Specifications never grant a capability,
+credential, target, provider access, or approval.
 
-After implementation and relevant tests, apply the Docs Agent maintenance
-contract to the final change before declaring it complete. Continue after
-`updated` or a justified `no_change`; route `needs_review` back to planning or
-implementation, then run final specification and release validation before
-archival.
+Use [Development specifications](docs/development-specifications.md) and the
+[specification workflow](specs/README.md) for non-trivial behavioral work. The
+generated [Semantic router](docs/semantic-index.md) is the first repository
+navigation hop, not runtime authority.
 
-Use the workflow for capabilities, approvals, policy, governance, connectors,
-workflows, verification, compensation, retention, audit, and cross-component
-contracts. Skip it for formatting, typo fixes, minor documentation corrections,
-and mechanical refactors with no behavior change.
+## Requirements and installation choices
 
-This is intentionally native rather than an OpenSpec dependency. It supplies
-maintained current requirements and machine-checked change deltas without
-creating another runtime planner or authorization layer. See
-[`specs/README.md`](specs/README.md) and
-[Development specifications](docs/development-specifications.md).
+- Python 3.12 or newer.
+- Ubuntu 24.04 LTS, macOS, native Windows 11, or WSL for documented setup.
+- Linux bubblewrap only for capability-capsule validation or execution on
+  Linux; native Windows uses AppContainer; macOS capsule execution remains
+  unavailable.
+- Approved provider endpoints and credentials only for the selected
+  authenticated capability.
+- Organization-specific governance, retention, application consent, secrets,
+  approval verification, and external audit controls before production use.
 
-## Configuration map
+Release artifacts are named `master_agent-1.0.0.tar.gz` and
+`master_agent-1.0.0-py3-none-any.whl`. Source, wheel, offline wheelhouse,
+Windows, and optional-extra procedures are in the
+[Quickstart](docs/quickstart.md), [Deployment runbook](docs/deployment-runbook.md),
+and [Release validation guide](docs/release-validation.md).
 
-| File | Purpose |
-|---|---|
-| `config/organization-profile.toml` | Employee/developer mode, reviewed configuration locations, enabled capability allowlist, and default private state root |
-| `config/capabilities.toml` | Executable capability contracts plus exact versioned read-result schemas, resource fields, and fixed metadata |
-| `config/governance.toml` | Owners, environments, classifications, approval tiers, and model-context destination, tenancy, handling, audit, and DLP rules |
-| `config/policy.toml` | Runtime risk policy and hard prohibitions |
-| `config/integrations.toml` | Provider endpoints, credential references, and granular live gates |
-| `config/oauth.toml` | OAuth profiles and required scopes |
-| `config/sources_of_truth.toml` | Canonical resource and projection rules |
-| `config/identities.toml` | Cross-system identity mappings, never credentials |
-| `config/retention.toml` | Evidence persistence modes and TTLs |
-| `config/dependency-licenses.toml` | Runtime and capsule dependency-license policy |
-| `config/capsule-authorities.example` | Example distinct role-scoped capsule signer identities and environment-backed key references |
-| `config/recurring.toml` | Disabled-by-default recurring workflow registrations |
-| `config/weekly-operating-review.toml` | Exact Jira, GitHub, and Confluence IDs for the local-only reference workflow |
+## Release status
 
-### Exact recurring occurrences
+The v1 governed core and typed provider contracts are implemented. Provider
+effects remain disabled at rest, production activation still requires an
+organization's own credentials and controls, and the protected Windows 11 x64
+certification remains planned until a clean enrolled standard-user runner
+produces real evidence.
 
-A schedule selects only when an already reviewed plan may run. It does not add
-authority. The supported first release uses one private local binder and one
-pinned SQLite claim store on a single scheduler host:
-
-```bash
-master-agent weekly-operating-review-plan --output review-plan.json
-master-agent bind-context review-plan.json [normal bound-run options] --output bound-plan.json
-master-agent recurring-bind weekly_operating_review \
-  --occurrence 2026-08-24T09:00:00 \
-  --plan bound-plan.json \
-  --recurring /absolute/private/recurring.toml \
-  --approval-authorities /absolute/private/approval-authorities.toml \
-  --output /absolute/private/occurrences/review.json
-master-agent recurring-inspect /absolute/private/occurrences/review.json
-master-agent recurring-run /absolute/private/occurrences/review.json \
-  --recurring /absolute/private/recurring.toml --dry-run
-master-agent recurring-run /absolute/private/occurrences/review.json \
-  --recurring /absolute/private/recurring.toml --apply
-```
-
-Bind, inspect, and dry-run do not resolve credentials or contact providers.
-Apply authenticates the artifact in separate trusted state, reserves it before
-credentials, reuses the normal policy/approval/orchestrator path, and checks
-the current claim generation immediately before every provider effect. There
-is no `--force`, no workflow-name apply, and no cross-host exactly-once claim.
+See the [Implementation roadmap](docs/implementation-roadmap.md) for the
+current completion ledger and [Windows certification](docs/windows-certification.md)
+for the outstanding release evidence.
 
 ## Documentation
 
-### Start here
+The [complete documentation index](docs/index.md) is organized by reader goal
+and identifies each canonical source. The full checked-in guide set is also
+listed here so release validation can prove that every current document is
+discoverable.
 
-- [Development specifications](docs/development-specifications.md)
-- [Architecture](docs/architecture.md)
-- [Systems governance for developers](docs/systems-governance.md)
-- [Semantic codebase index](docs/semantic-index.md)
-- [Semantic router measurements](docs/semantic-router-metrics.md)
+### Start and operate
+
+- [Quickstart](docs/quickstart.md)
+- [Use cases](docs/use-cases.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [CLI reference](docs/cli-reference.md)
 - [Configuration](docs/configuration.md)
-- [Capability contract](docs/capability-contract.md)
-- [Integration matrix](docs/integration-matrix.md)
-- [Implementation roadmap and completion status](docs/implementation-roadmap.md)
-
-### Agents and extensibility
-
-- [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
-- [Advisory sub-agent and Docs Agent contracts](docs/advisory-subagents.md)
-- [Capability capsule promotion](docs/capability-capsules.md)
-- [Plugin development](docs/plugin-development.md)
-
-### Providers and phase contracts
-
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
 - [Reddit connector](docs/reddit-connector.md)
-- [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
+- [Integration matrix](docs/integration-matrix.md)
 - [Live connector contracts](docs/live-connectors.md)
-- [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)
-- [Phase 2 read-only context](docs/phase-2-read-only.md)
+- [Deployment runbook](docs/deployment-runbook.md)
+- [Operations guide](docs/operations.md)
+
+### Understand and extend
+
+- [Architecture](docs/architecture.md)
+- [Capability contract](docs/capability-contract.md)
+- [Systems governance for developers](docs/systems-governance.md)
+- [Development specifications](docs/development-specifications.md)
+- [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
+- [Advisory specialist safety boundary](docs/advisory-subagents.md)
+- [Capability capsule promotion](docs/capability-capsules.md)
+- [Connector plugin development](docs/plugin-development.md)
+- [Semantic router](docs/semantic-index.md)
+- [Semantic router measurements](docs/semantic-router-metrics.md)
+
+### Phase contracts
+
+- [Phase 2A read-only integration](docs/phase-2-read-only.md)
 - [Phase 2B communication context](docs/phase-2b-communication-context.md)
 - [Phase 2C authentication and readiness](docs/phase-2c-authentication.md)
 - [Phase 3 draft-only output](docs/phase-3-drafts.md)
 - [Phase 4 approved reversible writes](docs/phase-4-approved-writes.md)
 - [Phase 5 external communication](docs/phase-5-communications.md)
-- [Phase 6 recurring autonomy](docs/phase-6-autonomy.md)
+- [Phase 6 exact-bound recurring autonomy](docs/phase-6-autonomy.md)
 
-### Security, operations, and release
+### Security, evidence, and release
 
 - [Threat model](docs/threat-model.md)
-- [Deployment runbook](docs/deployment-runbook.md)
-- [Operations guide](docs/operations.md)
+- [Implementation roadmap and completion status](docs/implementation-roadmap.md)
+- [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)
+- [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Release validation](docs/release-validation.md)
 - [Windows 11 x64 release certification](docs/windows-certification.md)
 
@@ -733,3 +416,11 @@ is no `--force`, no workflow-name apply, and no cross-host exactly-once claim.
 - provider or side-effect capsule execution outside the implemented boundary;
 - stateful execution through a missing or weaker platform backend;
 - enabling a recurring workflow merely because `--force` was supplied.
+
+## Project status and support
+
+- **Status:** v1 core implemented; organization activation and named external
+  evidence remain deployment work.
+- **Issues:** [GitHub Issues](https://github.com/RoryGlenn/MasterAgent/issues)
+- **History:** [CHANGELOG.md](CHANGELOG.md)
+- **License:** proprietary; see [LICENSE](LICENSE).
