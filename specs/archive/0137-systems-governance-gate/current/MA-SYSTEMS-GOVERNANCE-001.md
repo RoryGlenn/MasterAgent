@@ -21,7 +21,9 @@ document, state store, connector, or user workflow MUST contribute to a weighted
 complexity budget. Added complexity MUST include simpler alternatives, evidence
 that existing mechanisms are insufficient, and a removal or reversibility
 strategy. Over-budget work MUST require human review and MUST NOT be
-automatically admitted.
+automatically admitted. The runtime MUST consume a current authenticated human
+approval bound to the exact plan and covering every action before executing an
+otherwise valid over-budget plan.
 
 The runtime MUST enforce the admitted assessment before non-trivial execution
 and MUST review success metrics, unintended effects, complexity growth, removal
@@ -67,6 +69,15 @@ boundaries.
 - WHEN simpler alternatives, insufficiency evidence, or a removal strategy are
   missing, or the score exceeds the automatic budget
 - THEN the gate rejects automatic admission and identifies the required review
+
+### Human review admits an otherwise valid over-budget plan
+
+- GIVEN an otherwise valid assessment whose complexity score exceeds the
+  automatic budget
+- WHEN one current authenticated human approval covers the exact plan and every
+  action
+- THEN runtime admission may continue without weakening any ordinary policy or
+  execution control
 
 ### Systems governance cannot grant authority
 

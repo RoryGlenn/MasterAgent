@@ -231,7 +231,10 @@ Every serialized read action must include `data_classification`. The direct
 route binds that value together with provider/account/configuration digests,
 request parameters, exact requested fields or catalog output schema, item and
 byte limits, model destination, tenancy, handling, audit, and DLP requirements.
-It returns content-free egress metadata, not a second verification body.
+It returns content-free egress metadata, not a second verification body. The
+in-memory report also emits a content-free systems review; connector success
+alone leaves the declared metric and stop condition `not_observed` and requires
+reassessment.
 
 ## Provider-data egress controls
 
@@ -278,6 +281,13 @@ exact pending action manifests and every non-secret argument needed to resume,
 but contains no credential or approval-secret values and grants no authority.
 When `--result-json` is bound, its create-only output remains uncommitted while
 approval is pending and is written by the approval-complete resume.
+
+An otherwise valid over-budget systems decision is also review-required before
+the runtime starts an audit. A trusted operator can use `master-agent approve`
+with the printed plan fingerprint and the comma-separated IDs of every plan
+action. The applied run accepts that artifact only when its configured approval
+authority authenticates it, it is current, and it covers the exact whole plan.
+Partial approval cannot satisfy the complexity review.
 
 Use the request fingerprint printed by `run` for the handoff:
 

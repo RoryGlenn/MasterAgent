@@ -36,10 +36,16 @@ from master_agent.models import (
     ConnectorExecutionBinding,
     ExecutionResult,
     RiskLevel,
+    SystemsAssessment,
+    SystemsGateDecision,
+    SystemsPostExecutionReview,
     VerificationResult,
     freeze_json_mapping,
 )
-from master_agent.planners.base import enforce_systems_governance
+from master_agent.planners.base import (
+    build_systems_post_execution_review,
+    enforce_systems_governance,
+)
 from master_agent.policy import PolicyEngine
 from master_agent.provider_egress import (
     ProviderDataEgressBinding,
@@ -167,6 +173,7 @@ class DirectReadReport:
     plan_fingerprint: str
     provider: str
     actions: tuple[DirectReadActionReport, ...]
+    systems_review: SystemsPostExecutionReview
     schema: str = "master-agent/direct-read-report@1"
 
     def __post_init__(self) -> None:
@@ -178,6 +185,8 @@ class DirectReadReport:
             raise ValueError("direct read report provider must not be empty")
         if not self.actions:
             raise ValueError("direct read report must contain at least one action")
+        if not isinstance(self.systems_review, SystemsPostExecutionReview):
+            raise TypeError("direct read report requires a systems review")
 
     @property
     def successful(self) -> bool:
@@ -204,6 +213,7 @@ class DirectReadReport:
             "provider": self.provider,
             "successful": self.successful,
             "actions": [action.to_dict() for action in self.actions],
+            "systems_review": self.systems_review.to_dict(),
         }
 
 
@@ -283,11 +293,25 @@ class DirectReadSession:
             self._execute_action(action, egress)
             for action, egress in zip(plan.actions, egress_bindings, strict=True)
         )
+        assessment = plan.systems_assessment
+        decision = plan.systems_decision
+        if not isinstance(assessment, SystemsAssessment) or not isinstance(
+            decision, SystemsGateDecision
+        ):  # pragma: no cover - preflight enforces both.
+            raise ConfigurationError(
+                "direct read systems governance binding is invalid"
+            )
         return DirectReadReport(
             plan_id=plan.plan_id,
             plan_fingerprint=plan.fingerprint,
             provider=self._connector.system,
             actions=reports,
+            systems_review=build_systems_post_execution_review(
+                assessment=assessment,
+                decision=decision,
+                states=(item.state for item in reports),
+                dry_run=False,
+            ),
         )
 
     def run(self, plan: ChangePlan) -> DirectReadReport:
@@ -459,7 +483,7 @@ def preflight_direct_read_plan(
         The one provider system selected by the preflighted plan.
     """
 
-    enforce_systems_governance(plan)
+    enforce_systems_governance(plan, policy=policy)
     provider = _validate_unbound_session_shape(plan)
     governance_ok, governance_reason = governance.allows_direct_read_session(plan)
     if not governance_ok:

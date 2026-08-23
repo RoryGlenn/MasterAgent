@@ -66,13 +66,17 @@ mechanism.
 - Fast-path admission is based on both explicit assessment predicates and the
   actual risks in the generated plan.
 - Complexity above the automatic budget requires review rather than silently
-  increasing the threshold.
+  increasing the threshold. The plan carries the review-required decision, but
+  execution remains blocked until the existing approval authority authenticates
+  one current approval for the exact whole plan.
 - The systems decision cannot authorize a capability, approval, credential,
   target, provider, or side effect.
 - Free-form systems text must remain subject to existing size, retention,
   sanitization, and audit rules when it reaches the runtime binding.
 - Post-execution review must not retain provider bodies or sensitive content
   where only metadata is permitted.
+- Direct-read reports carry the same conservative content-free review without
+  adding durable audit or result state.
 
 ## Rejected alternatives
 

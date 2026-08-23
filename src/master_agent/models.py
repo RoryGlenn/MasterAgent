@@ -290,7 +290,12 @@ class SystemsAssessment:
 
 @dataclass(frozen=True, slots=True)
 class SystemsGateDecision:
-    """Immutable result of evaluating one plan and assessment."""
+    """Immutable result of evaluating one plan and assessment.
+
+    ``permitted`` records structural eligibility. A true
+    ``requires_human_review`` still blocks runtime admission until the policy
+    engine authenticates an exact whole-plan approval.
+    """
 
     route: SystemsGateRoute
     permitted: bool

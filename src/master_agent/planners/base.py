@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from master_agent.errors import ValidationError
 from master_agent.models import (
+    ActionState,
+    Approval,
     ChangePlan,
     ComplexityItem,
     ComplexityKind,
@@ -14,7 +18,12 @@ from master_agent.models import (
     SystemsAssessment,
     SystemsGateDecision,
     SystemsGateRoute,
+    SystemsMetricStatus,
+    SystemsPostExecutionReview,
 )
+
+if TYPE_CHECKING:
+    from master_agent.policy import PolicyEngine
 
 
 class Planner(Protocol):
@@ -133,8 +142,9 @@ class SystemsGovernanceGate:
                 f"{assessment.complexity_score} exceeds automatic budget "
                 f"{self._max_automatic_complexity_score}"
             )
-        permitted = not reasons
-        if permitted:
+        non_review_reason_count = len(reasons) - int(requires_human_review)
+        permitted = non_review_reason_count == 0
+        if permitted and not requires_human_review:
             reasons.append(
                 "explicit fast path accepted"
                 if route is SystemsGateRoute.FAST_PATH
@@ -150,14 +160,21 @@ class SystemsGovernanceGate:
         )
 
     def enforce(
-        self, plan: ChangePlan, assessment: SystemsAssessment
+        self,
+        plan: ChangePlan,
+        assessment: SystemsAssessment,
     ) -> SystemsGateDecision:
-        """Return a permitted decision or raise a validation error."""
+        """Return an automatically permitted decision or raise."""
 
         decision = self.evaluate(plan, assessment)
         if not decision.permitted:
             raise ValidationError(
                 "systems governance denied plan: " + "; ".join(decision.reasons)
+            )
+        if decision.requires_human_review:
+            raise ValidationError(
+                "systems governance requires authenticated human review: "
+                + "; ".join(decision.reasons)
             )
         return decision
 
@@ -172,7 +189,12 @@ def bind_systems_governance(
 
     if plan.systems_assessment is not None or plan.systems_decision is not None:
         raise ValidationError("plan already contains a systems governance binding")
-    decision = (gate or SystemsGovernanceGate()).enforce(plan, assessment)
+    selected_gate = gate or SystemsGovernanceGate()
+    decision = selected_gate.evaluate(plan, assessment)
+    if not decision.permitted:
+        raise ValidationError(
+            "systems governance denied plan: " + "; ".join(decision.reasons)
+        )
     return replace(plan, systems_assessment=assessment, systems_decision=decision)
 
 
@@ -206,6 +228,8 @@ def enforce_systems_governance(
     plan: ChangePlan,
     *,
     gate: SystemsGovernanceGate | None = None,
+    policy: PolicyEngine | None = None,
+    approvals: Iterable[Approval] = (),
 ) -> SystemsGateDecision:
     """Reject missing, stale, denied, or forged plan governance evidence."""
 
@@ -213,10 +237,84 @@ def enforce_systems_governance(
     bound_decision = plan.systems_decision
     if assessment is None or bound_decision is None:
         raise ValidationError("plan is missing a systems governance binding")
-    expected = (gate or SystemsGovernanceGate()).enforce(plan, assessment)
+    selected_gate = gate or SystemsGovernanceGate()
+    expected = selected_gate.evaluate(plan, assessment)
     if bound_decision != expected:
         raise ValidationError("plan systems governance decision is stale or forged")
+    if not expected.permitted:
+        raise ValidationError(
+            "systems governance denied plan: " + "; ".join(expected.reasons)
+        )
+    if expected.requires_human_review and (
+        policy is None
+        or not _has_authenticated_whole_plan_review(
+            policy=policy,
+            plan=plan,
+            approvals=tuple(approvals),
+        )
+    ):
+        raise ValidationError(
+            "systems governance requires authenticated human review: "
+            + "; ".join(expected.reasons)
+        )
     return bound_decision
+
+
+def _has_authenticated_whole_plan_review(
+    *,
+    policy: PolicyEngine,
+    plan: ChangePlan,
+    approvals: tuple[Approval, ...],
+) -> bool:
+    """Return whether one authenticated human approved every plan action."""
+
+    authenticated = policy.authenticated_approvals(plan, approvals)
+    action_ids = {action.action_id for action in plan.actions}
+    return any(
+        action_ids.issubset(approval.approved_action_ids)
+        for approval, _subject in authenticated
+    )
+
+
+def build_systems_post_execution_review(
+    *,
+    assessment: SystemsAssessment,
+    decision: SystemsGateDecision,
+    states: Iterable[ActionState],
+    dry_run: bool,
+) -> SystemsPostExecutionReview:
+    """Build conservative, content-free post-execution systems evidence."""
+
+    observed_states = tuple(states)
+    unintended_states = {
+        ActionState.INDETERMINATE,
+        ActionState.COMPENSATION_FAILED,
+    }
+    unintended_effects = any(item in unintended_states for item in observed_states)
+    successful = all(
+        item in {ActionState.PLANNED, ActionState.VERIFIED, ActionState.REUSED}
+        for item in observed_states
+    )
+    reason_codes = ["dry_run_metric_not_observed" if dry_run else "metric_not_observed"]
+    if not successful:
+        reason_codes.append("execution_unsuccessful")
+    if unintended_effects:
+        reason_codes.append("unintended_effect_possible")
+    reason_codes.append("stop_condition_not_observed")
+    return SystemsPostExecutionReview(
+        assessment_fingerprint=assessment.fingerprint,
+        decision_fingerprint=decision.fingerprint,
+        success_metric_sha256=hashlib.sha256(
+            assessment.success_metric.encode("utf-8")
+        ).hexdigest(),
+        metric_status=SystemsMetricStatus.NOT_OBSERVED,
+        unintended_effects_detected=unintended_effects,
+        planned_complexity_score=assessment.complexity_score,
+        removal_candidate_count=len(assessment.removable_complexity),
+        stop_condition_checked=False,
+        reassessment_required=True,
+        reason_codes=tuple(reason_codes),
+    )
 
 
 class GovernedPlanner:
@@ -275,5 +373,6 @@ __all__ = [
     "SystemsGovernanceGate",
     "bind_fast_path_governance",
     "bind_systems_governance",
+    "build_systems_post_execution_review",
     "enforce_systems_governance",
 ]

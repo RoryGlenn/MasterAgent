@@ -7342,6 +7342,11 @@ def _print_direct_read_report(report: DirectReadReport) -> None:
             max_characters=_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS,
         )
         print(f"  result: {rendered}")
+    print(
+        "systems review: "
+        f"metric={report.systems_review.metric_status}, "
+        f"reassessment_required={report.systems_review.reassessment_required}"
+    )
     print(f"successful: {report.successful}")
 
 

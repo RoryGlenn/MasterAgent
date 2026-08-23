@@ -225,9 +225,14 @@ class SystemsGovernanceGateTests(unittest.TestCase):
             assessment,
         )
 
-        self.assertFalse(decision.permitted)
+        self.assertTrue(decision.permitted)
         self.assertTrue(decision.requires_human_review)
         self.assertIn("exceeds automatic budget", " ".join(decision.reasons))
+        with self.assertRaisesRegex(ValidationError, "authenticated human review"):
+            SystemsGovernanceGate().enforce(
+                _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+                assessment,
+            )
 
     def test_governed_planner_assesses_before_building_the_plan(self) -> None:
         events: list[str] = []

@@ -86,18 +86,22 @@ agents, configuration surfaces, authoritative documents, state stores,
 connectors, and user workflows consume a weighted complexity budget. Added
 complexity must include simpler alternatives, evidence that existing
 mechanisms are insufficient, and an explicit removal strategy; over-budget
-plans are not admitted automatically.
+plans bind a review-required decision but are not admitted automatically. The
+orchestrator unlocks that decision only when the configured approval authority
+authenticates one current approval bound to the exact plan fingerprint and
+covering every action. Missing, invalid, expired, partial, or differently bound
+approvals fail before audit initialization or connector access.
 
-After orchestration, `RunReport.systems_review` and the terminal audit event
-contain content-free evidence for metric observation, possible unintended
-effects, planned complexity, removal candidates, and whether the
-reassessment/stop condition was independently checked. When the runtime cannot
-independently observe the stated success metric or stop condition, it records
-`not_observed` and requires reassessment instead of claiming success from
-connector completion alone. Systems governance is an admission
-layer only: capability, source-of-truth, organization governance, policy,
-approval, credential, provider, execution, verification, compensation,
-retention, and audit controls remain independently decisive.
+After execution, `RunReport.systems_review`, `DirectReadReport.systems_review`,
+and the orchestrator's terminal audit event contain content-free evidence for
+metric observation, possible unintended effects, planned complexity, removal
+candidates, and whether the reassessment/stop condition was independently
+checked. When the runtime cannot independently observe the stated success
+metric or stop condition, it records `not_observed` and requires reassessment
+instead of claiming success from connector completion alone. Systems governance
+is an admission layer only: capability, source-of-truth, organization
+governance, policy, approval, credential, provider, execution, verification,
+compensation, retention, and audit controls remain independently decisive.
 
 Direct GitHub-host advisory invocation is disabled because that surface cannot
 prove the selected-parent allowlist, depth-one routing, or per-goal counters.
@@ -510,9 +514,10 @@ The direct executor validates the whole plan before provider setup, uses a
 verification. It rejects workflow or persisted execution context, multiple
 providers, effects, non-direct authority, and approval-required actions. This
 route also requires an immutable explicit fast-path systems binding before any
-provider setup. This keeps the convenient path structurally unable to become an
-effect bypass; the orchestrator below remains the only execution owner for
-provider effects.
+provider setup. Its returned in-memory report includes the same conservative,
+content-free systems review as the applied runtime. This keeps the convenient
+path structurally unable to become an effect bypass; the orchestrator below
+remains the only execution owner for provider effects.
 
 ### Orchestrator
 

@@ -200,6 +200,10 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertEqual(
             report.to_dict()["schema"], "master-agent/direct-read-report@1"
         )
+        self.assertEqual(report.systems_review.metric_status, "not_observed")
+        self.assertFalse(report.systems_review.stop_condition_checked)
+        self.assertTrue(report.systems_review.reassessment_required)
+        self.assertIn("systems_review", report.to_dict())
         transport.assert_drained()
 
     def test_confidential_direct_read_is_denied_before_provider_access(self) -> None:
