@@ -154,6 +154,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "AWS_SECRET_ACCESS_KEY=example-secret-value",
                     "SharedAccessSignature=example-signature-value",
                     "xoxb-1234567890-secret",
+                    "xapp-"
+                    + "1-A1234567890-1234567890123-abcdefABCDEF1234567890abcdef",
                     "AIza1234567890abcdefghijklmnopqrstuvwxyz",
                     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature12345678",
                     "Cookie: sessionid=abc1234567890",

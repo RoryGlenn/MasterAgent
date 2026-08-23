@@ -114,6 +114,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b|"
     r"\bAIza[A-Za-z0-9_-]{32,}\b|"
     r"\bxox[baprs]-[A-Za-z0-9-]{8,}\b|"
+    r"\bxapp-[A-Za-z0-9-]{20,}\b|"
     r"\bnpm_[A-Za-z0-9]{20,}\b|"
     r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\b|"
     r"\b(?:gh[pousr]_|github_pat_|sk-proj-|sk_(?:live|test)_|"
