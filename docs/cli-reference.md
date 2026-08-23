@@ -420,7 +420,9 @@ reservation through journal commit and publication. `record` never initializes
 a missing database or its bookkeeping state; `start` validates all retained
 fields before initializing one.
 
-The database admits at most 4,096 events. Its allowlist contains event IDs,
+The database admits at most 1,024 events so a maximum-size journal remains
+inside the native 8 MiB state boundary on every supported platform. Its
+allowlist contains event IDs,
 timestamps, work IDs, kinds, stages, short summaries, compact references, and
 chain hashes. Obvious credential-shaped text, URI user information, control
 characters, unsafe URLs, and oversized fields are rejected. Do not paste

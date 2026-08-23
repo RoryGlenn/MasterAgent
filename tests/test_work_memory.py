@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
@@ -11,6 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from master_agent import work_memory
 from master_agent.approval_handoff import (
     validate_restricted_json_payload,
     write_restricted_json,
@@ -159,6 +161,9 @@ class WorkMemoryTests(unittest.TestCase):
                     "postgresql://alice:secret-password@db.example/app",
                     "https://alice:secret@example.com/path",
                     "machine api.example.com login alice password supersecret123",
+                    '{"access_token":"supersecret123456789"}',
+                    '{"client_secret":"supersecret123456789"}',
+                    '{"Authorization":"Bearer supersecret123456789"}',
                     (
                         "https://acct.blob.core.windows.net/c/b?"
                         "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
@@ -203,6 +208,43 @@ class WorkMemoryTests(unittest.TestCase):
                         kind=WorkEventKind.DECISION,
                         summary="x" * 2_049,
                     )
+
+    def test_maximum_journal_payload_fits_windows_state_boundary(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute(work_memory._WORK_EVENTS_TABLE_SQL)
+            connection.execute(work_memory._WORK_MEMORY_STATE_TABLE_SQL)
+            maximum_row = (
+                "0" * 36,
+                "2026-08-23T00:00:00.000000+00:00",
+                "w" * 128,
+                WorkEventKind.REFERENCE.value,
+                WorkStage.IMPLEMENTING.value,
+                "s" * 2_048,
+                "r" * 1_024,
+                "a" * 64,
+                "b" * 64,
+            )
+            connection.executemany(
+                "INSERT INTO work_events ("
+                "sequence, event_id, timestamp, work_id, kind, stage, summary, "
+                "reference, previous_hash, event_hash"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    (sequence, *maximum_row)
+                    for sequence in range(1, work_memory._MAX_EVENTS + 1)
+                ),
+            )
+            connection.execute(
+                "INSERT INTO work_memory_state (id, event_count, head_hash) "
+                "VALUES (1, ?, ?)",
+                (work_memory._MAX_EVENTS, "b" * 64),
+            )
+            payload = connection.serialize()
+        finally:
+            connection.close()
+
+        self.assertLessEqual(len(payload), 8 * 1024 * 1024)
 
     def test_concurrent_writers_preserve_every_event(self) -> None:
         with private_temporary_directory() as directory:
@@ -656,6 +698,11 @@ class WorkMemoryTests(unittest.TestCase):
                     "https://acct.blob.core.windows.net/c/b?"
                     "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
                 ),
+                "invalid or sensitive",
+            ),
+            (
+                "issue-166-json",
+                '{"access_token":"supersecret123456789"}',
                 "invalid or sensitive",
             ),
         ):

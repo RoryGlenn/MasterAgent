@@ -24,7 +24,9 @@ mismatch, deletion, reordering, or checkpoint mismatch. Concurrent writers
 MUST serialize through the native database boundary without losing events.
 
 Inputs, event count, stored fields, and serialized output MUST be bounded and
-deterministic. The journal MUST retain only operator-supplied identifiers,
+deterministic. The maximum permitted journal MUST fit within the certified
+native database publication boundary on every supported platform. The journal
+MUST retain only operator-supplied identifiers,
 short summaries, and references. It MUST NOT retain provider response bodies,
 credentials, authentication material, approval artifacts, execution
 transcripts, or arbitrary attachments. Remembered content MUST remain untrusted
