@@ -157,6 +157,31 @@ class SQLiteSafetyTests(unittest.TestCase):
                 connection.execute("CREATE TABLE values_for_test (value INTEGER)")
             replacement.close()
 
+    def test_existing_state_never_recreates_missing_bookkeeping(self) -> None:
+        for missing_name in (
+            ".state.sqlite3.master-agent.lock",
+            ".state.sqlite3.master-agent.flock",
+        ):
+            with (
+                self.subTest(missing_name=missing_name),
+                TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                database_path = root / "state.sqlite3"
+                database = PinnedSQLiteDatabase(database_path)
+                with database.connect() as connection:
+                    connection.execute("CREATE TABLE values_for_test (value INTEGER)")
+                database.close()
+                before = database_path.read_bytes()
+                missing = root / missing_name
+                missing.unlink()
+
+                with self.assertRaises((ConfigurationError, FileNotFoundError)):
+                    PinnedSQLiteDatabase(database_path, create=False)
+
+                self.assertEqual(database_path.read_bytes(), before)
+                self.assertFalse(missing.exists())
+
     def test_cleanup_does_not_remove_a_generation_committed_by_a_peer(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

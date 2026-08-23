@@ -567,6 +567,229 @@ def load_approval_request(path: Path) -> ApprovalRequest:
     return ApprovalRequest.from_dict(raw)
 
 
+class RestrictedJSONReservation:
+    """Hold one create-only JSON output name through an external transaction."""
+
+    def __init__(self, path: Path) -> None:
+        require_persistent_state_platform()
+        selected = path.expanduser()
+        if not selected.is_absolute():
+            selected = Path.cwd() / selected
+        if (
+            selected.name in {"", ".", ".."}
+            or Path(selected.name).name != selected.name
+        ):
+            raise ConfigurationError(
+                "restricted artifact escaped its private directory"
+            )
+        self._directory = PinnedDirectory.open(selected.parent)
+        self._path = self._directory.path / selected.name
+        self._descriptor = -1
+        self._owned_identity: tuple[int, int, int] | None = None
+        self._windows_file: Any | None = None
+        self._committed = False
+        self._closed = False
+        try:
+            atomic = get_atomic_publication_recovery_backend()
+            if atomic.backend_id == "windows-handle-atomic-state":
+                self._reserve_windows_name(atomic)
+            else:
+                self._reserve_posix_name()
+            self._directory.validate()
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def path(self) -> Path:
+        """Return the canonical reserved output path."""
+
+        return self._path
+
+    def commit(self, payload: Mapping[str, Any]) -> Path:
+        """Publish exact bounded JSON bytes through the held reservation."""
+
+        if self._closed or self._committed:
+            raise ConfigurationError("restricted artifact reservation is not active")
+        content = _json_bytes(payload)
+        if len(content) > _MAX_REQUEST_BYTES:
+            raise ValidationError("restricted artifact exceeds the 8 MiB limit")
+        try:
+            if self._windows_file is not None:
+                self._windows_file.write_bytes(content)
+                self._windows_file.publish()
+            else:
+                self._commit_posix(content)
+            self._directory.validate()
+            self._committed = True
+            return self._path
+        except BaseException as error:
+            try:
+                self.close()
+            except ConfigurationError as rollback_error:
+                raise rollback_error from error
+            raise
+
+    def close(self) -> None:
+        """Release the reservation and remove only an uncommitted owned file."""
+
+        if self._closed:
+            return
+        rollback_error: ConfigurationError | None = None
+        try:
+            if (
+                not self._committed
+                and self._descriptor >= 0
+                and self._owned_identity is not None
+            ):
+                try:
+                    _unlink_if_owned(
+                        self._directory.fileno(),
+                        self._path.name,
+                        self._owned_identity,
+                    )
+                except ConfigurationError as error:
+                    rollback_error = error
+        finally:
+            if self._descriptor >= 0:
+                os.close(self._descriptor)
+                self._descriptor = -1
+            if self._windows_file is not None:
+                self._windows_file.close()
+                self._windows_file = None
+            self._directory.close()
+            self._closed = True
+        if rollback_error is not None:
+            raise rollback_error
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _reserve_windows_name(self, atomic: Any) -> None:
+        """Exclusively create and retain the actual Windows output name."""
+
+        from master_agent.platform_runtime.windows.atomic import (
+            WindowsAtomicPublicationRecoveryBackend,
+        )
+
+        if not isinstance(atomic, WindowsAtomicPublicationRecoveryBackend):
+            raise ConfigurationError(
+                "native Windows atomic publication backend is unavailable"
+            )
+        parent = atomic.filesystem.pin_directory(
+            self._path.parent,
+            require_private=True,
+        )
+        created: Any | None = None
+        try:
+            try:
+                created = parent.create_private_file(
+                    self._path.name,
+                    max_bytes=_MAX_REQUEST_BYTES,
+                )
+            except FileExistsError:
+                raise ConfigurationError(
+                    "restricted artifact already exists; use a fresh private "
+                    "output name"
+                ) from None
+            parent.flush_directory()
+            self._windows_file = created
+        except BaseException:
+            if created is not None:
+                created.close()
+            raise
+        finally:
+            parent.close()
+
+    def _reserve_posix_name(self) -> None:
+        parent = self._directory.fileno()
+        try:
+            descriptor = os.open(
+                self._path.name,
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=parent,
+            )
+        except FileExistsError:
+            raise ConfigurationError(
+                "restricted artifact already exists; use a fresh private output name"
+            ) from None
+        except OSError as error:
+            raise ConfigurationError(
+                "restricted artifact destination changed"
+            ) from error
+        initial: os.stat_result | None = None
+        try:
+            initial = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(initial.st_mode)
+                or initial.st_uid != os.getuid()
+                or initial.st_nlink != 1
+                or stat.S_IMODE(initial.st_mode) & 0o077
+            ):
+                raise ConfigurationError("restricted artifact file is unsafe")
+            os.fchmod(descriptor, 0o600)
+            identity = _restricted_identity(os.fstat(descriptor))
+            os.fsync(descriptor)
+            os.fsync(parent)
+            self._descriptor = descriptor
+            self._owned_identity = identity[:3]
+        except BaseException:
+            os.close(descriptor)
+            if initial is not None:
+                _unlink_if_owned(
+                    parent,
+                    self._path.name,
+                    (initial.st_dev, initial.st_ino, initial.st_uid),
+                )
+            raise
+
+    def _commit_posix(self, content: bytes) -> None:
+        if self._descriptor < 0 or self._owned_identity is None:
+            raise ConfigurationError("restricted artifact reservation is incomplete")
+        parent = self._directory.fileno()
+        current = os.fstat(self._descriptor)
+        public = os.stat(self._path.name, dir_fd=parent, follow_symlinks=False)
+        expected = (*self._owned_identity, 0o600, 1)
+        if (
+            _restricted_identity(current) != expected
+            or _restricted_identity(public) != expected
+            or current.st_size != 0
+        ):
+            raise ConfigurationError("restricted artifact reservation changed")
+        os.lseek(self._descriptor, 0, os.SEEK_SET)
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(self._descriptor, remaining)
+            if written <= 0:
+                raise OSError("short restricted artifact write")
+            remaining = remaining[written:]
+        os.fsync(self._descriptor)
+        self._directory.validate()
+        final = os.fstat(self._descriptor)
+        published = os.stat(
+            self._path.name,
+            dir_fd=parent,
+            follow_symlinks=False,
+        )
+        if (
+            _restricted_identity(final) != expected
+            or _restricted_identity(published) != expected
+        ):
+            raise ConfigurationError("restricted artifact publication was replaced")
+        os.lseek(self._descriptor, 0, os.SEEK_SET)
+        if _read_descriptor(self._descriptor) != content:
+            raise ConfigurationError("restricted artifact bytes changed during write")
+        os.fsync(parent)
+
+
 def write_restricted_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Create one private JSON artifact without overwriting an existing name."""
 
@@ -581,6 +804,13 @@ def write_restricted_json(path: Path, payload: Mapping[str, Any]) -> None:
             _json_bytes(payload),
             reuse_identical=False,
         )
+
+
+def validate_restricted_json_payload(payload: Mapping[str, Any]) -> None:
+    """Reject a JSON object that cannot fit the restricted artifact boundary."""
+
+    if len(_json_bytes(payload)) > _MAX_REQUEST_BYTES:
+        raise ValidationError("restricted artifact exceeds the 8 MiB limit")
 
 
 def _publish_restricted_bytes(

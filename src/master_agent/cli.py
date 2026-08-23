@@ -27,8 +27,10 @@ from master_agent import __version__
 from master_agent.approval_handoff import (
     ApprovalRequest,
     ApprovalRunInvocation,
+    RestrictedJSONReservation,
     load_approval_request,
     publish_approval_request,
+    validate_restricted_json_payload,
     write_restricted_json,
 )
 from master_agent.approvals import HmacApprovalAuthenticator
@@ -224,6 +226,12 @@ from master_agent.terminal import (
     MAX_TERMINAL_EXCERPT_CHARACTERS,
     MAX_TERMINAL_FIELD_CHARACTERS,
     render_terminal_text,
+)
+from master_agent.work_memory import (
+    WorkEventKind,
+    WorkMemory,
+    WorkSnapshot,
+    WorkStage,
 )
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
@@ -631,6 +639,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _evidence_repair(
                 root=args.root,
                 apply=args.apply,
+                output=args.output,
+            )
+        if args.command == "work-memory":
+            return _work_memory(
+                action=args.work_memory_command,
+                database=args.database,
+                work_id=getattr(args, "work_id", None),
+                issue=getattr(args, "issue", None),
+                kind=getattr(args, "kind", None),
+                stage=getattr(args, "stage", None),
+                summary=getattr(args, "summary", None),
+                reference=getattr(args, "reference", None),
                 output=args.output,
             )
         if args.command == "citations":
@@ -1429,6 +1449,34 @@ def _build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--root", type=Path, default=Path(".master-agent"))
     repair.add_argument("--apply", action="store_true")
     repair.add_argument("--output", type=Path)
+
+    work_memory = subparsers.add_parser(
+        "work-memory",
+        help="keep bounded local issue-to-merge work metadata",
+    )
+    work_memory.add_argument(
+        "work_memory_command",
+        choices=("start", "record", "show", "verify"),
+        metavar="{start,record,show,verify}",
+    )
+    work_memory.add_argument("--database", type=Path, required=True)
+    work_memory.add_argument("--work-id")
+    work_memory.add_argument("--issue")
+    work_memory.add_argument(
+        "--kind",
+        choices=(
+            WorkEventKind.DECISION.value,
+            WorkEventKind.CHECKPOINT.value,
+            WorkEventKind.REFERENCE.value,
+        ),
+    )
+    work_memory.add_argument(
+        "--stage",
+        choices=tuple(stage.value for stage in WorkStage),
+    )
+    work_memory.add_argument("--summary")
+    work_memory.add_argument("--reference")
+    work_memory.add_argument("--output", type=Path)
 
     citations = subparsers.add_parser(
         "citations",
@@ -7474,6 +7522,172 @@ def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
         _write_json(output, payload)
         print(f"wrote {output}")
     return 2 if result.errors else 0
+
+
+def _work_memory(
+    *,
+    action: str,
+    database: Path,
+    work_id: str | None,
+    issue: str | None,
+    kind: str | None,
+    stage: str | None,
+    summary: str | None,
+    reference: str | None,
+    output: Path | None,
+) -> int:
+    """Run one explicit local persistent-work-memory operation."""
+
+    if action == "verify":
+        if any(
+            value is not None
+            for value in (work_id, issue, kind, stage, summary, reference)
+        ):
+            raise ValueError("work-memory verify accepts only --database and --output")
+        _preflight_work_memory_output(output, database=database)
+        verification = WorkMemory.verify_existing(database)
+        _emit_work_memory_payload(verification.to_dict(), output=output)
+        return 0 if verification.valid else 2
+    if work_id is None:
+        raise ValueError("work-memory operation requires --work-id")
+    if action == "show":
+        if any(value is not None for value in (issue, kind, stage, summary, reference)):
+            raise ValueError(
+                "work-memory show accepts only --database, --work-id, and --output"
+            )
+        _preflight_work_memory_output(output, database=database)
+        snapshot = WorkMemory.show_existing(database, work_id)
+    elif action == "start":
+        if issue is None or summary is None:
+            raise ValueError("work-memory start requires --issue and --summary")
+        if any(value is not None for value in (kind, stage, reference)):
+            raise ValueError("work-memory start received incompatible arguments")
+        WorkMemory.validate_start_fields(
+            work_id=work_id,
+            issue=issue,
+            summary=summary,
+        )
+        _preflight_work_memory_output(output, database=database)
+        with ExitStack() as resources:
+            reservation = (
+                resources.enter_context(RestrictedJSONReservation(output))
+                if output is not None
+                else None
+            )
+            with WorkMemory(database) as memory:
+                snapshot = memory.start(
+                    work_id=work_id,
+                    issue=issue,
+                    summary=summary,
+                    snapshot_validator=(
+                        _validate_work_memory_output_payload
+                        if output is not None
+                        else None
+                    ),
+                )
+            if reservation is not None:
+                reservation.commit(snapshot.to_dict())
+                print(f"wrote {reservation.path}")
+                return 0
+    elif action == "record":
+        if kind is None or summary is None:
+            raise ValueError("work-memory record requires --kind and --summary")
+        if issue is not None:
+            raise ValueError("work-memory record does not accept --issue")
+        _preflight_work_memory_output(output, database=database)
+        with ExitStack() as resources:
+            reservation = (
+                resources.enter_context(RestrictedJSONReservation(output))
+                if output is not None
+                else None
+            )
+            with WorkMemory(database, create=False) as memory:
+                snapshot = memory.record(
+                    work_id=work_id,
+                    kind=WorkEventKind(kind),
+                    stage=WorkStage(stage) if stage is not None else None,
+                    summary=summary,
+                    reference=reference,
+                    snapshot_validator=(
+                        _validate_work_memory_output_payload
+                        if output is not None
+                        else None
+                    ),
+                )
+            if reservation is not None:
+                reservation.commit(snapshot.to_dict())
+                print(f"wrote {reservation.path}")
+                return 0
+    else:
+        raise ValueError("unknown work-memory operation")
+    _emit_work_memory_payload(snapshot.to_dict(), output=output)
+    return 0
+
+
+def _preflight_work_memory_output(
+    output: Path | None,
+    *,
+    database: Path,
+) -> None:
+    """Reject an occupied create-only output before mutating the journal."""
+
+    if output is None:
+        return
+    require_persistent_state_platform()
+    selected = output.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    if selected.name in {"", ".", ".."}:
+        raise ConfigurationError("restricted artifact output path is invalid")
+    selected = selected.resolve(strict=False)
+    selected_database = database.expanduser()
+    if not selected_database.is_absolute():
+        selected_database = Path.cwd() / selected_database
+    selected_database = selected_database.resolve(strict=False)
+    if (
+        selected.parent.as_posix().casefold()
+        == selected_database.parent.as_posix().casefold()
+    ):
+        database_name = selected_database.name.casefold()
+        reserved_names = {
+            database_name,
+            f".{database_name}.master-agent.lock",
+            f".{database_name}.master-agent.flock",
+            f"{database_name}-journal",
+            f"{database_name}-shm",
+            f"{database_name}-wal",
+        }
+        output_name = selected.name.casefold()
+        if output_name in reserved_names or output_name.startswith(".master-agent-"):
+            raise ConfigurationError(
+                "work-memory output must not alias the journal or its state files"
+            )
+    with PinnedDirectory.open(selected.parent) as directory:
+        requested_name = selected.name.casefold()
+        if any(name.casefold() == requested_name for name in directory.list_children()):
+            raise ConfigurationError(
+                "restricted artifact already exists; use a fresh private output name"
+            )
+
+
+def _validate_work_memory_output_payload(snapshot: WorkSnapshot) -> None:
+    """Validate exact output bytes before the journal transaction commits."""
+
+    validate_restricted_json_payload(snapshot.to_dict())
+
+
+def _emit_work_memory_payload(
+    payload: Mapping[str, object],
+    *,
+    output: Path | None,
+) -> None:
+    """Publish bounded work metadata as deterministic JSON."""
+
+    if output is not None:
+        _write_json(output, payload)
+        print(f"wrote {output}")
+        return
+    print(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True))
 
 
 def _citations(path: Path, *, output: Path | None) -> int:

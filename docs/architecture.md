@@ -649,6 +649,23 @@ compensation digests, and the audit-chain anchor. Production requires an
 external healthy tamper-resistant receipt sink; local SQLite cannot satisfy
 that gate.
 
+### Persistent work memory
+
+`WorkMemory` is an optional local terminal journal beside, not inside, the
+governed execution path. It accepts only explicit bounded work metadata and an
+explicit database path; it performs no provider, network, hook, scheduler, or
+server action. Each native pinned SQLite transaction verifies the existing
+global event chain and durable count/head checkpoint before appending one
+canonical event. Current stage is replay-derived, so there is no separate
+mutable status row that can disagree with history.
+
+`show` and `verify` open an existing read-only pinned snapshot. Exact schema,
+row, hash, sequence, event-kind, work-start, lifecycle, terminal-merge, and
+checkpoint validation rejects corrupt or substituted logical history without
+creating or repairing it. Lifecycle stages remain strictly local progress
+labels. Summaries and references are untrusted metadata and have no path into
+identity, capability, policy, approval, or execution authority.
+
 ### Retention and citations
 
 Normalized resources receive stable citation IDs. Metadata-only persistence is

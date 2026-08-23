@@ -1,5 +1,14 @@
 # Changelog
 
+- Add bounded persistent issue-to-merge work memory with explicit local
+  `work-memory start`, `record`, `show`, and `verify` commands. Owner-private
+  pinned SQLite, serialized append-only global hash chaining, deterministic
+  replay, strict one-step lifecycle transitions, schema and checkpoint
+  validation, bounded metadata, and non-mutating inspection detect ordinary
+  editing, deletion, reordering, truncation, and unsafe state. The feature
+  starts no website, server, hook, poller, provider, or network path, and
+  remembered content never grants identity, authority, capability, or approval.
+
 - Add authenticated exact-bound recurring occurrences with strict canonical
   artifacts, separately trusted local binder registration, deterministic
   UTC/IANA/DST/tzdata and latest-only catch-up, single-host fenced claims,
