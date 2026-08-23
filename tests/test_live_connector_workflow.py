@@ -136,6 +136,24 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("MASTER_AGENT_BITBUCKET_USERNAME", self.workflow)
         self.assertEqual(self.workflow.count("MASTER_AGENT_BITBUCKET_EMAIL:"), 3)
+        read_job = _job_source(self.workflow, "credentialed-read", "sandbox-effects")
+        effect_job = _job_source(
+            self.workflow, "sandbox-effects", "github-admin-sandbox"
+        )
+        admin_job = _job_source(self.workflow, "github-admin-sandbox", None)
+        self.assertIn(
+            "MASTER_AGENT_PROXY_USERNAME: "
+            "${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_USERNAME }}",
+            read_job,
+        )
+        self.assertIn(
+            "MASTER_AGENT_PROXY_PASSWORD: "
+            "${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_PASSWORD }}",
+            read_job,
+        )
+        for source in (effect_job, admin_job):
+            self.assertNotIn("MASTER_AGENT_LIVE_READ_PROXY_USERNAME", source)
+            self.assertNotIn("MASTER_AGENT_LIVE_READ_PROXY_PASSWORD", source)
         for application_credential in (
             "MASTER_AGENT_ENTRA_APP_CLIENT_ID",
             "MASTER_AGENT_ENTRA_APP_CLIENT_SECRET",

@@ -213,13 +213,17 @@ Authenticated proxy and enterprise-CA evidence is opt-in and must run only from
 reviewed default-branch code in the protected `connector-integration-read`
 environment. It must never run for a pull request or fork. Before enabling it:
 
-1. add a dedicated company proxy test account to the environment secret store;
+1. add a dedicated company proxy test account to the environment secret store
+   as `MASTER_AGENT_LIVE_READ_PROXY_USERNAME` and
+   `MASTER_AGENT_LIVE_READ_PROXY_PASSWORD`;
 2. add the inspection CA as `MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM`;
 3. place a `network_profiles` entry in
    `MASTER_AGENT_LIVE_READ_INTEGRATIONS_TOML` using the fixed proxy authority,
    `MASTER_AGENT_PROXY_USERNAME`, `MASTER_AGENT_PROXY_PASSWORD`, and
    `MASTER_AGENT_ENTERPRISE_CA_BUNDLE` references;
-4. map the two proxy credential secrets only inside the protected read job;
+4. confirm the workflow maps those two read-environment secrets only to the
+   fixed `MASTER_AGENT_PROXY_USERNAME` and `MASTER_AGENT_PROXY_PASSWORD` broker
+   references on the protected read harness step;
 5. confirm the proxy permits CONNECT only to the fixed provider origins in the
    read matrix; and
 6. manually dispatch the read matrix from the current default branch.

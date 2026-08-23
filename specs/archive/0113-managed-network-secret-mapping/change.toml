@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0113-managed-network-secret-mapping"
+title = "Map protected managed-network credentials"
+status = "archived"
+github_issue = 113
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-LIVE-INTEGRATION-001"
+destination = "security/MA-LIVE-INTEGRATION-001.md"
+source = "current/MA-LIVE-INTEGRATION-001.md"
