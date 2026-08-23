@@ -5,9 +5,11 @@
 Extract the existing doctor assessment into one reusable CLI helper. The
 doctor renderer and the support-bundle command consume that same assessment so
 their readiness facts cannot drift. A pure builder in `operating.py` selects a
-fixed set of doctor fields, adds bounded support/runtime metadata, computes
-canonical JSON section digests, and returns the bundle mapping. The CLI writes
-that mapping through the existing restricted JSON publisher.
+fixed set of doctor fields, projects each issue onto its category, valid
+capability, and fixed helpdesk guidance, redacts any remaining path-bearing
+string as a whole, adds bounded support/runtime metadata, computes canonical
+JSON section digests, and returns the bundle mapping. The CLI writes that
+mapping through the existing restricted JSON publisher.
 
 ## Affected components
 
@@ -23,7 +25,9 @@ that mapping through the existing restricted JSON publisher.
 1. Resolve the explicit or default organization profile path.
 2. Run the existing offline doctor assessment without connectors or credential
    reads.
-3. Select allowlisted readiness fields and omit `profile_source`.
+3. Select allowlisted readiness fields, omit `profile_source`, replace parser
+   messages with fixed categorical guidance, and redact any path-bearing string
+   as a whole.
 4. Add a random support ID, UTC creation time, MasterAgent version, and Python
    version.
 5. Hash canonical doctor and runtime sections and record their byte counts.
@@ -39,9 +43,11 @@ enterprise readiness.
 
 The bundle never reads arbitrary logs, environment values, token files,
 provider bodies, hostnames, usernames, or command history. It accepts only
-known doctor fields from the internal assessment. Output is bounded, private,
-create-only, no-follow, and not uploaded. SHA-256 digests detect later section
-changes but do not authenticate the bundle or grant authority.
+known doctor fields from the internal assessment, never exports raw parser
+messages, and replaces a whole string when any local-path marker is present.
+Output is bounded, private, create-only, no-follow, and not uploaded. SHA-256
+digests detect later section changes but do not authenticate the bundle or
+grant authority.
 
 ## Rejected alternatives
 

@@ -175,10 +175,11 @@ because those gaps are the diagnostic result. The bundle contains a unique
 support ID, UTC creation time, MasterAgent and Python versions, allowlisted
 doctor fields, and canonical byte counts and SHA-256 digests for its `doctor`
 and `runtime` sections. It removes `profile_source` and redacts absolute path
-text. It does not read token-file contents, construct connectors, contact a
-provider, collect logs or environment values, or send the bundle anywhere.
-Use a fresh filename in an already private directory, inspect the JSON, and
-share it only through the organization's approved helpdesk channel.
+text as a whole. Raw parser messages are replaced by fixed guidance for their
+failure category. It does not read token-file contents, construct connectors,
+contact a provider, collect logs or environment values, or send the bundle
+anywhere. Use a fresh filename in an already private directory, inspect the
+JSON, and share it only through the organization's approved helpdesk channel.
 
 `master-agent execute PLAN` loads an unbound typed plan, checks every action
 against the profile allowlist, and selects the existing runtime by risk:

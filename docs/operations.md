@@ -91,7 +91,9 @@ The JSON contains only bounded MasterAgent/Python version facts, the redacted
 doctor assessment, and canonical byte counts and SHA-256 digests for its two
 embedded sections. It omits the profile path and does not collect credentials,
 provider content, environment values, hostnames, usernames, logs, or command
-history. It performs no automatic upload.
+history. Parser-controlled error text is replaced with fixed category guidance,
+and any remaining path-bearing string is redacted as a whole. It performs no
+automatic upload.
 
 Before attaching the artifact, confirm that the ticket's access and retention
 match the organization's support policy. Do not post it to public issues,

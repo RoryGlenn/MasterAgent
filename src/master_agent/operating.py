@@ -67,10 +67,10 @@ _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
 _SUPPORT_ID_PATTERN = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 )
-_WINDOWS_LOCAL_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\s,;]*")
-_FILE_URI_PATH_PATTERN = re.compile(r"(?i)file:///[^\s,;]*")
-_POSIX_LOCAL_PATH_PATTERN = re.compile(r"(?<![:/\w])/(?:[^/\s]+/)*[^/\s,;:]*")
-_HOME_LOCAL_PATH_PATTERN = re.compile(r"(?<!\w)~(?:[/\\][^\s,;]*)?")
+_WINDOWS_LOCAL_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\)")
+_FILE_URI_PATH_PATTERN = re.compile(r"(?i)file:///")
+_POSIX_LOCAL_PATH_PATTERN = re.compile(r"(?<![:/\w])/(?!/)")
+_HOME_LOCAL_PATH_PATTERN = re.compile(r"(?<!\w)~[/\\]")
 _CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+")
 _SUPPORT_DOCTOR_FIELDS = (
     "schema",
@@ -83,6 +83,13 @@ _SUPPORT_DOCTOR_FIELDS = (
     "capabilities",
     "issues",
 )
+_SUPPORT_ISSUE_MESSAGES = {
+    "unsupported_capability": "capability is not installed and reviewed",
+    "missing_organization_setup": "required organization setup is incomplete",
+    "missing_user_authentication": "selected user authentication is unavailable",
+    "blocked_policy": "selected organization policy blocks this capability",
+    "runtime_defect": "installed runtime or configuration validation failed",
+}
 _TOP_LEVEL_KEYS = frozenset(
     {
         "schema",
@@ -1816,11 +1823,20 @@ def _redact_support_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int)):
         return value
     if isinstance(value, str):
-        redacted = _FILE_URI_PATH_PATTERN.sub("[redacted-path]", value)
-        redacted = _WINDOWS_LOCAL_PATH_PATTERN.sub("[redacted-path]", redacted)
-        redacted = _POSIX_LOCAL_PATH_PATTERN.sub("[redacted-path]", redacted)
-        return _HOME_LOCAL_PATH_PATTERN.sub("[redacted-path]", redacted)
+        if any(
+            pattern.search(value) is not None
+            for pattern in (
+                _FILE_URI_PATH_PATTERN,
+                _WINDOWS_LOCAL_PATH_PATTERN,
+                _POSIX_LOCAL_PATH_PATTERN,
+                _HOME_LOCAL_PATH_PATTERN,
+            )
+        ):
+            return "[redacted-path]"
+        return value
     if isinstance(value, Mapping):
+        if "category" in value and "message" in value:
+            return _redact_support_issue(value)
         copied: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
@@ -1831,6 +1847,25 @@ def _redact_support_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_redact_support_value(item) for item in value]
     raise ConfigurationError("support bundle doctor value is not JSON-compatible")
+
+
+def _redact_support_issue(value: Mapping[Any, Any]) -> dict[str, str]:
+    """Project one doctor issue into fixed categorical helpdesk guidance."""
+
+    raw_category = value.get("category")
+    category = raw_category if isinstance(raw_category, str) else "runtime_defect"
+    message = _SUPPORT_ISSUE_MESSAGES.get(
+        category,
+        "diagnostic issue requires runtime-owner review",
+    )
+    projected = {"category": category, "message": message}
+    capability = value.get("capability")
+    if (
+        isinstance(capability, str)
+        and _CAPABILITY_PATTERN.fullmatch(capability) is not None
+    ):
+        projected["capability"] = capability
+    return projected
 
 
 def _canonical_support_section(payload: Mapping[str, Any]) -> bytes:

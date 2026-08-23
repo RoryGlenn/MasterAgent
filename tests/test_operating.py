@@ -1555,7 +1555,13 @@ class OperatingSupportBundleTests(unittest.TestCase):
             "mode": None,
             "profile_fingerprint": None,
             "profile_source": "/Users/alice/.config/master-agent/profile.toml",
-            "platform_runtime": {"platform": "macos", "backend": "posix-macos"},
+            "platform_runtime": {
+                "platform": "windows",
+                "backend": "windows-native",
+                "reason": (
+                    r"worker at C:\Users\Alice Smith\private\worker.exe unavailable"
+                ),
+            },
             "levels": {
                 "install_ready": True,
                 "read_ready": False,
@@ -1568,12 +1574,14 @@ class OperatingSupportBundleTests(unittest.TestCase):
             "issues": [
                 {
                     "category": "runtime_defect",
-                    "message": (
-                        "failed at /Users/alice/private/profile.toml and "
-                        r"C:\Users\Alice\private\profile.toml"
-                    ),
+                    "message": "identity aliases must be a list: alice@example.com",
                     "capability": None,
-                }
+                },
+                {
+                    "category": "future_category",
+                    "message": "configuration-controlled-value",
+                    "capability": None,
+                },
             ],
             "future_secret": "must-not-be-copied",
         }
@@ -1591,8 +1599,21 @@ class OperatingSupportBundleTests(unittest.TestCase):
         self.assertNotIn("future_secret", bundle["doctor"])
         rendered = json.dumps(bundle, sort_keys=True)
         self.assertNotIn("alice", rendered.casefold())
+        self.assertNotIn("configuration-controlled-value", rendered)
         self.assertNotIn("must-not-be-copied", rendered)
-        self.assertEqual(rendered.count("[redacted-path]"), 2)
+        self.assertEqual(rendered.count("[redacted-path]"), 1)
+        self.assertEqual(
+            bundle["doctor"]["issues"][0]["message"],
+            "installed runtime or configuration validation failed",
+        )
+        self.assertEqual(
+            bundle["doctor"]["issues"][1]["message"],
+            "diagnostic issue requires runtime-owner review",
+        )
+        self.assertEqual(
+            bundle["doctor"]["platform_runtime"]["reason"],
+            "[redacted-path]",
+        )
         self.assertEqual(
             bundle["redactions"],
             ["profile_source", "absolute_filesystem_paths"],
