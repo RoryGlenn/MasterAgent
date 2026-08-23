@@ -361,6 +361,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             "LongPathsEnabled",
             "Windows long-path policy is not enabled",
             "Windows long-path environment creation failed",
+            "Windows wheel test path leaves insufficient tool-path headroom",
             "source checkout Ω with spaces",
             "long segment 010",
             'Join-Path $sourceRoot ".venv\\Scripts\\master-agent.exe"',

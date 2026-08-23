@@ -123,13 +123,15 @@ jobs:
             "Master Agent Windows Ω path with spaces\" +
             "nested path segment 001\nested path segment 002\" +
             "nested path segment 003\nested path segment 004\" +
-            "nested path segment 005\nested path segment 006\" +
-            "nested path segment 007\nested path segment 008"
+            "nested path segment 005\nested path segment 006"
           )
           New-Item -ItemType Directory -Path $runtimeParent -Force | Out-Null
           $runtime = Join-Path $runtimeParent "wheel runtime"
-          if ($runtime.Length -lt 220) {
+          if ($runtime.Length -lt 190) {
             throw "Windows wheel test path is not long enough"
+          }
+          if ($runtime.Length -gt 220) {
+            throw "Windows wheel test path leaves insufficient tool-path headroom"
           }
           $longPathPolicy = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
           Set-ItemProperty `
