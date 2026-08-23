@@ -38,6 +38,7 @@ from master_agent.config_sources import (
 )
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import ChangePlan, RiskLevel
+from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
@@ -637,7 +638,12 @@ class OperatingReadinessReport:
         return _bounded_json(self.to_dict())
 
 
-def default_organization_profile_path(*, home: Path | None = None) -> Path:
+def default_organization_profile_path(
+    *,
+    home: Path | None = None,
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
     """Return the safe current-user default profile path.
 
     Parameters
@@ -645,12 +651,20 @@ def default_organization_profile_path(*, home: Path | None = None) -> Path:
     home
         Explicit home directory for tests or embedding.  Defaults to
         :meth:`pathlib.Path.home` and never consults the current directory.
+    platform_name
+        Explicit ``os.name`` value for tests.
+    environ
+        Explicit environment mapping for Windows path selection in tests.
     """
 
-    selected_home = _absolute_path(home or Path.home())
-    if selected_home == Path(selected_home.anchor):
-        raise ConfigurationError("organization profile home directory is invalid")
-    return selected_home / ".master-agent" / "MasterAgent" / _PROFILE_FILENAME
+    return (
+        current_user_product_root(
+            home=home,
+            platform_name=platform_name,
+            environ=environ,
+        )
+        / _PROFILE_FILENAME
+    )
 
 
 def load_organization_profile(source: ConfigSource) -> OrganizationProfile:

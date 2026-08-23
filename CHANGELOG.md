@@ -1,5 +1,17 @@
 # Changelog
 
+- Add native Windows bootstrap, packaging, and current-user paths. First run
+  uses `Scripts\python.exe` and `Scripts\master-agent.exe`, applies umask only
+  on POSIX, leaves unverified environments untouched in favor of a managed
+  side-by-side venv, and supports explicit local wheel/source archives plus
+  offline wheelhouses. Windows defaults use `%LOCALAPPDATA%\MasterAgent` rather
+  than the checkout. Bootstrap markers must be ordinary single-link files and
+  are published by atomic replacement, so linked markers cannot authorize an
+  environment or redirect marker writes. Hosted standard-user evidence now covers source and wheel
+  installs, console entry points, idempotency, spaces, Unicode, and long paths;
+  release validation excludes environment, state, credential, audit, cache,
+  and build artifacts.
+
 - Add native Windows atomic local-state and retention persistence. Protected
   state now uses stable handle locks, explicit private DACLs, bounded
   write/flush/readback, handle-relative replacement, an integrity-checked

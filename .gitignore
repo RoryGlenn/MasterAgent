@@ -10,6 +10,7 @@
 
 # Python environments, caches, and build output
 .venv/
+.venv-master-agent-*/
 venv/
 __pycache__/
 *.py[cod]
@@ -21,6 +22,7 @@ htmlcov/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.tox/
 
 # Platform/editor metadata
 .DS_Store

@@ -210,6 +210,44 @@ class ReleaseMetadataTests(unittest.TestCase):
                 report.errors,
             )
 
+    def test_release_archive_rejects_runtime_build_and_environment_directories(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "master_agent-1.0.0.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for relative in (
+                    ".venv/Scripts/python.exe",
+                    ".venv-master-agent-0123456789ab/bin/python",
+                    ".master-agent/audit.sqlite3",
+                    "build/copied.txt",
+                    "dist/copied.whl",
+                    "__pycache__/cached.pyc",
+                ):
+                    payload = b"forbidden"
+                    info = tarfile.TarInfo(f"master_agent-1.0.0/{relative}")
+                    info.size = len(payload)
+                    archive.addfile(info, BytesIO(payload))
+
+            report = validate_archive(archive_path)
+
+        for relative in (
+            ".venv/Scripts/python.exe",
+            ".venv-master-agent-0123456789ab/bin/python",
+            ".master-agent/audit.sqlite3",
+            "build/copied.txt",
+            "dist/copied.whl",
+            "__pycache__/cached.pyc",
+        ):
+            with self.subTest(relative=relative):
+                self.assertTrue(
+                    any(
+                        relative in error and "forbidden runtime directory" in error
+                        for error in report.errors
+                    ),
+                    report.errors,
+                )
+
     def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
         with TemporaryDirectory() as directory:
             archive_path = Path(directory) / "unsafe.whl"
@@ -318,10 +356,58 @@ class ReleaseMetadataTests(unittest.TestCase):
             "windows-appcontainer",
             "readiness --output $readinessPath",
             "native Windows restricted publication smoke failed",
+            "& $buildPython -m build",
+            "& $runtimePython -m pip install $wheel[0]",
+            "LongPathsEnabled",
+            "Windows long-path policy is not enabled",
+            "Windows long-path environment creation failed",
+            "Windows wheel test path leaves insufficient tool-path headroom",
+            '"src\\master_agent.egg-info"',
+            "source checkout Ω with spaces",
+            "long segment 008",
+            "Windows source bootstrap path leaves insufficient tool-path headroom",
+            'Join-Path $sourceRoot ".venv\\Scripts\\master-agent.exe"',
+            "standard-user source bootstrap was not idempotent",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, job)
         self.assertNotIn("setup --", job)
+        self.assertNotIn("& $runtimePython -m pip install .", job)
+        self.assertLess(
+            job.index("& $Python $bootstrap"),
+            job.index('$env:PYTHONPATH = Join-Path $Workspace "src"'),
+        )
+
+    def test_release_metadata_pins_line_endings_and_local_artifact_exclusions(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        attributes = (root / ".gitattributes").read_text(encoding="utf-8")
+        manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
+        ignore = (root / ".gitignore").read_text(encoding="utf-8")
+
+        for required in (
+            "* text=auto eol=lf",
+            "*.bat text eol=crlf",
+            "*.cmd text eol=crlf",
+            "*.ps1 text eol=crlf",
+            "*.png binary",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, attributes)
+        for directory in (
+            ".master-agent",
+            ".venv",
+            ".venv-master-agent-*",
+            "build",
+            "dist",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+        ):
+            with self.subTest(directory=directory):
+                self.assertIn(f"prune {directory}", manifest)
+        self.assertIn(".venv-master-agent-*/", ignore)
 
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

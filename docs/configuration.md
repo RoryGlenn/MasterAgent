@@ -10,7 +10,8 @@ Each CLI configuration option resolves in this order:
 The current working directory is never an implicit configuration authority.
 
 Profile-aware commands resolve an explicit `--profile` first and otherwise use
-the dedicated private path under `~/.master-agent/MasterAgent/`. `setup` uses
+the dedicated private path under `~/.master-agent/MasterAgent/` on POSIX or
+`%LOCALAPPDATA%\MasterAgent\` on native Windows. `setup` uses
 the packaged safe profile when the selected installed path does not yet exist;
 an existing selected profile is validated in place. It never discovers a
 profile from the current directory.
@@ -67,7 +68,9 @@ master-agent setup --non-interactive
 ```
 
 The default installed path is
-`~/.master-agent/MasterAgent/organization-profile.toml`. Its `state_root = "."`
+`~/.master-agent/MasterAgent/organization-profile.toml` on POSIX and
+`%LOCALAPPDATA%\MasterAgent\organization-profile.toml` on native Windows. Its
+`state_root = "."`
 resolves relative to that installed profile, so setup creates only the private
 product directory and its `runs/` child. It creates no plan, workspace, audit
 database, artifact, result, credential, provider connection, or approval. An

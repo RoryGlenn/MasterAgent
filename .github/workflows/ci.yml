@@ -97,20 +97,78 @@ jobs:
           python-version: "3.13"
           architecture: arm64
           cache: pip
-      - name: Install the package in an isolated runtime
+      - name: Build and install the wheel at a native long Unicode path
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $runtime = Join-Path $env:RUNNER_TEMP "master-agent-windows"
+          $buildRuntime = Join-Path $env:RUNNER_TEMP "master-agent-windows-build"
+          python -m venv $buildRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build environment creation failed with exit code $LASTEXITCODE"
+          }
+          $buildPython = Join-Path $buildRuntime "Scripts\python.exe"
+          & $buildPython -m pip install build
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build-tool installation failed with exit code $LASTEXITCODE"
+          }
+          & $buildPython -m build
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows package build failed with exit code $LASTEXITCODE"
+          }
+          $wheel = @((Get-ChildItem -LiteralPath dist -Filter *.whl).FullName)
+          if ($wheel.Count -ne 1) {
+            throw "Windows package build did not produce exactly one wheel"
+          }
+          $runtimeParent = Join-Path $env:RUNNER_TEMP (
+            "Master Agent Windows Ω path with spaces\" +
+            "nested path segment 001\nested path segment 002\" +
+            "nested path segment 003\nested path segment 004\" +
+            "nested path segment 005\nested path segment 006"
+          )
+          New-Item -ItemType Directory -Path $runtimeParent -Force | Out-Null
+          $runtime = Join-Path $runtimeParent "wheel runtime"
+          if ($runtime.Length -lt 190) {
+            throw "Windows wheel test path is not long enough"
+          }
+          if ($runtime.Length -gt 220) {
+            throw "Windows wheel test path leaves insufficient tool-path headroom"
+          }
+          $longPathPolicy = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+          Set-ItemProperty `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled `
+            -Type DWord `
+            -Value 1
+          if ((Get-ItemPropertyValue `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled) -ne 1) {
+            throw "Windows long-path policy is not enabled"
+          }
           python -m venv $runtime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows long-path environment creation failed with exit code $LASTEXITCODE"
+          }
           $runtimePython = Join-Path $runtime "Scripts\python.exe"
           $runtimeCli = Join-Path $runtime "Scripts\master-agent.exe"
-          & $runtimePython -m pip install .
+          & $runtimePython -m pip install $wheel[0]
           if ($LASTEXITCODE -ne 0) {
-            throw "isolated package installation failed with exit code $LASTEXITCODE"
+            throw "isolated wheel installation failed with exit code $LASTEXITCODE"
+          }
+          & $runtimeCli --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows console launcher failed with exit code $LASTEXITCODE"
           }
           "MASTER_AGENT_WINDOWS_PYTHON=$runtimePython" | Out-File -FilePath $env:GITHUB_ENV -Append
           "MASTER_AGENT_WINDOWS_CLI=$runtimeCli" | Out-File -FilePath $env:GITHUB_ENV -Append
+          foreach ($generatedPath in @(
+            "build",
+            "dist",
+            "src\master_agent.egg-info"
+          )) {
+            if (Test-Path -LiteralPath $generatedPath) {
+              Remove-Item -LiteralPath $generatedPath -Recurse -Force
+            }
+          }
       - name: Run native filesystem and locking tests as a standard user
         shell: pwsh
         run: |
@@ -201,7 +259,6 @@ jobs:
                 $ErrorActionPreference = "Stop"
                 $env:TEMP = $TemporaryRoot
                 $env:TMP = $TemporaryRoot
-                $env:PYTHONPATH = Join-Path $Workspace "src"
                 $env:PYTHONDONTWRITEBYTECODE = "1"
                 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
                 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -212,6 +269,37 @@ jobs:
                 ) {
                   throw "native Windows tests received an administrator token"
                 }
+                $sourceRoot = Join-Path $TemporaryRoot (
+                  "source checkout Ω with spaces\" +
+                  "long segment 001\long segment 002\long segment 003\" +
+                  "long segment 004\long segment 005\long segment 006\" +
+                  "long segment 007\long segment 008"
+                )
+                New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+                if ($sourceRoot.Length -lt 190) {
+                  throw "Windows source bootstrap path is not long enough"
+                }
+                if ($sourceRoot.Length -gt 210) {
+                  throw "Windows source bootstrap path leaves insufficient tool-path headroom"
+                }
+                Get-ChildItem -LiteralPath $Workspace -Force |
+                  Where-Object { $_.Name -notin @(".git", ".venv") } |
+                  Copy-Item -Destination $sourceRoot -Recurse -Force
+                $bootstrap = Join-Path $sourceRoot "scripts\bootstrap_agent.py"
+                & $Python $bootstrap
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source bootstrap failed with exit code $LASTEXITCODE"
+                }
+                & $Python $bootstrap
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source bootstrap was not idempotent"
+                }
+                $bootstrapCli = Join-Path $sourceRoot ".venv\Scripts\master-agent.exe"
+                & $bootstrapCli --version
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source console launcher failed"
+                }
+                $env:PYTHONPATH = Join-Path $Workspace "src"
                 $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_platform_runtime", "tests.test_windows_credentials", "tests.test_windows_process", "tests.test_windows_git", "tests.test_windows_capsules")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
                 & $Python -c $runner
                 if ($LASTEXITCODE -ne 0) {

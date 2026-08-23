@@ -94,10 +94,22 @@ configuration diagnosis can read approved local paths. It also selects the
 native handle-relative atomic-state backend, so `setup`, restricted output,
 SQLite state, retention, token/configuration publication, and local artifact
 stores no longer use POSIX fallbacks. A focused Windows 11 ARM job exercises
-that boundary through a non-administrator local account. Process supervision,
-trusted Git, capsule isolation, Credential Manager/DPAPI, and full hosted
-certification remain separate gates. Do not treat focused tests as full
-enterprise or release-host certification.
+that boundary through a non-administrator local account together with
+Credential Manager/DPAPI, Job Object supervision, trusted Git, and AppContainer
+capsule isolation. It also builds and installs the wheel, proves the `.exe`
+console launcher, and runs the idempotent source bootstrap from a spaced,
+Unicode, long path. Do not treat hosted tests as enterprise deployment
+approval.
+
+On native Windows, the no-profile default is
+`%LOCALAPPDATA%\MasterAgent\organization-profile.toml`; the current directory
+is never an implicit configuration source. Use explicit local drive paths for
+reviewed deployment configuration and state. UNC/device namespaces, reparse or
+cloud-placeholder paths, unsupported filesystems, unsafe names, and untrusted
+writable ancestors fail closed. Ensure Python 3.12 or newer, the `venv` module,
+long-path host policy, and a supported local filesystem are available. WSL is
+a separate Linux deployment and follows the POSIX path, permission, and
+bubblewrap requirements.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:
