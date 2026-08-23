@@ -66,13 +66,17 @@ Build this week's status from the reviewed Jira project, Confluence space, and
 Bitbucket repositories. Cite every source and do not change any provider.
 ```
 
-The workflow plan contains typed reads only. A direct read plan can stay in
-memory, return schema-bound content plus citations, and create no effect or
-approval state. Live provider credentials and organization configuration are
+The workflow plan contains typed reads only, but it spans three providers. The
+stateless direct-read path accepts exactly one provider, so this use case must
+use the normal context-binding and manifest-bound `run --apply` workflow. That
+applied read-only run independently verifies each provider result and records
+only the audit or result evidence allowed by the bound plan; it creates no
+provider effect. Live provider credentials and organization configuration are
 still required because the source data is account-visible.
 
-Use [Configuration](configuration.md) for the provider profiles and
-[Phase 2A](phase-2-read-only.md) for the read/verification boundary.
+Use [Configuration](configuration.md) for the provider profiles,
+[Operations](operations.md#low-level-run-lifecycle) for the bound apply path,
+and [Phase 2A](phase-2-read-only.md) for the read/verification boundary.
 
 ## Coordinate a reviewed provider change
 

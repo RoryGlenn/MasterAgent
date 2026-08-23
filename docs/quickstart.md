@@ -118,6 +118,83 @@ These commands do contact the selected public provider. They do not resolve or
 send ambient provider credentials, and they independently verify that returned
 repositories are public.
 
+## Install a release artifact instead
+
+The steps above are for a source checkout. If you received a reviewed release
+artifact, install it into a fresh private virtual environment and run the same
+offline readiness check before configuring a provider.
+
+### macOS or Ubuntu 24.04
+
+From the wheel:
+
+```bash
+umask 077
+python3 -m venv .venv
+.venv/bin/python -m pip install ./master_agent-1.0.0-py3-none-any.whl
+.venv/bin/master-agent readiness
+.venv/bin/master-agent doctor --require-level install
+```
+
+From the source distribution:
+
+```bash
+tar -xzf master_agent-1.0.0.tar.gz
+cd master_agent-1.0.0
+umask 077
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+.venv/bin/master-agent readiness
+.venv/bin/master-agent doctor --require-level install
+```
+
+### Native Windows 11 PowerShell
+
+From the wheel:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .\master_agent-1.0.0-py3-none-any.whl
+.\.venv\Scripts\master-agent.exe readiness
+.\.venv\Scripts\master-agent.exe doctor --require-level install
+```
+
+From the source distribution:
+
+```powershell
+tar -xzf .\master_agent-1.0.0.tar.gz
+Set-Location .\master_agent-1.0.0
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\master-agent.exe readiness
+.\.venv\Scripts\master-agent.exe doctor --require-level install
+```
+
+For an internal or offline wheelhouse, keep index credentials in approved pip
+configuration and use local paths on the command line. On macOS or Ubuntu:
+
+```bash
+.venv/bin/python -m pip install \
+  --no-index \
+  --find-links /approved/wheelhouse \
+  ./master_agent-1.0.0-py3-none-any.whl
+```
+
+On native Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install `
+  --no-index `
+  --find-links C:\ApprovedPackages `
+  .\master_agent-1.0.0-py3-none-any.whl
+```
+
+The core artifact deliberately omits local Office renderers. Install
+`master-agent[drafts]` from the same approved package source when you need
+`demo` or `draft-package`; the base CLI and install-readiness check do not need
+that extra. See [Phase 3 draft-only output](phase-3-drafts.md) for the exact
+optional-extra procedure.
+
 ## Next steps
 
 - Choose an outcome in [Use cases](use-cases.md).
