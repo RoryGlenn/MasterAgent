@@ -101,6 +101,14 @@ console launcher, and runs the idempotent source bootstrap from a spaced,
 Unicode, long path. Do not treat hosted tests as enterprise deployment
 approval.
 
+Native Windows release certification is a separate protected gate. Follow
+[Windows 11 x64 release certification](windows-certification.md) to provision
+an ephemeral clean Windows 11 x64 VM, register its dedicated non-administrator
+runner account with the exact labels, protect the default branch and review
+environment, and enable the workflow only while that infrastructure is
+healthy. A release cannot infer x64 certification from the hosted ARM matrix,
+workflow presence, a skip, or a queued self-hosted job.
+
 On native Windows, the no-profile default is
 `%LOCALAPPDATA%\MasterAgent\organization-profile.toml`; the current directory
 is never an implicit configuration source. Use explicit local drive paths for

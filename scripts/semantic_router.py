@@ -470,6 +470,20 @@ def _read_bounded_regular_file_state(
 def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
     """Return whether two observations describe one unchanged regular file."""
 
+    if os.name == "nt":
+        # Path-based Windows stat uses Win32 metadata while descriptor-based
+        # fstat uses the C runtime projection. Permission bits, link count, and
+        # creation-time fields can therefore differ for the same open file.
+        # File identity plus content-bearing metadata remains stable and is the
+        # boundary needed to detect replacement or mutation during this read.
+        return (
+            stat.S_ISREG(left.st_mode)
+            and stat.S_ISREG(right.st_mode)
+            and left.st_dev == right.st_dev
+            and left.st_ino == right.st_ino
+            and left.st_size == right.st_size
+            and left.st_mtime_ns == right.st_mtime_ns
+        )
     return (
         stat.S_ISREG(right.st_mode)
         and left.st_dev == right.st_dev

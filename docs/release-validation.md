@@ -34,6 +34,25 @@ handling, and independent verification.
   `Scripts\master-agent.exe`, and runs the source bootstrap twice under a
   fresh non-administrator account to prove source installation and
   idempotency.
+- The hosted Windows 11 ARM job is a required Python 3.12, 3.13, and 3.14
+  matrix. A failure in any native Windows, artifact, behavioral-specification,
+  or release-validation step blocks merge.
+
+### Protected Windows 11 x64 certification
+
+Hosted pull-request evidence is not the final x64 release gate. Before a
+release claims native Windows support, the exact default-branch commit must
+also pass [Windows 11 x64 release certification](windows-certification.md) on
+an environment-reviewed ephemeral self-hosted runner whose service account is
+not an administrator.
+
+The protected workflow validates the current protected default-branch SHA in a
+GitHub-hosted job before checkout. It has no pull-request trigger or repository
+secret references, dispatches only to the exact Windows/x64/custom labels,
+verifies Windows workstation build, architecture, privilege, long-path policy,
+and absent production credential names before checkout, then runs artifact and
+full native test/specification/release validation. Workflow presence, a skipped
+job, a queued job, or ARM hosted CI alone is not x64 certification evidence.
 
 ### Behavioral specifications
 
@@ -135,6 +154,8 @@ handling, and independent verification.
 - `scripts/semantic_router.py validate` rejects missing or duplicate ownership,
   unsafe or stale links, lifecycle contradictions, ambiguous routing fixtures,
   cross-owner references without an exact dependency, and topology drift.
+  Bounded manifest reads retain path/descriptor identity and content-metadata
+  checks on Windows without requiring incompatible POSIX metadata projections.
   `generate --check` rejects any byte difference in the compact generated
   `docs/semantic-index.md`; normal generation uses a descriptor-pinned atomic
   replacement rather than following repository links.
@@ -144,8 +165,10 @@ handling, and independent verification.
 - The topology is hub-and-spoke: the parent sees the complete registry;
   specialists see only their own profile and selected route. The common
   platform-runtime, Windows filesystem, atomic-state, credentials, process,
-  and Git routes are released; capsule isolation and hosted certification
-  remain distinctly planned until separately implemented and certified.
+  Git, and capsule routes are released. The hosted matrix and protected x64
+  workflow are implemented, while the certification route remains distinctly
+  planned until a clean enrolled standard-user runner supplies successful
+  default-branch evidence.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay

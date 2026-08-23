@@ -189,8 +189,10 @@ Credential Manager stores one bounded UTF-8 value per declared name beneath a
 reviewed `MasterAgent/` namespace. Connector configuration binds the non-secret
 provider and target, while values stay in the trusted in-memory credential
 snapshot. The common platform and native Windows filesystem, atomic-state,
-credential, process, Git, and capsule routes are released; hosted certification
-remains planned.
+credential, process, Git, and capsule routes are released. Three-version hosted
+CI and the protected x64 workflow are implemented; hosted certification remains
+planned until the external clean standard-user runner produces successful
+evidence.
 
 ## Repository discovery topology
 
@@ -221,6 +223,11 @@ Implementation, test, and current-requirement links must agree with that exact
 owner. A route that intentionally references another route's shared
 configuration, authority, or release gate declares that owner as an exact
 dependency, so an unrelated but valid path cannot silently replace it.
+Manifest reads compare the path before opening, the open descriptor, and the
+path after reading. Windows uses the stable volume/file identity, size, and
+modification time for that comparison because its path and descriptor APIs
+project POSIX-style permission, link-count, and change-time fields differently;
+replacement and content mutation still fail closed.
 
 Generation opens the destination directory through no-follow descriptors,
 writes a private same-directory temporary file, and atomically replaces the
@@ -238,10 +245,11 @@ input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
 The common platform-runtime and Windows filesystem, atomic-state, credential,
-process, Git, and capsule routes are released, while hosted certification
-remains `planned`; a generated index cannot present
-that final certification as released until its own
-implementation changes advance the manifest under validation.
+process, Git, and capsule routes are released. The hosted matrix and protected
+x64 workflow are implemented, while hosted certification remains `planned`;
+a generated index cannot present that final certification as released until
+the enrolled clean standard-user runner supplies verified evidence and the
+manifest advances under validation.
 
 ## Principal components
 
