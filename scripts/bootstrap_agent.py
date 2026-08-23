@@ -40,6 +40,14 @@ class BootstrapError(RuntimeError):
 
 
 def _stable_file_identity(value: os.stat_result) -> tuple[int, ...]:
+    if os.name == "nt":
+        return (
+            value.st_dev,
+            value.st_ino,
+            stat.S_IFMT(value.st_mode),
+            value.st_size,
+            value.st_mtime_ns,
+        )
     return (
         value.st_dev,
         value.st_ino,

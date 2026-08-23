@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from master_agent.errors import ConfigurationError
 from scripts.bootstrap_agent import (
@@ -22,6 +23,7 @@ from scripts.bootstrap_agent import (
     _record_environment_attestation,
     _run,
     _runtime_probe,
+    _stable_file_identity,
     _validate_windows_environment_permissions,
     bootstrap,
 )
@@ -333,6 +335,33 @@ class AgentBootstrapTests(unittest.TestCase):
             )
 
         run.assert_not_called()
+
+    def test_windows_stable_identity_ignores_posix_metadata_projections(self) -> None:
+        """Windows link counts, mode permissions, and change times are not identity."""
+
+        left = Mock(
+            st_dev=7,
+            st_ino=19,
+            st_mode=stat.S_IFREG | 0o644,
+            st_nlink=1,
+            st_size=42,
+            st_mtime_ns=123,
+            st_ctime_ns=456,
+        )
+        right = Mock(
+            st_dev=7,
+            st_ino=19,
+            st_mode=stat.S_IFREG | 0o777,
+            st_nlink=2,
+            st_size=42,
+            st_mtime_ns=123,
+            st_ctime_ns=999,
+        )
+        with patch("scripts.bootstrap_agent.os.name", "nt"):
+            self.assertEqual(
+                _stable_file_identity(left),
+                _stable_file_identity(right),
+            )
 
     def test_windows_runtime_validates_every_environment_dacl(self) -> None:
         """The Windows runtime profile covers roots, directories, and files."""

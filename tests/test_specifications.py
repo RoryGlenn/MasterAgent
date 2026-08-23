@@ -679,7 +679,7 @@ class RepositorySpecificationIntegrationTests(unittest.TestCase):
         report = specs.validate_repository(root)
 
         self.assertTrue(report.ok, report.errors)
-        self.assertIn("validated 30 current behavioral requirements", report.checks)
+        self.assertIn("validated 31 current behavioral requirements", report.checks)
 
     def test_source_manifest_includes_specification_tree(self) -> None:
         root = Path(__file__).resolve().parents[1]
