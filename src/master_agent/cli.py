@@ -129,6 +129,7 @@ from master_agent.operating import (
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
     LockMode,
     PlatformContract,
@@ -4389,15 +4390,14 @@ def _new_demo_workspace() -> Path:
     """Create the private, unpredictable root used by the safe demonstration."""
 
     require_persistent_state_platform()
-    runtime_root = Path.home() / ".master-agent"
-    product_root = runtime_root / "MasterAgent"
+    product_root = current_user_product_root()
     atomic = get_atomic_publication_recovery_backend()
     if atomic.backend_id == "windows-handle-atomic-state":
         atomic.ensure_private_directory(product_root)
         return atomic.ensure_private_directory(
             product_root / f"demo-{secrets.token_hex(16)}"
         )
-    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    product_root.parent.mkdir(mode=0o700, exist_ok=True)
     product_root.mkdir(mode=0o700, exist_ok=True)
     with PinnedDirectory.open(product_root) as pinned_root:
         workspace = Path(

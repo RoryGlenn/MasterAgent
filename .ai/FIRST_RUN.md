@@ -23,28 +23,39 @@ prompt in each MasterAgent chat.
   substantive work. Tell the operator: **“I’m preparing MasterAgent locally;
   this does not connect to workplace systems.”** Then run:
 
+  **Ubuntu 24.04 or macOS**
+
   ```bash
   python3 scripts/bootstrap_agent.py
   ```
 
+  **Native Windows 11 PowerShell**
+
+  ```powershell
+  py -3.12 scripts\bootstrap_agent.py
+  ```
+
 The script is idempotent. It refreshes a bootstrap-managed local runtime when
-its project metadata changes. A usable pre-existing repository-local `.venv`
-with no bootstrap marker is reused only for the offline readiness check: it is
-not rewritten, marked as trusted, or granted provider, credential, or
-effect-path authority.
+its project metadata changes. A pre-existing repository-local `.venv` without
+a valid bootstrap marker is never executed or rewritten. Bootstrap leaves it
+untouched and creates a digest-named side-by-side managed environment instead.
+The final `command:` line names the exact launcher to use afterward, including
+the side-by-side path when a collision was preserved.
 
 ## Bounded setup
 
 The first-run attempt may only:
 
-1. verify that the invoking `python3` is version 3.12 or newer;
-2. reject an unsafe, incomplete, or symbolic-link `.venv` rather than replace
-   or delete it;
+1. verify that the invoking Python interpreter is version 3.12 or newer;
+2. leave an unsafe, incomplete, symbolic-link, or unverifiable `.venv`
+   untouched and select a fresh side-by-side environment;
 3. create `.venv` with Python's standard `venv` module when it is absent;
 4. install this repository and its declared dependencies into that `.venv`
    without upgrading pip; and
-5. run `.venv/bin/master-agent doctor --require-level install`, which performs
-   no provider network requests.
+5. run the native console launcher—`.venv/bin/master-agent` on POSIX or
+   `.venv\Scripts\master-agent.exe` on Windows—with
+   `doctor --require-level install`, which performs no provider network
+   requests.
 
 Package installation may contact the Python package index already configured
 for the machine. It must never use `sudo`, an operating-system package manager,
@@ -52,6 +63,12 @@ a global or user-site install, a persistent `PATH` change, or a pip upgrade. If
 Python, `venv`, pip, package-index access, or another prerequisite is missing,
 exhaust safe repository-local alternatives before reporting the exact blocker.
 Do not repair the operating system or replace an existing environment.
+
+For an internal or offline installation, `--install-source` accepts a local
+source tree, wheel, or source archive. Combine `--no-index` with one or more
+local `--find-links DIRECTORY` values to resolve dependencies without a public
+index. Index credentials stay in organization-managed pip configuration and
+must not be placed on the command line.
 
 Read connectors are available but inactive during setup. Setup never supplies
 credentials, activates a connector, enables mutation or communication gates,

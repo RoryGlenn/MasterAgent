@@ -24,6 +24,11 @@ execution runtime.
    python3 scripts/bootstrap_agent.py
    ```
 
+   In native Windows PowerShell, the equivalent command is
+   `py -3.12 scripts\bootstrap_agent.py`; the managed interpreter and launcher
+   are `.venv\Scripts\python.exe` and `.venv\Scripts\master-agent.exe`. Neither
+   platform requires virtual-environment activation.
+
    Depending on the Copilot client and its terminal policy, approve that one
    command if prompted. The script creates `.venv` only when needed, installs
    this project and its declared dependencies there without upgrading pip, and
@@ -42,9 +47,18 @@ execution runtime.
 5. For ordinary runtime work, the agent uses the private organization profile
    and capability-scoped checks:
 
+   **Ubuntu 24.04, macOS, or WSL**
+
    ```bash
    .venv/bin/master-agent setup --non-interactive
    .venv/bin/master-agent doctor
+   ```
+
+   **Native Windows 11 PowerShell**
+
+   ```powershell
+   .\.venv\Scripts\master-agent.exe setup --non-interactive
+   .\.venv\Scripts\master-agent.exe doctor
    ```
 
    These commands do not contact a workplace provider. A missing optional
@@ -173,7 +187,8 @@ effect.
 
 Repository-inspection, diagnosis-only, and explicit no-local-change
 instructions always take precedence. In those modes, the agent inspects
-`python`, `python3`, pip, the project script declaration, and `PATH`, then
+the available Python launchers, pip, the project script declaration, and
+`PATH`, then
 reports the missing prerequisite without creating `.venv` or installing
 anything. Setup failures must be read and reported rather than redirected to an
 uninspected log.
@@ -277,15 +292,19 @@ the agent never self-signs or bypasses approval.
 
 Only after safe alternatives are exhausted, MasterAgent reports the exact
 prerequisite it could not satisfy and confirms what remained unchanged. Common
-blockers are Python older than
-3.12, a Python installation without the `venv` module, an existing incomplete
-or symbolic-link `.venv`, or unavailable package-index access. The agent never
-deletes or replaces an existing environment and never repairs the operating
+blockers are Python older than 3.12, a Python installation without the `venv`
+module, exhaustion of the bounded safe side-by-side environment names, or
+unavailable package-index access. The agent never deletes, executes, or
+replaces an unverified existing environment and never repairs the operating
 system automatically.
 
-A technical operator can run `python3 scripts/bootstrap_agent.py` directly to
-see the same check. There is no need to activate `.venv`; all later commands
-use `.venv/bin/master-agent` explicitly.
+A technical operator can run `python3 scripts/bootstrap_agent.py` on POSIX or
+`py -3.12 scripts\bootstrap_agent.py` in native Windows PowerShell to see the
+same check. There is no need to activate `.venv`; later commands use
+the exact launcher printed on bootstrap's final `command:` line. That is
+`.venv/bin/master-agent` on POSIX or
+`.venv\Scripts\master-agent.exe` on Windows when the primary path is safe, and
+the digest-named side-by-side equivalent when bootstrap preserves a collision.
 
 ## Scope
 

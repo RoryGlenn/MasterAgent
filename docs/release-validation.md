@@ -29,7 +29,11 @@ handling, and independent verification.
   exercises `--help`, `--version`, deployment `readiness`, restricted
   readiness output, and `doctor --require-level install`; validates SQLite and
   retention lifecycles; and proves unrelated unavailable contracts still fail
-  closed.
+  closed. The job builds the wheel without POSIX shell assumptions, installs
+  it at a spaced, Unicode, long local path, executes
+  `Scripts\master-agent.exe`, and runs the source bootstrap twice under a
+  fresh non-administrator account to prove source installation and
+  idempotency.
 
 ### Behavioral specifications
 
@@ -233,8 +237,11 @@ handling, and independent verification.
   `.github/workflows/live-connector-integration.yml`—`.ai/DOCS_AGENT.md`, and
   the tests that validate them.
 - The wheel and source archive include the platform-runtime package and native
-  Windows filesystem/locking tests; the hosted job installs the package into an
-  isolated virtual environment, then exercises it outside the checkout.
+  Windows filesystem/locking tests; the hosted job installs the built wheel
+  into an isolated virtual environment, then exercises it outside the checkout.
+- `.gitattributes` fixes LF text, CRLF Windows script, and binary handling.
+  Source manifests and archive validation exclude virtual environments,
+  runtime state, credentials, audit databases, caches, `build/`, and `dist/`.
 
 ### Optional live sandbox validation
 

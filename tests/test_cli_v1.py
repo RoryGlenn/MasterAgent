@@ -134,7 +134,7 @@ class VersionOneCliTests(unittest.TestCase):
             try:
                 os.chdir(checkout)
                 with (
-                    patch("master_agent.cli.Path.home", return_value=home),
+                    patch("master_agent.platform_paths.Path.home", return_value=home),
                     patch("master_agent.cli.build_live_registry") as live_registry,
                 ):
                     status, stdout, stderr = _run_cli(["demo"])

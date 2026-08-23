@@ -100,6 +100,7 @@ _IGNORED_DIRS = {
     "dist",
     "__pycache__",
 }
+_IGNORED_DIR_PREFIXES = (".venv-master-agent-",)
 _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "[`FIRST_RUN.md`](FIRST_RUN.md)",
@@ -1906,7 +1907,10 @@ def _validate_file_hygiene(
         )
     for path in root.rglob("*"):
         if any(
-            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+            part in _IGNORED_DIRS
+            or part.endswith(".egg-info")
+            or part.startswith(_IGNORED_DIR_PREFIXES)
+            for part in path.parts
         ):
             continue
         if path.is_symlink():
@@ -1940,7 +1944,10 @@ def _validate_archive_member(name: str, errors: list[str]) -> None:
     if relative.is_absolute() or ".." in relative.parts:
         errors.append(f"unsafe path in release archive: {name}")
         return
-    if ".master-agent" in relative.parts:
+    if any(
+        part in _IGNORED_DIRS or part.startswith(_IGNORED_DIR_PREFIXES)
+        for part in relative.parts
+    ):
         errors.append(f"forbidden runtime directory in release archive: {name}")
     filename = relative.name
     suffix = Path(filename).suffix.lower()
@@ -1990,7 +1997,10 @@ def _consume_stream(handle: BinaryIO) -> None:
 def _iter_files(root: Path, *, suffixes: set[str]) -> Iterable[Path]:
     for path in root.rglob("*"):
         if any(
-            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+            part in _IGNORED_DIRS
+            or part.endswith(".egg-info")
+            or part.startswith(_IGNORED_DIR_PREFIXES)
+            for part in path.parts
         ):
             continue
         if path.is_file() and path.suffix.lower() in suffixes:

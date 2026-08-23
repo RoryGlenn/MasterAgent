@@ -146,7 +146,8 @@ The catalog contains **82 typed capabilities**:
 ## Requirements
 
 - Python 3.12 or newer.
-- Ubuntu 24.04 LTS or macOS for the documented setup commands.
+- Ubuntu 24.04 LTS, macOS, native Windows 11, or WSL for the documented setup
+  commands. Native Windows and WSL use separate environments and path rules.
 - Linux bubblewrap only when validating or executing capability capsules.
 - Approved provider endpoints and credentials only for the selected
   authenticated capability. Anonymous public-data capabilities neither require
@@ -282,12 +283,18 @@ Neither command contacts a workplace provider. Missing credentials for an
 optional provider are reported under that provider's read or effect level; they
 do not make `install_ready` false.
 
-### Windows partial native runtime
+### Native Windows 11 installation and runtime
 
-The Windows surface is deliberately useful before every native security
-backend is complete. From PowerShell, an installed wheel supports package
-imports, command help and version, deployment readiness, and a bounded
-install-level diagnosis when the selected organization profile is absent:
+Use a standard-user PowerShell session; activation is neither required nor
+recommended. A source checkout can run the same idempotent first-run bootstrap
+used on POSIX:
+
+```powershell
+py -3.12 scripts\bootstrap_agent.py
+.\.venv\Scripts\master-agent.exe doctor --require-level install
+```
+
+From a built wheel, use the native interpreter and console launcher paths:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -296,6 +303,31 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\master-agent.exe readiness
 .\.venv\Scripts\master-agent.exe doctor --require-level install
 ```
+
+A source distribution works the same way after extraction:
+
+```powershell
+tar -xzf .\master_agent-1.0.0.tar.gz
+Set-Location .\master_agent-1.0.0
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\master-agent.exe readiness
+```
+
+For an internal/offline wheelhouse, keep index credentials in the approved pip
+configuration and use only local paths on the command line:
+
+```powershell
+py -3.12 scripts\bootstrap_agent.py --no-index `
+  --find-links C:\ApprovedPackages
+```
+
+Bootstrap never rewrites or executes an unmarked `.venv`; a collision produces
+a managed `.venv-master-agent-<digest>` beside it. Use the exact launcher shown
+on bootstrap's final `command:` line rather than assuming the selected path is
+`.venv`. Runtime configuration and state default to
+`%LOCALAPPDATA%\MasterAgent`, never the checkout or current working directory.
+An explicit reviewed profile may select a different private local path.
 
 These commands initialize no workplace connector and do not claim that every
 stateful operation is available. Native Windows selects
@@ -331,6 +363,14 @@ filesystem operation. Native Windows reads it only through the retained-handle
 and ACL boundary. Organization-managed trusted-writer policy remains a later
 deployment feature; the current default admits only the effective user and
 fixed operating-system administration principals.
+
+Native operation requires a local drive and filesystem supported by the
+retained-handle backend. UNC and device namespaces, reparse points (including
+symlinked or cloud-placeholder paths), unsafe names, unsupported filesystems,
+and directories writable by untrusted principals fail closed. Long paths must
+be enabled by Windows host policy. WSL installations are separate Linux
+installations and use `.venv/bin`, POSIX permissions, and the Linux containment
+requirements; do not mix a WSL environment with a native Windows checkout.
 
 ## Progressive employee workflow
 

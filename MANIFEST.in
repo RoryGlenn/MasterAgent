@@ -12,3 +12,12 @@ recursive-include supply-chain *.toml
 recursive-include tests *.py *.txt *.json
 global-exclude .DS_Store *.py[cod]
 prune .master-agent
+prune .venv
+prune .venv-master-agent-*
+prune build
+prune dist
+prune htmlcov
+prune .mypy_cache
+prune .pytest_cache
+prune .ruff_cache
+prune .tox
