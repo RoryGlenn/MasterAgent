@@ -103,6 +103,9 @@ jobs:
           $ErrorActionPreference = "Stop"
           $buildRuntime = Join-Path $env:RUNNER_TEMP "master-agent-windows-build"
           python -m venv $buildRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build environment creation failed with exit code $LASTEXITCODE"
+          }
           $buildPython = Join-Path $buildRuntime "Scripts\python.exe"
           & $buildPython -m pip install build
           if ($LASTEXITCODE -ne 0) {
@@ -128,7 +131,21 @@ jobs:
           if ($runtime.Length -lt 220) {
             throw "Windows wheel test path is not long enough"
           }
+          $longPathPolicy = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+          Set-ItemProperty `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled `
+            -Type DWord `
+            -Value 1
+          if ((Get-ItemPropertyValue `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled) -ne 1) {
+            throw "Windows long-path policy is not enabled"
+          }
           python -m venv $runtime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows long-path environment creation failed with exit code $LASTEXITCODE"
+          }
           $runtimePython = Join-Path $runtime "Scripts\python.exe"
           $runtimeCli = Join-Path $runtime "Scripts\master-agent.exe"
           & $runtimePython -m pip install $wheel[0]
