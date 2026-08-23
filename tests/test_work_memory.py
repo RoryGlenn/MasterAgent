@@ -178,6 +178,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "-----BEGIN PGP PRIVATE " + "KEY BLOCK-----",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
+                    "_auth=dXNlcjpwYXNz",
+                    "//registry.npmjs.org/:_auth=dXNlcjpwYXNz",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "glpat-abcdefghijklmnopqrst",
                     "hf_abcdefghijklmnopqrstuvwxyz012345",
