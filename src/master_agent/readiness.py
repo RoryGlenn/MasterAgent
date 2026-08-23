@@ -238,6 +238,17 @@ def assess_readiness(
                 "passed": not connector_errors,
                 "deployment": str(connector.deployment),
                 "credential_ready": not missing_environment,
+                "network_ready": not any(
+                    variable
+                    in connector.network_profile.required_environment_variables()
+                    for variable in missing_environment
+                ),
+                "network_profile": connector.network_profile.name,
+                "network_mode": str(connector.network_profile.mode),
+                "proxy_configured": connector.network_profile.mode.value != "direct",
+                "enterprise_ca_configured": bool(
+                    connector.network_profile.ca_bundle_env or connector.ca_bundle_env
+                ),
                 "missing_environment": list(missing_environment),
                 "principal_attestation": (
                     str(connector.principal_attestation_adapter)

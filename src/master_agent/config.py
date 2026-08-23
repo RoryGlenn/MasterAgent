@@ -72,6 +72,144 @@ class ConnectorCredentialProvider(StrEnum):
     WINDOWS_DPAPI = "windows-dpapi"
 
 
+class NetworkMode(StrEnum):
+    """Governed provider-network selection modes."""
+
+    DIRECT = "direct"
+    PROXY = "proxy"
+    AMBIENT_PROXY = "ambient_proxy"
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkProfile:
+    """Secret-free organization network policy selected by a connector."""
+
+    name: str
+    mode: NetworkMode = NetworkMode.DIRECT
+    proxy_url: str | None = None
+    proxy_username_env: str | None = None
+    proxy_password_env: str | None = None
+    ca_bundle_env: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, NetworkMode):
+            raise ConfigurationError(
+                f"network profile {self.name or '<invalid>'} mode is unsupported"
+            )
+        if (
+            not self.name
+            or self.name != self.name.strip()
+            or not self.name.isprintable()
+            or len(self.name) > 128
+        ):
+            raise ConfigurationError("network profile name is invalid")
+        if self.mode is NetworkMode.DIRECT:
+            if any(
+                value is not None
+                for value in (
+                    self.proxy_url,
+                    self.proxy_username_env,
+                    self.proxy_password_env,
+                )
+            ):
+                raise ConfigurationError(
+                    f"network profile {self.name} direct mode forbids proxy settings"
+                )
+        elif self.mode is NetworkMode.PROXY:
+            if self.proxy_url is None:
+                raise ConfigurationError(
+                    f"network profile {self.name} proxy mode requires proxy_url"
+                )
+            _validate_proxy_url(self.proxy_url, profile=self.name)
+        elif self.proxy_url is not None:
+            raise ConfigurationError(
+                f"network profile {self.name} ambient_proxy mode forbids proxy_url"
+            )
+        if (self.proxy_username_env is None) != (self.proxy_password_env is None):
+            raise ConfigurationError(
+                f"network profile {self.name} proxy credentials require both "
+                "username and password references"
+            )
+        for label, value in (
+            ("proxy_username_env", self.proxy_username_env),
+            ("proxy_password_env", self.proxy_password_env),
+            ("ca_bundle_env", self.ca_bundle_env),
+        ):
+            if value is not None and (
+                value != value.strip()
+                or not value
+                or not value.isprintable()
+                or len(value) > 256
+            ):
+                raise ConfigurationError(
+                    f"network profile {self.name} {label} is invalid"
+                )
+        allowed_references = {
+            "proxy_username_env": "MASTER_AGENT_PROXY_USERNAME",
+            "proxy_password_env": "MASTER_AGENT_PROXY_PASSWORD",
+            "ca_bundle_env": "MASTER_AGENT_ENTERPRISE_CA_BUNDLE",
+        }
+        for label, expected in allowed_references.items():
+            value = getattr(self, label)
+            if value is not None and value != expected:
+                raise ConfigurationError(
+                    f"network profile {self.name} has an unapproved {label} reference"
+                )
+
+    @property
+    def identity(self) -> str:
+        """Return the stable secret-free profile identity."""
+
+        payload = {
+            "name": self.name,
+            "mode": str(self.mode),
+            "proxy_url": self.proxy_url,
+            "proxy_username_env": self.proxy_username_env,
+            "proxy_password_env": self.proxy_password_env,
+            "ca_bundle_env": self.ca_bundle_env,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def required_environment_variables(self) -> tuple[str, ...]:
+        """Return credential-broker names required by this profile."""
+
+        names: list[str] = []
+        if self.mode is NetworkMode.AMBIENT_PROXY:
+            names.append("HTTPS_PROXY")
+        if self.proxy_username_env is not None:
+            names.extend((self.proxy_username_env, self.proxy_password_env or ""))
+        if self.ca_bundle_env is not None:
+            names.append(self.ca_bundle_env)
+        return tuple(name for name in names if name)
+
+    def resolved_proxy_url(self, environ: Mapping[str, str]) -> str | None:
+        """Resolve the secret-free proxy endpoint selected by this profile."""
+
+        if self.mode is NetworkMode.DIRECT:
+            return None
+        value = (
+            self.proxy_url
+            if self.mode is NetworkMode.PROXY
+            else environ.get("HTTPS_PROXY", "").strip()
+        )
+        if not value:
+            raise ConfigurationError(
+                f"network profile {self.name} requires an HTTPS proxy endpoint"
+            )
+        _validate_proxy_url(value, profile=self.name)
+        return value.rstrip("/")
+
+
+_DIRECT_NETWORK_PROFILE = NetworkProfile(name="direct")
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectorConfig:
     """Unresolved configuration for one connector.
@@ -90,6 +228,9 @@ class ConnectorConfig:
     secret_env: str | None
     web_base_url: str | None = None
     ca_bundle_env: str | None = None
+    network_profile: NetworkProfile = field(
+        default_factory=lambda: _DIRECT_NETWORK_PROFILE
+    )
     timeout_seconds: float = 20.0
     max_pages: int = 10
     max_items: int = 200
@@ -163,6 +304,7 @@ class ConnectorConfig:
             value = self.extra.get(key)
             if isinstance(value, str) and value.strip():
                 names.add(value.strip())
+        names.update(self.network_profile.required_environment_variables())
         return tuple(sorted(names))
 
     @property
@@ -186,6 +328,8 @@ class ConnectorConfig:
             "max_response_bytes": self.max_response_bytes,
             "extra": dict(self.extra),
         }
+        if self.network_profile != _DIRECT_NETWORK_PROFILE:
+            payload["network_profile"] = self.network_profile.identity
         encoded = json.dumps(
             payload,
             sort_keys=True,
@@ -224,6 +368,7 @@ class ConnectorConfig:
                 names.append(value.strip())
         elif self.auth_mode is not AuthMode.NONE and self.secret_env:
             names.append(self.secret_env)
+        names.extend(self.network_profile.required_environment_variables())
         return tuple(dict.fromkeys(names))
 
     def effective_base_url(
@@ -339,35 +484,16 @@ class ConnectorConfig:
             deployment=self.deployment,
         )
 
-        ca_bundle: Path | None = None
-        if self.ca_bundle_env and source.get(self.ca_bundle_env):
-            require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
-            selected = Path(source[self.ca_bundle_env]).expanduser()
-            if os.name == "nt":
-                from master_agent.platform_runtime.windows.filesystem import (
-                    WindowsPathSecurityError,
-                    validate_windows_drive_path,
-                )
-
-                if not selected.is_absolute():
-                    selected = Path.cwd() / selected
-                try:
-                    ca_bundle = Path(validate_windows_drive_path(selected).canonical)
-                except WindowsPathSecurityError as error:
-                    raise ConfigurationError(
-                        f"connector {self.system} CA bundle path is unsafe"
-                    ) from error
-            else:
-                try:
-                    ca_bundle = selected.resolve(strict=True)
-                except OSError as error:
-                    raise ConfigurationError(
-                        f"connector {self.system} CA bundle does not exist: {selected}"
-                    ) from error
-                if not ca_bundle.is_file():
-                    raise ConfigurationError(
-                        f"connector {self.system} CA bundle does not exist: {selected}"
-                    )
+        if self.ca_bundle_env and self.network_profile.ca_bundle_env:
+            raise ConfigurationError(
+                f"connector {self.system} cannot combine connector and network-profile "
+                "CA bundle references"
+            )
+        ca_environment = self.network_profile.ca_bundle_env or self.ca_bundle_env
+        ca_bundle = _resolve_ca_bundle_path(
+            source.get(ca_environment, "") if ca_environment else "",
+            label=f"connector {self.system}",
+        )
         return base_url.rstrip("/"), ca_bundle
 
     def capture_execution_target(
@@ -376,12 +502,16 @@ class ConnectorConfig:
     ) -> ResolvedExecutionTarget:
         """Capture the destination and immutable CA bytes used by live TLS."""
 
-        base_url, ca_bundle = self.resolve_execution_target(environ)
+        source = environ if environ is not None else os.environ
+        base_url, ca_bundle = self.resolve_execution_target(source)
         return ResolvedExecutionTarget(
             system=self.system,
             config_identity=self.identity,
             base_url=base_url,
             ca_bundle=(capture_ca_bundle(ca_bundle) if ca_bundle is not None else None),
+            network_profile_name=self.network_profile.name,
+            network_profile_sha256=self.network_profile.identity,
+            proxy_url=self.network_profile.resolved_proxy_url(source),
         )
 
     def credential_identity(
@@ -511,8 +641,26 @@ class ConnectorConfig:
             raise ConfigurationError(
                 f"connector {self.system} execution target does not match its config"
             )
+        if (
+            target.network_profile_name != self.network_profile.name
+            or target.network_profile_sha256 != self.network_profile.identity
+            or target.proxy_url != self.network_profile.resolved_proxy_url(source)
+        ):
+            raise ConfigurationError(
+                f"connector {self.system} network target does not match its profile"
+            )
         base_url = target.base_url
         ca_bundle = target.ca_bundle
+        proxy_username = (
+            source.get(self.network_profile.proxy_username_env)
+            if self.network_profile.proxy_username_env
+            else None
+        )
+        proxy_password = (
+            source.get(self.network_profile.proxy_password_env)
+            if self.network_profile.proxy_password_env
+            else None
+        )
 
         username = source.get(self.username_env) if self.username_env else None
         secret = source.get(self.secret_env) if self.secret_env else None
@@ -540,6 +688,9 @@ class ConnectorConfig:
                     transport=auth_transport,
                     timeout_seconds=self.timeout_seconds,
                     ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
+                    proxy_url=target.proxy_url,
+                    proxy_username=proxy_username,
+                    proxy_password=proxy_password,
                 )
             )
             secret = None
@@ -587,6 +738,11 @@ class ConnectorConfig:
             ca_bundle=(ca_bundle.path if ca_bundle is not None else None),
             ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
             ca_bundle_sha256=(ca_bundle.sha256 if ca_bundle is not None else None),
+            network_profile_name=target.network_profile_name,
+            network_profile_sha256=target.network_profile_sha256,
+            proxy_url=target.proxy_url,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
             extra=self.extra,
             config_identity=self.identity,
         )
@@ -600,6 +756,9 @@ class ResolvedExecutionTarget:
     config_identity: str
     base_url: str
     ca_bundle: CaBundleSnapshot | None = None
+    network_profile_name: str = "direct"
+    network_profile_sha256: str | None = None
+    proxy_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,6 +777,11 @@ class ResolvedConnectorConfig:
     ca_bundle: Path | None = None
     ca_bundle_data: bytes | None = field(default=None, repr=False)
     ca_bundle_sha256: str | None = None
+    network_profile_name: str = "direct"
+    network_profile_sha256: str | None = None
+    proxy_url: str | None = None
+    proxy_username: str | None = field(default=None, repr=False)
+    proxy_password: str | None = field(default=None, repr=False)
     extra: Mapping[str, Any] = field(default_factory=dict)
     config_identity: str | None = None
 
@@ -638,6 +802,16 @@ class ResolvedConnectorConfig:
             raise ConfigurationError(
                 "resolved connector CA digest requires captured data"
             )
+        if (self.proxy_username is None) != (self.proxy_password is None):
+            raise ConfigurationError(
+                "resolved proxy credentials require both username and password"
+            )
+        if self.proxy_url is not None:
+            _validate_proxy_url(self.proxy_url, profile=self.network_profile_name)
+        if self.network_profile_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.network_profile_sha256
+        ):
+            raise ConfigurationError("resolved network profile digest is invalid")
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
 
 
@@ -646,6 +820,7 @@ class IntegrationConfig:
     """Collection of connector configurations."""
 
     connectors: Mapping[str, ConnectorConfig]
+    network_profiles: Mapping[str, NetworkProfile] = field(default_factory=dict)
     source_sha256: str | None = None
 
     def __post_init__(self) -> None:
@@ -653,6 +828,11 @@ class IntegrationConfig:
             self,
             "connectors",
             MappingProxyType(dict(self.connectors)),
+        )
+        object.__setattr__(
+            self,
+            "network_profiles",
+            MappingProxyType(dict(self.network_profiles)),
         )
 
     @classmethod
@@ -678,6 +858,19 @@ class IntegrationConfig:
             raise ConfigurationError(
                 f"integration configuration not found: {path}"
             ) from error
+        raw_profiles = raw.get("network_profiles", {})
+        if not isinstance(raw_profiles, Mapping):
+            raise ConfigurationError("[network_profiles] must be a TOML table")
+        profiles: dict[str, NetworkProfile] = {
+            "direct": _DIRECT_NETWORK_PROFILE,
+        }
+        for name, value in raw_profiles.items():
+            if not isinstance(value, Mapping):
+                raise ConfigurationError(
+                    f"network profile config must be a table: {name}"
+                )
+            profiles[str(name)] = _parse_network_profile(str(name), value)
+
         raw_connectors = raw.get("connectors", {})
         if not isinstance(raw_connectors, Mapping):
             raise ConfigurationError("[connectors] must be a TOML table")
@@ -686,9 +879,17 @@ class IntegrationConfig:
         for system, value in raw_connectors.items():
             if not isinstance(value, Mapping):
                 raise ConfigurationError(f"connector config must be a table: {system}")
-            parsed[str(system)] = _parse_connector(str(system), value)
+            profile_name = str(value.get("network_profile", "direct")).strip()
+            if profile_name not in profiles:
+                raise ConfigurationError(
+                    f"connector {system} selects unknown network profile: {profile_name}"
+                )
+            parsed[str(system)] = _parse_connector(
+                str(system), value, network_profile=profiles[profile_name]
+            )
         return cls(
             connectors=parsed,
+            network_profiles=profiles,
             source_sha256=hashlib.sha256(payload).hexdigest(),
         )
 
@@ -727,6 +928,7 @@ _KNOWN_CONNECTOR_KEYS = {
     "username_env",
     "secret_env",
     "ca_bundle_env",
+    "network_profile",
     "timeout_seconds",
     "max_pages",
     "max_items",
@@ -734,9 +936,46 @@ _KNOWN_CONNECTOR_KEYS = {
 }
 
 
+def _parse_network_profile(
+    name: str,
+    raw: Mapping[str, Any],
+) -> NetworkProfile:
+    """Parse one closed, typed network profile."""
+
+    allowed = {
+        "mode",
+        "proxy_url",
+        "proxy_username_env",
+        "proxy_password_env",
+        "ca_bundle_env",
+    }
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ConfigurationError(
+            f"network profile {name} contains unknown fields: "
+            + ", ".join(sorted(str(item) for item in unknown))
+        )
+    try:
+        mode = NetworkMode(str(raw.get("mode", "direct")))
+    except ValueError as error:
+        raise ConfigurationError(
+            f"network profile {name} has an unsupported mode"
+        ) from error
+    return NetworkProfile(
+        name=name,
+        mode=mode,
+        proxy_url=_optional_string(raw.get("proxy_url")),
+        proxy_username_env=_optional_string(raw.get("proxy_username_env")),
+        proxy_password_env=_optional_string(raw.get("proxy_password_env")),
+        ca_bundle_env=_optional_string(raw.get("ca_bundle_env")),
+    )
+
+
 def _parse_connector(
     system: str,
     raw: Mapping[str, Any],
+    *,
+    network_profile: NetworkProfile = _DIRECT_NETWORK_PROFILE,
 ) -> ConnectorConfig:
     extra = {
         key: value for key, value in raw.items() if key not in _KNOWN_CONNECTOR_KEYS
@@ -760,6 +999,7 @@ def _parse_connector(
         secret_env=_optional_string(raw.get("secret_env")),
         web_base_url=_optional_string(raw.get("web_base_url")),
         ca_bundle_env=_optional_string(raw.get("ca_bundle_env")),
+        network_profile=network_profile,
         timeout_seconds=float(raw.get("timeout_seconds", 20.0)),
         max_pages=int(raw.get("max_pages", 10)),
         max_items=int(raw.get("max_items", 200)),
@@ -836,6 +1076,82 @@ def _optional_string(value: Any) -> str | None:
         return None
     rendered = str(value).strip()
     return rendered or None
+
+
+def _validate_proxy_url(value: str, *, profile: str) -> None:
+    """Require a credential-free HTTP CONNECT proxy authority."""
+
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError(
+            f"network profile {profile} proxy endpoint is invalid"
+        ) from error
+    hostname = (parsed.hostname or "").casefold().rstrip(".")
+    if (
+        parsed.scheme != "http"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or port is None
+        or not 1 <= port <= 65535
+    ):
+        raise ConfigurationError(
+            f"network profile {profile} requires a credential-free HTTP proxy "
+            "authority with an explicit port"
+        )
+    if hostname in {"localhost", "localhost.localdomain"}:
+        raise ConfigurationError(
+            f"network profile {profile} proxy endpoint must not use loopback"
+        )
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_multicast
+    ):
+        raise ConfigurationError(
+            f"network profile {profile} proxy endpoint is not an allowed address"
+        )
+
+
+def _resolve_ca_bundle_path(value: str, *, label: str) -> Path | None:
+    """Resolve one explicitly selected CA bundle through the platform contract."""
+
+    if not value:
+        return None
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    selected = Path(value).expanduser()
+    if os.name == "nt":
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsPathSecurityError,
+            validate_windows_drive_path,
+        )
+
+        if not selected.is_absolute():
+            selected = Path.cwd() / selected
+        try:
+            return Path(validate_windows_drive_path(selected).canonical)
+        except WindowsPathSecurityError as error:
+            raise ConfigurationError(f"{label} CA bundle path is unsafe") from error
+    try:
+        resolved = selected.resolve(strict=True)
+    except OSError as error:
+        raise ConfigurationError(
+            f"{label} CA bundle does not exist: {selected}"
+        ) from error
+    if not resolved.is_file():
+        raise ConfigurationError(f"{label} CA bundle does not exist: {selected}")
+    return resolved
 
 
 def _validate_base_url(base_url: str, *, system: str) -> None:

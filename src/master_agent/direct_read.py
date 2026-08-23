@@ -672,6 +672,27 @@ def _validate_connector_endpoint(
         raise ConfigurationError(
             "resolved connector CA identity drifted from the direct read binding"
         )
+    runtime_network_name = getattr(config, "network_profile_name", "direct")
+    runtime_network_sha256 = getattr(config, "network_profile_sha256", None)
+    runtime_proxy = getattr(config, "proxy_url", None)
+    legacy_direct = (
+        binding.network_profile_name == "direct"
+        and binding.network_profile_sha256 is None
+        and binding.proxy_origin is None
+    )
+    network_drifted = (
+        runtime_network_name != "direct" or runtime_proxy is not None
+        if legacy_direct
+        else (
+            runtime_network_name != binding.network_profile_name
+            or runtime_network_sha256 != binding.network_profile_sha256
+            or runtime_proxy != binding.proxy_origin
+        )
+    )
+    if network_drifted:
+        raise ConfigurationError(
+            "resolved connector network profile drifted from the direct read binding"
+        )
 
 
 def _validate_read_result(action: AgentAction, result: object) -> None:

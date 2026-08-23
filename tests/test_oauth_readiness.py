@@ -203,6 +203,47 @@ class OAuthReadinessTests(unittest.TestCase):
         )
         self.assertFalse(any("principal" in item for item in report.errors))
 
+    def test_readiness_reports_selected_network_profile_without_network_access(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[network_profiles.corporate]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+proxy_username_env = "MASTER_AGENT_PROXY_USERNAME"
+proxy_password_env = "MASTER_AGENT_PROXY_PASSWORD"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+network_profile = "corporate"
+""",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                environ={
+                    "MASTER_AGENT_PROXY_USERNAME": "brokered-user",
+                    "MASTER_AGENT_PROXY_PASSWORD": "proxy-secret-marker",
+                },
+            )
+
+        connector_check = next(
+            check for check in report.checks if check["name"] == "connector:github"
+        )
+        self.assertEqual(connector_check["network_profile"], "corporate")
+        self.assertEqual(connector_check["network_mode"], "proxy")
+        self.assertTrue(connector_check["proxy_configured"])
+        self.assertTrue(connector_check["network_ready"])
+        self.assertNotIn("proxy-secret-marker", str(report.to_dict()))
+
     def test_ordinary_readiness_does_not_require_provider_egress_policy(self) -> None:
         governance = replace(
             GovernanceProfile.from_toml(ROOT / "config/governance.toml"),

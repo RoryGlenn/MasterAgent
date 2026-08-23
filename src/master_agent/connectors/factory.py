@@ -50,7 +50,7 @@ from master_agent.execution_context import (
     capture_connector_executions,
 )
 from master_agent.http import HttpTransport
-from master_agent.models import ExecutionContext
+from master_agent.models import ConnectorExecutionBinding, ExecutionContext
 from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.registry import ConnectorRegistry
 
@@ -557,6 +557,8 @@ def _verify_approved_execution_context(
             detail = "CA path"
         elif actual.ca_bundle_sha256 != reviewed.ca_bundle_sha256:
             detail = "CA digest"
+        elif network_detail := _network_binding_difference(actual, reviewed):
+            detail = network_detail
         else:
             continue
         raise ConfigurationError(
@@ -626,11 +628,53 @@ def _verify_supplied_captured_executions(
             ca_bundle.sha256 if ca_bundle is not None else None
         ):
             detail = "CA digest"
+        elif target.network_profile_name != configured.network_profile.name:
+            detail = "network profile"
+        elif target.network_profile_sha256 != configured.network_profile.identity:
+            detail = "network profile digest"
+        elif binding.network_profile_name != target.network_profile_name:
+            detail = "bound network profile"
+        elif binding.network_profile_sha256 != target.network_profile_sha256:
+            detail = "bound network profile digest"
+        elif binding.proxy_origin != target.proxy_url:
+            detail = "bound proxy origin"
+        elif resolved.network_profile_name != target.network_profile_name:
+            detail = "resolved network profile"
+        elif resolved.network_profile_sha256 != target.network_profile_sha256:
+            detail = "resolved network profile digest"
+        elif resolved.proxy_url != target.proxy_url:
+            detail = "resolved proxy origin"
         else:
             continue
         raise ConfigurationError(
             f"captured connector {system} {detail} differs from its immutable target"
         )
+
+
+def _network_binding_difference(
+    actual: ConnectorExecutionBinding,
+    reviewed: ConnectorExecutionBinding,
+) -> str | None:
+    """Return network drift while admitting legacy direct-only bindings."""
+
+    legacy_direct = (
+        reviewed.network_profile_name == "direct"
+        and reviewed.network_profile_sha256 is None
+        and reviewed.proxy_origin is None
+    )
+    if legacy_direct:
+        if actual.network_profile_name != "direct":
+            return "network profile"
+        if actual.proxy_origin is not None:
+            return "proxy origin"
+        return None
+    if actual.network_profile_name != reviewed.network_profile_name:
+        return "network profile"
+    if actual.network_profile_sha256 != reviewed.network_profile_sha256:
+        return "network profile digest"
+    if actual.proxy_origin != reviewed.proxy_origin:
+        return "proxy origin"
+    return None
 
 
 def _captured_origin(base_url: str) -> str:

@@ -57,6 +57,9 @@ class JiraWriteConnector(CompensatingConnector):
             timeout_seconds=config.timeout_seconds,
             max_response_bytes=config.max_response_bytes,
             ca_bundle_data=config.ca_bundle_data,
+            proxy_url=config.proxy_url,
+            proxy_username=config.proxy_username,
+            proxy_password=config.proxy_password,
             allowed_methods=frozenset({"GET", "POST", "PUT", "DELETE"}),
         )
         self._last: dict[str, dict[str, Any]] = {}

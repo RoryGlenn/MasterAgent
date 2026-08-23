@@ -1,8 +1,10 @@
 """Restricted HTTP client tests."""
 
+import ipaddress
 import socket
 import unittest
 from http.client import HTTPMessage
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.request import ProxyHandler, Request
 
@@ -10,13 +12,19 @@ from master_agent.errors import (
     AuthenticationError,
     ConfigurationError,
     ConnectorHttpError,
+    NetworkDnsError,
+    NetworkTlsError,
+    ProxyAuthenticationError,
 )
 from master_agent.http import (
     HttpResponse,
     SafeHttpClient,
     UrllibTransport,
+    _ExplicitProxyHandler,
     _PinnedHTTPSConnection,
+    _PinnedHTTPSHandler,
     _SameOriginRedirectHandler,
+    diagnose_connectivity_error,
     http_action_budget,
 )
 from tests.fakes import ExpectedRequest, QueueTransport, ScriptedTransport
@@ -287,6 +295,219 @@ class SafeHttpClientTests(unittest.TestCase):
         # finalized chain; its absence proves the environment-derived default
         # handler was suppressed.
         self.assertEqual(proxy_handlers, [])
+
+    def test_explicit_proxy_requires_credential_free_http_authority(self) -> None:
+        invalid = (
+            "https://proxy.example:8443",
+            "http://proxy.example",
+            "http://user:secret@proxy.example:8080",
+            "http://proxy.example:8080/path",
+        )
+        for proxy_url in invalid:
+            with (
+                self.subTest(proxy_url=proxy_url),
+                self.assertRaises(ConfigurationError),
+            ):
+                UrllibTransport(proxy_url=proxy_url)
+
+    def test_explicit_proxy_ignores_ambient_no_proxy_and_binds_connect_auth(
+        self,
+    ) -> None:
+        handler = _ExplicitProxyHandler(
+            "http://proxy.corp.example:8080",
+            "Basic brokered-marker",
+        )
+        request = Request("https://api.example.test/resource")
+
+        with patch.dict("os.environ", {"NO_PROXY": "api.example.test"}):
+            handler.proxy_open(
+                request,
+                "http://proxy.corp.example:8080",
+                "https",
+            )
+
+        self.assertEqual(request.host, "proxy.corp.example:8080")
+        self.assertEqual(request._tunnel_host, "api.example.test")
+        self.assertEqual(
+            request.unredirected_hdrs["Proxy-authorization"],
+            "Basic brokered-marker",
+        )
+
+    def test_proxy_authorization_is_removed_from_provider_request(self) -> None:
+        observed: dict[str, object] = {}
+
+        class RecordingConnection:
+            def __init__(self, host: str, **kwargs: object) -> None:
+                observed["host"] = host
+                observed["kwargs"] = kwargs
+                self.sock = None
+
+            def set_debuglevel(self, level: int) -> None:
+                observed["debuglevel"] = level
+
+            def set_tunnel(
+                self,
+                host: str,
+                headers: dict[str, str],
+            ) -> None:
+                observed["tunnel_host"] = host
+                observed["tunnel_headers"] = dict(headers)
+
+            def request(
+                self,
+                method: str,
+                selector: str,
+                data: bytes | None,
+                headers: dict[str, str],
+                *,
+                encode_chunked: bool,
+            ) -> None:
+                observed["request_headers"] = dict(headers)
+
+            def getresponse(self) -> SimpleNamespace:
+                return SimpleNamespace(reason="OK")
+
+            def close(self) -> None:
+                observed["closed"] = True
+
+        request = Request(
+            "https://api.example.test/resource",
+            headers={"Authorization": "Bearer provider-marker"},
+        )
+        request.timeout = 3.0
+        _ExplicitProxyHandler(
+            "http://proxy.corp.example:8080",
+            "Basic proxy-marker",
+        ).proxy_open(request, "http://proxy.corp.example:8080", "https")
+        handler = _PinnedHTTPSHandler(context=MagicMock())
+
+        with patch(
+            "master_agent.http._PinnedHTTPSConnection",
+            RecordingConnection,
+        ):
+            handler.https_open(request)
+
+        self.assertEqual(
+            observed["tunnel_headers"],
+            {"Proxy-Authorization": "Basic proxy-marker"},
+        )
+        provider_headers = observed["request_headers"]
+        assert isinstance(provider_headers, dict)
+        self.assertEqual(provider_headers["Authorization"], "Bearer provider-marker")
+        self.assertNotIn("Proxy-Authorization", provider_headers)
+
+    def test_proxy_connect_vets_provider_and_preserves_tls_hostname(self) -> None:
+        proxy_address = "10.20.30.40"
+        raw_socket = MagicMock()
+        wrapped_socket = MagicMock()
+        wrapped_socket.getpeername.return_value = (proxy_address, 8080)
+        context = MagicMock()
+        context.wrap_socket.return_value = wrapped_socket
+        connection = _PinnedHTTPSConnection(
+            "proxy.corp.example",
+            port=8080,
+            timeout=3.0,
+            context=context,
+        )
+        connection.set_tunnel(
+            "api.example.test",
+            443,
+            headers={"Proxy-Authorization": "Basic brokered-marker"},
+        )
+
+        with (
+            patch("master_agent.http._public_address_records") as vet_provider,
+            patch(
+                "master_agent.http._connect_proxy_address",
+                return_value=(raw_socket, ipaddress.ip_address(proxy_address)),
+            ) as connect_proxy,
+            patch.object(connection, "_tunnel") as tunnel,
+        ):
+            connection.connect()
+
+        vet_provider.assert_called_once_with("api.example.test", 443)
+        connect_proxy.assert_called_once_with(
+            "proxy.corp.example",
+            8080,
+            timeout=3.0,
+            source_address=None,
+        )
+        tunnel.assert_called_once_with()
+        context.wrap_socket.assert_called_once_with(
+            raw_socket,
+            server_hostname="api.example.test",
+        )
+
+    def test_proxy_authentication_failure_is_classified_without_credentials(
+        self,
+    ) -> None:
+        raw_socket = MagicMock()
+        connection = _PinnedHTTPSConnection(
+            "proxy.corp.example",
+            port=8080,
+            timeout=3.0,
+            context=MagicMock(),
+        )
+        connection.set_tunnel("api.example.test", 443)
+        with (
+            patch("master_agent.http._public_address_records"),
+            patch(
+                "master_agent.http._connect_proxy_address",
+                return_value=(
+                    raw_socket,
+                    ipaddress.ip_address("10.20.30.40"),
+                ),
+            ),
+            patch.object(
+                connection,
+                "_tunnel",
+                side_effect=OSError(
+                    "Tunnel connection failed: 407 proxy-secret-marker"
+                ),
+            ),
+            self.assertRaises(ProxyAuthenticationError) as raised,
+        ):
+            connection.connect()
+
+        self.assertNotIn("proxy-secret-marker", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        diagnostic = diagnose_connectivity_error(raised.exception)
+        self.assertEqual(diagnostic.category, "proxy_authentication")
+        self.assertNotIn("proxy-secret-marker", str(diagnostic.to_dict()))
+
+    def test_proxy_cannot_bypass_private_provider_destination_rejection(self) -> None:
+        connection = _PinnedHTTPSConnection(
+            "proxy.corp.example",
+            port=8080,
+            timeout=3.0,
+            context=MagicMock(),
+        )
+        connection.set_tunnel("api.example.test", 443)
+        with (
+            patch(
+                "master_agent.http._public_address_records",
+                side_effect=ConnectorHttpError(
+                    "private or reserved network destination rejected"
+                ),
+            ),
+            patch("master_agent.http._connect_proxy_address") as connect_proxy,
+            self.assertRaisesRegex(ConnectorHttpError, "private or reserved"),
+        ):
+            connection.connect()
+
+        connect_proxy.assert_not_called()
+
+    def test_connectivity_diagnostics_are_bounded_and_actionable(self) -> None:
+        cases = (
+            (NetworkDnsError("secret dns detail"), "dns"),
+            (NetworkTlsError("secret tls detail"), "tls_ca"),
+            (AuthenticationError("secret provider detail"), "provider_authentication"),
+        )
+        for error, category in cases:
+            with self.subTest(category=category):
+                rendered = diagnose_connectivity_error(error).to_dict()
+                self.assertEqual(rendered["category"], category)
+                self.assertNotIn("secret", str(rendered))
 
     def test_https_connection_uses_vetted_address_and_original_tls_hostname(
         self,

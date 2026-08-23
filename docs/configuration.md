@@ -278,6 +278,59 @@ a claimed identity label. Another provider-verified principal or trusted
 credential-broker attestation adapter is required before those flows can be
 used for applied execution.
 
+## Enterprise network profiles
+
+Provider networking is selected by a named, secret-free profile in
+`integrations.toml`. Omitting `network_profile` preserves direct networking.
+Direct mode ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, including
+credential-bearing values inherited from a shell or desktop session.
+
+For a managed network with a fixed HTTP CONNECT proxy and Transport Layer
+Security (TLS) inspection, declare one organization-reviewed profile and select
+it from each connector that must use that route:
+
+```toml
+[network_profiles.corporate]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+proxy_username_env = "MASTER_AGENT_PROXY_USERNAME"
+proxy_password_env = "MASTER_AGENT_PROXY_PASSWORD"
+ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
+
+[connectors.github]
+network_profile = "corporate"
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+```
+
+The proxy URL must be a credential-free `http://` authority with an explicit
+port. HTTPS, SOCKS, URL user information, paths, query strings, fragments, and
+loopback proxies are rejected. Proxy credentials use the same restricted
+credential-file/native broker overlay as provider credentials and remain
+memory-only. They are sent only on CONNECT and are never written to the proxy
+URL, plan, execution binding, audit, exception, readiness report, or provider
+request.
+
+The profile-level CA variable is required when declared. MasterAgent captures
+its immutable bytes and SHA-256 before execution, then validates the original
+provider hostname and certificate chain through the tunnel. Do not also set a
+connector-level `ca_bundle_env`; one connector may have only one captured CA
+identity.
+
+An organization may deliberately select the workstation's `HTTPS_PROXY` value
+with `mode = "ambient_proxy"`. That is the only mode that reads this ambient
+variable. `HTTP_PROXY` and `NO_PROXY` are not consumed, and explicit proxy
+profiles ignore ambient bypass rules. This opt-in is intended for a trusted,
+organization-managed integrations file; it is not a per-action proxy override.
+
+Offline `readiness` output reports the profile name, mode, whether a proxy and
+enterprise CA are configured, and whether the required credential references
+are available. It opens no network connection. For protected real-network
+evidence, follow [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md#managed-network-profile-evidence).
+
 ## License and SBOM policy
 
 The repository and packaged copy of `dependency-licenses.toml` must match.

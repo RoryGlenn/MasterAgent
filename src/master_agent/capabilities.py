@@ -722,6 +722,25 @@ def _connector_execution_binding_error(
         or runtime_ca_sha256 != binding.ca_bundle_sha256
     ):
         return "CA identity drifted from its execution binding"
+    runtime_network_name = getattr(runtime_config, "network_profile_name", "direct")
+    runtime_network_sha256 = getattr(runtime_config, "network_profile_sha256", None)
+    runtime_proxy = getattr(runtime_config, "proxy_url", None)
+    legacy_direct = (
+        binding.network_profile_name == "direct"
+        and binding.network_profile_sha256 is None
+        and binding.proxy_origin is None
+    )
+    network_drifted = (
+        runtime_network_name != "direct" or runtime_proxy is not None
+        if legacy_direct
+        else (
+            runtime_network_name != binding.network_profile_name
+            or runtime_network_sha256 != binding.network_profile_sha256
+            or runtime_proxy != binding.proxy_origin
+        )
+    )
+    if network_drifted:
+        return "network profile drifted from its execution binding"
     return None
 
 
@@ -737,7 +756,10 @@ def validate_connector_execution_binding(
     )
     if error is not None:
         return False, f"resolved connector {error}"
-    return True, "resolved connector endpoint and CA match the execution binding"
+    return True, (
+        "resolved connector endpoint, CA, and network profile match the "
+        "execution binding"
+    )
 
 
 def _optional_positive_int(value: Any, name: str) -> int | None:

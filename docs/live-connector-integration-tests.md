@@ -207,6 +207,42 @@ secret in any job that needs an approved private certificate authority. Do not
 reuse the read/effect TOML or token secrets across environments merely because
 their provider fields look similar.
 
+## Managed-network profile evidence
+
+Authenticated proxy and enterprise-CA evidence is opt-in and must run only from
+reviewed default-branch code in the protected `connector-integration-read`
+environment. It must never run for a pull request or fork. Before enabling it:
+
+1. add a dedicated company proxy test account to the environment secret store;
+2. add the inspection CA as `MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM`;
+3. place a `network_profiles` entry in
+   `MASTER_AGENT_LIVE_READ_INTEGRATIONS_TOML` using the fixed proxy authority,
+   `MASTER_AGENT_PROXY_USERNAME`, `MASTER_AGENT_PROXY_PASSWORD`, and
+   `MASTER_AGENT_ENTERPRISE_CA_BUNDLE` references;
+4. map the two proxy credential secrets only inside the protected read job;
+5. confirm the proxy permits CONNECT only to the fixed provider origins in the
+   read matrix; and
+6. manually dispatch the read matrix from the current default branch.
+
+Count the run as evidence only when at least one typed credentialed provider
+read completes through the tunnel and its ordinary `verify()` re-read also
+succeeds. A direct-network fallback, skipped test, missing proxy secret, missing
+CA, or disabled inspection policy is incomplete evidence. The job log and
+artifacts must contain none of the proxy username, password, authorization
+header, CA body, provider tokens, or credential-bearing URLs.
+
+Run the corresponding offline regressions before dispatch:
+
+```bash
+python -m unittest -q tests.test_http tests.test_config \
+  tests.test_execution_context tests.test_oauth_readiness
+```
+
+Those tests cover CONNECT authentication placement, provider hostname and CA
+validation, ambient proxy suppression, redirect and origin confinement,
+private-address pivots, immutable binding, readiness, and redaction without
+opening an external connection.
+
 Jira and Confluence scoped-token TOML uses the exact gateway roots
 `https://api.atlassian.com/ex/jira/{cloudId}` and
 `https://api.atlassian.com/ex/confluence/{cloudId}` plus a distinct exact tenant

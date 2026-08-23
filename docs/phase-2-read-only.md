@@ -174,7 +174,17 @@ Unicode remains readable.
 - bounded transient retries;
 - query-free error messages;
 - typed authentication, authorization, not-found, rate-limit, and HTTP errors;
-- optional enterprise CA bundles.
+- optional immutable enterprise CA bundles;
+- named direct or authenticated HTTP CONNECT profiles with brokered proxy
+  credentials; and
+- secret-free DNS, proxy-authentication, TLS/CA, provider-authentication, scope,
+  rate-limit, policy, timeout, and transport diagnostics.
+
+Direct mode ignores ambient proxy and bypass environment variables. A reviewed
+organization profile may instead select a fixed credential-free HTTP proxy or
+explicitly opt into `HTTPS_PROXY`. The proxy route does not broaden the fixed
+provider origin, decoded base path, redirect policy, public-address check,
+response budget, or TLS hostname validation.
 
 The runtime does not expose a generic HTTP tool to the planner.
 

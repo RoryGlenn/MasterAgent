@@ -160,13 +160,13 @@ id = "provider-security"
 title = "Provider egress, authentication, HTTP, and untrusted content"
 lifecycle = "released"
 summary = "Own credentials, OAuth, provider-data egress, bounded HTTP, sanitization, and terminal rendering."
-authority = ["specs/current/security/MA-DATA-EGRESS-001.md", "specs/current/security/MA-LIVE-INTEGRATION-001.md", "docs/threat-model.md"]
+authority = ["specs/current/security/MA-DATA-EGRESS-001.md", "specs/current/security/MA-LIVE-INTEGRATION-001.md", "specs/current/security/MA-NETWORK-PROFILE-001.md", "docs/threat-model.md"]
 implementation = ["src/master_agent/provider_egress.py", "src/master_agent/http.py", "src/master_agent/security.py"]
-configuration = ["config/oauth.toml", "config/governance.toml"]
+configuration = ["config/integrations.toml", "config/oauth.toml", "config/governance.toml"]
 tests = ["tests/test_provider_egress.py", "tests/test_http.py", "tests/test_security.py", "tests/test_live_connector_workflow.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml", ".github/workflows/live-connector-integration.yml"]
 dependencies = ["direct-read", "governed-applied-run", "packaging-release"]
-aliases = ["provider egress", "oauth credentials", "http transport", "prompt injection", "terminal safety"]
+aliases = ["provider egress", "oauth credentials", "http transport", "enterprise proxy", "corporate proxy", "managed network profile", "enterprise ca", "prompt injection", "terminal safety"]
 agent = "master-agent"
 
 [[routes]]
@@ -650,6 +650,7 @@ agent = "master-agent"
 "specs/current/security/MA-ADVISORY-005.md" = "agent-topology"
 "specs/current/security/MA-DATA-EGRESS-001.md" = "provider-security"
 "specs/current/security/MA-LIVE-INTEGRATION-001.md" = "provider-security"
+"specs/current/security/MA-NETWORK-PROFILE-001.md" = "provider-security"
 "specs/current/security/MA-RETENTION-001.md" = "retention-audit"
 "specs/current/security/MA-TRUST-PROFILES-001.md" = "operating-modes"
 
@@ -889,6 +890,10 @@ route = "direct-read"
 
 [[routing_cases]]
 query = "inspect provider egress policy"
+route = "provider-security"
+
+[[routing_cases]]
+query = "configure an enterprise proxy and ca profile"
 route = "provider-security"
 
 [[routing_cases]]

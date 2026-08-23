@@ -436,6 +436,19 @@ Controls:
 - SharePoint download host suffix allowlist;
 - no Graph Authorization header on temporary download URLs;
 - IP literals, localhost, URL credentials, and fragments rejected.
+- provider requests select an immutable named direct or enterprise-network
+  profile; ambient proxy and bypass variables are ignored unless the reviewed
+  profile explicitly selects `HTTPS_PROXY`;
+- authenticated HTTP CONNECT accepts only a fixed credential-free proxy
+  authority, resolves its username/password through the credential broker, and
+  keeps `Proxy-Authorization` on CONNECT rather than provider requests;
+- tunneled requests still vet the provider hostname for public DNS, preserve
+  provider Server Name Indication and certificate-hostname validation against
+  captured CA bytes, and retain the same origin/path/redirect/response bounds;
+  and
+- execution bindings include the network-profile digest, proxy authority, and
+  enterprise-CA identity, so apply and verification reject route or trust
+  drift.
 
 ### Arbitrary code or shell execution
 
