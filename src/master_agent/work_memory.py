@@ -19,6 +19,7 @@ from uuid import UUID, uuid4
 from master_agent.errors import ConfigurationError
 from master_agent.sqlite_safety import (
     PinnedSQLiteDatabase,
+    path_entry_exists,
     readonly_snapshot_connection,
 )
 
@@ -255,7 +256,12 @@ class WorkMemory:
     def __init__(self, database: Path, *, create: bool = True) -> None:
         self._database_path = database
         try:
-            self._database = PinnedSQLiteDatabase(database, create=create)
+            create_database = create and not path_entry_exists(database)
+            self._database = PinnedSQLiteDatabase(
+                database,
+                create=create_database,
+                initialize_existing=False,
+            )
         except (ConfigurationError, OSError, RuntimeError, sqlite3.Error) as error:
             raise WorkMemoryError(
                 "work-memory database could not be opened safely"

@@ -423,6 +423,17 @@ class WorkMemoryTests(unittest.TestCase):
                     summary="Start work.",
                 )
             before = database.read_bytes()
+            with (
+                patch(
+                    "master_agent.work_memory.path_entry_exists",
+                    return_value=False,
+                ),
+                self.assertRaises(WorkMemoryError),
+            ):
+                WorkMemory(database)
+            self.assertEqual(database.read_bytes(), before)
+            self.assertTrue(WorkMemory.verify_existing(database).valid)
+
             ledger.unlink()
 
             with self.assertRaises(WorkMemoryError):

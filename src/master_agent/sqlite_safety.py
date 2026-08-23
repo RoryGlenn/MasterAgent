@@ -129,6 +129,7 @@ class _PosixPinnedSQLiteDatabase:
         *,
         parent_directory: PinnedDirectory | None = None,
         create: bool = True,
+        initialize_existing: bool = True,
     ) -> None:
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
@@ -171,16 +172,10 @@ class _PosixPinnedSQLiteDatabase:
                 os.fstat(parent_descriptor)
             )
             with _file_lock(parent_descriptor, exclusive=True):
-                database_existed = _validated_database_entry_exists(
-                    parent_descriptor,
-                    self._name,
-                )
-                if not create and not database_existed:
-                    raise ConfigurationError("SQLite state database does not exist")
                 lock_descriptor, self._lock_created = _open_flock_file(
                     parent_descriptor,
                     self._lock_name,
-                    create=create and not database_existed,
+                    create=create,
                 )
                 lock_identity = _validated_state_file_identity(
                     os.fstat(lock_descriptor),
@@ -198,7 +193,7 @@ class _PosixPinnedSQLiteDatabase:
                         self._name,
                         create=create,
                     )
-                    if self._created == database_existed:
+                    if create and not initialize_existing and not self._created:
                         raise ConfigurationError(
                             "SQLite state database namespace changed during "
                             "initialization"
@@ -214,7 +209,7 @@ class _PosixPinnedSQLiteDatabase:
                     ledger = _read_ledger_generation(
                         parent_descriptor,
                         self._ledger_name,
-                        missing_ok=self._created,
+                        missing_ok=create and (initialize_existing or self._created),
                     )
                     ledger_created = ledger is None
                     self._ledger_created = ledger_created
@@ -616,6 +611,7 @@ class _WindowsPinnedSQLiteDatabase:
         atomic: AtomicPublicationRecoveryBackend,
         parent_directory: PinnedDirectory | None,
         create: bool = True,
+        initialize_existing: bool = True,
     ) -> None:
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
@@ -661,6 +657,11 @@ class _WindowsPinnedSQLiteDatabase:
                     self._created = True
                     self._cleanup_identity = identity
                 else:
+                    if create and not initialize_existing:
+                        raise ConfigurationError(
+                            "SQLite state database namespace changed during "
+                            "initialization"
+                        )
                     content = transaction.read_bytes()
                     if content is None:
                         raise ConfigurationError(
@@ -757,6 +758,7 @@ class PinnedSQLiteDatabase:
         *,
         parent_directory: PinnedDirectory | None = None,
         create: bool = True,
+        initialize_existing: bool = True,
     ) -> None:
         require_persistent_state_platform()
         atomic = get_atomic_publication_recovery_backend()
@@ -768,12 +770,14 @@ class PinnedSQLiteDatabase:
                 atomic=atomic,
                 parent_directory=parent_directory,
                 create=create,
+                initialize_existing=initialize_existing,
             )
         else:
             self._implementation = _PosixPinnedSQLiteDatabase(
                 path,
                 parent_directory=parent_directory,
                 create=create,
+                initialize_existing=initialize_existing,
             )
 
     @property
@@ -1198,33 +1202,6 @@ def _open_database_file(
             _unlink_if_identity(parent_descriptor, name, opened_identity)
         raise
     return descriptor, created
-
-
-def _validated_database_entry_exists(parent_descriptor: int, name: str) -> bool:
-    """Return whether one existing database entry is safe to open."""
-
-    try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY | _no_follow_flag(),
-            dir_fd=parent_descriptor,
-        )
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        raise ConfigurationError(
-            "SQLite state database must be a regular no-follow file"
-        ) from error
-    try:
-        value = os.fstat(descriptor)
-        _validate_regular_owned_single_link(value, label="SQLite state database")
-        if stat.S_IMODE(value.st_mode) != 0o600:
-            raise ConfigurationError(
-                "SQLite state database permissions must remain 0600"
-            )
-        return True
-    finally:
-        os.close(descriptor)
 
 
 def _read_generation(descriptor: int) -> _Generation:

@@ -177,7 +177,7 @@ class SQLiteSafetyTests(unittest.TestCase):
                 missing.unlink()
 
                 with self.assertRaises((ConfigurationError, FileNotFoundError)):
-                    PinnedSQLiteDatabase(database_path)
+                    PinnedSQLiteDatabase(database_path, create=False)
 
                 self.assertEqual(database_path.read_bytes(), before)
                 self.assertFalse(missing.exists())
