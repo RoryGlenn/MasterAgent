@@ -43,6 +43,7 @@ from master_agent.recurring import (
     WeeklySchedule,
 )
 from master_agent.recurring_occurrence import (
+    _validate_plan_scope,
     bind_local_occurrence,
     load_occurrence,
     parse_occurrence,
@@ -245,6 +246,77 @@ class RecurringOccurrenceTests(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 results = tuple(pool.map(lambda _index: reserve(), range(2)))
             self.assertEqual(sorted(results), [False, True])
+
+    def test_expired_claim_cannot_be_renewed(self) -> None:
+        with _recurring_fixture() as fixture:
+            occurrence = _bind_fixture(fixture)
+            started = datetime(2026, 8, 20, 20, 30, tzinfo=UTC)
+            store = RecurringStateStore(
+                fixture.config.state_database,
+                lease_duration=timedelta(seconds=5),
+            )
+            try:
+                generation, token = store.reserve_occurrence(
+                    artifact_fingerprint=occurrence.fingerprint,
+                    started_at=started,
+                )
+                expired_at = started + timedelta(seconds=5)
+                self.assertFalse(
+                    store.renew_occurrence_fence(
+                        artifact_fingerprint=occurrence.fingerprint,
+                        claim_generation=generation,
+                        claim_token=token,
+                        now=expired_at,
+                    )
+                )
+                with self.assertRaisesRegex(ConfigurationError, "fence was lost"):
+                    store.validate_occurrence_fence(
+                        artifact_fingerprint=occurrence.fingerprint,
+                        claim_generation=generation,
+                        claim_token=token,
+                        now=expired_at,
+                    )
+            finally:
+                store.close()
+
+    def test_all_communication_recipient_fields_are_allowlisted(self) -> None:
+        parameter_cases = (
+            {"to": ["allowed@example.test", "blocked@example.test"]},
+            {"to": "allowed@example.test", "cc": ["blocked@example.test"]},
+            {"to": "allowed@example.test", "bcc": ["blocked@example.test"]},
+            {"recipient_id": "blocked-team-recipient"},
+        )
+        with _recurring_fixture(include_effect=True) as fixture:
+            workflow = replace(
+                fixture.config.workflows["weekly"],
+                allowed_capabilities=("outlook.email.send",),
+                allowed_recipients=("allowed@example.test",),
+                canonical_sources=("outlook://mailbox",),
+            )
+            for parameters in parameter_cases:
+                with self.subTest(parameters=parameters):
+                    action = AgentAction(
+                        capability="outlook.email.send",
+                        target=ResourceRef(
+                            system="outlook",
+                            resource_type="mailbox",
+                            resource_id="mailbox",
+                        ),
+                        parameters=parameters,
+                        risk=RiskLevel.EXTERNAL_COMMUNICATION,
+                        authority_source=AuthoritySource.REGISTERED_WORKFLOW,
+                        requires_approval=True,
+                        idempotency_key="weekly:communication",
+                        justification="Send the approved recurring review.",
+                    )
+                    with self.assertRaisesRegex(
+                        ConfigurationError,
+                        "exceeds recipient scope",
+                    ):
+                        _validate_plan_scope(
+                            replace(fixture.plan, actions=(action,)),
+                            workflow,
+                        )
 
     def test_cancellation_invalidates_pending_or_running_attempts(self) -> None:
         with _recurring_fixture() as fixture:

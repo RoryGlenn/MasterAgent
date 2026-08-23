@@ -693,6 +693,7 @@ class RecurringStateStore:
                 UPDATE recurring_occurrences SET lease_expires_at = ?
                 WHERE artifact_fingerprint = ? AND status = ?
                   AND claim_generation = ? AND claim_token = ?
+                  AND lease_expires_at IS NOT NULL AND lease_expires_at > ?
                 """,
                 (
                     (current + self._lease_duration).isoformat(),
@@ -700,6 +701,7 @@ class RecurringStateStore:
                     str(OccurrenceStatus.RUNNING),
                     claim_generation,
                     str(claim_token),
+                    current.isoformat(),
                 ),
             )
         return cursor.rowcount == 1

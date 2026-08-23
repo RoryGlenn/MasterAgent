@@ -725,13 +725,36 @@ def _validate_plan_scope(plan: ChangePlan, workflow: RegisteredWorkflow) -> None
 
 def _action_recipients(action: AgentAction) -> tuple[str, ...]:
     recipients: list[str] = []
-    for key in ("recipient", "to", "chat_id", "channel_id", "destination_id"):
+    for key in (
+        "recipient",
+        "recipient_id",
+        "chat_id",
+        "channel_id",
+        "destination_id",
+    ):
         value = action.parameters.get(key)
-        if isinstance(value, str) and value:
-            recipients.append(value)
-    values = action.parameters.get("recipients")
-    if isinstance(values, (list, tuple)):
-        recipients.extend(str(item) for item in values)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(
+                f"recurring recipient field {key} must be a non-empty string"
+            )
+        recipients.append(value)
+    for key in ("to", "cc", "bcc", "recipients"):
+        value = action.parameters.get(key)
+        if value is None:
+            continue
+        values = (value,) if isinstance(value, str) else value
+        if not isinstance(values, tuple):
+            raise ConfigurationError(
+                f"recurring recipient field {key} must be a string or list"
+            )
+        for item in values:
+            if not isinstance(item, str) or not item:
+                raise ConfigurationError(
+                    f"recurring recipient field {key} contains an invalid value"
+                )
+            recipients.append(item)
     return tuple(recipients)
 
 
