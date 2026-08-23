@@ -5,6 +5,22 @@ that a model should not act on its own. The model can help interpret the goal;
 typed runtime controls decide what may execute and verify what actually
 happened.
 
+## Native connectors are the normal enterprise path
+
+The provider examples below assume MasterAgent's first-party native connectors.
+They do not require installing or invoking a third-party Model Context Protocol
+(MCP) server. That is deliberate: the intended environment may block
+unapproved downloads, require separate review for an MCP server, or make an
+otherwise supported MCP integration unreliable behind the managed network.
+
+A supported provider operation therefore stays inside MasterAgent's typed
+connector, credential, policy, approval, verification, and audit boundaries.
+MCP is optional rather than a prerequisite or automatic fallback. A specific
+MCP adapter may be added later only after the organization approves it and it
+can satisfy the same connector contract. See
+[Native-first enterprise purpose](native-first-enterprise.md) and
+[Live connector contracts](live-connectors.md).
+
 ## Choose an outcome
 
 | Outcome | Provider credential | Approval | External write |
@@ -147,5 +163,6 @@ and whole-agent execution remain fail closed. See
 
 MasterAgent has no generic shell or HTTP capability, autonomous merge path,
 force push, broad deletion, arbitrary permission change, uncontrolled sync, or
-authority derived from retrieved content. The complete boundary is in the
+authority derived from retrieved content. It does not require or silently fall
+back to an unapproved third-party MCP server. The complete boundary is in the
 [threat model](threat-model.md) and [integration matrix](integration-matrix.md).
