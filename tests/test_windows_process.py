@@ -24,6 +24,7 @@ from master_agent.platform_runtime.windows import (
 from master_agent.platform_runtime.windows.process import (
     _PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 _SECRET = "ambient-process-secret-canary"
 
@@ -47,6 +48,12 @@ class _FakeProcessApi:
             stderr=b"",
             output_truncated=False,
         )
+
+
+class _PolicyDeniedProcessApi(_FakeProcessApi):
+    def run(self, **kwargs: Any) -> ProcessExecutionResult:
+        self.calls.append(kwargs)
+        raise OSError(f"application control denied {_SECRET}")
 
 
 class WindowsProcessContractTests(unittest.TestCase):
@@ -134,6 +141,28 @@ class WindowsProcessContractTests(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "supervised_launch_required")
         self.assertNotIn(_SECRET, str(raised.exception))
 
+    @adversarial_reasons("native_control_failed")
+    def test_policy_denial_is_bounded_and_secret_free(self) -> None:
+        backend = WindowsProcessSupervisionBackend(api=_PolicyDeniedProcessApi())
+        with self.assertRaises(ProcessSupervisionError) as raised:
+            backend.run(
+                executable=Path.cwd() / "runtime" / "blocked.exe",
+                arguments=("--secret", _SECRET),
+                cwd=Path.cwd() / "work",
+                environment={"CANARY": _SECRET},
+                timeout_seconds=2,
+                cpu_seconds=1,
+                memory_bytes=128 * 1024 * 1024,
+                max_processes=1,
+                max_output_bytes=1024,
+            )
+        self.assertEqual(raised.exception.reason, "native_control_failed")
+        self.assertEqual(
+            str(raised.exception),
+            "process supervision failed: native_control_failed",
+        )
+        self.assertNotIn(_SECRET, str(raised.exception))
+
     def _restore_environment(self, previous: str | None) -> None:
         if previous is None:
             os.environ.pop("MASTER_AGENT_AMBIENT_PROCESS_SECRET", None)
@@ -178,6 +207,7 @@ class NativeWindowsProcessTests(unittest.TestCase):
         except ProcessSupervisionError as error:
             self.fail(f"{error}; native_error_code={error.native_error_code}")
 
+    @adversarial_reasons("ambient_secret_absent")
     def test_runtime_reports_native_backend_and_minimal_environment(self) -> None:
         runtime = build_windows_runtime()
         status = runtime.status.contract_status(PlatformContract.PROCESS_SUPERVISION)
@@ -192,6 +222,7 @@ class NativeWindowsProcessTests(unittest.TestCase):
         self.assertEqual(result.reason, ProcessExitReason.EXITED)
         self.assertEqual(result.stdout.replace(b"\r\n", b"\n"), b"selected\nNone\n")
 
+    @adversarial_reasons("unselected_handle_absent")
     def test_only_selected_native_handle_reaches_child(self) -> None:
         import msvcrt
 
@@ -222,6 +253,7 @@ class NativeWindowsProcessTests(unittest.TestCase):
         self.assertEqual(result.reason, ProcessExitReason.EXITED)
         self.assertEqual(result.stdout.strip(), b"1,0")
 
+    @adversarial_reasons("descendant_tree_terminated", "timed_out")
     def test_timeout_terminates_descendant_tree(self) -> None:
         marker = self.cwd / "descendant-survived.txt"
         descendant = (
@@ -243,6 +275,7 @@ class NativeWindowsProcessTests(unittest.TestCase):
         time.sleep(4)
         self.assertFalse(marker.exists())
 
+    @adversarial_reasons("memory_limit_enforced", "process_limit_enforced")
     def test_process_count_and_memory_limits_are_enforced(self) -> None:
         child = "import subprocess,sys; subprocess.run([sys.executable,'-I','-c','pass'],check=True)"
         process_result = self.run_python(
@@ -265,6 +298,7 @@ class NativeWindowsProcessTests(unittest.TestCase):
         if memory_result.reason is ProcessExitReason.EXITED:
             self.assertEqual(memory_result.stdout.strip(), b"blocked")
 
+    @adversarial_reasons("bounded_output")
     def test_output_is_bounded_and_failure_reason_is_secret_free(self) -> None:
         result = self.run_python(
             "import sys; sys.stdout.write('x'*10000); "
@@ -276,6 +310,25 @@ class NativeWindowsProcessTests(unittest.TestCase):
         self.assertLessEqual(len(result.stdout) + len(result.stderr), 128)
         self.assertTrue(result.output_truncated)
         self.assertNotIn(_SECRET, str(result.reason))
+
+    @adversarial_reasons("explicit_utf8")
+    def test_unicode_console_output_is_explicit_utf8(self) -> None:
+        result = self.run_python(
+            "import sys; "
+            "sys.stdout.reconfigure(encoding='utf-8'); "
+            "sys.stderr.reconfigure(encoding='utf-8'); "
+            "print('stdout-Δ-文-🙂'); "
+            "print('stderr-ß-é', file=sys.stderr)",
+        )
+        self.assertEqual(result.reason, ProcessExitReason.EXITED)
+        self.assertEqual(
+            result.stdout.replace(b"\r\n", b"\n"),
+            "stdout-Δ-文-🙂\n".encode(),
+        )
+        self.assertEqual(
+            result.stderr.replace(b"\r\n", b"\n"),
+            "stderr-ß-é\n".encode(),
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0107-windows-adversarial-certification"
+title = "Windows adversarial certification matrix"
+status = "archived"
+github_issue = 107
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-WINDOWS-CERTIFICATION-001"
+destination = "runtime/MA-WINDOWS-CERTIFICATION-001.md"
+source = "current/MA-WINDOWS-CERTIFICATION-001.md"

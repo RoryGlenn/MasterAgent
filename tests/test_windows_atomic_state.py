@@ -55,6 +55,7 @@ from master_agent.retention import (
 )
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 from master_agent.workflows import communication_context, weekly_status
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
 OTHER_SID = "S-1-5-21-100-200-300-1002"
@@ -481,6 +482,7 @@ class WindowsAtomicStateTests(unittest.TestCase):
             transaction.publish_bytes(b"first", expected=None)
         self.assertIsNotNone(api.public_bytes(ledger_path))
 
+    @adversarial_reasons("indeterminate_generation")
     def test_interrupted_prepare_and_replace_reconcile_old_or_new(self) -> None:
         api, backend = _backend()
         path = Path("C:/Secure/state.json")

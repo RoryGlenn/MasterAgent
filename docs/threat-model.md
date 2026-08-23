@@ -451,7 +451,8 @@ Controls:
   a native Windows zero-capability AppContainer with no network, no ambient
   environment, no undeclared host-file/process authority, and bounded
   resources; Windows must return signed OS-level denial evidence for host-file,
-  IPv4, IPv6, localhost, ambient-secret, and child-process probes; and
+  IPv4, IPv6, localhost, named-pipe, parent-handle, ambient-secret, and child-
+  process probes; and
 - provider destinations, credentials, side effects, and capsule dependencies
   are rejected before connector construction in the demonstrated runtime;
 - each credential lease binds the exact plan fingerprint, action ID, normalized
@@ -665,8 +666,10 @@ Controls:
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
 - native Windows implementation and hosted matrix evidence are not live x64
-  release certification: the protected workflow remains unproven until an
-  enrolled clean standard-user Windows 11 x64 runner completes it. Operations
+  release certification: the skip-intolerant adversarial registry also keeps
+  organization-trust and enterprise-network cases explicitly blocked on #111
+  and #112, and the protected workflow remains unproven until those cases and
+  an enrolled clean standard-user Windows 11 x64 runner complete it. Operations
   also remain unavailable where another required runtime or credential-broker
   contract is absent. Expiration
   quarantine intentionally retains orphaned bytes until an

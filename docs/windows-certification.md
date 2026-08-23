@@ -26,6 +26,39 @@ specification and release validation, and removes its bounded work products.
 It never has a pull-request trigger, never references repository secrets, and
 never uploads the runner's filesystem state.
 
+## Adversarial evidence groups
+
+The repository binds 52 Windows security invariants to exact test IDs in
+`tests/windows_adversarial_matrix.json`. The registry separates two groups:
+
+- `hosted` contains policy and contract attacks that are safe on a GitHub-
+  hosted pull-request runner; and
+- `certification` contains native filesystem, process, Git, AppContainer, and
+  managed-workstation attacks that must run inside the reviewed Windows 11 x64
+  environment under its non-administrator account.
+
+The workflow invokes `scripts/run_windows_adversarial.py` for each group. The
+runner validates the complete invariant set and exact test IDs before running
+anything. Every active test method also declares its exact stable reason set;
+the runner captures that binding when the test starts and compares it with the
+matrix. A missing, renamed, failed, errored, skipped, or reason-mismatched
+required test makes the group fail. Ordinary `unittest` skip semantics
+therefore cannot turn missing native evidence into successful certification.
+
+The matrix also records stable content-free failure reasons and links
+equivalent POSIX evidence where useful. It never stores workstation paths,
+security identifiers (SIDs), credentials, proxy details, or native diagnostic
+text.
+
+Six managed-workstation entries are explicit blockers until their owning
+features or evidence are complete: Defender/Controlled Folder Access and
+AppLocker/WDAC remain blocked on #107 until real managed-host fixtures replace
+mocked error injection; organization ACL inheritance and approved support or
+endpoint-detection-and-response (EDR) principals depend on #111; authenticated
+proxy and enterprise certificate-authority behavior depend on #112. The
+certification runner reports those issue numbers and fails. Do not remove,
+skip, or relabel those entries to obtain a green run.
+
 ## Provision the external runner
 
 Use a dedicated disposable Windows 11 Pro or Enterprise x64 virtual machine,
@@ -69,7 +102,10 @@ Before enabling the workflow:
    allow deployments only from the protected default branch.
 3. Confirm exactly one clean eligible runner is online with all four required
    labels.
-4. Set the repository variable
+4. Confirm the adversarial matrix has no dependency-blocked certification
+   entry and that the managed image supplies the documented ACL, cloud-path,
+   endpoint-security, application-control, network, and contention fixtures.
+5. Set the repository variable
    `MASTER_AGENT_WINDOWS_CERTIFICATION_ENABLED` to `true` only while that
    infrastructure remains healthy.
 
@@ -109,3 +145,8 @@ tokens, account credentials, machine inventories, or private runner logs.
 - **Test or artifact failure:** treat it as a release blocker, preserve only
   secret-free logs needed for diagnosis, destroy the VM, fix through a pull
   request, and rerun on a fresh image.
+- **Adversarial dependency blocked:** complete the referenced issue and replace
+  its blocked registry entry with an exact passing managed-host test. A blocked
+  entry is not a waiver and cannot be counted as certification.
+- **Required adversarial test skipped:** repair the host prerequisite or test;
+  never convert the case to optional or invoke ordinary discovery as a bypass.

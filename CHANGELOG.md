@@ -1,5 +1,14 @@
 # Changelog
 
+- Add a machine-checked 52-invariant Windows adversarial registry with exact
+  hosted-safe and protected-certification test groups. Required test skips,
+  missing or renamed IDs, expected-reason mismatches, and unresolved managed-
+  workstation dependencies now fail the gate. Native AppContainer evidence
+  additionally probes named-pipe and parent-handle access; real Defender/CFA,
+  AppLocker/WDAC, organization-trust, and enterprise-network evidence remains
+  explicitly blocked on #107, #111, and #112 rather than being treated as
+  optional.
+
 - Add a required Windows 11 ARM Python 3.12–3.14 pull-request matrix and a
   protected Windows 11 x64 release-certification workflow. The x64 gate checks
   the current protected default-branch SHA before checkout, rejects server,

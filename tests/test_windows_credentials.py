@@ -22,6 +22,7 @@ from master_agent.platform_runtime.windows import (
     build_windows_runtime,
     probe_windows_credential_storage_backend,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 _SECRET = "windows-credential-secret-canary"
 _TARGET = "MasterAgent/tests/issue-101"
@@ -187,6 +188,7 @@ class WindowsCredentialStorageTests(unittest.TestCase):
         )
         self.assertNotIn(entry, self.api.credentials)
 
+    @adversarial_reasons("secret_free_failure")
     def test_credential_manager_rolls_back_without_rendering_values(self) -> None:
         original = {
             "MASTER_AGENT_JIRA_USERNAME": "operator@example.test",
@@ -219,6 +221,7 @@ class WindowsCredentialStorageTests(unittest.TestCase):
             original["MASTER_AGENT_JIRA_TOKEN"].encode(),
         )
 
+    @adversarial_reasons("current_user_scope")
     def test_dpapi_persists_ciphertext_and_enforces_current_user(self) -> None:
         credentials = {
             "MASTER_AGENT_ENTRA_APP_CLIENT_ID": "client-id",

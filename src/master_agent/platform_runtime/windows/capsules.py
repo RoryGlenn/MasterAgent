@@ -11,6 +11,7 @@ import socket
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -532,71 +533,100 @@ class CtypesWindowsAppContainerApi:
         secret_path = projection.profile_root.parent / (
             f".master-agent-capsule-probe-{secrets.token_hex(12)}"
         )
-        secret_path.write_bytes(secrets.token_bytes(32))
-        self._set_sddl(
-            secret_path,
-            _private_sddl(owner_sid=owner_sid),
-        )
-        ipv4_listener = _loopback_listener("127.0.0.1", family=socket.AF_INET)
-        try:
+        with ExitStack() as resources:
+            resources.callback(secret_path.unlink, missing_ok=True)
+            secret_path.write_bytes(secrets.token_bytes(32))
+            self._set_sddl(
+                secret_path,
+                _private_sddl(owner_sid=owner_sid),
+            )
+            ipv4_listener = _loopback_listener("127.0.0.1", family=socket.AF_INET)
+            resources.callback(ipv4_listener.close)
             ipv6_listener = _loopback_listener("::1", family=socket.AF_INET6)
-        except BaseException:
-            ipv4_listener.close()
-            raise
-        probes = (
-            (
-                "os_host_file",
+            resources.callback(ipv6_listener.close)
+            import msvcrt
+            from multiprocessing.connection import Listener
+
+            inherited_read, inherited_write = os.pipe()
+            resources.callback(os.close, inherited_read)
+            resources.callback(os.close, inherited_write)
+            os.set_blocking(inherited_read, False)
+            os.set_inheritable(inherited_write, True)
+            inherited_handle = int(msvcrt.get_osfhandle(inherited_write))  # type: ignore[attr-defined]
+            pipe_name = rf"\\.\pipe\master-agent-capsule-{secrets.token_hex(12)}"
+            pipe_listener = Listener(address=pipe_name, family="AF_PIPE")
+            resources.callback(pipe_listener.close)
+            probes = (
                 (
-                    "from pathlib import Path\n"
-                    f"p=Path({str(secret_path)!r})\n"
-                    "try:\n p.read_bytes()\n"
-                    "except PermissionError:\n print('DENIED')\n"
-                    "else:\n print('ALLOWED')\n"
+                    "os_host_file",
+                    (
+                        "from pathlib import Path\n"
+                        f"p=Path({str(secret_path)!r})\n"
+                        "try:\n p.read_bytes()\n"
+                        "except PermissionError:\n print('DENIED')\n"
+                        "else:\n print('ALLOWED')\n"
+                    ),
                 ),
-            ),
-            (
-                "os_ambient_secret",
                 (
-                    "import os\n"
-                    "print('DENIED' if "
-                    "'MASTER_AGENT_AMBIENT_CAPSULE_SECRET' not in os.environ "
-                    "else 'ALLOWED')\n"
+                    "os_ambient_secret",
+                    (
+                        "import os\n"
+                        "print('DENIED' if "
+                        "'MASTER_AGENT_AMBIENT_CAPSULE_SECRET' not in os.environ "
+                        "else 'ALLOWED')\n"
+                    ),
                 ),
-            ),
-            ("os_network_ipv4", _network_probe_source("1.1.1.1", family=2)),
-            (
-                "os_network_ipv6",
-                _network_probe_source(
-                    "::1",
-                    family=23,
-                    port=int(ipv6_listener.getsockname()[1]),
-                    listener_backed=True,
-                ),
-            ),
-            (
-                "os_network_localhost",
-                _network_probe_source(
-                    "127.0.0.1",
-                    family=2,
-                    port=int(ipv4_listener.getsockname()[1]),
-                    listener_backed=True,
-                ),
-            ),
-            (
-                "os_subprocess",
+                ("os_network_ipv4", _network_probe_source("1.1.1.1", family=2)),
                 (
-                    "import subprocess\n"
-                    "try:\n"
-                    f" subprocess.run([{str(Path(self._process.windows_directory()) / 'System32' / 'cmd.exe')!r},'/c','exit','0'],check=False)\n"
-                    "except OSError:\n print('DENIED')\n"
-                    "else:\n print('ALLOWED')\n"
+                    "os_network_ipv6",
+                    _network_probe_source(
+                        "::1",
+                        family=23,
+                        port=int(ipv6_listener.getsockname()[1]),
+                        listener_backed=True,
+                    ),
                 ),
-            ),
-        )
-        results: list[Mapping[str, str]] = []
-        try:
+                (
+                    "os_network_localhost",
+                    _network_probe_source(
+                        "127.0.0.1",
+                        family=2,
+                        port=int(ipv4_listener.getsockname()[1]),
+                        listener_backed=True,
+                    ),
+                ),
+                (
+                    "os_named_pipe",
+                    (
+                        "from multiprocessing.connection import Client\n"
+                        "try:\n"
+                        f" Client({pipe_name!r}, family='AF_PIPE').close()\n"
+                        "except OSError:\n print('DENIED')\n"
+                        "else:\n print('ALLOWED')\n"
+                    ),
+                ),
+                (
+                    "os_parent_handle",
+                    _parent_handle_probe_source(inherited_handle),
+                ),
+                (
+                    "os_subprocess",
+                    (
+                        "import subprocess\n"
+                        "try:\n"
+                        f" subprocess.run([{str(Path(self._process.windows_directory()) / 'System32' / 'cmd.exe')!r},'/c','exit','0'],check=False)\n"
+                        "except OSError:\n print('DENIED')\n"
+                        "else:\n print('ALLOWED')\n"
+                    ),
+                ),
+            )
+            results: list[Mapping[str, str]] = []
             for name, source in probes:
                 result = self._run_probe(projection, source=source)
+                if name == "os_parent_handle":
+                    _require_parent_handle_denied(result, inherited_read)
+                    results.append(MappingProxyType({"name": name, "status": "denied"}))
+                    continue
                 if (
                     result.reason is not ProcessExitReason.EXITED
                     or result.exit_code != 0
@@ -611,10 +641,6 @@ class CtypesWindowsAppContainerApi:
                         f"appcontainer_{name}_probe_failed{suffix}"
                     )
                 results.append(MappingProxyType({"name": name, "status": "denied"}))
-        finally:
-            ipv6_listener.close()
-            ipv4_listener.close()
-            secret_path.unlink(missing_ok=True)
         return tuple(results)
 
     def _run_probe(
@@ -1007,6 +1033,36 @@ def _network_probe_source(
         " code=int(error.winerror or error.errno or 0)\n"
         "print('DENIED' if code in denied else f'UNEXPECTED_{code}')\n"
     )
+
+
+def _parent_handle_probe_source(handle: int) -> str:
+    if handle <= 0:
+        raise ValueError("parent handle must be positive")
+    return (
+        "import _winapi\n"
+        "print('PROBE_READY',flush=True)\n"
+        f"_winapi.WriteFile({handle},b'\\x00',False)\n"
+    )
+
+
+def _require_parent_handle_denied(
+    result: ProcessExecutionResult,
+    read_descriptor: int,
+) -> None:
+    try:
+        leaked_parent_byte = os.read(read_descriptor, 1)
+    except BlockingIOError:
+        leaked_parent_byte = b""
+    except OSError as error:
+        raise ProcessSupervisionError(
+            "appcontainer_parent_handle_observation_failed"
+        ) from error
+    if result.stdout.splitlines()[:1] != [b"PROBE_READY"]:
+        raise ProcessSupervisionError("appcontainer_os_parent_handle_probe_failed")
+    if leaked_parent_byte:
+        raise ProcessSupervisionError(
+            "appcontainer_os_parent_handle_probe_failed_ALLOWED"
+        )
 
 
 def _loopback_listener(host: str, *, family: socket.AddressFamily) -> socket.socket:

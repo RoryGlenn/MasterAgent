@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -24,9 +25,12 @@ from master_agent.platform_runtime.windows import (
 from master_agent.platform_runtime.windows.capsules import (
     _copy_runtime_directory,
     _network_probe_source,
+    _parent_handle_probe_source,
+    _require_parent_handle_denied,
     _sddl,
     _tree_sha256,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
 APP_SID = "S-1-15-2-1234567890"
@@ -236,6 +240,53 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         self.assertNotIn("10061", source)
         self.assertIn("54321", source)
 
+    def test_parent_handle_probe_writes_only_to_the_exact_withheld_handle(
+        self,
+    ) -> None:
+        source = _parent_handle_probe_source(12345)
+        compile(source, "<parent-handle-probe>", "exec")
+        self.assertIn("_winapi.WriteFile(12345,b'\\x00',False)", source)
+        self.assertIn("print('PROBE_READY',flush=True)", source)
+        self.assertNotIn("except OSError", source)
+        self.assertNotIn("ctypes", source)
+
+        with self.assertRaisesRegex(ValueError, "parent handle must be positive"):
+            _parent_handle_probe_source(0)
+
+    def test_parent_handle_denial_is_observed_on_the_parent_pipe(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        self.addCleanup(os.close, read_descriptor)
+        self.addCleanup(os.close, write_descriptor)
+        os.set_blocking(read_descriptor, False)
+        reached_probe = ProcessExecutionResult(
+            reason=ProcessExitReason.NONZERO_EXIT,
+            exit_code=1,
+            stdout=b"PROBE_READY\r\n",
+            stderr=b"fixed invalid-handle traceback",
+            output_truncated=False,
+        )
+
+        _require_parent_handle_denied(reached_probe, read_descriptor)
+        os.write(write_descriptor, b"\x00")
+        with self.assertRaisesRegex(
+            ProcessSupervisionError,
+            "appcontainer_os_parent_handle_probe_failed_ALLOWED",
+        ):
+            _require_parent_handle_denied(reached_probe, read_descriptor)
+
+        missing_marker = ProcessExecutionResult(
+            reason=ProcessExitReason.NONZERO_EXIT,
+            exit_code=1,
+            stdout=b"",
+            stderr=b"",
+            output_truncated=False,
+        )
+        with self.assertRaisesRegex(
+            ProcessSupervisionError,
+            "appcontainer_os_parent_handle_probe_failed$",
+        ):
+            _require_parent_handle_denied(missing_marker, read_descriptor)
+
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")
 class NativeWindowsAppContainerTests(unittest.TestCase):
@@ -245,6 +296,16 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         if backend is not None and hasattr(backend, "close"):
             self.addCleanup(backend.close)  # type: ignore[attr-defined]
 
+    @adversarial_reasons(
+        "os_ambient_secret_denied",
+        "os_host_file_denied",
+        "os_named_pipe_denied",
+        "os_network_ipv4_denied",
+        "os_network_ipv6_denied",
+        "os_network_localhost_denied",
+        "os_parent_handle_denied",
+        "os_subprocess_denied",
+    )
     def test_pure_worker_and_native_denial_suite(self) -> None:
         output = self.worker.execute_program(
             source=b'def run(request):\n    return {"value": request["value"] + 1}\n',
@@ -269,11 +330,14 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
                 "os_network_ipv4",
                 "os_network_ipv6",
                 "os_network_localhost",
+                "os_named_pipe",
+                "os_parent_handle",
                 "os_subprocess",
             },
         )
         self.assertTrue(all(item["status"] == "denied" for item in probes))
 
+    @adversarial_reasons("capsule_runtime_identity_changed")
     def test_runtime_identity_tamper_fails_closed(self) -> None:
         _ = self.worker.identity_components
         backend = self.worker._isolation_backend
@@ -311,6 +375,7 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         ):
             _ = self.worker.identity_components
 
+    @adversarial_reasons("output_too_large")
     def test_worker_output_and_wall_time_limits_fail_closed(self) -> None:
         with self.assertRaisesRegex(
             ConnectorError,

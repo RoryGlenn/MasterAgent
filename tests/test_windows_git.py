@@ -24,6 +24,7 @@ from master_agent.platform_runtime.windows import (
     WindowsTrustedGitBackend,
     build_windows_runtime,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 _SECRET = "ambient-windows-git-secret-canary"
 
@@ -190,6 +191,11 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
             executable=self.executable.path,
         )
 
+    @adversarial_reasons(
+        "ambient_config_disabled",
+        "credential_helper_disabled",
+        "hooks_disabled",
+    )
     def test_pins_identity_and_runs_with_minimal_hardened_context(self) -> None:
         process = _FakeProcess(
             [_result(b"core.repositoryformatversion\x00"), _result(b"clean\n")]
@@ -346,6 +352,25 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
                 self.assertEqual(process.calls, [])
                 del parent._children[name]
 
+    @adversarial_reasons("case_collision")
+    def test_case_conflicting_git_directory_is_rejected(self) -> None:
+        self.repository._children[".GIT"] = _FakePin(
+            _fixture_path("/repo/.GIT"),
+            directory=True,
+        )
+        process = _FakeProcess([])
+        backend = self.backend(process)
+        self.addCleanup(backend.close)
+
+        with self.assertRaisesRegex(TrustedGitError, "case_collision"):
+            backend.read(
+                self.repository.path,
+                ("status", "--porcelain=v1"),
+                timeout_seconds=10,
+                max_output_bytes=4096,
+            )
+        self.assertEqual(process.calls, [])
+
     def test_child_diagnostics_never_enter_failure_text(self) -> None:
         process = _FakeProcess(
             [
@@ -446,6 +471,7 @@ class NativeWindowsTrustedGitTests(unittest.TestCase):
             self.assertIsInstance(diff, bytes)
             self.assertIn(b"tree ", commit)
 
+    @adversarial_reasons("repository_busy", "unicode_repository")
     def test_spaces_unicode_and_index_contention(self) -> None:
         with tempfile.TemporaryDirectory(prefix="git space unicode é ") as raw:
             repository = Path(raw).resolve()

@@ -179,6 +179,10 @@ jobs:
             tests.test_windows_platform_runtime `
             tests.test_windows_process
           if ($LASTEXITCODE -ne 0) { throw "native Windows test suite failed" }
+          & $testPython scripts\run_windows_adversarial.py --group hosted
+          if ($LASTEXITCODE -ne 0) { throw "hosted-safe Windows adversarial tests failed" }
+          & $testPython scripts\run_windows_adversarial.py --group certification
+          if ($LASTEXITCODE -ne 0) { throw "certification-only Windows adversarial tests failed" }
           & $testPython scripts\specs.py validate
           if ($LASTEXITCODE -ne 0) { throw "specification validation failed" }
           & $testPython scripts\validate_release.py
