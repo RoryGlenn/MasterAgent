@@ -4146,6 +4146,7 @@ def _adapt_anonymous_direct_read_integrations(
     return (
         IntegrationConfig(
             connectors=connectors,
+            network_profiles=integrations.network_profiles,
             source_sha256=integrations.source_sha256,
         ),
         True,
@@ -4158,12 +4159,17 @@ def _anonymous_direct_read_environment(
     configurations: Iterable[str],
     environ: Mapping[str, str],
 ) -> dict[str, str]:
-    """Copy only endpoint and trust values needed by an anonymous connector."""
+    """Copy only endpoint, network-profile, and trust values for anonymous reads."""
 
     selected: dict[str, str] = {}
     for name in configurations:
         connector = integrations.connector(name)
-        for variable in (connector.base_url_env, connector.ca_bundle_env):
+        network_variables = connector.network_profile.required_environment_variables()
+        for variable in (
+            connector.base_url_env,
+            connector.ca_bundle_env,
+            *network_variables,
+        ):
             if variable is None:
                 continue
             value = environ.get(variable)
@@ -5711,6 +5717,7 @@ def _connect(
         connectors[name] = replace(unresolved, enabled=True, extra=extra)
     effective = IntegrationConfig(
         connectors=connectors,
+        network_profiles=integrations.network_profiles,
         source_sha256=integrations.source_sha256,
     )
 
@@ -5785,7 +5792,11 @@ def _connect(
             )
         connectors = dict(effective.connectors)
         connectors["microsoft"] = microsoft
-        effective = IntegrationConfig(connectors=connectors)
+        effective = IntegrationConfig(
+            connectors=connectors,
+            network_profiles=effective.network_profiles,
+            source_sha256=effective.source_sha256,
+        )
 
     records = discover_integrations(
         effective,
@@ -5996,6 +6007,7 @@ def _with_connector_url_overrides(
             )
     return IntegrationConfig(
         connectors=connectors,
+        network_profiles=integrations.network_profiles,
         source_sha256=integrations.source_sha256,
     )
 
@@ -6473,6 +6485,9 @@ def _standalone_connector_binding(
         ca_bundle_sha256=(
             target.ca_bundle.sha256 if target.ca_bundle is not None else None
         ),
+        network_profile_name=target.network_profile_name,
+        network_profile_sha256=target.network_profile_sha256,
+        proxy_origin=target.proxy_url,
     )
 
 

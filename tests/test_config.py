@@ -1,5 +1,6 @@
 """Integration configuration and authentication tests."""
 
+import hashlib
 import os
 import unittest
 from dataclasses import replace
@@ -12,6 +13,8 @@ from master_agent.config import (
     ConnectorCredentialProvider,
     DeploymentType,
     IntegrationConfig,
+    NetworkMode,
+    NetworkProfile,
 )
 from master_agent.config_sources import resolve_config_source
 from master_agent.errors import ConfigurationError
@@ -21,6 +24,163 @@ from tests.helpers import private_temporary_directory
 
 class IntegrationConfigTests(unittest.TestCase):
     """Verify secret references, validation, and resolution."""
+
+    def test_named_proxy_profile_is_identity_bound_and_resolves_brokered_secrets(
+        self,
+    ) -> None:
+        profile = NetworkProfile(
+            name="corporate",
+            mode=NetworkMode.PROXY,
+            proxy_url="http://proxy.corp.example:8080",
+            proxy_username_env="MASTER_AGENT_PROXY_USERNAME",
+            proxy_password_env="MASTER_AGENT_PROXY_PASSWORD",
+        )
+        connector = ConnectorConfig(
+            system="github",
+            enabled=True,
+            deployment=DeploymentType.CLOUD,
+            base_url="https://api.github.com",
+            base_url_env=None,
+            auth_mode=AuthMode.NONE,
+            username_env=None,
+            secret_env=None,
+            network_profile=profile,
+        )
+        environ = {
+            "MASTER_AGENT_PROXY_USERNAME": "proxy-user",
+            "MASTER_AGENT_PROXY_PASSWORD": "proxy-secret-marker",
+        }
+
+        target = connector.capture_execution_target(environ)
+        resolved = connector.resolve(environ, execution_target=target)
+
+        self.assertEqual(target.network_profile_name, "corporate")
+        self.assertEqual(target.network_profile_sha256, profile.identity)
+        self.assertEqual(target.proxy_url, "http://proxy.corp.example:8080")
+        self.assertEqual(resolved.proxy_username, "proxy-user")
+        self.assertEqual(resolved.proxy_password, "proxy-secret-marker")
+        self.assertNotIn("proxy-secret-marker", repr(target))
+        self.assertNotIn("proxy-secret-marker", repr(resolved))
+        self.assertIn(
+            "MASTER_AGENT_PROXY_PASSWORD",
+            connector.credential_environment_variables(),
+        )
+
+    def test_network_profiles_reject_credentials_urls_and_unapproved_references(
+        self,
+    ) -> None:
+        invalid = (
+            {"mode": NetworkMode.PROXY, "proxy_url": "https://proxy.example:8443"},
+            {
+                "mode": NetworkMode.PROXY,
+                "proxy_url": "http://user:secret@proxy.example:8080",
+            },
+            {"mode": NetworkMode.PROXY, "proxy_url": "http://127.0.0.1:8080"},
+            {
+                "mode": NetworkMode.PROXY,
+                "proxy_url": "http://proxy.example:8080",
+                "proxy_username_env": "UNREVIEWED_USERNAME",
+                "proxy_password_env": "MASTER_AGENT_PROXY_PASSWORD",
+            },
+        )
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(ConfigurationError):
+                NetworkProfile(name="invalid", **values)
+
+    def test_network_profile_captures_enterprise_ca_identity(self) -> None:
+        with private_temporary_directory() as directory:
+            ca_bundle = Path(directory) / "enterprise-ca.pem"
+            ca_bundle.write_bytes(b"-----BEGIN CERTIFICATE-----\nmanaged\n")
+            expected_digest = hashlib.sha256(ca_bundle.read_bytes()).hexdigest()
+            profile = NetworkProfile(
+                name="corporate-ca",
+                mode=NetworkMode.PROXY,
+                proxy_url="http://proxy.corp.example:8080",
+                ca_bundle_env="MASTER_AGENT_ENTERPRISE_CA_BUNDLE",
+            )
+            connector = ConnectorConfig(
+                system="github",
+                enabled=True,
+                deployment=DeploymentType.CLOUD,
+                base_url="https://api.github.com",
+                base_url_env=None,
+                auth_mode=AuthMode.NONE,
+                username_env=None,
+                secret_env=None,
+                network_profile=profile,
+            )
+
+            target = connector.capture_execution_target(
+                {"MASTER_AGENT_ENTERPRISE_CA_BUNDLE": str(ca_bundle)}
+            )
+
+        self.assertIsNotNone(target.ca_bundle)
+        assert target.ca_bundle is not None
+        self.assertEqual(target.ca_bundle.path, ca_bundle.resolve())
+        self.assertEqual(
+            target.ca_bundle.sha256,
+            expected_digest,
+        )
+
+    def test_ambient_proxy_is_consumed_only_by_an_opted_in_profile(self) -> None:
+        direct = NetworkProfile(name="direct-test")
+        ambient = NetworkProfile(
+            name="managed-workstation", mode=NetworkMode.AMBIENT_PROXY
+        )
+        environ = {"HTTPS_PROXY": "http://proxy.corp.example:8080"}
+
+        self.assertIsNone(direct.resolved_proxy_url(environ))
+        self.assertEqual(
+            ambient.resolved_proxy_url(environ),
+            "http://proxy.corp.example:8080",
+        )
+        self.assertEqual(ambient.required_environment_variables(), ("HTTPS_PROXY",))
+
+    def test_integration_config_selects_only_declared_network_profiles(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "network-profile.toml"
+            path.write_text(
+                """
+[network_profiles.corporate]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+network_profile = "corporate"
+""",
+                encoding="utf-8",
+            )
+            parsed = IntegrationConfig.from_toml(path)
+
+        self.assertEqual(parsed.connector("github").network_profile.name, "corporate")
+
+    def test_builtin_direct_profile_cannot_be_redefined_as_a_proxy(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "network-profile.toml"
+            path.write_text(
+                """
+[network_profiles.direct]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "built-in direct network profile cannot be redefined",
+            ):
+                IntegrationConfig.from_toml(path)
 
     def test_windows_ca_target_is_lexical_until_native_capture(self) -> None:
         connector = ConnectorConfig(

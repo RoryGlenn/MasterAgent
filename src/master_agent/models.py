@@ -15,6 +15,7 @@ from enum import StrEnum
 from itertools import islice
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from master_agent.errors import ValidationError
@@ -318,6 +319,9 @@ class ConnectorExecutionBinding:
     credential_identity: str | None = None
     ca_bundle_path: str | None = None
     ca_bundle_sha256: str | None = None
+    network_profile_name: str = "direct"
+    network_profile_sha256: str | None = None
+    proxy_origin: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -365,6 +369,29 @@ class ConnectorExecutionBinding:
                 self.ca_bundle_sha256,
                 "connector execution binding ca_bundle_sha256",
             )
+        if not self.network_profile_name.strip():
+            raise ValidationError(
+                "connector execution binding network profile name is empty"
+            )
+        if self.network_profile_sha256 is not None:
+            _validate_sha256(
+                self.network_profile_sha256,
+                "connector execution binding network_profile_sha256",
+            )
+        if self.proxy_origin is not None:
+            parsed_proxy = urlsplit(self.proxy_origin)
+            if (
+                parsed_proxy.scheme != "http"
+                or not parsed_proxy.hostname
+                or parsed_proxy.username is not None
+                or parsed_proxy.password is not None
+                or parsed_proxy.path not in {"", "/"}
+                or parsed_proxy.query
+                or parsed_proxy.fragment
+            ):
+                raise ValidationError(
+                    "connector execution binding proxy origin is invalid"
+                )
         object.__setattr__(self, "credential_scopes", scopes)
 
     def to_dict(self) -> dict[str, Any]:
@@ -379,6 +406,9 @@ class ConnectorExecutionBinding:
             "authentication_mode": self.authentication_mode,
             "ca_bundle_path": self.ca_bundle_path,
             "ca_bundle_sha256": self.ca_bundle_sha256,
+            "network_profile_name": self.network_profile_name,
+            "network_profile_sha256": self.network_profile_sha256,
+            "proxy_origin": self.proxy_origin,
         }
         payload["credential_scopes"] = list(self.credential_scopes)
         if self.credential_identity is not None:
@@ -417,6 +447,17 @@ class ConnectorExecutionBinding:
             ca_bundle_sha256=(
                 str(data["ca_bundle_sha256"])
                 if data.get("ca_bundle_sha256") is not None
+                else None
+            ),
+            network_profile_name=str(data.get("network_profile_name", "direct")),
+            network_profile_sha256=(
+                str(data["network_profile_sha256"])
+                if data.get("network_profile_sha256") is not None
+                else None
+            ),
+            proxy_origin=(
+                str(data["proxy_origin"])
+                if data.get("proxy_origin") is not None
                 else None
             ),
         )

@@ -468,6 +468,10 @@ class SharePointConnector(ReadOnlyConnector):
             transport=self._transport,
             timeout_seconds=self._config.timeout_seconds,
             max_response_bytes=max_bytes,
+            ca_bundle_data=self._config.ca_bundle_data,
+            proxy_url=self._config.proxy_url,
+            proxy_username=self._config.proxy_username,
+            proxy_password=self._config.proxy_password,
         )
         try:
             content = response.body.decode("utf-8-sig")

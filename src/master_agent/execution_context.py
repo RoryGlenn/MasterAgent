@@ -185,6 +185,9 @@ def capture_connector_executions(
                     ca_bundle_sha256=(
                         ca_bundle.sha256 if ca_bundle is not None else None
                     ),
+                    network_profile_name=target.network_profile_name,
+                    network_profile_sha256=target.network_profile_sha256,
+                    proxy_origin=target.proxy_url,
                 ),
             )
         )
@@ -200,7 +203,7 @@ def _verify_approved_connector_target(
 
     observed_origin = _origin(target.base_url, system=config.system)
     ca_bundle = target.ca_bundle
-    comparisons = (
+    comparisons = [
         ("deployment", str(config.deployment), approved.deployment),
         ("config identity", target.config_identity, approved.config_identity_sha256),
         ("base URL", target.base_url, approved.resolved_base_url),
@@ -215,7 +218,35 @@ def _verify_approved_connector_target(
             ca_bundle.sha256 if ca_bundle is not None else None,
             approved.ca_bundle_sha256,
         ),
+    ]
+    legacy_direct = (
+        approved.network_profile_name == "direct"
+        and approved.network_profile_sha256 is None
+        and approved.proxy_origin is None
     )
+    if legacy_direct:
+        comparisons.extend(
+            (
+                ("network profile", target.network_profile_name, "direct"),
+                ("proxy origin", target.proxy_url, None),
+            )
+        )
+    else:
+        comparisons.extend(
+            (
+                (
+                    "network profile",
+                    target.network_profile_name,
+                    approved.network_profile_name,
+                ),
+                (
+                    "network profile digest",
+                    target.network_profile_sha256,
+                    approved.network_profile_sha256,
+                ),
+                ("proxy origin", target.proxy_url, approved.proxy_origin),
+            )
+        )
     for detail, observed, expected in comparisons:
         if observed != expected:
             raise ConfigurationError(

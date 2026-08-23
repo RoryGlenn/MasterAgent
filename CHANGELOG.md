@@ -1,5 +1,14 @@
 # Changelog
 
+- Add immutable enterprise network profiles for direct, fixed authenticated
+  HTTP CONNECT, and explicitly selected ambient-proxy routing. Proxy
+  credentials now resolve through the governed broker and remain CONNECT-only;
+  provider DNS, origin/path redirects, Server Name Indication, captured
+  enterprise-CA validation, request/response budgets, and execution bindings
+  remain enforced through the tunnel. Offline readiness reports the selected
+  network mode without secrets, and protected managed-network evidence is
+  documented as an opt-in default-branch integration gate.
+
 - Add explicit `user-private` and `organization-managed` configuration trust.
   A private organization profile can bind exact managed bytes to bounded POSIX
   UID/GID or Windows SID writer policies; effective-user or untrusted write,

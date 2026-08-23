@@ -3,7 +3,11 @@
 # remain independently gated. No credential values belong in this file. Every
 # *_env field names an environment variable injected at runtime.
 
+[network_profiles.direct]
+mode = "direct"
+
 [connectors.jira]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
@@ -22,6 +26,7 @@ writes_enabled = false
 write_enabled = false
 
 [connectors.confluence]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
@@ -39,6 +44,7 @@ writes_enabled = false
 write_enabled = false
 
 [connectors.bitbucket]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 # Cloud API root. For Data Center, use the server/context root.
@@ -61,6 +67,7 @@ branch_prefix = "agent/"
 write_enabled = false
 
 [connectors.github]
+network_profile = "direct"
 enabled = true
 deployment = "cloud"
 base_url = "https://api.github.com"
@@ -79,6 +86,7 @@ admin_enabled = false
 write_enabled = false
 
 [connectors.microsoft]
+network_profile = "direct"
 enabled = true
 deployment = "cloud"
 # Change this root for a supported Microsoft national cloud.

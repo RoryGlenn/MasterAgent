@@ -238,6 +238,9 @@ class EntraClientCredentialsProvider:
         transport: HttpTransport | None = None,
         timeout_seconds: float = 20.0,
         ca_bundle_data: bytes | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
     ) -> None:
         for name, value in (
             ("tenant_id", tenant_id),
@@ -259,6 +262,9 @@ class EntraClientCredentialsProvider:
             max_response_bytes=1024 * 1024,
             retry_attempts=1,
             ca_bundle_data=ca_bundle_data,
+            proxy_url=proxy_url,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
             allowed_methods=frozenset({"POST"}),
         )
 

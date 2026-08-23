@@ -81,6 +81,22 @@ class ConnectorHttpError(HttpRequestError):
     """
 
 
+class NetworkDnsError(ConnectorHttpError):
+    """Raised when a governed network destination cannot be safely resolved."""
+
+
+class NetworkTlsError(ConnectorHttpError):
+    """Raised when provider TLS identity or configured CA validation fails."""
+
+
+class NetworkTimeoutError(ConnectorHttpError):
+    """Raised when a governed provider or proxy operation times out."""
+
+
+class ProxyAuthenticationError(AuthenticationError):
+    """Raised when an explicitly selected proxy rejects brokered credentials."""
+
+
 class VersionConflictError(ConnectorError):
     """Raised when a resource changed after planning."""
 
