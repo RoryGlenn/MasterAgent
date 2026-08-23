@@ -169,6 +169,11 @@ class WorkMemoryTests(unittest.TestCase):
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+                    "glpat-abcdefghijklmnopqrst",
+                    "hf_abcdefghijklmnopqrstuvwxyz012345",
+                    "lin_api_abcdefghijklmnopqrstuvwxyz012345",
+                    "dapi" + "0123456789abcdef0123456789abcdef",
+                    "pypi-abcdefghijklmnopqrstuvwxyz0123456789",
                     (
                         "https://acct.blob.core.windows.net/c/b?"
                         "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"

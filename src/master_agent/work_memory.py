@@ -111,6 +111,14 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"\bnpm_[A-Za-z0-9]{20,}\b|"
     r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\b|"
     r"\b(?:gh[pousr]_|github_pat_|sk-proj-|sk-|sk_(?:live|test)_)[A-Za-z0-9_-]{8,}"
+    r"|\b(?:glpat|glptt|glrt|glcbt|glimt|glsoat|glagent|gloas|gldt)-"
+    r"[A-Za-z0-9_-]{16,}\b"
+    r"|\b(?:hf_|lin_api_|gsk_|dop_v1_|doo_v1_|dor_v1_|shpat_|shpca_|"
+    r"shppa_|shpss_|PMAK-)[A-Za-z0-9_-]{16,}\b"
+    r"|\bdapi[A-Fa-f0-9]{24,}\b"
+    r"|\bpypi-[A-Za-z0-9_-]{20,}\b"
+    r"|\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b"
+    r"|\batlasv1\.[A-Za-z0-9_-]{16,}\b"
     r")",
     re.IGNORECASE,
 )
