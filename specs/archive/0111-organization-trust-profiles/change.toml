@@ -1,0 +1,32 @@
+schema = "master-agent/change@1"
+id = "0111-organization-trust-profiles"
+title = "Organization-managed trust profiles"
+status = "archived"
+github_issue = 111
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-TRUST-PROFILES-001"
+destination = "security/MA-TRUST-PROFILES-001.md"
+source = "current/MA-TRUST-PROFILES-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-WINDOWS-FILESYSTEM-001"
+destination = "runtime/MA-WINDOWS-FILESYSTEM-001.md"
+source = "current/MA-WINDOWS-FILESYSTEM-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-WINDOWS-INSTALL-001"
+destination = "runtime/MA-WINDOWS-INSTALL-001.md"
+source = "current/MA-WINDOWS-INSTALL-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-WINDOWS-CERTIFICATION-001"
+destination = "runtime/MA-WINDOWS-CERTIFICATION-001.md"
+source = "current/MA-WINDOWS-CERTIFICATION-001.md"

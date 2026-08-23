@@ -9,11 +9,12 @@ contract now keeps imports and configuration diagnostics platform neutral. The
 native Windows filesystem/ACL, locking, atomic local-state, credential,
 process, trusted Git, and AppContainer pure-capsule tranche is implemented.
 Three-version hosted Windows CI, an exhaustive skip-intolerant adversarial
-registry, and the protected x64 workflow are implemented. The final
-certification tranche stays operationally planned until #107 replaces the
-mocked Defender/CFA and AppLocker/WDAC placeholders, #111 and #112 clear their
-managed-workstation registry blockers, and a clean enrolled standard-user
-Windows 11 x64 runner supplies successful evidence.
+registry, and the protected x64 workflow are implemented. Organization-managed
+configuration trust and hosted-safe ACL/support-principal policy evidence are
+implemented. The final certification tranche stays operationally planned on
+#106 until real Defender/CFA, AppLocker/WDAC, organization ACL, and support/EDR
+fixtures run on a clean enrolled standard-user Windows 11 x64 runner; #112
+retains the authenticated-proxy and enterprise-CA blockers.
 Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring
 execution, raw plugin execution, and
@@ -239,8 +240,8 @@ absent.
 
 - descriptor-bound local and remote Git mutation;
 - recurring execution under a complete immutable runtime manifest;
-- native Windows organization trust-profile integration and live x64
-  certification evidence from an enrolled clean standard-user runner;
+- live x64 managed-workstation certification evidence from an enrolled clean
+  standard-user runner;
 - raw plugin execution with a sealed dependency filesystem;
 - provider or side-effect capability capsules;
 - additional organization secret-manager, receipt, and external audit adapters;

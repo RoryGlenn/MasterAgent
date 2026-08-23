@@ -322,9 +322,12 @@ py -3.12 scripts\bootstrap_agent.py --no-index `
   --find-links C:\ApprovedPackages
 ```
 
-Bootstrap never rewrites or executes an unmarked `.venv`; a collision produces
-a managed `.venv-master-agent-<digest>` beside it. Use the exact launcher shown
-on bootstrap's final `command:` line rather than assuming the selected path is
+Bootstrap never rewrites or executes an unattested `.venv`; a legacy marker is
+not sufficient. Reuse requires a fresh isolated interpreter check plus exact
+source, dependency-policy, project-version, launcher, distribution, and
+installed-file identity. A collision or mismatch produces a managed
+`.venv-master-agent-<digest>` beside it. Use the exact launcher shown on
+bootstrap's final `command:` line rather than assuming the selected path is
 `.venv`. Runtime configuration and state default to
 `%LOCALAPPDATA%\MasterAgent`, never the checkout or current working directory.
 An explicit reviewed profile may select a different private local path.

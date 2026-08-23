@@ -81,6 +81,68 @@ class OrganizationProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, "unknown organization"):
                 profile.configuration_path("secret_token")
 
+    def test_profile_binds_managed_configuration_digest_and_writer_policy(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            source = root / "organization-profile.toml"
+            trust_table = (
+                "[configuration_trust.policy]\n"
+                'class = "organization-managed"\n'
+                f'sha256 = "{"a" * 64}"\n'
+                "posix_uids = [0]\n"
+                "posix_gids = [0]\n"
+                'windows_sids = ["S-1-5-21-1-2-3-4100"]\n'
+            ).encode()
+            payload = (
+                _profile_payload(
+                    state_root="state",
+                    configuration={"policy": "company/policy.toml"},
+                )
+                + trust_table
+            )
+
+            profile = OrganizationProfile.from_toml(
+                ConfigSnapshot(display_path=source, payload=payload)
+            )
+            policy = profile.configuration_trust_policy("policy")
+            self.assertIsNotNone(policy)
+            assert policy is not None
+            self.assertEqual(policy.sha256, "a" * 64)
+            self.assertEqual(policy.posix_uids, (0,))
+            self.assertEqual(policy.windows_sids, ("S-1-5-21-1-2-3-4100",))
+            self.assertEqual(
+                profile.configuration_trust_summary(),
+                (("policy", "organization-managed"),),
+            )
+            self.assertEqual(
+                profile.to_dict()["configuration_trust"],
+                {
+                    "policy": {
+                        "class": "organization-managed",
+                        "reason": "content-and-writer-bound",
+                    }
+                },
+            )
+            readiness = assess_operating_readiness(
+                profile=profile,
+                catalog=_catalog(),
+            ).to_dict()
+            self.assertEqual(
+                readiness["configuration_trust"],
+                {
+                    "policy": {
+                        "class": "organization-managed",
+                        "reason": "content-and-writer-bound",
+                    }
+                },
+            )
+
+            missing_path = _profile_payload(state_root="state") + trust_table
+            with self.assertRaisesRegex(ConfigurationError, "matching configuration"):
+                OrganizationProfile.from_toml(
+                    ConfigSnapshot(display_path=source, payload=missing_path)
+                )
+
     def test_profile_rejects_unknown_fields_types_duplicates_and_secret_paths(
         self,
     ) -> None:

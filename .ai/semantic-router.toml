@@ -118,7 +118,7 @@ id = "operating-modes"
 title = "Progressive operating modes and user workflow"
 lifecycle = "released"
 summary = "Own strict organization profiles, employee/developer boundaries, capability-scoped doctor results, private setup, and one-command governed execution."
-authority = ["specs/current/runtime/MA-OPERATING-MODES-001.md", "specs/current/runtime/MA-USER-WORKFLOW-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md"]
+authority = ["specs/current/runtime/MA-OPERATING-MODES-001.md", "specs/current/runtime/MA-USER-WORKFLOW-001.md", "specs/current/security/MA-TRUST-PROFILES-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md"]
 implementation = ["src/master_agent/operating.py"]
 configuration = ["config/organization-profile.toml", "src/master_agent/defaults/organization-profile.toml"]
 tests = ["tests/test_operating.py", "tests/test_operating_modes.py"]
@@ -651,6 +651,7 @@ agent = "master-agent"
 "specs/current/security/MA-DATA-EGRESS-001.md" = "provider-security"
 "specs/current/security/MA-LIVE-INTEGRATION-001.md" = "provider-security"
 "specs/current/security/MA-RETENTION-001.md" = "retention-audit"
+"specs/current/security/MA-TRUST-PROFILES-001.md" = "operating-modes"
 
 [ownership.configurations]
 ".ai/semantic-router.toml" = "semantic-router"

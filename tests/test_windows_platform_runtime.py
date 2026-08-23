@@ -83,6 +83,7 @@ from tests.windows_adversarial_evidence import adversarial_reasons
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
 OTHER_SID = "S-1-5-21-100-200-300-1002"
+UNTRUSTED_SID = "S-1-5-21-100-200-300-1003"
 
 _LOCK_CHILD_SCRIPT = """
 import os
@@ -144,12 +145,16 @@ class _FakeFilesystemApi:
         self.open_calls: list[tuple[str, bool, bool, bool]] = []
         self.closed: set[int] = set()
         self.delete_on_close: set[int] = set()
+        self.effective_token_sids: set[str] = {CURRENT_SID}
         self._next_handle = 100
         self._paths: dict[int, str] = {}
         self._positions: dict[int, int] = {}
 
     def current_user_sid(self) -> str:
         return CURRENT_SID
+
+    def current_token_is_member(self, sid: str) -> bool:
+        return sid in self.effective_token_sids
 
     def volume_information(self, root: str) -> NativeWindowsVolume:
         if root != "C:\\":
@@ -222,25 +227,28 @@ class _FakeFilesystemApi:
         path = self._require_handle(handle)
         generation = self.security_generation.get(path, 0)
         owner_sid = OTHER_SID if path in self.untrusted_paths else CURRENT_SID
-        aces: tuple[WindowsAccessAllowedAce, ...] = ()
-        if path in self.untrusted_paths or path in self.writable_untrusted_paths:
-            mask = 0x2 if path in self.untrusted_paths else 0x100
-            aces = (WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=mask),)
+        aces_list: list[WindowsAccessAllowedAce] = []
+        if path in self.untrusted_paths:
+            aces_list.append(WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x2))
+        if path in self.writable_untrusted_paths:
+            aces_list.append(
+                WindowsAccessAllowedAce(sid=UNTRUSTED_SID, access_mask=0x100)
+            )
         elif path in self.ancestor_child_create_paths:
-            aces = (
+            aces_list = [
                 WindowsAccessAllowedAce(
                     sid=OTHER_SID,
                     access_mask=WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
-                ),
-            )
+                )
+            ]
         elif path in self.readable_untrusted_paths:
-            aces = (WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x120089),)
+            aces_list = [WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x120089)]
         return NativeWindowsSecurity(
             owner_sid=owner_sid,
             dacl=WindowsDacl(
                 raw=f"acl:{path}:{generation}".encode(),
                 valid=True,
-                allow_aces=aces,
+                allow_aces=tuple(aces_list),
             ),
             dacl_protected=path in self.protected_paths,
         )
@@ -1447,6 +1455,43 @@ class WindowsPinnedPathTests(unittest.TestCase):
                 r"C:\Secure\note.txt",
                 require_private=False,
             )
+
+    @adversarial_reasons(
+        "requires_approved_principal_profile",
+        "requires_organization_trust_profile",
+    )
+    def test_organization_managed_policy_excludes_user_and_admits_support_principals(
+        self,
+    ) -> None:
+        support_sid = OTHER_SID
+        api = _FakeFilesystemApi()
+        backend = WindowsSecureFilesystemBackend(_api=api)
+        managed = backend.for_organization_managed_configuration((support_sid,))
+        self.assertFalse(managed.trust_current_user)
+        self.assertEqual(managed.additional_trusted_sids, (support_sid,))
+        with self.assertRaisesRegex(ValueError, "effective user"):
+            backend.for_organization_managed_configuration((CURRENT_SID,))
+        api.effective_token_sids.add(support_sid)
+        with self.assertRaisesRegex(ValueError, "effective user token"):
+            backend.for_organization_managed_configuration((support_sid,))
+        api.effective_token_sids.remove(support_sid)
+
+        with self.assertRaisesRegex(
+            WindowsPathSecurityError,
+            "owner SID is not trusted",
+        ):
+            managed.pin_file(r"C:\Secure\note.txt", require_private=False)
+
+        api.untrusted_paths.update({"C:\\", r"C:\Secure", r"C:\Secure\note.txt"})
+        with managed.pin_file(r"C:\Secure\note.txt", require_private=False) as pinned:
+            self.assertEqual(pinned.identity.owner_sid, support_sid)
+
+        api.writable_untrusted_paths.add(r"C:\Secure\note.txt")
+        with self.assertRaisesRegex(
+            WindowsPathSecurityError,
+            "write-capable access to an untrusted SID",
+        ):
+            managed.pin_file(r"C:\Secure\note.txt", require_private=False)
 
     def test_expected_identity_mismatch_fails_closed(self) -> None:
         api = _FakeFilesystemApi()

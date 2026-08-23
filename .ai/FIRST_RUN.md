@@ -35,10 +35,17 @@ prompt in each MasterAgent chat.
   py -3.12 scripts\bootstrap_agent.py
   ```
 
-The script is idempotent. It refreshes a bootstrap-managed local runtime when
-its project metadata changes. A pre-existing repository-local `.venv` without
-a valid bootstrap marker is never executed or rewritten. Bootstrap leaves it
-untouched and creates a digest-named side-by-side managed environment instead.
+The script is idempotent. It reuses a bootstrap-managed local runtime only when
+a versioned attestation matches the current source, dependency policy, project
+version, interpreter, launcher, distribution identities, and installed files.
+The bootstrap process verifies POSIX permissions/ACLs or retained Windows
+DACLs and hashes installed files before it executes the isolated interpreter
+probe; the probe disables site initialization and imports no environment code.
+A pre-existing
+repository-local `.venv` with a legacy marker, missing or mismatched
+attestation, broken probe, or unsafe object is never executed or rewritten.
+Bootstrap leaves it untouched and creates a digest-named side-by-side managed
+environment instead.
 The final `command:` line names the exact launcher to use afterward, including
 the side-by-side path when a collision was preserved.
 
@@ -47,7 +54,8 @@ the side-by-side path when a collision was preserved.
 The first-run attempt may only:
 
 1. verify that the invoking Python interpreter is version 3.12 or newer;
-2. leave an unsafe, incomplete, symbolic-link, or unverifiable `.venv`
+2. independently attest an existing environment, or leave an unsafe,
+   incomplete, legacy, altered, symbolic-link, or unverifiable `.venv`
    untouched and select a fresh side-by-side environment;
 3. create `.venv` with Python's standard `venv` module when it is absent;
 4. install this repository and its declared dependencies into that `.venv`
