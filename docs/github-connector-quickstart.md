@@ -6,6 +6,10 @@ only for private or account-visible data. The agent owns local setup, the
 minimum typed read, and verification without asking for permission at each
 step.
 
+For a credential-free local setup before contacting GitHub, start with the
+[general quickstart](quickstart.md). For examples beyond repository discovery,
+see [Use cases](use-cases.md).
+
 ## What GitHub access can do
 
 The built-in GitHub connector can:

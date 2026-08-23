@@ -9,7 +9,7 @@ A plugin package exposes one entry point in the `master_agent.connectors` group:
 servicenow = "my_master_agent_plugin:build_connectors"
 ```
 
-The factory receives no automatic credentials from Master Agent. It must return one connector or an iterable of connectors implementing the connector contract.
+The factory receives no automatic credentials from MasterAgent. It must return one connector or an iterable of connectors implementing the connector contract.
 
 ## Connector contract
 

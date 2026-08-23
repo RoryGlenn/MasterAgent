@@ -1,5 +1,10 @@
 # Operations Guide
 
+Use this guide after local setup to run reviewed plans, resume approval, handle
+incidents, rotate state, and monitor MasterAgent. For the first local result,
+start with the [quickstart](quickstart.md); for symptom-first recovery, use
+[troubleshooting](troubleshooting.md).
+
 ## Employee workflow
 
 The organization profile is the normal employee entry point. It selects one

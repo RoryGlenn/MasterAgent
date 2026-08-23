@@ -5,6 +5,11 @@ through [`.github/agents/MasterAgent.agent.md`](../.github/agents/MasterAgent.ag
 The profile is the Copilot entry point; the Python package remains the governed
 execution runtime.
 
+New to the project? Use the [quickstart](quickstart.md) for the shortest safe
+path or browse concrete prompts in [Use cases](use-cases.md). This guide is the
+exact reference for the repository agent's setup, autonomy, advisory, and
+approval boundaries.
+
 ## Use in an IDE
 
 1. Open the repository root as the workspace. Opening only its parent directory
