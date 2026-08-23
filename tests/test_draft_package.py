@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -44,36 +45,38 @@ class DraftPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(os.path.realpath(directory))
             registry = ConnectorRegistry()
-            for connector in (
-                JiraDraftConnector(root),
-                ConfluenceDraftConnector(root),
-                OutlookDraftConnector(root),
-                TeamsDraftConnector(root),
-                PowerPointDraftConnector(root),
-                RepositoryDraftConnector(root),
-            ):
-                registry.register(connector)
-            runtime = WorkflowOrchestrator(
-                policy=PolicyEngine(
-                    PolicyConfig.from_toml(ROOT / "config/policy.toml")
-                ),
-                sources=SourceOfTruthRegistry.from_toml(
-                    ROOT / "config/sources_of_truth.toml"
-                ),
-                connectors=registry,
-                audit=AuditLog(root / "audit.sqlite3"),
-            )
-            report = runtime.run(plan, dry_run=False)
-            self.assertTrue(report.successful)
-            artifacts = render_draft_package(report, output_dir=root)
-            self.assertTrue(artifacts.manifest_json.is_file())
-            self.assertTrue((root / "change-package.pptx").is_file())
-            self.assertTrue((root / "stakeholder-email.eml").is_file())
-            self.assertTrue((root / "source-change.patch").is_file())
-            self.assertIn(
-                "No external system was modified",
-                artifacts.summary_markdown.read_text(encoding="utf-8"),
-            )
+            with ExitStack() as connector_stack:
+                for connector in (
+                    JiraDraftConnector(root),
+                    ConfluenceDraftConnector(root),
+                    OutlookDraftConnector(root),
+                    TeamsDraftConnector(root),
+                    PowerPointDraftConnector(root),
+                    RepositoryDraftConnector(root),
+                ):
+                    connector_stack.callback(connector.close)
+                    registry.register(connector)
+                runtime = WorkflowOrchestrator(
+                    policy=PolicyEngine(
+                        PolicyConfig.from_toml(ROOT / "config/policy.toml")
+                    ),
+                    sources=SourceOfTruthRegistry.from_toml(
+                        ROOT / "config/sources_of_truth.toml"
+                    ),
+                    connectors=registry,
+                    audit=AuditLog(root / "audit.sqlite3"),
+                )
+                report = runtime.run(plan, dry_run=False)
+                self.assertTrue(report.successful)
+                artifacts = render_draft_package(report, output_dir=root)
+                self.assertTrue(artifacts.manifest_json.is_file())
+                self.assertTrue((root / "change-package.pptx").is_file())
+                self.assertTrue((root / "stakeholder-email.eml").is_file())
+                self.assertTrue((root / "source-change.patch").is_file())
+                self.assertIn(
+                    "No external system was modified",
+                    artifacts.summary_markdown.read_text(encoding="utf-8"),
+                )
 
     def test_repository_patch_rejects_parent_path(self) -> None:
         settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
@@ -83,11 +86,13 @@ class DraftPackageTests(unittest.TestCase):
             patch,
             parameters={**patch.parameters, "relative_path": "../secret.txt"},
         )
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            self.assertRaisesRegex(Exception, "inside the repository"),
-        ):
-            RepositoryDraftConnector(Path(directory)).execute(unsafe)
+        with tempfile.TemporaryDirectory() as directory:
+            connector = RepositoryDraftConnector(Path(os.path.realpath(directory)))
+            try:
+                with self.assertRaisesRegex(Exception, "inside the repository"):
+                    connector.execute(unsafe)
+            finally:
+                connector.close()
 
     def test_repository_patch_normalizes_crlf_to_deterministic_lf(self) -> None:
         settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
@@ -113,8 +118,11 @@ class DraftPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(os.path.realpath(directory))
             connector = RepositoryDraftConnector(root)
-            connector.execute(crlf)
-            connector.execute(lf)
+            try:
+                connector.execute(crlf)
+                connector.execute(lf)
+            finally:
+                connector.close()
             crlf_bytes = (root / "crlf.patch").read_bytes()
             lf_bytes = (root / "lf.patch").read_bytes()
 
