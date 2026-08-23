@@ -552,6 +552,172 @@ class SystemsAssessment:
         return assessment
 
 
+_STRATEGY_COHERENCE_FINDINGS: tuple[str, ...] = (
+    "diagnosis_addresses_constraint",
+    "guiding_policy_targets_leverage_point",
+    "proximate_objective_advances_outcome",
+    "coherent_actions_support_success_metric",
+    "tradeoffs_cover_alternatives",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyCoherenceReview:
+    """Fingerprint-bound findings from a trusted strategy review boundary."""
+
+    assessment_fingerprint: str
+    strategy_kernel_fingerprint: str
+    diagnosis_addresses_constraint: bool
+    guiding_policy_targets_leverage_point: bool
+    proximate_objective_advances_outcome: bool
+    coherent_actions_support_success_metric: bool
+    tradeoffs_cover_alternatives: bool
+    reason_codes: tuple[str, ...]
+    schema: str = "master-agent/strategy-coherence-review@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/strategy-coherence-review@1":
+            raise ValidationError("unsupported strategy coherence review schema")
+        for name in ("assessment_fingerprint", "strategy_kernel_fingerprint"):
+            if re.fullmatch(r"[0-9a-f]{64}", getattr(self, name)) is None:
+                raise ValidationError(
+                    f"strategy coherence {name} must be a SHA-256 digest"
+                )
+        for name in _STRATEGY_COHERENCE_FINDINGS:
+            if not isinstance(getattr(self, name), bool):
+                raise ValidationError(f"strategy coherence {name} must be a boolean")
+        codes = tuple(islice(iter(self.reason_codes), MAX_PLAN_ACTIONS + 1))
+        if len(codes) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"strategy coherence exceeds the {MAX_PLAN_ACTIONS}-reason limit"
+            )
+        if any(
+            not isinstance(item, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item) is None
+            for item in codes
+        ):
+            raise ValidationError("strategy coherence reason codes are invalid")
+        if len(codes) != len(set(codes)):
+            raise ValidationError("strategy coherence reason codes must be unique")
+        missing = {
+            name
+            for name in _STRATEGY_COHERENCE_FINDINGS
+            if getattr(self, name) and name not in codes
+        }
+        if missing:
+            raise ValidationError(
+                "positive strategy coherence findings require matching reason codes: "
+                + ", ".join(sorted(missing))
+            )
+        object.__setattr__(self, "reason_codes", codes)
+
+    @classmethod
+    def for_review(
+        cls,
+        *,
+        assessment: SystemsAssessment,
+        diagnosis_addresses_constraint: bool,
+        guiding_policy_targets_leverage_point: bool,
+        proximate_objective_advances_outcome: bool,
+        coherent_actions_support_success_metric: bool,
+        tradeoffs_cover_alternatives: bool,
+        reason_codes: tuple[str, ...],
+    ) -> StrategyCoherenceReview:
+        """Bind explicit coherence findings to one exact assessment and kernel."""
+
+        kernel = assessment.strategy_kernel
+        if kernel is None:
+            raise ValidationError(
+                "strategy coherence review requires a strategy kernel"
+            )
+        return cls(
+            assessment_fingerprint=assessment.fingerprint,
+            strategy_kernel_fingerprint=kernel.fingerprint,
+            diagnosis_addresses_constraint=diagnosis_addresses_constraint,
+            guiding_policy_targets_leverage_point=(
+                guiding_policy_targets_leverage_point
+            ),
+            proximate_objective_advances_outcome=(proximate_objective_advances_outcome),
+            coherent_actions_support_success_metric=(
+                coherent_actions_support_success_metric
+            ),
+            tradeoffs_cover_alternatives=tradeoffs_cover_alternatives,
+            reason_codes=reason_codes,
+        )
+
+    @classmethod
+    def for_static_intervention(
+        cls, assessment: SystemsAssessment
+    ) -> StrategyCoherenceReview:
+        """Record the explicit code-owned review of a registered intervention."""
+
+        return cls.for_review(
+            assessment=assessment,
+            diagnosis_addresses_constraint=True,
+            guiding_policy_targets_leverage_point=True,
+            proximate_objective_advances_outcome=True,
+            coherent_actions_support_success_metric=True,
+            tradeoffs_cover_alternatives=True,
+            reason_codes=(*_STRATEGY_COHERENCE_FINDINGS, "static_intervention"),
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        """Return the stable digest of the complete coherence review."""
+
+        return _stable_sha256(self.to_dict())
+
+    @property
+    def all_findings_confirmed(self) -> bool:
+        """Return whether the trusted boundary confirmed every relationship."""
+
+        return all(getattr(self, name) for name in _STRATEGY_COHERENCE_FINDINGS)
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the content-free coherence review."""
+
+        return {
+            "schema": self.schema,
+            "assessment_fingerprint": self.assessment_fingerprint,
+            "strategy_kernel_fingerprint": self.strategy_kernel_fingerprint,
+            **{name: getattr(self, name) for name in _STRATEGY_COHERENCE_FINDINGS},
+            "reason_codes": list(self.reason_codes),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> StrategyCoherenceReview:
+        """Parse bounded coherence-review evidence."""
+
+        return cls(
+            schema=str(data.get("schema", "")),
+            assessment_fingerprint=str(data.get("assessment_fingerprint", "")),
+            strategy_kernel_fingerprint=str(
+                data.get("strategy_kernel_fingerprint", "")
+            ),
+            diagnosis_addresses_constraint=_strict_bool(
+                data.get("diagnosis_addresses_constraint"),
+                "strategy coherence diagnosis_addresses_constraint",
+            ),
+            guiding_policy_targets_leverage_point=_strict_bool(
+                data.get("guiding_policy_targets_leverage_point"),
+                "strategy coherence guiding_policy_targets_leverage_point",
+            ),
+            proximate_objective_advances_outcome=_strict_bool(
+                data.get("proximate_objective_advances_outcome"),
+                "strategy coherence proximate_objective_advances_outcome",
+            ),
+            coherent_actions_support_success_metric=_strict_bool(
+                data.get("coherent_actions_support_success_metric"),
+                "strategy coherence coherent_actions_support_success_metric",
+            ),
+            tradeoffs_cover_alternatives=_strict_bool(
+                data.get("tradeoffs_cover_alternatives"),
+                "strategy coherence tradeoffs_cover_alternatives",
+            ),
+            reason_codes=_systems_text_list(data, "reason_codes"),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SystemsGateDecision:
     """Immutable result of evaluating one plan and assessment.
@@ -567,6 +733,7 @@ class SystemsGateDecision:
     complexity_score: int
     assessment_fingerprint: str
     requires_human_review: bool = False
+    strategy_coherence_review_fingerprint: str | None = None
     schema: str = "master-agent/systems-gate-decision@1"
 
     def __post_init__(self) -> None:
@@ -594,6 +761,13 @@ class SystemsGateDecision:
             raise ValidationError(
                 "systems gate assessment fingerprint must be a SHA-256 digest"
             )
+        if self.strategy_coherence_review_fingerprint is not None and (
+            re.fullmatch(r"[0-9a-f]{64}", self.strategy_coherence_review_fingerprint)
+            is None
+        ):
+            raise ValidationError(
+                "systems gate strategy coherence fingerprint must be a SHA-256 digest"
+            )
 
     @property
     def fingerprint(self) -> str:
@@ -604,7 +778,7 @@ class SystemsGateDecision:
     def to_dict(self) -> dict[str, object]:
         """Serialize the gate decision."""
 
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "route": str(self.route),
             "permitted": self.permitted,
@@ -613,6 +787,11 @@ class SystemsGateDecision:
             "assessment_fingerprint": self.assessment_fingerprint,
             "requires_human_review": self.requires_human_review,
         }
+        if self.strategy_coherence_review_fingerprint is not None:
+            payload["strategy_coherence_review_fingerprint"] = (
+                self.strategy_coherence_review_fingerprint
+            )
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SystemsGateDecision:
@@ -633,6 +812,11 @@ class SystemsGateDecision:
             requires_human_review=_strict_bool(
                 data.get("requires_human_review", False),
                 "systems gate decision requires_human_review",
+            ),
+            strategy_coherence_review_fingerprint=(
+                str(data["strategy_coherence_review_fingerprint"])
+                if data.get("strategy_coherence_review_fingerprint") is not None
+                else None
             ),
         )
 
@@ -2144,6 +2328,9 @@ class ExecutionContext:
         )
 
 
+_TRUSTED_STRATEGY_COHERENCE_ADMISSION = object()
+
+
 @dataclass(frozen=True, slots=True)
 class ChangePlan:
     """Immutable set of actions proposed for one user goal."""
@@ -2161,10 +2348,23 @@ class ChangePlan:
     systems_assessment: SystemsAssessment | None = None
     systems_decision: SystemsGateDecision | None = None
     strategy_traces: tuple[StrategyActionTrace, ...] = ()
+    strategy_coherence_review: StrategyCoherenceReview | None = None
+    _trusted_strategy_coherence_admission: object | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.compensate_on_failure, bool):
             raise ValidationError("compensate_on_failure must be a boolean")
+        if self.strategy_coherence_review is not None and not isinstance(
+            self.strategy_coherence_review, StrategyCoherenceReview
+        ):
+            raise ValidationError(
+                "plan strategy_coherence_review must be a StrategyCoherenceReview"
+            )
         if (self.systems_assessment is None) != (self.systems_decision is None):
             raise ValidationError(
                 "systems assessment and gate decision must be supplied together"
@@ -2189,6 +2389,18 @@ class ChangePlan:
             ):
                 raise ValidationError(
                     "systems gate decision complexity does not match the assessment"
+                )
+            review_fingerprint = (
+                self.strategy_coherence_review.fingerprint
+                if self.strategy_coherence_review is not None
+                else None
+            )
+            if (
+                self.systems_decision.strategy_coherence_review_fingerprint
+                != review_fingerprint
+            ):
+                raise ValidationError(
+                    "systems gate decision does not match the strategy coherence review"
                 )
         if not self.goal.strip():
             raise ValidationError("goal must not be empty")
@@ -2266,6 +2478,11 @@ class ChangePlan:
                     "systems_decision": self.systems_decision.to_dict()
                     if self.systems_decision is not None
                     else None,
+                    "strategy_coherence_review": (
+                        self.strategy_coherence_review.to_dict()
+                        if self.strategy_coherence_review is not None
+                        else None
+                    ),
                 },
                 context="systems governance binding",
                 max_bytes=MAX_PLAN_BYTES,
@@ -2283,6 +2500,32 @@ class ChangePlan:
             allow_nan=False,
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    def _with_trusted_strategy_coherence_admission(self) -> ChangePlan:
+        """Mark an exact in-process plan admitted by a trusted planning binder."""
+
+        object.__setattr__(
+            self,
+            "_trusted_strategy_coherence_admission",
+            _TRUSTED_STRATEGY_COHERENCE_ADMISSION,
+        )
+        return self
+
+    def _has_trusted_strategy_coherence_admission(self) -> bool:
+        """Return whether trusted in-process admission created this exact plan."""
+
+        return (
+            self._trusted_strategy_coherence_admission
+            is _TRUSTED_STRATEGY_COHERENCE_ADMISSION
+        )
+
+    def execution_snapshot(self) -> ChangePlan:
+        """Clone immutable plan data while preserving trusted local admission."""
+
+        snapshot = ChangePlan.from_dict(self.to_dict())
+        if self._has_trusted_strategy_coherence_admission():
+            snapshot._with_trusted_strategy_coherence_admission()
+        return snapshot
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the plan to JSON-compatible data."""
@@ -2304,6 +2547,10 @@ class ChangePlan:
             payload["strategy_traces"] = [
                 item.to_dict() for item in self.strategy_traces
             ]
+        if self.strategy_coherence_review is not None:
+            payload["strategy_coherence_review"] = (
+                self.strategy_coherence_review.to_dict()
+            )
         if self.systems_assessment is not None:
             if self.systems_decision is None:  # pragma: no cover - validated above.
                 raise ValidationError("systems gate decision is missing")
@@ -2371,6 +2618,13 @@ class ChangePlan:
             ),
             strategy_traces=tuple(
                 StrategyActionTrace.from_dict(item) for item in traces_data
+            ),
+            strategy_coherence_review=(
+                StrategyCoherenceReview.from_dict(
+                    _expect_mapping(data, "strategy_coherence_review")
+                )
+                if data.get("strategy_coherence_review") is not None
+                else None
             ),
             actions=tuple(AgentAction.from_dict(item) for item in actions_data),
         )

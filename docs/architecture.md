@@ -97,11 +97,32 @@ constraint, one guiding policy, a proximate objective, explicit tradeoffs, and
 bounded coherent-action intents. `StrategyActionTrace` records map every exact
 plan action to one known intent, with no missing, duplicate, unknown, stale, or
 unused entries. The kernel is covered by the assessment fingerprint and the
-traces by the plan fingerprint. This makes strategy reviewable without making
-strategy authoritative. `EvidenceBackedSystemsAssessor` is the concrete
-planning boundary for explicitly supplied evidence; it rejects a substituted
-goal instead of filling gaps with generated prose. Built-in workflows use the
-explicit fast-path or static-intervention constructors.
+traces by the plan fingerprint.
+
+The gated route also requires a `StrategyCoherenceReview` from a separate
+trusted planning boundary. Its strict findings attest that the diagnosis
+addresses the constraint, the guiding policy targets the leverage point, the
+proximate objective advances the desired outcome, the action effects support
+the success metric, and the tradeoffs cover relevant alternatives. The review
+is bound to the exact assessment and kernel fingerprints, and its own
+fingerprint is bound into the gate decision and plan. Missing, false,
+type-confused, mismatched, stale, or altered review evidence fails closed.
+
+This makes strategy reviewable without making strategy authoritative or
+pretending deterministic code can prove natural-language meaning.
+`EvidenceBackedSystemsAssessor` and
+`EvidenceBackedStrategyCoherenceReviewer` are the concrete boundaries for
+explicitly supplied evidence; they reject substituted inputs instead of
+filling gaps with generated prose. Built-in workflows use the explicit
+fast-path or code-owned static-intervention constructors.
+
+Public fingerprints prove exactness, not authorship. The governed planner and
+static-intervention binder therefore attach non-serialized, process-local
+provenance to the exact plan they admit. Execution snapshots preserve it, while
+plans reconstructed from JSON cannot claim it. Applied execution of such a
+serialized gated plan requires a current authenticated approval covering the
+exact plan and every action; dry runs may inspect its structure without
+executing it.
 
 After execution, `RunReport.systems_review`, `DirectReadReport.systems_review`,
 and the orchestrator's terminal audit event contain content-free evidence for

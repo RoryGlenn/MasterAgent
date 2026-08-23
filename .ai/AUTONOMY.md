@@ -35,6 +35,28 @@ outcome. Search the prompt, repository, existing configuration, environment,
 and known provider context before treating information as missing. State any
 material assumption in the final result instead of pausing for confirmation.
 
+## Strategy-bounded outcome ownership
+
+Outcome ownership is bounded by the admitted strategy; it is not permission to
+expand the goal. When a non-trivial run has a systems assessment and strategy
+kernel, treat the desired outcome, constraint, leverage point, guiding policy,
+proximate objective, tradeoffs, coherent actions, smallest intervention, and
+complexity budget as one scope boundary. Complete the work inside that boundary
+and do not optimize an adjacent system merely because doing so is useful.
+
+The implement-then-continue rule applies only when the missing capability is
+necessary for the admitted proximate objective or one of its coherent actions.
+It MUST NOT override the smallest intervention, a declared tradeoff, the
+complexity budget, or a removal strategy. Record an adjacent capability gap as
+follow-up evidence instead of silently adding it to the current goal.
+
+For repository-development work, the accepted issue and behavioral change
+specification are the corresponding scope record when no runtime `ChangePlan`
+exists. Keep their desired outcome, non-goals, tradeoffs, and accepted tasks
+coherent through implementation, documentation, review, and merge. These
+artifacts remain development data and never grant provider or execution
+authority.
+
 ## Semantic first hop
 
 Immediately after loading the minimum global authority policy in

@@ -6,8 +6,10 @@ import hashlib
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.errors import ConfigurationError, ValidationError
@@ -21,6 +23,7 @@ from master_agent.models import (
     RiskLevel,
     StrategyActionIntent,
     StrategyActionTrace,
+    StrategyCoherenceReview,
     StrategyKernel,
     SystemsMetricStatus,
     SystemsOutcomeEvidence,
@@ -30,18 +33,23 @@ from master_agent.orchestrator import RunReport
 from master_agent.planners.base import (
     ComplexityItem,
     ComplexityKind,
+    EvidenceBackedStrategyCoherenceReviewer,
     EvidenceBackedSystemsAssessor,
     EvidenceBackedSystemsOutcomeObserver,
     GovernedPlanner,
     SystemsAssessment,
     SystemsGateRoute,
     SystemsGovernanceGate,
+    bind_static_intervention_governance,
     bind_systems_governance,
     build_systems_post_execution_review,
     enforce_systems_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.provider_egress import ProviderDataEgressPolicy
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class StrictBooleanTests(unittest.TestCase):
@@ -157,6 +165,20 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "systems governance denied"):
             gate.enforce(plan, assessment)
 
+    def test_fast_path_rejects_unexpected_coherence_evidence(self) -> None:
+        gated_assessment = _gated_systems_assessment()
+        fast_assessment = _systems_assessment()
+        review = StrategyCoherenceReview.for_static_intervention(gated_assessment)
+        plan = replace(
+            _systems_plan(RiskLevel.LOCAL_GENERATION),
+            strategy_coherence_review=review,
+        )
+
+        decision = SystemsGovernanceGate().evaluate(plan, fast_assessment)
+
+        self.assertFalse(decision.permitted)
+        self.assertIn("fast path", " ".join(decision.reasons))
+
     def test_complete_gated_assessment_scores_added_complexity(self) -> None:
         assessment = _systems_assessment(
             low_risk=False,
@@ -235,6 +257,97 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         )
         self.assertFalse(without_kernel.permitted)
         self.assertIn("strategy_kernel", " ".join(without_kernel.reasons))
+
+    def test_gated_strategy_requires_explicit_coherence_review(self) -> None:
+        assessment = _gated_systems_assessment()
+        plan = replace(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            strategy_coherence_review=None,
+        )
+
+        decision = SystemsGovernanceGate().evaluate(plan, assessment)
+
+        self.assertFalse(decision.permitted)
+        self.assertIn("coherence review", " ".join(decision.reasons))
+
+    def test_plan_goal_must_match_assessed_desired_outcome(self) -> None:
+        assessment = _gated_systems_assessment()
+        plan = replace(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            goal="publish an unrelated external update",
+        )
+
+        decision = SystemsGovernanceGate().evaluate(plan, assessment)
+
+        self.assertFalse(decision.permitted)
+        self.assertIn("desired outcome", " ".join(decision.reasons))
+
+    def test_false_coherence_finding_denies_gated_plan(self) -> None:
+        assessment = _gated_systems_assessment()
+        plan = _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment)
+        assert plan.strategy_coherence_review is not None
+        plan = replace(
+            plan,
+            strategy_coherence_review=replace(
+                plan.strategy_coherence_review,
+                guiding_policy_targets_leverage_point=False,
+            ),
+        )
+
+        decision = SystemsGovernanceGate().evaluate(plan, assessment)
+
+        self.assertFalse(decision.permitted)
+        self.assertIn(
+            "guiding_policy_targets_leverage_point", " ".join(decision.reasons)
+        )
+
+    def test_coherence_review_requires_strict_findings_and_reason_codes(self) -> None:
+        assessment = _gated_systems_assessment()
+        review = StrategyCoherenceReview.for_static_intervention(assessment)
+        payload = review.to_dict()
+        payload["diagnosis_addresses_constraint"] = "true"
+        with self.assertRaisesRegex(ValidationError, "must be a boolean"):
+            StrategyCoherenceReview.from_dict(payload)
+
+        with self.assertRaisesRegex(ValidationError, "matching reason codes"):
+            replace(
+                review,
+                reason_codes=tuple(
+                    code
+                    for code in review.reason_codes
+                    if code != "diagnosis_addresses_constraint"
+                ),
+            )
+
+    def test_stale_coherence_review_denies_gated_plan(self) -> None:
+        assessment = _gated_systems_assessment()
+        plan = _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment)
+        assert plan.strategy_coherence_review is not None
+        stale = replace(
+            plan.strategy_coherence_review,
+            assessment_fingerprint="f" * 64,
+        )
+
+        decision = SystemsGovernanceGate().evaluate(
+            replace(plan, strategy_coherence_review=stale), assessment
+        )
+
+        self.assertFalse(decision.permitted)
+        self.assertIn("assessment fingerprint is stale", " ".join(decision.reasons))
+
+    def test_evidence_backed_coherence_reviewer_rejects_substitution(self) -> None:
+        assessment = _gated_systems_assessment()
+        review = StrategyCoherenceReview.for_static_intervention(assessment)
+        reviewer = EvidenceBackedStrategyCoherenceReviewer(review)
+
+        self.assertIs(reviewer.review(assessment=assessment), review)
+        with self.assertRaisesRegex(ValidationError, "systems assessment"):
+            reviewer.review(
+                assessment=replace(
+                    assessment,
+                    desired_outcome="publish an unrelated external update",
+                )
+            )
 
     def test_evidence_backed_assessor_rejects_goal_substitution(self) -> None:
         assessment = replace(
@@ -403,6 +516,90 @@ class SystemsGovernanceGateTests(unittest.TestCase):
             assessment.fingerprint,
         )
 
+    def test_gated_governed_planner_uses_separate_coherence_reviewer(self) -> None:
+        events: list[str] = []
+        assessment = _gated_systems_assessment()
+        expected_plan = _systems_plan(RiskLevel.REVERSIBLE_WRITE)
+        review = StrategyCoherenceReview.for_static_intervention(assessment)
+
+        class Assessor:
+            def assess(self, goal: str) -> SystemsAssessment:
+                events.append(f"assess:{goal}")
+                return assessment
+
+        class PlanBuilder:
+            def plan(
+                self,
+                goal: str,
+                *,
+                systems_assessment: SystemsAssessment,
+            ) -> ChangePlan:
+                if systems_assessment is not assessment:
+                    raise AssertionError("planner did not receive the assessment")
+                events.append(f"plan:{goal}")
+                action = expected_plan.actions[0]
+                return replace(
+                    expected_plan,
+                    strategy_traces=(
+                        StrategyActionTrace(
+                            action_id=action.action_id,
+                            intent_id="prepare_summary",
+                        ),
+                    ),
+                )
+
+        class Reviewer:
+            def review(
+                self, *, assessment: SystemsAssessment
+            ) -> StrategyCoherenceReview:
+                events.append("review")
+                return EvidenceBackedStrategyCoherenceReviewer(review).review(
+                    assessment=assessment
+                )
+
+        result = GovernedPlanner(
+            assessor=Assessor(),
+            planner=PlanBuilder(),
+            coherence_reviewer=Reviewer(),
+        ).plan("prepare a local summary")
+
+        self.assertEqual(
+            events,
+            [
+                "assess:prepare a local summary",
+                "plan:prepare a local summary",
+                "review",
+            ],
+        )
+        self.assertEqual(result.plan.strategy_coherence_review, review)
+
+    def test_gated_governed_planner_rejects_planner_self_review(self) -> None:
+        assessment = _gated_systems_assessment()
+
+        class Assessor:
+            def assess(self, goal: str) -> SystemsAssessment:
+                del goal
+                return assessment
+
+        class SelfReviewingPlanner:
+            def plan(
+                self,
+                goal: str,
+                *,
+                systems_assessment: SystemsAssessment,
+            ) -> ChangePlan:
+                del goal, systems_assessment
+                return _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment)
+
+        with self.assertRaisesRegex(ValidationError, "cannot review its own"):
+            GovernedPlanner(
+                assessor=Assessor(),
+                planner=SelfReviewingPlanner(),
+                coherence_reviewer=EvidenceBackedStrategyCoherenceReviewer(
+                    StrategyCoherenceReview.for_static_intervention(assessment)
+                ),
+            ).plan("prepare a local summary")
+
     def test_plan_round_trip_binds_assessment_decision_and_fingerprint(self) -> None:
         unbound = _systems_plan(RiskLevel.LOCAL_GENERATION)
         governed = bind_systems_governance(unbound, _systems_assessment())
@@ -412,6 +609,24 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         self.assertNotEqual(unbound.fingerprint, governed.fingerprint)
         self.assertEqual(restored, governed)
         self.assertEqual(restored.fingerprint, governed.fingerprint)
+
+    def test_gated_plan_round_trip_binds_coherence_review(self) -> None:
+        assessment = _gated_systems_assessment()
+        governed = bind_systems_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            assessment,
+        )
+
+        restored = ChangePlan.from_dict(governed.to_dict())
+
+        self.assertEqual(restored, governed)
+        decision = restored.systems_decision
+        review = restored.strategy_coherence_review
+        assert decision is not None and review is not None
+        self.assertEqual(
+            decision.strategy_coherence_review_fingerprint,
+            review.fingerprint,
+        )
 
     def test_plan_rejects_tampered_systems_decision(self) -> None:
         governed = bind_systems_governance(
@@ -443,6 +658,92 @@ class SystemsGovernanceGateTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValidationError, "stale or forged"):
             enforce_systems_governance(forged)
+
+    def test_plan_rejects_coherence_review_changed_after_admission(self) -> None:
+        assessment = _gated_systems_assessment()
+        governed = bind_systems_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            assessment,
+        )
+        payload = governed.to_dict()
+        payload["strategy_coherence_review"]["reason_codes"].append(
+            "forged_review_note"
+        )
+
+        with self.assertRaisesRegex(ValidationError, "does not match"):
+            ChangePlan.from_dict(payload)
+
+    def test_serialized_gated_plan_cannot_self_attest_coherence(self) -> None:
+        assessment = _gated_systems_assessment()
+        admitted = bind_static_intervention_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+
+        self.assertEqual(
+            enforce_systems_governance(admitted), admitted.systems_decision
+        )
+        self.assertEqual(
+            enforce_systems_governance(admitted.execution_snapshot()),
+            admitted.systems_decision,
+        )
+        serialized = ChangePlan.from_dict(admitted.to_dict())
+        with self.assertRaisesRegex(
+            ValidationError, "trusted strategy coherence provenance"
+        ):
+            enforce_systems_governance(serialized)
+        self.assertEqual(
+            enforce_systems_governance(
+                serialized,
+                require_trusted_coherence=False,
+            ),
+            serialized.systems_decision,
+        )
+
+    def test_authenticated_whole_plan_review_readmits_serialized_coherence(
+        self,
+    ) -> None:
+        assessment = _gated_systems_assessment()
+        admitted = bind_static_intervention_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+        serialized = ChangePlan.from_dict(admitted.to_dict())
+        authenticator = HmacApprovalAuthenticator(
+            {
+                "strategy-reviewer": ApprovalAuthority(
+                    key_id="strategy-reviewer",
+                    subject="Strategy Reviewer",
+                    issuer="master-agent.test",
+                    tenant="test-tenant",
+                    roles=("change-approver",),
+                    secret=b"strategy-reviewer-test-secret-32-bytes",
+                )
+            }
+        )
+        policy = PolicyEngine(
+            PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+            approval_authenticator=authenticator,
+        )
+        now = datetime.now(UTC)
+        approval = authenticator.issue(
+            plan=serialized,
+            approved_action_ids=tuple(
+                action.action_id for action in serialized.actions
+            ),
+            key_id="strategy-reviewer",
+            issued_at=now - timedelta(seconds=1),
+            expires_at=now + timedelta(minutes=5),
+        )
+
+        self.assertEqual(
+            enforce_systems_governance(
+                serialized,
+                policy=policy,
+                approvals=(approval,),
+            ),
+            serialized.systems_decision,
+        )
 
     def test_plan_rejects_boolean_complexity_weight(self) -> None:
         assessment = _systems_assessment(
@@ -497,6 +798,22 @@ def _systems_plan(
             if assessment is not None and assessment.strategy_kernel is not None
             else ()
         ),
+        strategy_coherence_review=(
+            StrategyCoherenceReview.for_static_intervention(assessment)
+            if assessment is not None and assessment.strategy_kernel is not None
+            else None
+        ),
+    )
+
+
+def _gated_systems_assessment() -> SystemsAssessment:
+    return _systems_assessment(
+        low_risk=False,
+        stocks=("open work",),
+        flows=("new work arrives",),
+        feedback_loops=("verification changes the next plan",),
+        delays=("provider latency",),
+        unintended_consequences=("work could remain incomplete",),
     )
 
 
@@ -533,7 +850,7 @@ def _systems_assessment(
         )
     )
     return SystemsAssessment(
-        desired_outcome="produce an accurate local summary",
+        desired_outcome="prepare a local summary",
         current_behavior="the summary is prepared manually",
         constraint="manual preparation time",
         leverage_point="information flow",

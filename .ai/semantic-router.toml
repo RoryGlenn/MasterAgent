@@ -138,7 +138,7 @@ configuration = ["config/capabilities.toml", "config/governance.toml", "config/p
 tests = ["tests/test_orchestrator.py", "tests/test_strict_types.py", "tests/test_policy.py", "tests/test_execution_context.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog", "systems governance", "systems assessment", "thinking in systems", "strategy kernel", "guiding policy", "coherent actions", "outcome observer", "complexity budget"]
+aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog", "systems governance", "systems assessment", "thinking in systems", "strategy kernel", "strategy coherence", "coherence review", "guiding policy", "coherent actions", "outcome observer", "complexity budget"]
 agent = "master-agent"
 
 [[routes]]
@@ -940,6 +940,10 @@ route = "governed-applied-run"
 
 [[routing_cases]]
 query = "design a strategy kernel and observe systems outcomes"
+route = "governed-applied-run"
+
+[[routing_cases]]
+query = "validate strategy coherence across a systems assessment and action plan"
 route = "governed-applied-run"
 
 [[routing_cases]]

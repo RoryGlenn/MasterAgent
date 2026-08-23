@@ -40,8 +40,9 @@ GitHub issue → behavioral change specification → code/tests
              → archive → maintained current requirements
 
 Runtime plane
-User/workflow request → ChangePlan → policy/governance → approval
-                      → connector execution → verification/audit
+User/workflow request → systems diagnosis → strategy + coherence review
+                      → ChangePlan → policy/governance → approval
+                      → connector execution → verification/audit + feedback
 ```
 
 - Agent and instruction files define **how coding agents work**.
@@ -192,7 +193,10 @@ intent. This is direct parent work, not a live GitHub-host child-agent path.
 A missing safe repository capability is implementation work, not a reason to
 stop with “the connector is read-only.” MasterAgent adds the smallest complete
 typed path, verification or compensation, tests, configuration, and
-documentation, then resumes the original goal. Credentials, genuinely
+documentation, then resumes the original goal. That rule stays inside the
+admitted proximate objective, coherent actions, tradeoffs, and complexity
+budget; useful adjacent capabilities do not silently expand the goal.
+Credentials, genuinely
 ambiguous provider targets, and authenticated exact-plan approval remain real
 operator boundaries.
 
