@@ -150,6 +150,7 @@ from master_agent.operating import (
     ReadinessLevel,
     allocate_operating_run,
     assess_operating_readiness,
+    build_operating_support_bundle,
     default_organization_profile_path,
     install_organization_profile,
     load_organization_profile,
@@ -288,6 +289,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _doctor(
                 profile_path=args.profile,
                 require_level=args.require_level,
+                output=args.output,
+            )
+        if args.command == "support-bundle":
+            return _support_bundle(
+                profile_path=args.profile,
                 output=args.output,
             )
         if args.command == "execute":
@@ -733,6 +739,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default="install",
     )
     doctor.add_argument("--output", type=Path)
+
+    support_bundle = subparsers.add_parser(
+        "support-bundle",
+        help="write one private redacted offline helpdesk artifact",
+    )
+    support_bundle.add_argument("--profile", type=Path)
+    support_bundle.add_argument("--output", type=Path, required=True)
 
     execute = subparsers.add_parser(
         "execute",
@@ -1509,16 +1522,11 @@ def _setup(*, profile_path: Path | None, non_interactive: bool | None) -> int:
     return 0
 
 
-def _doctor(
-    *,
+def _doctor_assessment(
     profile_path: Path | None,
-    require_level: str,
-    output: Path | None,
-) -> int:
-    """Report progressive readiness without provider or credential I/O."""
+) -> tuple[dict[str, object], PlatformRuntimeStatus]:
+    """Build the shared offline doctor assessment without rendering it."""
 
-    if output is not None:
-        require_persistent_state_platform()
     selected_platform = platform_runtime_status()
     selected = profile_path or default_organization_profile_path()
     selected = selected.expanduser()
@@ -1644,6 +1652,20 @@ def _doctor(
             approval_required_reads=approval_required_reads,
         )
         _recompute_doctor_operational_levels(payload)
+    return payload, selected_platform
+
+
+def _doctor(
+    *,
+    profile_path: Path | None,
+    require_level: str,
+    output: Path | None,
+) -> int:
+    """Report progressive readiness without provider or credential I/O."""
+
+    if output is not None:
+        require_persistent_state_platform()
+    payload, selected_platform = _doctor_assessment(profile_path)
     levels = payload["levels"]
     if not isinstance(levels, Mapping):  # pragma: no cover - typed report invariant.
         raise ValidationError("operating readiness levels are malformed")
@@ -1682,6 +1704,37 @@ def _doctor(
         print(f"wrote {_terminal_field(output)}")
     required_key = f"{require_level}_ready"
     return 0 if bool(levels.get(required_key, False)) else 2
+
+
+def _support_bundle(*, profile_path: Path | None, output: Path) -> int:
+    """Write one private, bounded, redacted offline helpdesk artifact."""
+
+    require_persistent_state_platform()
+    payload, _selected_platform = _doctor_assessment(profile_path)
+    support_id = str(UUID(bytes=secrets.token_bytes(16), version=4))
+    created_at = (
+        datetime.now(UTC)
+        .isoformat(timespec="seconds")
+        .replace(
+            "+00:00",
+            "Z",
+        )
+    )
+    bundle = build_operating_support_bundle(
+        payload,
+        support_id=support_id,
+        created_at=created_at,
+        master_agent_version=__version__,
+        python_version=(
+            f"{sys.version_info.major}.{sys.version_info.minor}."
+            f"{sys.version_info.micro}"
+        ),
+    )
+    _write_json(output, bundle)
+    print(f"support ID: {_terminal_field(support_id, max_characters=80)}")
+    print(f"wrote {_terminal_field(output)}")
+    print("upload: none; share only through the approved helpdesk channel")
+    return 0
 
 
 def _filesystem_backed_read_capabilities(

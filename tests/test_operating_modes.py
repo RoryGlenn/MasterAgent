@@ -153,6 +153,132 @@ class OperatingModeCliTests(unittest.TestCase):
             )
             live_registry.assert_not_called()
 
+    def test_support_bundle_is_private_redacted_offline_and_correlated(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            profile = _setup_default(root)
+            output = root / "support-bundle.json"
+            secret = "provider-secret-value-that-must-not-appear"
+            with (
+                patch.dict(
+                    os.environ,
+                    {"MASTER_AGENT_GITHUB_TOKEN": secret},
+                    clear=False,
+                ),
+                patch("master_agent.cli.build_live_registry") as live_registry,
+                patch("master_agent.operating.capture_ca_bundle") as capture_bundle,
+                patch("master_agent.operating.create_ssl_context") as create_context,
+            ):
+                status, stdout, stderr = _run_cli(
+                    [
+                        "support-bundle",
+                        "--profile",
+                        str(profile),
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(status, 0, stderr)
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema"], "master-agent/support-bundle@1")
+            self.assertRegex(
+                payload["support_id"],
+                r"\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-"
+                r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z",
+            )
+            self.assertIn(payload["support_id"], stdout)
+            self.assertIn("upload: none", stdout)
+            self.assertTrue(payload["doctor"]["levels"]["install_ready"])
+            self.assertNotIn("profile_source", payload["doctor"])
+            rendered = output.read_text(encoding="utf-8")
+            self.assertNotIn(str(root), rendered)
+            self.assertNotIn(secret, rendered)
+            live_registry.assert_not_called()
+            capture_bundle.assert_not_called()
+            create_context.assert_not_called()
+
+    def test_support_bundle_succeeds_without_organization_setup(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            profile = root / "missing-profile.toml"
+            output = root / "support-bundle.json"
+
+            status, stdout, stderr = _run_cli(
+                [
+                    "support-bundle",
+                    "--profile",
+                    str(profile),
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(status, 0, stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertTrue(payload["doctor"]["levels"]["install_ready"])
+            self.assertFalse(payload["doctor"]["levels"]["read_ready"])
+            self.assertEqual(
+                payload["doctor"]["issues"][0]["category"],
+                "missing_organization_setup",
+            )
+            self.assertNotIn(str(profile), output.read_text(encoding="utf-8"))
+            self.assertIn("wrote", stdout)
+
+    def test_support_bundle_refuses_to_overwrite_existing_artifact(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            output = root / "support-bundle.json"
+            first = _run_cli(
+                [
+                    "support-bundle",
+                    "--profile",
+                    str(root / "missing-profile.toml"),
+                    "--output",
+                    str(output),
+                ]
+            )
+            original = output.read_bytes()
+
+            second = _run_cli(
+                [
+                    "support-bundle",
+                    "--profile",
+                    str(root / "missing-profile.toml"),
+                    "--output",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(first[0], 0, first[2])
+            self.assertNotEqual(second[0], 0)
+            self.assertIn("already exists", second[2])
+            self.assertEqual(output.read_bytes(), original)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission boundary")
+    def test_support_bundle_rejects_nonprivate_output_directory(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            output = root / "support-bundle.json"
+            root.chmod(0o777)
+            try:
+                status, _stdout, stderr = _run_cli(
+                    [
+                        "support-bundle",
+                        "--profile",
+                        str(root / "missing-profile.toml"),
+                        "--output",
+                        str(output),
+                    ]
+                )
+            finally:
+                root.chmod(0o700)
+
+            self.assertNotEqual(status, 0)
+            self.assertIn("group- or world-writable", stderr)
+            self.assertFalse(output.exists())
+
     def test_windows_doctor_reports_absent_profile_without_reading_bytes(
         self,
     ) -> None:
