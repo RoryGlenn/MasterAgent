@@ -160,6 +160,15 @@ jobs:
           }
           "MASTER_AGENT_WINDOWS_PYTHON=$runtimePython" | Out-File -FilePath $env:GITHUB_ENV -Append
           "MASTER_AGENT_WINDOWS_CLI=$runtimeCli" | Out-File -FilePath $env:GITHUB_ENV -Append
+          foreach ($generatedPath in @(
+            "build",
+            "dist",
+            "src\master_agent.egg-info"
+          )) {
+            if (Test-Path -LiteralPath $generatedPath) {
+              Remove-Item -LiteralPath $generatedPath -Recurse -Force
+            }
+          }
       - name: Run native filesystem and locking tests as a standard user
         shell: pwsh
         run: |
