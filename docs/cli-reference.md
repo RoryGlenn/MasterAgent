@@ -22,6 +22,7 @@ checks; this does not relax publication rules for other output paths.
 |---|---|---|
 | `setup` | Install or validate the private organization profile and minimum local state | Requires secure filesystem, cross-process locking, and atomic publication/recovery; creates only the dedicated owner-private profile/state paths, performs no provider request, and enables no effect |
 | `doctor` | Report capability-scoped installation, read, draft, effect, and enterprise readiness | Offline and content-free; optional credentials are level-specific gaps, not installation failures |
+| `support-bundle` | Create one redacted doctor artifact for an approved helpdesk case | Offline, private, and create-only; collects no provider content, credentials, environment values, local paths, host/user identity, logs, or command history, and never uploads the artifact |
 | `execute` | Run an unbound plan or resume its exact approval request through one governed front door | Reads stay stateless when eligible; effects use the existing bound runtime and cannot run without all normal gates and authenticated approval |
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |
 | `sample-plan` | Write a synthetic weekly-status plan | Writes only the selected local JSON output |
@@ -165,6 +166,20 @@ uses the dedicated current-user profile. `--require-level
 install|read|draft|effect|enterprise` makes automation return nonzero unless
 that one level is ready. `--output PATH` writes the same content-free report
 through the restricted create-only JSON publisher.
+
+`master-agent support-bundle --output PATH` runs that same offline assessment
+and writes one helpdesk-oriented JSON artifact. `--profile PATH` selects an
+explicit installed profile; without it, the normal current-user profile is
+used. The command succeeds even when setup is missing or readiness is false,
+because those gaps are the diagnostic result. The bundle contains a unique
+support ID, UTC creation time, MasterAgent and Python versions, allowlisted
+doctor fields, and canonical byte counts and SHA-256 digests for its `doctor`
+and `runtime` sections. It removes `profile_source` and redacts absolute path
+text as a whole. Raw parser messages are replaced by fixed guidance for their
+failure category. It does not read token-file contents, construct connectors,
+contact a provider, collect logs or environment values, or send the bundle
+anywhere. Use a fresh filename in an already private directory, inspect the
+JSON, and share it only through the organization's approved helpdesk channel.
 
 `master-agent execute PLAN` loads an unbound typed plan, checks every action
 against the profile allowlist, and selects the existing runtime by risk:

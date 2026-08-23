@@ -124,7 +124,7 @@ configuration = ["config/organization-profile.toml", "src/master_agent/defaults/
 tests = ["tests/test_operating.py", "tests/test_operating_modes.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["operating modes", "organization profile", "employee mode", "developer mode", "setup doctor execute", "progressive readiness"]
+aliases = ["operating modes", "organization profile", "employee mode", "developer mode", "setup doctor execute", "progressive readiness", "helpdesk support bundle", "redacted diagnostics"]
 agent = "master-agent"
 
 [[routes]]
@@ -759,6 +759,7 @@ agent = "master-agent"
 "sample-plan" = "governed-applied-run"
 "scan" = "provider-security"
 "setup" = "operating-modes"
+"support-bundle" = "operating-modes"
 "weekly-status" = "local-workflows"
 "weekly-status-plan" = "local-workflows"
 "weekly-operating-review-plan" = "local-workflows"
@@ -927,6 +928,10 @@ route = "specification-lifecycle"
 
 [[routing_cases]]
 query = "set up employee mode and run capability doctor"
+route = "operating-modes"
+
+[[routing_cases]]
+query = "create a redacted helpdesk support bundle"
 route = "operating-modes"
 
 [[routing_cases]]

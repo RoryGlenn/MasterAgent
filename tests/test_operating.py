@@ -30,6 +30,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.operating import (
+    OPERATING_SUPPORT_BUNDLE_SCHEMA,
     ORGANIZATION_PROFILE_SCHEMA,
     ConnectorMode,
     OperatingFailureCategory,
@@ -38,6 +39,7 @@ from master_agent.operating import (
     OrganizationProfile,
     allocate_operating_run,
     assess_operating_readiness,
+    build_operating_support_bundle,
     default_organization_profile_path,
     install_organization_profile,
     load_organization_profile,
@@ -1542,6 +1544,147 @@ class OperatingReadinessTests(unittest.TestCase):
                 report.capabilities[0].issues[0].category,
                 OperatingFailureCategory.UNSUPPORTED_CAPABILITY,
             )
+
+
+class OperatingSupportBundleTests(unittest.TestCase):
+    """Verify the bounded allowlist and embedded integrity facts."""
+
+    def test_bundle_omits_unknown_fields_and_redacts_local_paths(self) -> None:
+        doctor = {
+            "schema": "master-agent/operating-readiness@1",
+            "mode": None,
+            "profile_fingerprint": None,
+            "profile_source": "/Users/alice/.config/master-agent/profile.toml",
+            "platform_runtime": {
+                "platform": "windows",
+                "backend": "windows-native",
+                "reason": (
+                    r"worker at C:\Users\Alice Smith\private\worker.exe unavailable"
+                ),
+            },
+            "levels": {
+                "install_ready": True,
+                "read_ready": False,
+                "draft_ready": False,
+                "effect_ready": False,
+                "enterprise_ready": False,
+            },
+            "enterprise_blocker": "organization controls are incomplete",
+            "capabilities": [],
+            "issues": [
+                {
+                    "category": "runtime_defect",
+                    "message": "identity aliases must be a list: alice@example.com",
+                    "capability": None,
+                },
+                {
+                    "category": "future_category",
+                    "message": "configuration-controlled-value",
+                    "capability": None,
+                },
+            ],
+            "future_secret": "must-not-be-copied",
+        }
+
+        bundle = build_operating_support_bundle(
+            doctor,
+            support_id="12345678-1234-4234-9234-123456789abc",
+            created_at="2026-08-23T12:00:00Z",
+            master_agent_version="1.0.0",
+            python_version="3.13.7",
+        )
+
+        self.assertEqual(bundle["schema"], OPERATING_SUPPORT_BUNDLE_SCHEMA)
+        self.assertNotIn("profile_source", bundle["doctor"])
+        self.assertNotIn("future_secret", bundle["doctor"])
+        rendered = json.dumps(bundle, sort_keys=True)
+        self.assertNotIn("alice", rendered.casefold())
+        self.assertNotIn("configuration-controlled-value", rendered)
+        self.assertNotIn("must-not-be-copied", rendered)
+        self.assertEqual(rendered.count("[redacted-path]"), 1)
+        self.assertEqual(
+            bundle["doctor"]["issues"][0]["message"],
+            "installed runtime or configuration validation failed",
+        )
+        self.assertEqual(
+            bundle["doctor"]["issues"][1]["message"],
+            "diagnostic issue requires runtime-owner review",
+        )
+        self.assertEqual(
+            bundle["doctor"]["platform_runtime"]["reason"],
+            "[redacted-path]",
+        )
+        self.assertEqual(
+            bundle["redactions"],
+            ["profile_source", "absolute_filesystem_paths"],
+        )
+
+    def test_bundle_manifest_matches_canonical_embedded_sections(self) -> None:
+        doctor = {
+            "schema": "master-agent/operating-readiness@1",
+            "mode": "employee",
+            "profile_fingerprint": "a" * 64,
+            "platform_runtime": {"platform": "linux", "backend": "posix-linux"},
+            "levels": {
+                "install_ready": True,
+                "read_ready": True,
+                "draft_ready": False,
+                "effect_ready": False,
+                "enterprise_ready": False,
+            },
+            "capabilities": [],
+        }
+        bundle = build_operating_support_bundle(
+            doctor,
+            support_id="12345678-1234-4234-9234-123456789abc",
+            created_at="2026-08-23T12:00:00Z",
+            master_agent_version="1.0.0",
+            python_version="3.13.7",
+        )
+
+        sections = {item["name"]: item for item in bundle["manifest"]["sections"]}
+        for name in ("doctor", "runtime"):
+            encoded = json.dumps(
+                bundle[name],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            self.assertEqual(sections[name]["bytes"], len(encoded))
+            self.assertEqual(
+                sections[name]["sha256"],
+                hashlib.sha256(encoded).hexdigest(),
+            )
+
+    def test_bundle_rejects_invalid_metadata_and_report_schema(self) -> None:
+        doctor = {
+            "schema": "master-agent/operating-readiness@1",
+            "levels": {},
+        }
+        cases = (
+            {"support_id": "not-a-uuid"},
+            {"created_at": "2026-08-23T12:00:00+00:00"},
+            {"doctor_payload": {"schema": "unknown", "levels": {}}},
+        )
+        for overrides in cases:
+            with (
+                self.subTest(overrides=overrides),
+                self.assertRaises(ConfigurationError),
+            ):
+                build_operating_support_bundle(
+                    overrides.get("doctor_payload", doctor),
+                    support_id=overrides.get(
+                        "support_id",
+                        "12345678-1234-4234-9234-123456789abc",
+                    ),
+                    created_at=overrides.get(
+                        "created_at",
+                        "2026-08-23T12:00:00Z",
+                    ),
+                    master_agent_version="1.0.0",
+                    python_version="3.13.7",
+                )
 
 
 def _profile_payload(

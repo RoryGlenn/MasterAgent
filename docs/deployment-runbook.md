@@ -288,6 +288,9 @@ Before production:
   production credential/OAuth adapter, authenticated exact-plan approvals, and
   the external tamper-resistant receipt sink all pass one readiness assessment;
 - define incident response and token revocation for authenticated connectors;
+- configure the approved helpdesk channel, owner, response-time objective,
+  access/retention policy, and secure deletion process, then test
+  `master-agent support-bundle` from the installed artifact;
 - define evidence retention/legal hold;
 - keep raw plugin and provider/side-effect/dependent capsule execution disabled;
   inventory and pin plugin artifacts only for review;

@@ -54,6 +54,7 @@ ORGANIZATION_PROFILE_SCHEMA = "master-agent/organization-profile@1"
 OPERATING_PLAN_VALIDATION_SCHEMA = "master-agent/operating-plan-validation@1"
 OPERATING_READINESS_SCHEMA = "master-agent/operating-readiness@1"
 ORGANIZATION_SETUP_SCHEMA = "master-agent/organization-setup@1"
+OPERATING_SUPPORT_BUNDLE_SCHEMA = "master-agent/support-bundle@1"
 
 _PROFILE_FILENAME = "organization-profile.toml"
 _MAX_PROFILE_BYTES = 256 * 1024
@@ -63,7 +64,32 @@ _MAX_PATH_CHARACTERS = 4096
 _MAX_REPORT_BYTES = 1024 * 1024
 _MAX_DIRECTORY_DEPTH = 64
 _RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
+_SUPPORT_ID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
+_WINDOWS_LOCAL_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\)")
+_FILE_URI_PATH_PATTERN = re.compile(r"(?i)file:///")
+_POSIX_LOCAL_PATH_PATTERN = re.compile(r"(?<![:/\w])/(?!/)")
+_HOME_LOCAL_PATH_PATTERN = re.compile(r"(?<!\w)~[/\\]")
 _CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+")
+_SUPPORT_DOCTOR_FIELDS = (
+    "schema",
+    "mode",
+    "profile_fingerprint",
+    "platform_runtime",
+    "levels",
+    "configuration_trust",
+    "enterprise_blocker",
+    "capabilities",
+    "issues",
+)
+_SUPPORT_ISSUE_MESSAGES = {
+    "unsupported_capability": "capability is not installed and reviewed",
+    "missing_organization_setup": "required organization setup is incomplete",
+    "missing_user_authentication": "selected user authentication is unavailable",
+    "blocked_policy": "selected organization policy blocks this capability",
+    "runtime_defect": "installed runtime or configuration validation failed",
+}
 _TOP_LEVEL_KEYS = frozenset(
     {
         "schema",
@@ -715,6 +741,99 @@ class OperatingReadinessReport:
         """Return canonical JSON under the operating report byte ceiling."""
 
         return _bounded_json(self.to_dict())
+
+
+def build_operating_support_bundle(
+    doctor_payload: Mapping[str, Any],
+    *,
+    support_id: str,
+    created_at: str,
+    master_agent_version: str,
+    python_version: str,
+) -> dict[str, Any]:
+    """Build one bounded, path-redacted offline helpdesk artifact.
+
+    Parameters
+    ----------
+    doctor_payload
+        Internal capability-scoped doctor assessment. Only the fixed fields in
+        :data:`_SUPPORT_DOCTOR_FIELDS` are admitted to the bundle.
+    support_id
+        Random UUIDv4 used only to correlate one helpdesk artifact.
+    created_at
+        UTC RFC 3339 creation timestamp ending in ``Z``.
+    master_agent_version
+        Installed MasterAgent package version.
+    python_version
+        Active Python runtime version.
+
+    Returns
+    -------
+    dict[str, Any]
+        JSON-compatible support bundle with canonical section integrity facts.
+
+    Raises
+    ------
+    ConfigurationError
+        If metadata or the doctor payload is malformed or exceeds its bound.
+    """
+
+    if _SUPPORT_ID_PATTERN.fullmatch(support_id) is None:
+        raise ConfigurationError("support bundle ID must be a lowercase UUIDv4")
+    _validate_bounded_text(created_at, "support bundle creation time", maximum=64)
+    if not created_at.endswith("Z"):
+        raise ConfigurationError("support bundle creation time must be UTC")
+    _validate_bounded_text(
+        master_agent_version,
+        "support bundle MasterAgent version",
+        maximum=80,
+    )
+    _validate_bounded_text(
+        python_version,
+        "support bundle Python version",
+        maximum=80,
+    )
+    if doctor_payload.get("schema") != OPERATING_READINESS_SCHEMA:
+        raise ConfigurationError("support bundle doctor report schema is invalid")
+    if not isinstance(doctor_payload.get("levels"), Mapping):
+        raise ConfigurationError("support bundle doctor readiness is malformed")
+
+    selected_doctor = {
+        field: _redact_support_value(doctor_payload[field])
+        for field in _SUPPORT_DOCTOR_FIELDS
+        if field in doctor_payload
+    }
+    runtime = {
+        "master_agent_version": master_agent_version,
+        "python_version": python_version,
+    }
+    doctor_bytes = _canonical_support_section(selected_doctor)
+    runtime_bytes = _canonical_support_section(runtime)
+    bundle: dict[str, Any] = {
+        "schema": OPERATING_SUPPORT_BUNDLE_SCHEMA,
+        "support_id": support_id,
+        "created_at": created_at,
+        "redactions": ["profile_source", "absolute_filesystem_paths"],
+        "manifest": {
+            "algorithm": "sha256",
+            "sections": [
+                {
+                    "name": "doctor",
+                    "bytes": len(doctor_bytes),
+                    "sha256": hashlib.sha256(doctor_bytes).hexdigest(),
+                },
+                {
+                    "name": "runtime",
+                    "bytes": len(runtime_bytes),
+                    "sha256": hashlib.sha256(runtime_bytes).hexdigest(),
+                },
+            ],
+        },
+        "runtime": runtime,
+        "doctor": selected_doctor,
+    }
+    _bounded_json(bundle)
+    return bundle
 
 
 def default_organization_profile_path(
@@ -1696,6 +1815,63 @@ def _bounded_json(payload: Mapping[str, Any]) -> str:
     if len(encoded.encode("utf-8")) > _MAX_REPORT_BYTES:
         raise ConfigurationError("operating report exceeds the 1 MiB limit")
     return encoded
+
+
+def _redact_support_value(value: Any) -> Any:
+    """Copy one doctor value while removing absolute local path text."""
+
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        if any(
+            pattern.search(value) is not None
+            for pattern in (
+                _FILE_URI_PATH_PATTERN,
+                _WINDOWS_LOCAL_PATH_PATTERN,
+                _POSIX_LOCAL_PATH_PATTERN,
+                _HOME_LOCAL_PATH_PATTERN,
+            )
+        ):
+            return "[redacted-path]"
+        return value
+    if isinstance(value, Mapping):
+        if "category" in value and "message" in value:
+            return _redact_support_issue(value)
+        copied: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ConfigurationError("support bundle doctor keys must be strings")
+            _validate_bounded_text(key, "support bundle doctor key", maximum=256)
+            copied[key] = _redact_support_value(item)
+        return copied
+    if isinstance(value, (list, tuple)):
+        return [_redact_support_value(item) for item in value]
+    raise ConfigurationError("support bundle doctor value is not JSON-compatible")
+
+
+def _redact_support_issue(value: Mapping[Any, Any]) -> dict[str, str]:
+    """Project one doctor issue into fixed categorical helpdesk guidance."""
+
+    raw_category = value.get("category")
+    category = raw_category if isinstance(raw_category, str) else "runtime_defect"
+    message = _SUPPORT_ISSUE_MESSAGES.get(
+        category,
+        "diagnostic issue requires runtime-owner review",
+    )
+    projected = {"category": category, "message": message}
+    capability = value.get("capability")
+    if (
+        isinstance(capability, str)
+        and _CAPABILITY_PATTERN.fullmatch(capability) is not None
+    ):
+        projected["capability"] = capability
+    return projected
+
+
+def _canonical_support_section(payload: Mapping[str, Any]) -> bytes:
+    """Return bounded canonical JSON bytes for one embedded section."""
+
+    return _bounded_json(payload).encode("utf-8")
 
 
 def _directory_flags() -> int:

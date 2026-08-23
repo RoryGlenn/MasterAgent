@@ -72,6 +72,50 @@ belongs in a separate trusted developer change. Generated effects stay
 quarantined until independent review, tests, specification archival, signing,
 deployment, and normal runtime admission complete.
 
+## Helpdesk support bundles
+
+When an employee needs help, create one fresh diagnostic artifact instead of
+copying terminal output, logs, configuration, or environment values into a
+ticket. The destination directory must already be current-user-owned and not
+writable by group or world:
+
+```bash
+master-agent support-bundle \
+  --profile /trusted/config/organization-profile.toml \
+  --output /private/helpdesk/master-agent-support-001.json
+```
+
+The command is offline and succeeds even when the profile is missing or a
+readiness level is false. It prints the same support ID stored in the artifact.
+The JSON contains only bounded MasterAgent/Python version facts, the redacted
+doctor assessment, and canonical byte counts and SHA-256 digests for its two
+embedded sections. It omits the profile path and does not collect credentials,
+provider content, environment values, hostnames, usernames, logs, or command
+history. Parser-controlled error text is replaced with fixed category guidance,
+and any remaining path-bearing string is redacted as a whole. It performs no
+automatic upload.
+
+Before attaching the artifact, confirm that the ticket's access and retention
+match the organization's support policy. Do not post it to public issues,
+general chat, or an unapproved email list. Helpdesk should use the failure
+category and support ID to correlate the case, then:
+
+- route `missing_organization_setup` to the managed-install/configuration owner;
+- route `missing_user_authentication` to the identity or credential owner;
+- route `blocked_policy` to the named governance approver without asking the
+  employee to bypass the gate;
+- route `unsupported_capability` to the reviewed product backlog; and
+- escalate `runtime_defect` to the MasterAgent runtime owner with the artifact
+  unchanged.
+
+The section digests detect an edited diagnostic section; they do not
+authenticate the employee or grant runtime authority. If the artifact was
+edited or the case needs a later snapshot, generate a new filename and support
+ID. Any request for additional logs, provider data, or configuration is a
+separate organization-approved collection step. The deployment owner must
+define the support queue, accountable owner, response-time objective, evidence
+access, retention, and secure deletion procedure before a pilot begins.
+
 ## Low-level run lifecycle
 
 1. Generate or receive a plan.
