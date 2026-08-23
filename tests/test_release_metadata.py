@@ -364,7 +364,8 @@ class ReleaseMetadataTests(unittest.TestCase):
             "Windows wheel test path leaves insufficient tool-path headroom",
             '"src\\master_agent.egg-info"',
             "source checkout Ω with spaces",
-            "long segment 010",
+            "long segment 008",
+            "Windows source bootstrap path leaves insufficient tool-path headroom",
             'Join-Path $sourceRoot ".venv\\Scripts\\master-agent.exe"',
             "standard-user source bootstrap was not idempotent",
         ):
