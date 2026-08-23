@@ -24,6 +24,7 @@ from master_agent.connectors.drafts import (
     JiraDraftConnector,
     OutlookDraftConnector,
     PowerPointDraftConnector,
+    RedditDraftConnector,
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
@@ -45,6 +46,8 @@ from master_agent.connectors.microsoft import (
 from master_agent.connectors.mock import MockConnector
 from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteConnector
 from master_agent.connectors.outlook import OutlookConnector
+from master_agent.connectors.reddit import RedditConnector
+from master_agent.connectors.reddit_write import RedditWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.models import RiskLevel
@@ -71,6 +74,8 @@ _LIVE_CONNECTOR_TYPES = frozenset(
         TeamsConnector,
         TeamsSendConnector,
         OneNoteReadConnector,
+        RedditConnector,
+        RedditWriteConnector,
     }
 )
 _DRAFT_CONNECTOR_TYPES = frozenset(
@@ -81,6 +86,7 @@ _DRAFT_CONNECTOR_TYPES = frozenset(
         TeamsDraftConnector,
         PowerPointDraftConnector,
         RepositoryDraftConnector,
+        RedditDraftConnector,
     }
 )
 _DIRECT_OR_QUARANTINED_CONNECTOR_TYPES = frozenset(
@@ -109,6 +115,8 @@ _CONNECTOR_MODULES = (
     "microsoft",
     "onenote",
     "outlook",
+    "reddit",
+    "reddit_write",
     "sharepoint_write",
     "teams",
 )
@@ -135,6 +143,7 @@ class ConnectorFactoryContractTests(unittest.TestCase):
                     "outlook",
                     "teams",
                     "onenote",
+                    "reddit",
                 },
                 include_writes=True,
                 include_communications=True,
@@ -223,6 +232,8 @@ class ConnectorInventoryContractTests(unittest.TestCase):
                 ):
                     self.assertFalse(catalog.definitions[capability].enabled)
         self.assertEqual(OneNoteWriteConnector._CAPABILITIES, frozenset())
+        self.assertFalse(catalog.definitions["reddit.content.edit"].enabled)
+        self.assertFalse(catalog.definitions["reddit.content.delete"].enabled)
 
 
 def _integration_text() -> str:
@@ -283,6 +294,18 @@ def _integration_text() -> str:
         default_identity = "me"
         teams_probe = "chats"
         max_upload_bytes = 1000000
+
+        [connectors.reddit]
+        enabled = true
+        deployment = "cloud"
+        base_url = "https://oauth.reddit.com"
+        web_base_url = "https://www.reddit.com"
+        auth_mode = "none"
+        user_agent = "MasterAgent/1.0 test"
+        posts_enabled = true
+        comments_enabled = true
+        edits_enabled = false
+        deletes_enabled = false
         """
     ).strip()
 
@@ -351,6 +374,17 @@ def _draft_cases() -> tuple[
                 "relative_path": "README.md",
                 "before_text": "old\n",
                 "after_text": "new\n",
+            },
+        ),
+        (
+            "reddit",
+            "reddit.post.draft",
+            "post",
+            "reddit-draft",
+            {
+                "subreddit": "python",
+                "title": "Typed connectors",
+                "body": "Ready for review.",
             },
         ),
     )

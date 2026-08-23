@@ -534,6 +534,7 @@ def _is_builtin_direct_read_connector(connector: ReadOnlyConnector) -> bool:
     )
     from master_agent.connectors.onenote import OneNoteReadConnector
     from master_agent.connectors.outlook import OutlookConnector
+    from master_agent.connectors.reddit import RedditConnector
     from master_agent.connectors.teams import TeamsConnector
 
     return type(connector) in {
@@ -544,6 +545,7 @@ def _is_builtin_direct_read_connector(connector: ReadOnlyConnector) -> bool:
         MicrosoftIdentityConnector,
         OneNoteReadConnector,
         OutlookConnector,
+        RedditConnector,
         SharePointConnector,
         TeamsConnector,
     }

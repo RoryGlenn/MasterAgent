@@ -40,6 +40,19 @@ shared same-origin pagination boundary. Authenticated Cloud API-token
 configuration uses the Atlassian account email; a private legacy app-password
 configuration may retain its explicit username.
 
+The Reddit connector sends refresh-token exchanges only to Reddit's fixed token
+origin and bearer requests only to the fixed OAuth API origin. It attests the
+immutable account ID through `/api/v1/me`, binds granted scopes, and exposes
+typed search, content, rules, history, and inbox reads. The packaged read
+credential profile contains only `identity`, `read`, `history`, and
+`privatemessages`. Its separate communication credential profile contains only
+`identity`, `read`, and `submit`; missing or out-of-profile provider scope
+reports fail closed. The effect adapter requires exact approval for every active
+visible mutation, performs no write retry, and independently re-reads created
+content. Typed edit and deletion adapters enforce authenticated-user ownership,
+expected version, and poststate checks in tests but remain catalog-disabled
+because Reddit has no atomic provider precondition.
+
 `master-agent connect --systems ...` is the provider-neutral readiness path
 when operator-requested access requires authentication. It enables only the
 selected supported read connectors in memory, accepts canonical or strictly
@@ -113,6 +126,10 @@ Compensation is connector-specific:
   not-found or the documented trash state;
 - Bitbucket PR creation emits manual re-read/decline recovery;
 - GitHub issue/PR creation emits manual re-read/close recovery;
+- Reddit creation emits manual recovery after a fresh ownership review; the
+  edit adapter remains catalog-quarantined, and deletion remains a
+  catalog-quarantined high-impact action with no compensation because Reddit
+  does not expose a provider-side atomic precondition;
 - the non-routable SharePoint replacement adapter can restore a captured prior
   version after byte proofs only as a manually reviewed operation, and remains
   disabled until its write is atomic;

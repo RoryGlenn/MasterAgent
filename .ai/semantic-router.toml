@@ -212,6 +212,20 @@ aliases = ["microsoft graph", "outlook connector", "teams connector", "sharepoin
 agent = "master-agent"
 
 [[routes]]
+id = "reddit-connectors"
+title = "Reddit connector"
+lifecycle = "released"
+summary = "Own bounded Reddit OAuth reads, local drafts, and exact approval-bound interactions."
+authority = ["specs/current/connectors/MA-REDDIT-001.md", "docs/reddit-connector.md", "docs/integration-matrix.md"]
+implementation = ["src/master_agent/connectors/reddit.py", "src/master_agent/connectors/reddit_write.py"]
+configuration = []
+tests = ["tests/test_reddit_connector.py", "tests/test_reddit_write_connector.py"]
+release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
+dependencies = ["packaging-release"]
+aliases = ["reddit connector", "reddit oauth", "reddit search", "reddit post", "reddit comment", "reddit reply"]
+agent = "master-agent"
+
+[[routes]]
 id = "git-connectors"
 title = "Local and remote Git boundaries"
 lifecycle = "released"
@@ -453,6 +467,8 @@ agent = "master-agent"
 "src/master_agent/connectors/mock.py" = "governed-applied-run"
 "src/master_agent/connectors/onenote.py" = "microsoft-connectors"
 "src/master_agent/connectors/outlook.py" = "microsoft-connectors"
+"src/master_agent/connectors/reddit.py" = "reddit-connectors"
+"src/master_agent/connectors/reddit_write.py" = "reddit-connectors"
 "src/master_agent/connectors/read_only.py" = "provider-security"
 "src/master_agent/connectors/sharepoint_write.py" = "microsoft-connectors"
 "src/master_agent/connectors/teams.py" = "microsoft-connectors"
@@ -593,6 +609,8 @@ agent = "master-agent"
 "tests/test_plugins.py" = "governed-applied-run"
 "tests/test_policy.py" = "governed-applied-run"
 "tests/test_provider_egress.py" = "provider-security"
+"tests/test_reddit_connector.py" = "reddit-connectors"
+"tests/test_reddit_write_connector.py" = "reddit-connectors"
 "tests/test_recurring.py" = "local-workflows"
 "tests/test_registry.py" = "governed-applied-run"
 "tests/test_registry_capabilities.py" = "governed-applied-run"
@@ -621,6 +639,7 @@ agent = "master-agent"
 "tests/test_write_connectors.py" = "governed-applied-run"
 
 [ownership.current_requirements]
+"specs/current/connectors/MA-REDDIT-001.md" = "reddit-connectors"
 "specs/current/development/MA-DOCS-001.md" = "specification-lifecycle"
 "specs/current/development/MA-DOCS-002.md" = "specification-lifecycle"
 "specs/current/development/MA-DOCS-003.md" = "specification-lifecycle"
@@ -787,6 +806,20 @@ agent = "master-agent"
 "outlook.mail_folder.list" = "microsoft-connectors"
 "outlook.message.read" = "microsoft-connectors"
 "outlook.message.search" = "microsoft-connectors"
+"reddit.comment.create" = "reddit-connectors"
+"reddit.comment.draft" = "reddit-connectors"
+"reddit.comment.reply" = "reddit-connectors"
+"reddit.comment.reply.draft" = "reddit-connectors"
+"reddit.content.delete" = "reddit-connectors"
+"reddit.content.edit" = "reddit-connectors"
+"reddit.content.read" = "reddit-connectors"
+"reddit.inbox.read" = "reddit-connectors"
+"reddit.post.create" = "reddit-connectors"
+"reddit.post.draft" = "reddit-connectors"
+"reddit.search" = "reddit-connectors"
+"reddit.subreddit.rules.read" = "reddit-connectors"
+"reddit.user.comments.read" = "reddit-connectors"
+"reddit.user.submitted.read" = "reddit-connectors"
 "powerpoint.presentation.generate" = "local-workflows"
 "repository.branch.create" = "git-connectors"
 "repository.branch.plan" = "git-connectors"
@@ -837,6 +870,8 @@ agent = "master-agent"
 "src/master_agent/connectors/mock.py" = "governed-applied-run"
 "src/master_agent/connectors/onenote.py" = "microsoft-connectors"
 "src/master_agent/connectors/outlook.py" = "microsoft-connectors"
+"src/master_agent/connectors/reddit.py" = "reddit-connectors"
+"src/master_agent/connectors/reddit_write.py" = "reddit-connectors"
 "src/master_agent/connectors/read_only.py" = "provider-security"
 "src/master_agent/connectors/sharepoint_write.py" = "microsoft-connectors"
 "src/master_agent/connectors/teams.py" = "microsoft-connectors"
@@ -903,6 +938,10 @@ route = "atlassian-connectors"
 [[routing_cases]]
 query = "change github repository reads"
 route = "github-connectors"
+
+[[routing_cases]]
+query = "add a governed reddit oauth connector"
+route = "reddit-connectors"
 
 [[routing_cases]]
 query = "change the teams connector"

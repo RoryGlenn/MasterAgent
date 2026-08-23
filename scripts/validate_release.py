@@ -1152,6 +1152,31 @@ def _validate_packaged_defaults(
             "all packaged read connectors are available and mutation gates are disabled"
         )
 
+    reddit = connectors.get("reddit", {})
+    expected_reddit_read_profile = {
+        "credential_profile": "read",
+        "client_id_env": "MASTER_AGENT_REDDIT_READ_CLIENT_ID",
+        "client_secret_env": "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET",
+        "refresh_token_env": "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN",
+        "scopes": ["identity", "read", "history", "privatemessages"],
+    }
+    mismatches = {
+        key: reddit.get(key)
+        for key, expected_value in expected_reddit_read_profile.items()
+        if reddit.get(key) != expected_value
+    }
+    if mismatches:
+        errors.append(
+            "packaged Reddit connector must use the purpose-separated read "
+            f"credential profile: {sorted(mismatches)}"
+        )
+    elif any(scope in reddit["scopes"] for scope in ("submit", "edit")):
+        errors.append("packaged Reddit read credential requests mutation scopes")
+    else:
+        checks.append(
+            "packaged Reddit connector uses a mutation-free read credential profile"
+        )
+
     recurring = tomllib.loads((defaults_dir / "recurring.toml").read_text())
     workflows = recurring.get("workflows", {})
     enabled = [name for name, item in workflows.items() if item.get("enabled")]
@@ -1168,10 +1193,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 82:
-        errors.append(f"expected 82 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 96:
+        errors.append(f"expected 96 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 82 typed capabilities")
+        checks.append("capability catalog contains 96 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")

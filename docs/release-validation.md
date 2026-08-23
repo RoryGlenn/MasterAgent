@@ -119,7 +119,7 @@ certification evidence.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
-- All 82 typed capabilities have governance coverage.
+- All 96 typed capabilities have governance coverage.
 - GitHub administration without provider concurrency, Jira mutations without
   atomic read-check-write support, local/remote Git mutation, and high-impact
   Bitbucket merge remain explicitly prohibited.

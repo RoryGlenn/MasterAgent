@@ -305,6 +305,14 @@ class SemanticRouterTests(unittest.TestCase):
             generate_index(self.root, manifest, check=False)
 
     def test_inventory_is_derived_without_git(self) -> None:
+        managed_environment = self.root / ".venv-master-agent-0123456789ab"
+        site_packages = managed_environment / "lib/python3.13/site-packages/example"
+        site_packages.mkdir(parents=True)
+        (site_packages / "installed.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (managed_environment / "pyvenv.cfg").write_text(
+            "home = /trusted/python\n", encoding="utf-8"
+        )
+
         inventory = collect_inventory(self.root)
 
         self.assertIn("setup.py", inventory["production_modules"])
@@ -326,6 +334,14 @@ class SemanticRouterTests(unittest.TestCase):
         )
         self.assertFalse(
             any(path.startswith("specs/") for path in inventory["configurations"])
+        )
+        self.assertFalse(
+            any(
+                path.startswith(".venv-master-agent-")
+                for paths in inventory.values()
+                if isinstance(paths, set)
+                for path in paths
+            )
         )
 
     def test_unmapped_production_module_fails(self) -> None:

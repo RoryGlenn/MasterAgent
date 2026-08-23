@@ -24,6 +24,7 @@ from master_agent.oauth import (
     EntraClientCredentialsProvider,
     EnvironmentTokenProvider,
     InMemoryTokenCache,
+    RedditRefreshTokenProvider,
     RestrictedTokenFileProvider,
     TokenProvider,
 )
@@ -62,6 +63,7 @@ class PrincipalAttestationAdapter(StrEnum):
 
     GITHUB_AUTHENTICATED_USER = "github_authenticated_user"
     MICROSOFT_DELEGATED_USER = "microsoft_delegated_user"
+    REDDIT_AUTHENTICATED_USER = "reddit_authenticated_user"
 
 
 class ConnectorCredentialProvider(StrEnum):
@@ -300,6 +302,7 @@ class ConnectorConfig:
             "tenant_id_env",
             "client_id_env",
             "client_secret_env",
+            "refresh_token_env",
         ):
             value = self.extra.get(key)
             if isinstance(value, str) and value.strip():
@@ -359,6 +362,14 @@ class ConnectorConfig:
             and oauth_flow == "client_credentials"
         ):
             for key in ("tenant_id_env", "client_id_env", "client_secret_env"):
+                value = self.extra.get(key)
+                if isinstance(value, str) and value.strip():
+                    names.append(value.strip())
+        elif (
+            self.auth_mode is AuthMode.OAUTH_DELEGATED
+            and oauth_flow == "reddit_refresh_token"
+        ):
+            for key in ("client_id_env", "client_secret_env", "refresh_token_env"):
                 value = self.extra.get(key)
                 if isinstance(value, str) and value.strip():
                     names.append(value.strip())
@@ -422,6 +433,22 @@ class ConnectorConfig:
                 or not scopes
             ):
                 errors.append("scopes must be a non-empty string list for OAuth")
+        elif (
+            self.auth_mode is AuthMode.OAUTH_DELEGATED
+            and oauth_flow == "reddit_refresh_token"
+        ):
+            for key in ("client_id_env", "client_secret_env", "refresh_token_env"):
+                value = self.extra.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"{key} is required for reddit_refresh_token authentication"
+                    )
+            user_agent = self.extra.get("user_agent")
+            if not isinstance(user_agent, str) or not user_agent.strip():
+                errors.append(
+                    "user_agent is required for reddit_refresh_token authentication"
+                )
+            errors.extend(_reddit_credential_profile_errors(self))
         elif self.auth_mode is AuthMode.OAUTH_DELEGATED and oauth_flow == "token_file":
             value = self.extra.get("token_file_env")
             if not isinstance(value, str) or not value.strip():
@@ -581,6 +608,13 @@ class ConnectorConfig:
             == "delegated"
         ):
             return PrincipalAttestationAdapter.MICROSOFT_DELEGATED_USER
+        if (
+            self.system == "reddit"
+            and self.deployment is DeploymentType.CLOUD
+            and self.auth_mode is AuthMode.OAUTH_DELEGATED
+            and oauth_flow == "reddit_refresh_token"
+        ):
+            return PrincipalAttestationAdapter.REDDIT_AUTHENTICATED_USER
         return None
 
     def principal_attestation_error(self) -> str | None:
@@ -685,6 +719,30 @@ class ConnectorConfig:
                     client_id=client_id,
                     client_secret=client_secret,
                     scopes=scopes,
+                    transport=auth_transport,
+                    timeout_seconds=self.timeout_seconds,
+                    ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
+                    proxy_url=target.proxy_url,
+                    proxy_username=proxy_username,
+                    proxy_password=proxy_password,
+                )
+            )
+            secret = None
+        elif (
+            self.auth_mode is AuthMode.OAUTH_DELEGATED
+            and oauth_flow == "reddit_refresh_token"
+        ):
+            client_id = _environment_value(source, self.extra, "client_id_env")
+            client_secret = _environment_value(source, self.extra, "client_secret_env")
+            refresh_token = _environment_value(source, self.extra, "refresh_token_env")
+            scopes = tuple(str(item) for item in self.extra.get("scopes", []))
+            token_provider = InMemoryTokenCache(
+                RedditRefreshTokenProvider(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    refresh_token=refresh_token,
+                    scopes=scopes,
+                    user_agent=str(self.extra.get("user_agent", "")),
                     transport=auth_transport,
                     timeout_seconds=self.timeout_seconds,
                     ca_bundle_data=(ca_bundle.data if ca_bundle is not None else None),
@@ -1253,6 +1311,12 @@ def _validate_provider_origin(
         )
     elif system == "github":
         valid = hostname.rstrip(".") == "api.github.com"
+    elif system == "reddit":
+        valid = (
+            hostname.rstrip(".") == "oauth.reddit.com"
+            and _explicit_port(parsed) is None
+            and parsed.path in {"", "/"}
+        )
     elif system == "microsoft":
         valid = hostname.rstrip(".") in {
             "graph.microsoft.com",
@@ -1283,6 +1347,16 @@ def _validate_web_base_url(
         raise ConfigurationError(
             f"connector {system} web_base_url must be an Atlassian tenant root"
         )
+    if deployment is DeploymentType.CLOUD and system == "reddit":
+        parsed = urlparse(web_base_url)
+        if (
+            (parsed.hostname or "").casefold().rstrip(".") != "www.reddit.com"
+            or _explicit_port(parsed) is not None
+            or parsed.path not in {"", "/"}
+        ):
+            raise ConfigurationError(
+                "connector reddit web_base_url must be the fixed Reddit web root"
+            )
 
 
 def _is_atlassian_gateway_url(base_url: str, *, system: str) -> bool:
@@ -1353,6 +1427,27 @@ _ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
         "secret_env": frozenset({"MASTER_AGENT_GITHUB_TOKEN"}),
         "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
     },
+    "reddit": {
+        "client_id_env": frozenset(
+            {
+                "MASTER_AGENT_REDDIT_READ_CLIENT_ID",
+                "MASTER_AGENT_REDDIT_COMMUNICATION_CLIENT_ID",
+            }
+        ),
+        "client_secret_env": frozenset(
+            {
+                "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET",
+                "MASTER_AGENT_REDDIT_COMMUNICATION_CLIENT_SECRET",
+            }
+        ),
+        "refresh_token_env": frozenset(
+            {
+                "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN",
+                "MASTER_AGENT_REDDIT_COMMUNICATION_REFRESH_TOKEN",
+            }
+        ),
+        "ca_bundle_env": frozenset({"MASTER_AGENT_ENTERPRISE_CA_BUNDLE"}),
+    },
     "microsoft": {
         "base_url_env": frozenset({"MASTER_AGENT_GRAPH_BASE_URL"}),
         "secret_env": frozenset({"MASTER_AGENT_GRAPH_ACCESS_TOKEN"}),
@@ -1368,6 +1463,79 @@ _ALLOWED_ENVIRONMENT_REFERENCES: Mapping[str, Mapping[str, frozenset[str]]] = {
         "client_secret_env": frozenset({"MASTER_AGENT_ENTRA_APP_CLIENT_SECRET"}),
     },
 }
+
+
+_REDDIT_CREDENTIAL_PROFILES: Mapping[str, tuple[Mapping[str, str], frozenset[str]]] = {
+    "read": (
+        {
+            "client_id_env": "MASTER_AGENT_REDDIT_READ_CLIENT_ID",
+            "client_secret_env": "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET",
+            "refresh_token_env": "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN",
+        },
+        frozenset({"identity", "read", "history", "privatemessages"}),
+    ),
+    "communication": (
+        {
+            "client_id_env": "MASTER_AGENT_REDDIT_COMMUNICATION_CLIENT_ID",
+            "client_secret_env": "MASTER_AGENT_REDDIT_COMMUNICATION_CLIENT_SECRET",
+            "refresh_token_env": "MASTER_AGENT_REDDIT_COMMUNICATION_REFRESH_TOKEN",
+        },
+        frozenset({"identity", "read", "submit"}),
+    ),
+}
+
+
+def _reddit_credential_profile_errors(config: ConnectorConfig) -> tuple[str, ...]:
+    """Validate purpose-separated Reddit credential names, scopes, and gates."""
+
+    profile = str(config.extra.get("credential_profile", "")).strip().casefold()
+    contract = _REDDIT_CREDENTIAL_PROFILES.get(profile)
+    if contract is None:
+        return ("credential_profile must be read or communication for Reddit OAuth",)
+    expected_names, expected_scopes = contract
+    errors: list[str] = []
+    for key, expected in expected_names.items():
+        if config.extra.get(key) != expected:
+            errors.append(f"Reddit {profile} profile requires {key}={expected}")
+    raw_scopes = config.extra.get("scopes")
+    if (
+        not isinstance(raw_scopes, list)
+        or not raw_scopes
+        or not all(
+            isinstance(item, str) and item and item == item.strip()
+            for item in raw_scopes
+        )
+        or len(set(raw_scopes)) != len(raw_scopes)
+    ):
+        errors.append("Reddit scopes must be a non-empty unique string list")
+    elif frozenset(raw_scopes) != expected_scopes:
+        errors.append(
+            f"Reddit {profile} profile scopes must be exactly: "
+            + ", ".join(sorted(expected_scopes))
+        )
+    effect_flags = {
+        key: config.extra.get(key, False)
+        for key in (
+            "posts_enabled",
+            "comments_enabled",
+            "edits_enabled",
+            "deletes_enabled",
+        )
+    }
+    if profile == "read" and any(value is True for value in effect_flags.values()):
+        errors.append("Reddit read profile cannot enable provider mutations")
+    if profile == "communication":
+        if not any(
+            effect_flags[key] is True for key in ("posts_enabled", "comments_enabled")
+        ):
+            errors.append("Reddit communication profile must enable posts or comments")
+        if any(
+            effect_flags[key] is True for key in ("edits_enabled", "deletes_enabled")
+        ):
+            errors.append(
+                "Reddit communication profile cannot enable quarantined edit/delete"
+            )
+    return tuple(errors)
 
 
 def _validate_environment_references(config: ConnectorConfig) -> None:
@@ -1387,6 +1555,7 @@ def _validate_environment_references(config: ConnectorConfig) -> None:
         "tenant_id_env",
         "client_id_env",
         "client_secret_env",
+        "refresh_token_env",
     ):
         value = config.extra.get(key)
         references[key] = str(value).strip() if isinstance(value, str) else None

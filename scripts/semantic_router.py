@@ -131,6 +131,7 @@ _IGNORED_DIRECTORY_NAMES: Final = {
     "build",
     "dist",
 }
+_IGNORED_DIRECTORY_PREFIXES: Final = (".venv-master-agent-",)
 
 
 class ManifestError(ValueError):
@@ -888,7 +889,9 @@ def _bounded_file_inventory(
             relative = path.relative_to(root)
             if relative.parts and relative.parts[0] in excluded_first_parts:
                 continue
-            if entry.name in _IGNORED_DIRECTORY_NAMES:
+            if entry.name in _IGNORED_DIRECTORY_NAMES or entry.name.startswith(
+                _IGNORED_DIRECTORY_PREFIXES
+            ):
                 continue
             if entry.is_symlink():
                 if entry.name.endswith(suffix):

@@ -20,6 +20,9 @@ capabilities = [
   "outlook.email.draft",
   "repository.branch.plan",
   "repository.patch.generate",
+  "reddit.comment.draft",
+  "reddit.comment.reply.draft",
+  "reddit.post.draft",
   "teams.message.draft",
 ]
 

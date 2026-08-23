@@ -20,6 +20,7 @@ from master_agent.config import (
 from master_agent.config_sources import ConfigSource
 from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.microsoft import MicrosoftIdentityConnector
+from master_agent.connectors.reddit import RedditConnector
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
@@ -369,6 +370,19 @@ def _credential_attestation(
         return CredentialAttestation(
             identity=microsoft_attested.identity,
             scopes=microsoft_attested.scopes,
+        )
+    if adapter is PrincipalAttestationAdapter.REDDIT_AUTHENTICATED_USER:
+        if resolved is None:  # pragma: no cover - capture invariant.
+            raise ConfigurationError(
+                "Reddit principal attestation requires credentials"
+            )
+        reddit_attested = RedditConnector(
+            resolved,
+            transport=transport,
+        ).attest_principal()
+        return CredentialAttestation(
+            identity=reddit_attested.identity,
+            scopes=reddit_attested.scopes,
         )
     if adapter is not None:  # pragma: no cover - adapter registry invariant.
         raise ConfigurationError(

@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0135-reddit-connector"
+title = "Add governed Reddit reads and approved interactions"
+status = "archived"
+github_issue = 135
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-REDDIT-001"
+destination = "connectors/MA-REDDIT-001.md"
+source = "current/MA-REDDIT-001.md"
