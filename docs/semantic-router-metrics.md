@@ -13,20 +13,21 @@ release-workflow specification, and verification ownership; the certification ro
 clean enrolled standard-user runner supplies successful evidence.
 Issue #156 moves systems assessment and planning-gate ownership into the
 governed applied-run route, adds strategy and outcome-observer aliases, and adds
-one deterministic routing fixture for that vocabulary.
+one deterministic routing fixture for that vocabulary. Issue #158 adds strategy-
+coherence ownership and one deterministic coherence-review fixture.
 
 ## Results
 
 | Measure | Manual index baseline | Generated router | Result |
 | --- | ---: | ---: | --- |
-| Checked-in router bytes | 29,903 | 23,345 | 21.9% smaller |
-| Approximate context tokens (`bytes / 4`) | 7,476 | 5,837 | 21.9% smaller |
+| Checked-in router bytes | 29,903 | 23,387 | 21.8% smaller |
+| Approximate context tokens (`bytes / 4`) | 7,476 | 5,847 | 21.8% smaller |
 | Production-module coverage | 80/97 direct links | 130/130 exact owners | Complete and machine-checked |
 | Test-module coverage | 68/80 direct links | 101/101 exact owners | Complete and machine-checked |
 | Current-requirement coverage | 0/16 direct links | 35/35 exact owners | Complete and machine-checked |
 | Stable machine route IDs | 0 | 24 | Every declared route is addressable |
-| Automated routing fixtures | 0/24 | 28/28 | 100% deterministic fixture accuracy |
-| Median lookup time | 652.75 microseconds | 147.74 microseconds | 4.42 times faster |
+| Automated routing fixtures | 0/24 | 29/29 | 100% deterministic fixture accuracy |
+| Median lookup time | 652.75 microseconds | 145.81 microseconds | 4.48 times faster |
 | Example selected-route payload | Not available | 1,629 bytes | One route and its local agent contract |
 
 The baseline coverage rows count direct links in the prose index; the generated
@@ -56,7 +57,7 @@ python3 scripts/semantic_router.py route "semantic router topology"
 python3 scripts/semantic_router.py changes HEAD
 ```
 
-The metrics command parses the bounded TOML manifest, verifies all 28 routing
+The metrics command parses the bounded TOML manifest, verifies all 29 routing
 fixtures, and reports the median of 11 repeated in-process route-selection
 batches. This is bounded route-selection latency, not end-to-end task duration.
 The route command emits only the selected route and its selected agent's local

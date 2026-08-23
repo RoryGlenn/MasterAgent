@@ -13,7 +13,9 @@ the explicit static assessment for you.
 
 Every other plan uses the gated route. Its assessment needs the complete
 systems diagnosis plus a strategy kernel. Every plan action must trace exactly
-once to one declared coherent-action intent, and every intent must be used.
+once to one declared coherent-action intent, and every intent must be used. A
+separate coherence review must confirm how the systems diagnosis, strategy,
+action effects, metric, tradeoffs, and alternatives fit together.
 
 ## Build a static intervention
 
@@ -64,7 +66,10 @@ governed_plan = bind_static_intervention_governance(plan, assessment)
 
 The number of coherent-action intents must equal the number of static plan
 actions. The binder maps them in order. If a registered workflow changes its
-actions, update its kernel in the same change.
+actions, update its kernel in the same change. The binder is also the explicit
+code-owned coherence-review boundary for a registered intervention, so code
+review must verify all five relationships rather than treating the generated
+positive findings as semantic proof.
 
 ## Build an evidence-backed planner
 
@@ -78,6 +83,44 @@ the returned `ChangePlan` before the gate runs.
 The assessor does not invent missing stocks, loops, tradeoffs, or actions. A
 model may propose those values upstream, but they remain untrusted planning data
 until the caller validates and explicitly supplies the typed assessment.
+
+Construct the coherence review only after that trusted boundary has checked the
+relationships, then supply it through a separate reviewer:
+
+```python
+from master_agent.models import StrategyCoherenceReview
+from master_agent.planners import (
+    EvidenceBackedStrategyCoherenceReviewer,
+    GovernedPlanner,
+)
+
+coherence = StrategyCoherenceReview.for_review(
+    assessment=assessment,
+    diagnosis_addresses_constraint=True,
+    guiding_policy_targets_leverage_point=True,
+    proximate_objective_advances_outcome=True,
+    coherent_actions_support_success_metric=True,
+    tradeoffs_cover_alternatives=True,
+    reason_codes=(
+        "diagnosis_addresses_constraint",
+        "guiding_policy_targets_leverage_point",
+        "proximate_objective_advances_outcome",
+        "coherent_actions_support_success_metric",
+        "tradeoffs_cover_alternatives",
+        "independent_strategy_review",
+    ),
+)
+governed = GovernedPlanner(
+    assessor=assessor,
+    planner=planner,
+    coherence_reviewer=EvidenceBackedStrategyCoherenceReviewer(coherence),
+).plan(assessment.desired_outcome)
+```
+
+The reviewer checks exact fingerprints; it does not infer agreement. Do not use
+token overlap, keyword matching, or the planner's own assertion as a substitute
+for the trusted review. A false finding is valid evidence of incoherence, and
+the systems gate denies that plan.
 
 ## Observe outcomes after execution
 
@@ -126,10 +169,11 @@ run is a dry run, the review records `not_observed` and requires reassessment.
 ## Compatibility and authority
 
 Existing serialized fast-path plans remain loadable without a kernel or traces.
-Older gated plans must be replanned because they cannot prove coherent strategy.
-Adding or changing a kernel or trace changes the plan fingerprint, so old
-approvals no longer match.
+Older gated plans must be replanned because they cannot prove coherent strategy
+and do not carry a coherence review. Adding or changing an assessment, kernel,
+review, or trace changes the plan fingerprint, so old approvals no longer
+match.
 
-Systems assessment, strategy, and outcome evidence never grant capability,
-credential, target, provider, policy, approval, or execution authority. All
-ordinary runtime gates remain independently decisive.
+Systems assessment, strategy, coherence, and outcome evidence never grant
+capability, credential, target, provider, policy, approval, or execution
+authority. All ordinary runtime gates remain independently decisive.

@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0158-strategy-coherence"
+title = "Bind strategy coherence across planning and documentation"
+status = "archived"
+github_issue = 158
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-SYSTEMS-GOVERNANCE-001"
+destination = "runtime/MA-SYSTEMS-GOVERNANCE-001.md"
+source = "current/MA-SYSTEMS-GOVERNANCE-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-DOCS-001"
+destination = "development/MA-DOCS-001.md"
+source = "current/MA-DOCS-001.md"

@@ -71,6 +71,24 @@ class DocsAgentContractTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.contract)
 
+    def test_contract_pins_systems_strategy_and_outcome_handoff(self) -> None:
+        """Documentation must consume the same evidence chain as delivery."""
+
+        required = (
+            "systems assessment, strategy kernel, coherence review",
+            "same desired outcome",
+            "guiding policy",
+            "tradeoffs",
+            "success metric",
+            "observed result",
+            "materially disagree",
+            "return `needs_review`",
+        )
+
+        for marker in required:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.contract)
+
     def test_parent_instructions_apply_the_contract_directly(self) -> None:
         """Every durable parent instruction must include the completion gate."""
 

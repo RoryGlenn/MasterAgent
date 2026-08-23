@@ -124,6 +124,9 @@ _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     _AUTONOMY_CONTRACT_PATH: (
         "Default to action",
         "The default response to an actionable prompt is execution",
+        "Strategy-bounded outcome ownership",
+        "necessary for the admitted proximate objective",
+        "MUST NOT override the smallest intervention",
         "Resolve, do not relay",
         "capability gap",
         "Never end an actionable request",

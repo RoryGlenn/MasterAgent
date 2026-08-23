@@ -15,6 +15,7 @@ from master_agent.models import (
     ComplexityKind,
     RiskLevel,
     StrategyActionTrace,
+    StrategyCoherenceReview,
     SystemsAssessment,
     SystemsGateDecision,
     SystemsGateRoute,
@@ -39,6 +40,13 @@ class SystemsAssessor(Protocol):
 
     def assess(self, goal: str) -> SystemsAssessment:
         """Return a structured assessment before planning begins."""
+
+
+class StrategyCoherenceReviewer(Protocol):
+    """Review semantic handoffs without granting runtime authority."""
+
+    def review(self, *, assessment: SystemsAssessment) -> StrategyCoherenceReview:
+        """Return explicit findings bound to one assessment and strategy kernel."""
 
 
 class SystemsOutcomeEvidenceProvider(Protocol):
@@ -86,6 +94,35 @@ class EvidenceBackedSystemsAssessor:
                 "systems assessment desired outcome does not match the planner goal"
             )
         return self._assessment
+
+
+class EvidenceBackedStrategyCoherenceReviewer:
+    """Return one explicit coherence review for its exact planning evidence."""
+
+    def __init__(self, review: StrategyCoherenceReview) -> None:
+        if not isinstance(review, StrategyCoherenceReview):
+            raise ValidationError(
+                "evidence-backed coherence reviewer requires a StrategyCoherenceReview"
+            )
+        self._review = review
+
+    def review(self, *, assessment: SystemsAssessment) -> StrategyCoherenceReview:
+        """Return the bound review and reject assessment or kernel substitution."""
+
+        kernel = assessment.strategy_kernel
+        if kernel is None:
+            raise ValidationError(
+                "strategy coherence review requires a strategy kernel"
+            )
+        if self._review.assessment_fingerprint != assessment.fingerprint:
+            raise ValidationError(
+                "strategy coherence review does not match the systems assessment"
+            )
+        if self._review.strategy_kernel_fingerprint != kernel.fingerprint:
+            raise ValidationError(
+                "strategy coherence review does not match the strategy kernel"
+            )
+        return self._review
 
 
 class EvidenceBackedSystemsOutcomeObserver:
@@ -172,6 +209,8 @@ class SystemsGovernanceGate:
         )
         reasons: list[str] = []
         requires_human_review = False
+        if plan.goal != assessment.desired_outcome:
+            reasons.append("plan goal does not match the assessed desired outcome")
         if route is SystemsGateRoute.FAST_PATH:
             unsafe = sorted(
                 {
@@ -187,6 +226,8 @@ class SystemsGovernanceGate:
                 )
             if assessment.added_complexity:
                 reasons.append("fast path cannot introduce durable complexity")
+            if plan.strategy_coherence_review is not None:
+                reasons.append("fast path cannot carry a strategy coherence review")
         else:
             for name, values in (
                 ("stocks", assessment.stocks),
@@ -199,6 +240,7 @@ class SystemsGovernanceGate:
                     reasons.append(f"gated assessment requires {name}")
             if assessment.strategy_kernel is None:
                 reasons.append("gated assessment requires a strategy_kernel")
+            reasons.extend(_strategy_coherence_reasons(plan, assessment))
         reasons.extend(_strategy_trace_reasons(plan, assessment))
         if assessment.added_complexity:
             if not assessment.alternatives_considered:
@@ -237,6 +279,12 @@ class SystemsGovernanceGate:
             complexity_score=assessment.complexity_score,
             assessment_fingerprint=assessment.fingerprint,
             requires_human_review=requires_human_review,
+            strategy_coherence_review_fingerprint=(
+                plan.strategy_coherence_review.fingerprint
+                if route is SystemsGateRoute.GATED
+                and plan.strategy_coherence_review is not None
+                else None
+            ),
         )
 
     def enforce(
@@ -300,6 +348,9 @@ def bind_static_intervention_governance(
             for action, intent in zip(
                 plan.actions, kernel.coherent_actions, strict=True
             )
+        ),
+        strategy_coherence_review=(
+            StrategyCoherenceReview.for_static_intervention(assessment)
         ),
     )
     return bind_systems_governance(traced_plan, assessment, gate=gate)
@@ -523,6 +574,34 @@ def _strategy_trace_reasons(
     return tuple(reasons)
 
 
+def _strategy_coherence_reasons(
+    plan: ChangePlan, assessment: SystemsAssessment
+) -> tuple[str, ...]:
+    """Return every strategy-to-systems coherence-evidence failure."""
+
+    review = plan.strategy_coherence_review
+    if review is None:
+        return ("gated plan requires a strategy coherence review",)
+    kernel = assessment.strategy_kernel
+    reasons: list[str] = []
+    if review.assessment_fingerprint != assessment.fingerprint:
+        reasons.append("strategy coherence review assessment fingerprint is stale")
+    if kernel is None:
+        reasons.append("strategy coherence review requires a strategy kernel")
+    elif review.strategy_kernel_fingerprint != kernel.fingerprint:
+        reasons.append("strategy coherence review kernel fingerprint is stale")
+    for name in (
+        "diagnosis_addresses_constraint",
+        "guiding_policy_targets_leverage_point",
+        "proximate_objective_advances_outcome",
+        "coherent_actions_support_success_metric",
+        "tradeoffs_cover_alternatives",
+    ):
+        if not getattr(review, name):
+            reasons.append(f"strategy coherence finding is false: {name}")
+    return tuple(reasons)
+
+
 class GovernedPlanner:
     """Require diagnosis before planning and bind the resulting decision."""
 
@@ -531,10 +610,12 @@ class GovernedPlanner:
         *,
         assessor: SystemsAssessor,
         planner: SystemsAwarePlanner,
+        coherence_reviewer: StrategyCoherenceReviewer | None = None,
         gate: SystemsGovernanceGate | None = None,
     ) -> None:
         self._assessor = assessor
         self._planner = planner
+        self._coherence_reviewer = coherence_reviewer
         self._gate = gate or SystemsGovernanceGate()
 
     def plan(self, goal: str) -> GovernedPlan:
@@ -549,6 +630,21 @@ class GovernedPlanner:
         plan = self._planner.plan(goal, systems_assessment=assessment)
         if not isinstance(plan, ChangePlan):
             raise ValidationError("systems-aware planner must return a ChangePlan")
+        if plan.strategy_coherence_review is not None:
+            raise ValidationError(
+                "systems-aware planner cannot review its own strategy coherence"
+            )
+        if not assessment.fast_path_requested:
+            if self._coherence_reviewer is None:
+                raise ValidationError(
+                    "gated planning requires a strategy coherence reviewer"
+                )
+            review = self._coherence_reviewer.review(assessment=assessment)
+            if not isinstance(review, StrategyCoherenceReview):
+                raise ValidationError(
+                    "strategy coherence reviewer must return a StrategyCoherenceReview"
+                )
+            plan = replace(plan, strategy_coherence_review=review)
         governed_plan = bind_systems_governance(plan, assessment, gate=self._gate)
         decision = governed_plan.systems_decision
         if decision is None:  # pragma: no cover - guaranteed by binding.
@@ -568,11 +664,13 @@ def _require_text(value: str, name: str) -> None:
 __all__ = [
     "ComplexityItem",
     "ComplexityKind",
+    "EvidenceBackedStrategyCoherenceReviewer",
     "EvidenceBackedSystemsAssessor",
     "EvidenceBackedSystemsOutcomeObserver",
     "GovernedPlan",
     "GovernedPlanner",
     "Planner",
+    "StrategyCoherenceReviewer",
     "SystemsAssessment",
     "SystemsAssessor",
     "SystemsAwarePlanner",
