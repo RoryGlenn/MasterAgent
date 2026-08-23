@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -29,6 +30,14 @@ _MAX_EVENTS = 1_024
 _MAX_WORK_ID_BYTES = 128
 _MAX_SUMMARY_BYTES = 2_048
 _MAX_REFERENCE_BYTES = 1_024
+_INITIALIZATION_RACE_ATTEMPTS = 100
+_INITIALIZATION_RACE_DELAY_SECONDS = 0.02
+_NAMESPACE_CHANGED_DURING_INITIALIZATION = (
+    "SQLite state database namespace changed during initialization"
+)
+_UNINITIALIZED_JOURNAL_MESSAGE = (
+    "work-memory database does not contain an initialized journal"
+)
 _EVENT_COLUMNS = (
     "sequence",
     "event_id",
@@ -112,6 +121,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"azure_client_secret|accountkey|sharedaccesssignature)"
     r"[\"']?\s*[:=]\s*[\"']?\S+|"
     r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b|"
+    r"\bAGE-SECRET-KEY-1[0-9A-Z]{20,}\b|"
     r"\bAIza[A-Za-z0-9_-]{32,}\b|"
     r"\bxox[baprs]-[A-Za-z0-9-]{8,}\b|"
     r"\bxapp-[A-Za-z0-9-]{20,}\b|"
@@ -261,6 +271,7 @@ class WorkMemory:
 
     def __init__(self, database: Path, *, create: bool = True) -> None:
         self._database_path = database
+        create_database = False
         try:
             create_database = create and not path_entry_exists(database)
             self._database = PinnedSQLiteDatabase(
@@ -268,7 +279,17 @@ class WorkMemory:
                 create=create_database,
                 initialize_existing=False,
             )
-        except (ConfigurationError, OSError, RuntimeError, sqlite3.Error) as error:
+        except ConfigurationError as error:
+            if (
+                create_database
+                and str(error) == _NAMESPACE_CHANGED_DURING_INITIALIZATION
+            ):
+                self._wait_for_concurrent_initialization(database)
+                return
+            raise WorkMemoryError(
+                "work-memory database could not be opened safely"
+            ) from error
+        except (OSError, RuntimeError, sqlite3.Error) as error:
             raise WorkMemoryError(
                 "work-memory database could not be opened safely"
             ) from error
@@ -277,6 +298,38 @@ class WorkMemory:
         except BaseException:
             self._database.close(remove_created=True)
             raise
+
+    def _wait_for_concurrent_initialization(self, database: Path) -> None:
+        """Open only a complete journal created by a concurrent first writer."""
+
+        last_error: BaseException | None = None
+        for attempt in range(_INITIALIZATION_RACE_ATTEMPTS):
+            candidate: PinnedSQLiteDatabase | None = None
+            try:
+                candidate = PinnedSQLiteDatabase(
+                    database,
+                    create=False,
+                    initialize_existing=False,
+                )
+                self._database = candidate
+                self._initialize(create_schema=False)
+            except WorkMemoryError as error:
+                last_error = error
+                if candidate is not None:
+                    candidate.close()
+                if str(error) != _UNINITIALIZED_JOURNAL_MESSAGE:
+                    raise
+            except (ConfigurationError, OSError, RuntimeError, sqlite3.Error) as error:
+                last_error = error
+                if candidate is not None:
+                    candidate.close()
+            else:
+                return
+            if attempt + 1 < _INITIALIZATION_RACE_ATTEMPTS:
+                time.sleep(_INITIALIZATION_RACE_DELAY_SECONDS)
+        raise WorkMemoryError(
+            "concurrent work-memory initialization did not complete safely"
+        ) from last_error
 
     def close(self) -> None:
         """Release pinned database and transaction-lock resources."""
@@ -454,9 +507,7 @@ class WorkMemory:
                 tables = _user_tables(connection)
                 if version == 0 and not tables:
                     if not create_schema:
-                        raise WorkMemoryError(
-                            "work-memory database does not contain an initialized journal"
-                        )
+                        raise WorkMemoryError(_UNINITIALIZED_JOURNAL_MESSAGE)
                     connection.execute(_WORK_EVENTS_TABLE_SQL)
                     connection.execute(_WORK_MEMORY_STATE_TABLE_SQL)
                     connection.execute(

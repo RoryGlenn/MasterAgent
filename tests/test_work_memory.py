@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
@@ -178,6 +179,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "PRIVATE_" + "KEY=encoded-private-key-material",
                     "SSH_PRIVATE_" + "KEY=encoded-private-key-material",
                     "-----BEGIN PGP PRIVATE " + "KEY BLOCK-----",
+                    "AGE-SECRET-KEY-1" + "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_auth=dXNlcjpwYXNz",
@@ -331,6 +333,37 @@ class WorkMemoryTests(unittest.TestCase):
             snapshot = WorkMemory.show_existing(database, "issue-3")
             self.assertEqual(len(snapshot.events), 14)
 
+    def test_concurrent_first_starts_share_the_created_journal(self) -> None:
+        with private_temporary_directory() as directory:
+            database = Path(directory) / "work-memory.sqlite3"
+            absence_barrier = threading.Barrier(2)
+
+            def report_absent(_path: Path) -> bool:
+                absence_barrier.wait(timeout=5)
+                return False
+
+            def start(index: int) -> None:
+                with WorkMemory(database) as memory:
+                    memory.start(
+                        work_id=f"issue-first-{index}",
+                        issue=f"#first-{index}",
+                        summary=f"Concurrent first start {index}.",
+                    )
+
+            with (
+                patch(
+                    "master_agent.work_memory.path_entry_exists",
+                    side_effect=report_absent,
+                ),
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                list(executor.map(start, range(2)))
+
+            verification = WorkMemory.verify_existing(database)
+            self.assertTrue(verification.valid, verification.message)
+            self.assertEqual(verification.event_count, 2)
+            self.assertEqual(verification.work_count, 2)
+
     def test_hash_tampering_deletion_and_schema_drift_are_detected(self) -> None:
         for mutation, expected in (
             (
@@ -463,17 +496,6 @@ class WorkMemoryTests(unittest.TestCase):
                     summary="Start work.",
                 )
             before = database.read_bytes()
-            with (
-                patch(
-                    "master_agent.work_memory.path_entry_exists",
-                    return_value=False,
-                ),
-                self.assertRaises(WorkMemoryError),
-            ):
-                WorkMemory(database)
-            self.assertEqual(database.read_bytes(), before)
-            self.assertTrue(WorkMemory.verify_existing(database).valid)
-
             ledger.unlink()
 
             with self.assertRaises(WorkMemoryError):

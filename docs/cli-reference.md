@@ -423,6 +423,8 @@ initializing one and initializes the journal schema only when it exclusively
 created that database. An existing empty database is not repurposed. If an
 existing journal is missing its native transaction lock or integrity ledger,
 every mutating action fails without recreating the missing bookkeeping.
+Concurrent first `start` calls retry only against the fully initialized journal
+created by the winner, then serialize their distinct records normally.
 
 The database admits at most 1,024 events so a maximum-size journal remains
 inside the native 8 MiB state boundary on every supported platform. Its

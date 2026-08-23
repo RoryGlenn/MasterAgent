@@ -76,6 +76,13 @@ with recorded history.
 - WHEN the operations overlap
 - THEN native serialization preserves every event in one valid global chain
 
+### Concurrent first writers
+
+- GIVEN independent processes start distinct records in the same initially
+  absent database
+- WHEN their absence checks and initialization overlap
+- THEN one creates the journal and every start is preserved in its valid chain
+
 ### Tampered journal
 
 - GIVEN a row, including its exact timestamp representation, was edited,

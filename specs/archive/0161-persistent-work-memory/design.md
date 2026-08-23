@@ -25,7 +25,9 @@ disabled, while `start` validates every retained field before opening the
 create-enabled boundary. The work-memory schema and SQLite transaction and
 integrity bookkeeping are initialized only when that boundary exclusively
 created the database in the same operation; existing empty or incomplete state
-is never repurposed or repaired implicitly.
+is never repurposed or repaired implicitly. Concurrent first writers use a
+bounded retry after the namespace race and accept only the winner's complete,
+strictly validated journal and bookkeeping before appending.
 
 ## Affected components
 
