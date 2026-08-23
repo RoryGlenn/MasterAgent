@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -71,6 +72,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b|"
     r"\bAIza[A-Za-z0-9_-]{32,}\b|"
     r"\bxox[baprs]-[A-Za-z0-9-]{8,}\b|"
+    r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\b|"
     r"\b(?:gh[pousr]_|github_pat_|sk-proj-|sk-|sk_(?:live|test)_)[A-Za-z0-9_-]{8,}"
     r")",
     re.IGNORECASE,
@@ -233,7 +235,14 @@ class WorkMemory:
         del exception_type, exception, traceback
         self.close()
 
-    def start(self, *, work_id: str, issue: str, summary: str) -> WorkSnapshot:
+    def start(
+        self,
+        *,
+        work_id: str,
+        issue: str,
+        summary: str,
+        snapshot_validator: Callable[[WorkSnapshot], None] | None = None,
+    ) -> WorkSnapshot:
         """Start one new work record at the issue stage."""
 
         selected_id = _validate_work_id(work_id)
@@ -255,7 +264,10 @@ class WorkMemory:
                 reference=selected_issue,
             )
             updated = _replay(connection, allow_empty=False)
-            return _snapshot(updated, selected_id)
+            snapshot = _snapshot(updated, selected_id)
+            if snapshot_validator is not None:
+                snapshot_validator(snapshot)
+            return snapshot
 
     def record(
         self,
@@ -265,6 +277,7 @@ class WorkMemory:
         summary: str,
         stage: WorkStage | None = None,
         reference: str | None = None,
+        snapshot_validator: Callable[[WorkSnapshot], None] | None = None,
     ) -> WorkSnapshot:
         """Append one decision, checkpoint, or reference to existing work."""
 
@@ -306,7 +319,10 @@ class WorkMemory:
                 reference=selected_reference,
             )
             updated = _replay(connection, allow_empty=False)
-            return _snapshot(updated, selected_id)
+            snapshot = _snapshot(updated, selected_id)
+            if snapshot_validator is not None:
+                snapshot_validator(snapshot)
+            return snapshot
 
     def show(self, work_id: str) -> WorkSnapshot:
         """Inspect one work record through a non-mutating verified snapshot."""

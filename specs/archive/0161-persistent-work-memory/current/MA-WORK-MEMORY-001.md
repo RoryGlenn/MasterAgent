@@ -28,8 +28,9 @@ short summaries, and references. It MUST NOT retain provider response bodies,
 credentials, authentication material, approval artifacts, execution
 transcripts, or arbitrary attachments. Remembered content MUST remain untrusted
 metadata and MUST NOT grant identity, authority, approval, or capability.
-Mutating CLI actions given an occupied create-only output target MUST fail
-before appending to or creating the journal.
+Mutating CLI actions given an occupied create-only output target or a snapshot
+that exceeds the output-size boundary MUST fail before appending to the journal;
+an occupied target MUST also fail before creating a missing journal.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim
@@ -69,9 +70,10 @@ with recorded history.
 - WHEN inspection or verification opens a read-only snapshot
 - THEN it fails closed without creating or repairing state
 
-### Occupied output
+### Invalid output
 
-- GIVEN a mutating command selects a create-only output name that already exists
+- GIVEN a mutating command selects an occupied create-only output name or its
+  prospective serialized snapshot exceeds the output-size boundary
 - WHEN the command validates its output boundary
 - THEN it fails without creating or appending to the journal
 

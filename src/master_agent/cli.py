@@ -29,6 +29,7 @@ from master_agent.approval_handoff import (
     ApprovalRunInvocation,
     load_approval_request,
     publish_approval_request,
+    validate_restricted_json_payload,
     write_restricted_json,
 )
 from master_agent.approvals import HmacApprovalAuthenticator
@@ -225,7 +226,12 @@ from master_agent.terminal import (
     MAX_TERMINAL_FIELD_CHARACTERS,
     render_terminal_text,
 )
-from master_agent.work_memory import WorkEventKind, WorkMemory, WorkStage
+from master_agent.work_memory import (
+    WorkEventKind,
+    WorkMemory,
+    WorkSnapshot,
+    WorkStage,
+)
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
     build_communication_context_plan,
@@ -7555,7 +7561,14 @@ def _work_memory(
             raise ValueError("work-memory start received incompatible arguments")
         _preflight_work_memory_output(output)
         with WorkMemory(database) as memory:
-            snapshot = memory.start(work_id=work_id, issue=issue, summary=summary)
+            snapshot = memory.start(
+                work_id=work_id,
+                issue=issue,
+                summary=summary,
+                snapshot_validator=(
+                    _validate_work_memory_output_payload if output is not None else None
+                ),
+            )
     elif action == "record":
         if kind is None or summary is None:
             raise ValueError("work-memory record requires --kind and --summary")
@@ -7569,6 +7582,9 @@ def _work_memory(
                 stage=WorkStage(stage) if stage is not None else None,
                 summary=summary,
                 reference=reference,
+                snapshot_validator=(
+                    _validate_work_memory_output_payload if output is not None else None
+                ),
             )
     else:
         raise ValueError("unknown work-memory operation")
@@ -7593,6 +7609,12 @@ def _preflight_work_memory_output(output: Path | None) -> None:
             raise ConfigurationError(
                 "restricted artifact already exists; use a fresh private output name"
             )
+
+
+def _validate_work_memory_output_payload(snapshot: WorkSnapshot) -> None:
+    """Validate exact output bytes before the journal transaction commits."""
+
+    validate_restricted_json_payload(snapshot.to_dict())
 
 
 def _emit_work_memory_payload(

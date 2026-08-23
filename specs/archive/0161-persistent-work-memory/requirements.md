@@ -26,8 +26,9 @@ short summaries, and references. It MUST NOT retain provider response bodies,
 credentials, authentication material, approval artifacts, execution
 transcripts, or arbitrary attachments. Remembered content MUST remain untrusted
 metadata and MUST NOT grant identity, authority, approval, or capability.
-Mutating CLI actions given an occupied create-only output target MUST fail
-before appending to or creating the journal.
+Mutating CLI actions given an occupied create-only output target or a snapshot
+that exceeds the output-size boundary MUST fail before appending to the journal;
+an occupied target MUST also fail before creating a missing journal.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim

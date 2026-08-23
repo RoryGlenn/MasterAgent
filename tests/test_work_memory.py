@@ -9,8 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from master_agent.approval_handoff import validate_restricted_json_payload
 from master_agent.cli import main
+from master_agent.errors import ValidationError
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
 from master_agent.work_memory import (
     WorkEventKind,
@@ -147,6 +150,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "SharedAccessSignature=example-signature-value",
                     "xoxb-1234567890-secret",
                     "AIza1234567890abcdefghijklmnopqrstuvwxyz",
+                    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature12345678",
                 ):
                     with (
                         self.subTest(credential=credential),
@@ -465,6 +469,57 @@ class WorkMemoryTests(unittest.TestCase):
                 after = WorkMemory.show_existing(database, "issue-163")
                 self.assertEqual(after.journal_event_count, before.journal_event_count)
                 self.assertEqual(after.journal_head_hash, before.journal_head_hash)
+
+    def test_cli_rolls_back_event_when_output_payload_is_oversized(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "work-memory.sqlite3"
+            output = root / "snapshot.json"
+            with self.assertRaisesRegex(ValidationError, "exceeds the 8 MiB limit"):
+                validate_restricted_json_payload({"payload": "x" * (8 * 1024 * 1024)})
+            with WorkMemory(database) as memory:
+                memory.start(
+                    work_id="issue-164",
+                    issue="#164",
+                    summary="Start work.",
+                )
+            before = WorkMemory.show_existing(database, "issue-164")
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with (
+                patch(
+                    "master_agent.cli.validate_restricted_json_payload",
+                    side_effect=ValidationError(
+                        "restricted artifact exceeds the 8 MiB limit"
+                    ),
+                ),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                status = main(
+                    [
+                        "work-memory",
+                        "record",
+                        "--database",
+                        str(database),
+                        "--work-id",
+                        "issue-164",
+                        "--kind",
+                        "decision",
+                        "--summary",
+                        "Choose the journal.",
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(status, 1)
+            self.assertIn("exceeds the 8 MiB limit", stderr.getvalue())
+            self.assertFalse(output.exists())
+            after = WorkMemory.show_existing(database, "issue-164")
+            self.assertEqual(after.journal_event_count, before.journal_event_count)
+            self.assertEqual(after.journal_head_hash, before.journal_head_hash)
 
 
 if __name__ == "__main__":

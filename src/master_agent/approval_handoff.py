@@ -583,6 +583,13 @@ def write_restricted_json(path: Path, payload: Mapping[str, Any]) -> None:
         )
 
 
+def validate_restricted_json_payload(payload: Mapping[str, Any]) -> None:
+    """Reject a JSON object that cannot fit the restricted artifact boundary."""
+
+    if len(_json_bytes(payload)) > _MAX_REQUEST_BYTES:
+        raise ValidationError("restricted artifact exceeds the 8 MiB limit")
+
+
 def _publish_restricted_bytes(
     directory: PinnedDirectory,
     name: str,
