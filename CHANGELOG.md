@@ -1,5 +1,16 @@
 # Changelog
 
+- Add authenticated exact-bound recurring occurrences with strict canonical
+  artifacts, separately trusted local binder registration, deterministic
+  UTC/IANA/DST/tzdata and latest-only catch-up, single-host fenced claims,
+  occurrence-scoped provider idempotency and local output names, lease-free
+  exact approval resume, no-force explicit recovery, and conservative crash
+  reconciliation. Recurring apply now enters the existing governed run path and
+  rechecks the occurrence fence immediately before each provider effect. Ship a
+  disabled-by-default local-only Weekly Operating Review across exact Jira,
+  GitHub, and Confluence resources with cited occurrence-keyed artifacts; legacy
+  direct workflow execution remains fail closed.
+
 - Add immutable enterprise network profiles for direct, fixed authenticated
   HTTP CONNECT, and explicitly selected ambient-proxy routing. Proxy
   credentials now resolve through the governed broker and remain CONNECT-only;

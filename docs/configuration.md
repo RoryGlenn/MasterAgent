@@ -823,12 +823,32 @@ and [Jira issue API](https://developer.atlassian.com/cloud/jira/platform/rest/v3
 
 ## Recurring workflows
 
-Recurring definitions and due-state reporting remain available, but
-`recurring-run` is disabled. The prior capability-only scope check did not bind
-exact targets, canonical sources, delivery mode, and configuration snapshots to
-one execution manifest. `weekly-status` and `communication-context` execution
-are disabled for the same reason; their plan-generation commands remain
-available.
+`recurring.toml` defines only built-in workflows and remains disabled by
+default. Exact execution additionally requires absolute, pre-existing,
+owner-private occurrence, claim, lock, audit, artifact, result, and workspace
+roots. Independently writable roots must be distinct. Relative registration
+paths are resolved once against the trusted recurring configuration source,
+never against apply-time `cwd`.
+
+Each workflow binds `generation`, `revoked`, an IANA timezone, `dst_fold`,
+`max_lateness_minutes`, `catch_up_policy = "latest_only"`, an approval-resume
+deadline, exact provider resource IDs, capability and recipient allowlists,
+delivery mode, and SHA-256 identities for referenced integration, workflow,
+identity, and retention configuration files. DST gaps fail; DST folds require
+`first` or `second` instead of the safe default `reject`.
+
+The supported trust mode is `local_state`: a deterministic binder exclusively
+creates a mode-`0600` canonical artifact beneath the pinned occurrence root and
+atomically stores its digest in the pinned local claim database. The artifact's
+own digest is not authentication and scheduler authentication is not approval.
+This release supports one scheduler host/service identity and one local claim
+store. Independent local databases on multiple hosts are unsupported.
+
+The `weekly_operating_review` registration is the reference path. Its separate
+configuration contains exact Jira project, GitHub owner/repository, and
+Confluence page IDs. It performs provider reads plus occurrence-keyed local
+generation only. Any later write or communication must be a separate plan
+action with normal approval and gates.
 
 ## Safe validation
 
@@ -836,6 +856,7 @@ available.
 master-agent readiness
 master-agent discover
 master-agent recurring-status
+master-agent recurring-inspect /private/occurrences/example.json
 master-agent plugins
 ```
 

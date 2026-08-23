@@ -108,6 +108,11 @@ operator prompt in each chat.
   catalog, governance, policy, source, and connector validation. Never use it
   for a provider effect; writes, sends, administration, deletion, merge,
   plugins, capsules, and recurring work remain on the bound `run --apply` path.
+- Recurring work additionally requires a separately authenticated exact
+  occurrence artifact and single-host fenced claim. A schedule supplies time,
+  never authority. Reserve before credentials, recheck the fence immediately
+  before every effect, bind approval resume to the same occurrence/generation,
+  reject force/replay/drift, and leave uncertain effects indeterminate.
 - If the runtime has no declared and implemented capability for an in-scope,
   safe operation, treat that capability gap as implementation work: add its
   typed contract, tests, and documentation, then continue the original goal.

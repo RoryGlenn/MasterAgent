@@ -127,6 +127,8 @@ the request JSON as approval.
 ## Incident handling
 
 - Stop the scheduled workflow or disable the connector gate.
+- Preserve the occurrence artifact, fingerprint, claim generation, exact
+  approval request, result reservation, and registration configuration.
 - Preserve plan, approval, audit database/export, and explicit retained evidence.
 - Verify the audit chain.
 - Re-read affected provider resources independently.
@@ -148,7 +150,15 @@ the request JSON as approval.
 - Access tokens should be short-lived.
 - Token-file mode rejects group/world-readable files and expired tokens.
 - Approval TTLs should be minutes, not days.
-- Recurring execution is disabled; do not install or repair scheduler locks.
+- Recurring registrations are disabled by default. When operating an explicitly
+  reviewed registration, use one scheduler host and the pinned roots from the
+  occurrence. Never copy the claim database to a second active host.
+- Use `recurring-recover` only for a recorded certified pre-effect failure. Use
+  `recurring-reconcile` for an expired running lease; status `indeterminate`
+  requires connector-specific reconciliation and must not be force-retried.
+- Use `recurring-cancel` with the inspected exact fingerprint for pending work.
+  An active attempt is fenced off and becomes indeterminate; investigate it as
+  a possible in-flight provider effect.
 
 Preview an owner-controlled retained-evidence root before explicitly applying
 expiration. On POSIX, for example:

@@ -641,22 +641,41 @@ repair cannot move a manifest from an active child-first publication.
 
 ### Recurring runner
 
-Recurring workflows are immutable registrations with:
+Recurring workflows use a versioned `master-agent/recurring-occurrence@1`
+artifact for exactly one immutable plan and canonical scheduled instant. A
+schedule determines eligibility only; it grants no capability, target,
+recipient, credential, or approval.
+
+The local binder exclusively publishes beneath a pre-existing private pinned
+root and atomically registers the exact artifact digest in a separately trusted
+SQLite claim store. A self-contained digest is never authentication. The
+occurrence binds:
 
 - a built-in workflow kind;
-- timezone-aware schedule;
-- maximum lateness;
+- registration generation and referenced-config digests;
+- canonical UTC instant, IANA timezone, offset, fold, tzdata digest, maximum
+  lateness, latest-only catch-up, and approval-resume deadline;
 - delivery mode;
-- capability allowlist;
-- recipient allowlist;
-- canonical-source allowlist;
-- persistent occurrence state;
-- a per-workflow lock.
+- exact capability, recipient, canonical-source, action, target, plan, runtime,
+  provider-principal/scope, plugin/capsule, and filesystem identities;
+- a strict typed non-secret `ApprovalRunInvocation`; and
+- one occurrence execution key that namespaces every provider write/send and
+  every create-only local output name while reads remain fresh.
 
-Built-in recurring definitions can be inspected for due state, but execution is
-disabled. Weekly-status and communication-context plans can be generated for
-review; their legacy direct execution/package commands are not routable until
-they share the immutable manifest and descriptor-pinned runtime boundary.
+Apply performs pre-secret authentication and structural validation, atomically
+reserves the occurrence, then lets the existing applied-run path select secrets
+and attest principals/scopes. A monotonically increasing generation plus random
+claim token is rechecked immediately before every provider effect. Approval
+waits release the lease into an occurrence-bound `approval_blocked` state; an
+exact approval request resumes the same occurrence with a new generation.
+
+Expired attempts reconcile from occurrence-keyed audit/idempotency state. Only
+certified pre-effect or independently reusable completed effects become
+recoverable; pending, conflicting, or indeterminate effects remain blocked.
+The claim store guarantees one active fenced attempt on one supported host, not
+distributed transactions or exactly-once provider effects. Legacy direct
+`weekly-status`, `communication-context`, and workflow-name recurring execution
+remain fail closed.
 
 ## Trust boundary
 

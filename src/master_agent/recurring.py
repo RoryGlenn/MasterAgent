@@ -29,6 +29,7 @@ class WorkflowKind(StrEnum):
 
     WEEKLY_STATUS_PACKAGE = "weekly_status_package"
     COMMUNICATION_CONTEXT_PACKAGE = "communication_context_package"
+    WEEKLY_OPERATING_REVIEW = "weekly_operating_review"
 
 
 class DeliveryMode(StrEnum):
@@ -36,6 +37,20 @@ class DeliveryMode(StrEnum):
 
     LOCAL_ONLY = "local_only"
     DRAFT_ONLY = "draft_only"
+
+
+class DstFoldPolicy(StrEnum):
+    """Explicit handling for a weekly time repeated by a DST transition."""
+
+    REJECT = "reject"
+    FIRST = "first"
+    SECOND = "second"
+
+
+class CatchUpPolicy(StrEnum):
+    """Bounded recurring catch-up behavior."""
+
+    LATEST_ONLY = "latest_only"
 
 
 class ClaimStatus(StrEnum):
@@ -48,6 +63,21 @@ class ClaimStatus(StrEnum):
     RECOVERABLE = "recoverable"
 
 
+class OccurrenceStatus(StrEnum):
+    """Exact-bound occurrence lifecycle."""
+
+    BOUND = "bound"
+    RUNNING = "running"
+    APPROVAL_BLOCKED = "approval_blocked"
+    SUCCEEDED = "succeeded"
+    FAILED_PRE_EFFECT = "failed_pre_effect"
+    RECOVERABLE = "recoverable"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    INDETERMINATE = "indeterminate"
+    REVOKED = "revoked"
+
+
 @dataclass(frozen=True, slots=True)
 class WeeklySchedule:
     """Fixed weekly schedule in an IANA timezone."""
@@ -57,6 +87,7 @@ class WeeklySchedule:
     minute: int
     timezone: str
     max_lateness_minutes: int = 1440
+    fold_policy: DstFoldPolicy = DstFoldPolicy.REJECT
 
     def __post_init__(self) -> None:
         if not 0 <= self.weekday <= 6:
@@ -67,6 +98,8 @@ class WeeklySchedule:
             raise ConfigurationError("minute must be 0 through 59")
         if self.max_lateness_minutes < 0:
             raise ConfigurationError("max_lateness_minutes must not be negative")
+        if not isinstance(self.fold_policy, DstFoldPolicy):
+            raise ConfigurationError("DST fold policy is invalid")
         try:
             ZoneInfo(self.timezone)
         except ZoneInfoNotFoundError as error:
@@ -87,11 +120,43 @@ class WeeklySchedule:
             candidate_date.day,
             self.hour,
             self.minute,
-            tzinfo=zone,
-        )
-        if candidate > local:
+            tzinfo=UTC,
+        ).replace(tzinfo=None)
+        selected = self._resolve_local(candidate, zone)
+        if selected > now.astimezone(UTC):
             candidate -= timedelta(days=7)
-        return candidate.astimezone(UTC)
+            selected = self._resolve_local(candidate, zone)
+        return selected
+
+    def resolve_occurrence(self, local: datetime) -> datetime:
+        """Resolve one explicit local wall time under the bound DST policy."""
+
+        if local.tzinfo is not None:
+            raise ConfigurationError("recurring occurrence must be a local wall time")
+        return self._resolve_local(local, ZoneInfo(self.timezone))
+
+    def _resolve_local(self, local: datetime, zone: ZoneInfo) -> datetime:
+        candidates: list[tuple[int, datetime]] = []
+        for fold in (0, 1):
+            candidate = local.replace(tzinfo=zone, fold=fold)
+            instant = candidate.astimezone(UTC)
+            round_trip = instant.astimezone(zone)
+            if round_trip.replace(tzinfo=None) == local and round_trip.fold == fold:
+                candidates.append((fold, instant))
+        unique = tuple(dict.fromkeys(instant for _fold, instant in candidates))
+        if not unique:
+            raise ConfigurationError("recurring local time does not exist in its zone")
+        if len(unique) == 1:
+            return unique[0]
+        if self.fold_policy is DstFoldPolicy.REJECT:
+            raise ConfigurationError(
+                "recurring local time is ambiguous and requires a fold policy"
+            )
+        selected_fold = 0 if self.fold_policy is DstFoldPolicy.FIRST else 1
+        for fold, instant in candidates:
+            if fold == selected_fold:
+                return instant
+        raise ConfigurationError("recurring DST fold policy could not be satisfied")
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +176,10 @@ class RegisteredWorkflow:
     allowed_capabilities: tuple[str, ...]
     allowed_recipients: tuple[str, ...]
     canonical_sources: tuple[str, ...]
+    generation: int = 1
+    revoked: bool = False
+    catch_up_policy: CatchUpPolicy = CatchUpPolicy.LATEST_ONLY
+    approval_resume_minutes: int = 1440
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +189,7 @@ class RecurringConfig:
     state_database: Path
     lock_dir: Path
     workflows: Mapping[str, RegisteredWorkflow]
+    occurrence_root: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "workflows", MappingProxyType(dict(self.workflows)))
@@ -135,12 +205,16 @@ class RecurringConfig:
             raise ConfigurationError(
                 f"recurring configuration not found: {path}"
             ) from error
-        # Runtime outputs are deliberately relative to the operator's current
-        # working directory, including when safe defaults come from a wheel.
-        base = Path.cwd().resolve()
+        # Resolve once against the trusted configuration source. Apply-time CWD
+        # must never change a recurring security boundary.
+        base = Path(str(path)).expanduser().resolve(strict=False).parent
         scheduler = _table(raw, "scheduler")
         state_database = _resolve(base, _required(scheduler, "state_database"))
         lock_dir = _resolve(base, _required(scheduler, "lock_dir"))
+        occurrence_root_value = str(scheduler.get("occurrence_root", "")).strip()
+        occurrence_root = (
+            _resolve(base, occurrence_root_value) if occurrence_root_value else None
+        )
         raw_workflows = _table(raw, "workflows")
         workflows: dict[str, RegisteredWorkflow] = {}
         for name, raw_value in raw_workflows.items():
@@ -178,6 +252,12 @@ class RecurringConfig:
                         "max_lateness_minutes",
                         1440,
                     ),
+                    fold_policy=_enum(
+                        value,
+                        "dst_fold",
+                        DstFoldPolicy,
+                        DstFoldPolicy.REJECT,
+                    ),
                 ),
                 delivery_mode=delivery_mode,
                 output_dir=_resolve(base, _required(value, "output_dir")),
@@ -202,11 +282,25 @@ class RecurringConfig:
                 allowed_capabilities=allowed_capabilities,
                 allowed_recipients=_string_list(value, "allowed_recipients"),
                 canonical_sources=canonical_sources,
+                generation=_positive_int(value, "generation", 1),
+                revoked=_strict_bool(value, "revoked", default=False),
+                catch_up_policy=_enum(
+                    value,
+                    "catch_up_policy",
+                    CatchUpPolicy,
+                    CatchUpPolicy.LATEST_ONLY,
+                ),
+                approval_resume_minutes=_positive_int(
+                    value,
+                    "approval_resume_minutes",
+                    1440,
+                ),
             )
         return cls(
             state_database=state_database,
             lock_dir=lock_dir,
             workflows=workflows,
+            occurrence_root=occurrence_root,
         )
 
 
@@ -299,6 +393,440 @@ class RecurringStateStore:
                 (name, scheduled_at.isoformat()),
             ).fetchone()
         return str(row[0]) if row else None
+
+    def register_occurrence_artifact(
+        self,
+        *,
+        workflow_name: str,
+        scheduled_at: datetime,
+        artifact_fingerprint: str,
+        artifact_sha256: str,
+        registration_digest: str,
+        execution_key: str,
+        resume_deadline: datetime,
+    ) -> None:
+        """Atomically authenticate one locally published occurrence artifact."""
+
+        self._ensure_initialized()
+        values = (
+            workflow_name,
+            scheduled_at.astimezone(UTC).isoformat(),
+            artifact_fingerprint,
+            artifact_sha256,
+            registration_digest,
+            execution_key,
+            str(OccurrenceStatus.BOUND),
+            resume_deadline.astimezone(UTC).isoformat(),
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT artifact_fingerprint, artifact_sha256,
+                       registration_digest, execution_key, resume_deadline
+                FROM recurring_occurrences
+                WHERE workflow_name = ? AND scheduled_at = ?
+                """,
+                values[:2],
+            ).fetchone()
+            if existing is not None:
+                if tuple(str(item) for item in existing) == values[2:6] + values[7:]:
+                    return
+                raise ConfigurationError(
+                    "a different recurring artifact is already registered for "
+                    "this occurrence"
+                )
+            connection.execute(
+                """
+                INSERT INTO recurring_occurrences (
+                    workflow_name, scheduled_at, artifact_fingerprint,
+                    artifact_sha256, registration_digest, execution_key,
+                    status, claim_generation, claim_token, lease_expires_at,
+                    approval_request_fingerprint, resume_deadline, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, NULL)
+                """,
+                values,
+            )
+
+    def authenticate_occurrence_artifact(
+        self,
+        *,
+        workflow_name: str,
+        scheduled_at: datetime,
+        artifact_fingerprint: str,
+        artifact_sha256: str,
+        registration_digest: str,
+        execution_key: str,
+    ) -> OccurrenceStatus:
+        """Verify one artifact against separately trusted local state."""
+
+        self._ensure_initialized()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT artifact_fingerprint, artifact_sha256,
+                       registration_digest, execution_key, status
+                FROM recurring_occurrences
+                WHERE workflow_name = ? AND scheduled_at = ?
+                """,
+                (workflow_name, scheduled_at.astimezone(UTC).isoformat()),
+            ).fetchone()
+        if row is None:
+            raise ConfigurationError(
+                "recurring artifact is not registered in trusted local state"
+            )
+        expected = (
+            artifact_fingerprint,
+            artifact_sha256,
+            registration_digest,
+            execution_key,
+        )
+        if tuple(str(item) for item in row[:4]) != expected:
+            raise ConfigurationError("recurring artifact authentication changed")
+        try:
+            return OccurrenceStatus(str(row[4]))
+        except ValueError as error:
+            raise ConfigurationError("recurring occurrence state is invalid") from error
+
+    def reserve_occurrence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        started_at: datetime,
+    ) -> tuple[int, UUID]:
+        """Reserve one bound occurrence and return its generation and token."""
+
+        self._ensure_initialized()
+        token = uuid4()
+        current = started_at.astimezone(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, claim_generation = claim_generation + 1,
+                    claim_token = ?, lease_expires_at = ?, finished_at = NULL
+                WHERE artifact_fingerprint = ? AND status IN (?, ?)
+                  AND resume_deadline >= ?
+                """,
+                (
+                    str(OccurrenceStatus.RUNNING),
+                    str(token),
+                    (current + self._lease_duration).isoformat(),
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.BOUND),
+                    str(OccurrenceStatus.RECOVERABLE),
+                    current.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConfigurationError(
+                    "recurring occurrence is not eligible for reservation"
+                )
+            row = connection.execute(
+                "SELECT claim_generation FROM recurring_occurrences "
+                "WHERE artifact_fingerprint = ?",
+                (artifact_fingerprint,),
+            ).fetchone()
+        if row is None:  # pragma: no cover - transaction invariant.
+            raise RuntimeError("reserved recurring occurrence disappeared")
+        return int(row[0]), token
+
+    def mark_occurrence_recoverable(
+        self,
+        *,
+        artifact_fingerprint: str,
+    ) -> None:
+        """Apply an explicit reviewed transition for a pre-effect retry."""
+
+        self._ensure_initialized()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, approval_request_fingerprint = NULL
+                WHERE artifact_fingerprint = ? AND status = ?
+                """,
+                (
+                    str(OccurrenceStatus.RECOVERABLE),
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.FAILED_PRE_EFFECT),
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ConfigurationError(
+                "only a certified failed-pre-effect occurrence can be recovered"
+            )
+
+    def reconcile_expired_occurrence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        status: OccurrenceStatus,
+        now: datetime | None = None,
+    ) -> None:
+        """Transition one expired running lease after exact-record review."""
+
+        if status not in {
+            OccurrenceStatus.RECOVERABLE,
+            OccurrenceStatus.INDETERMINATE,
+        }:
+            raise ValueError("unsupported recurring reconciliation state")
+        self._ensure_initialized()
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, claim_token = NULL, lease_expires_at = NULL,
+                    finished_at = ?
+                WHERE artifact_fingerprint = ? AND status = ?
+                  AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+                """,
+                (
+                    str(status),
+                    current.isoformat(),
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.RUNNING),
+                    current.isoformat(),
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ConfigurationError(
+                "recurring occurrence has no expired running claim to reconcile"
+            )
+
+    def cancel_occurrence(self, *, artifact_fingerprint: str) -> OccurrenceStatus:
+        """Cancel pending work or conservatively fence an active attempt."""
+
+        self._ensure_initialized()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM recurring_occurrences "
+                "WHERE artifact_fingerprint = ?",
+                (artifact_fingerprint,),
+            ).fetchone()
+            if row is None:
+                raise ConfigurationError("recurring occurrence is not registered")
+            current = OccurrenceStatus(str(row[0]))
+            if current in {
+                OccurrenceStatus.SUCCEEDED,
+                OccurrenceStatus.INDETERMINATE,
+                OccurrenceStatus.REVOKED,
+                OccurrenceStatus.CANCELLED,
+            }:
+                raise ConfigurationError(
+                    "completed or uncertain recurring occurrence cannot be cancelled"
+                )
+            selected = (
+                OccurrenceStatus.INDETERMINATE
+                if current is OccurrenceStatus.RUNNING
+                else OccurrenceStatus.CANCELLED
+            )
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, claim_token = NULL, lease_expires_at = NULL,
+                    finished_at = ?
+                WHERE artifact_fingerprint = ? AND status = ?
+                """,
+                (
+                    str(selected),
+                    datetime.now(UTC).isoformat(),
+                    artifact_fingerprint,
+                    str(current),
+                ),
+            )
+            if cursor.rowcount != 1:  # pragma: no cover - write-lock invariant.
+                raise ConfigurationError("recurring occurrence changed during cancel")
+        return selected
+
+    def validate_occurrence_fence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        claim_generation: int,
+        claim_token: UUID,
+        now: datetime | None = None,
+    ) -> None:
+        """Fail unless the caller still owns the exact unexpired fence."""
+
+        self._ensure_initialized()
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT status, claim_generation, claim_token, lease_expires_at
+                FROM recurring_occurrences WHERE artifact_fingerprint = ?
+                """,
+                (artifact_fingerprint,),
+            ).fetchone()
+        if (
+            row is None
+            or str(row[0]) != str(OccurrenceStatus.RUNNING)
+            or int(row[1]) != claim_generation
+            or str(row[2]) != str(claim_token)
+            or row[3] is None
+            or datetime.fromisoformat(str(row[3])) <= current
+        ):
+            raise ConfigurationError("recurring occurrence claim fence was lost")
+
+    def renew_occurrence_fence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        claim_generation: int,
+        claim_token: UUID,
+        now: datetime | None = None,
+    ) -> bool:
+        """Renew only the exact current occurrence fence."""
+
+        self._ensure_initialized()
+        current = (now or datetime.now(UTC)).astimezone(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences SET lease_expires_at = ?
+                WHERE artifact_fingerprint = ? AND status = ?
+                  AND claim_generation = ? AND claim_token = ?
+                  AND lease_expires_at IS NOT NULL AND lease_expires_at > ?
+                """,
+                (
+                    (current + self._lease_duration).isoformat(),
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.RUNNING),
+                    claim_generation,
+                    str(claim_token),
+                    current.isoformat(),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def block_occurrence_for_approval(
+        self,
+        *,
+        artifact_fingerprint: str,
+        claim_generation: int,
+        claim_token: UUID,
+        request_fingerprint: str,
+    ) -> None:
+        """Release the lease into one durable exact approval-blocked state."""
+
+        self._transition_running_occurrence(
+            artifact_fingerprint=artifact_fingerprint,
+            claim_generation=claim_generation,
+            claim_token=claim_token,
+            status=OccurrenceStatus.APPROVAL_BLOCKED,
+            request_fingerprint=request_fingerprint,
+        )
+
+    def resume_approval_blocked_occurrence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        prior_generation: int,
+        request_fingerprint: str,
+        started_at: datetime,
+    ) -> tuple[int, UUID]:
+        """Atomically reclaim the same occurrence for one exact approval resume."""
+
+        self._ensure_initialized()
+        token = uuid4()
+        current = started_at.astimezone(UTC)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, claim_generation = claim_generation + 1,
+                    claim_token = ?, lease_expires_at = ?, finished_at = NULL
+                WHERE artifact_fingerprint = ? AND status = ?
+                  AND claim_generation = ?
+                  AND approval_request_fingerprint = ?
+                  AND resume_deadline >= ?
+                """,
+                (
+                    str(OccurrenceStatus.RUNNING),
+                    str(token),
+                    (current + self._lease_duration).isoformat(),
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.APPROVAL_BLOCKED),
+                    prior_generation,
+                    request_fingerprint,
+                    current.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConfigurationError(
+                    "recurring approval resume is stale, expired, or changed"
+                )
+        return prior_generation + 1, token
+
+    def finalize_occurrence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        claim_generation: int,
+        claim_token: UUID,
+        status: OccurrenceStatus,
+        finished_at: datetime | None = None,
+    ) -> None:
+        """Finalize one currently fenced occurrence."""
+
+        if status not in {
+            OccurrenceStatus.SUCCEEDED,
+            OccurrenceStatus.FAILED_PRE_EFFECT,
+            OccurrenceStatus.INDETERMINATE,
+            OccurrenceStatus.REVOKED,
+        }:
+            raise ValueError("unsupported recurring occurrence terminal state")
+        self._transition_running_occurrence(
+            artifact_fingerprint=artifact_fingerprint,
+            claim_generation=claim_generation,
+            claim_token=claim_token,
+            status=status,
+            finished_at=finished_at or datetime.now(UTC),
+        )
+
+    def _transition_running_occurrence(
+        self,
+        *,
+        artifact_fingerprint: str,
+        claim_generation: int,
+        claim_token: UUID,
+        status: OccurrenceStatus,
+        request_fingerprint: str | None = None,
+        finished_at: datetime | None = None,
+    ) -> None:
+        self._ensure_initialized()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE recurring_occurrences
+                SET status = ?, claim_token = NULL, lease_expires_at = NULL,
+                    approval_request_fingerprint = ?, finished_at = ?
+                WHERE artifact_fingerprint = ? AND status = ?
+                  AND claim_generation = ? AND claim_token = ?
+                """,
+                (
+                    str(status),
+                    request_fingerprint,
+                    finished_at.astimezone(UTC).isoformat()
+                    if finished_at is not None
+                    else None,
+                    artifact_fingerprint,
+                    str(OccurrenceStatus.RUNNING),
+                    claim_generation,
+                    str(claim_token),
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ConfigurationError("recurring occurrence claim fence was lost")
 
     def claim(
         self,
@@ -566,6 +1094,26 @@ class RecurringStateStore:
                     "recurring state contains duplicate scheduled occurrences; "
                     "review and repair it before upgrading"
                 ) from error
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recurring_occurrences (
+                    workflow_name TEXT NOT NULL,
+                    scheduled_at TEXT NOT NULL,
+                    artifact_fingerprint TEXT NOT NULL UNIQUE,
+                    artifact_sha256 TEXT NOT NULL,
+                    registration_digest TEXT NOT NULL,
+                    execution_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    claim_generation INTEGER NOT NULL DEFAULT 0,
+                    claim_token TEXT,
+                    lease_expires_at TEXT,
+                    approval_request_fingerprint TEXT,
+                    resume_deadline TEXT NOT NULL,
+                    finished_at TEXT,
+                    PRIMARY KEY (workflow_name, scheduled_at)
+                )
+                """
+            )
 
     def _ensure_initialized(self) -> None:
         """Create scheduler state only when state is read or written."""
@@ -816,6 +1364,28 @@ def _int(value: Mapping[str, Any], key: str, default: int) -> int:
         return int(item)
     except (TypeError, ValueError) as error:
         raise ConfigurationError(f"{key} must be an integer") from error
+
+
+def _positive_int(value: Mapping[str, Any], key: str, default: int) -> int:
+    item = _int(value, key, default)
+    if item <= 0:
+        raise ConfigurationError(f"{key} must be positive")
+    return item
+
+
+def _enum(
+    value: Mapping[str, Any],
+    key: str,
+    enum_type: type[StrEnum],
+    default: StrEnum,
+) -> Any:
+    raw = value.get(key, str(default))
+    if not isinstance(raw, str):
+        raise ConfigurationError(f"{key} must be a string")
+    try:
+        return enum_type(raw)
+    except ValueError as error:
+        raise ConfigurationError(f"{key} is unsupported") from error
 
 
 def _string_list(value: Mapping[str, Any], key: str) -> tuple[str, ...]:

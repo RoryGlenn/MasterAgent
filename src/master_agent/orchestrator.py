@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
@@ -223,6 +223,7 @@ class WorkflowOrchestrator:
         audit: AuditLog,
         capabilities: CapabilityCatalog | None = None,
         governance: GovernanceProfile | None = None,
+        pre_effect_guard: Callable[[AgentAction], None] | None = None,
     ) -> None:
         self._policy = policy
         self._sources = sources
@@ -230,6 +231,7 @@ class WorkflowOrchestrator:
         self._audit = audit
         self._capabilities = capabilities
         self._governance = governance
+        self._pre_effect_guard = pre_effect_guard
 
     def run(
         self,
@@ -712,6 +714,11 @@ class WorkflowOrchestrator:
                     claim_token = claim.token
                     if claim_token is None:  # pragma: no cover - invariant guard.
                         raise RuntimeError("idempotency claim omitted its token")
+                if _uses_idempotency(action) and self._pre_effect_guard is not None:
+                    # This is deliberately the last recurring boundary before
+                    # provider dispatch. Losing the occurrence lease after this
+                    # point is an indeterminate effect, never an automatic retry.
+                    self._pre_effect_guard(action)
                 with activate_http_action_budget(http_budget):
                     result = connector.execute(action)
                     if not isinstance(result, ExecutionResult):

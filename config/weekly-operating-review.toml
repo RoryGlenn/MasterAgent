@@ -1,0 +1,16 @@
+[project]
+name = "Example Project"
+
+[jira]
+project_id = "EXAMPLE"
+jql = "project = EXAMPLE ORDER BY priority DESC, updated DESC"
+limit = 100
+
+[github]
+owner = "example-owner"
+repository = "example-repository"
+state = "open"
+limit = 50
+
+[confluence]
+page_id = "123456789"

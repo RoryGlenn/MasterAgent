@@ -1,23 +1,61 @@
-# Registration/status data only. recurring-run is disabled until exact
-# target/config/source and runtime-path bindings share one execution manifest.
+# Exact-bound recurring execution remains disabled until an operator creates
+# the private roots, selects stable provider IDs, and binds one occurrence.
 [scheduler]
-state_database = ".master-agent/recurring.sqlite3"
-lock_dir = ".master-agent/recurring-locks"
+state_database = "../.master-agent/recurring-state/recurring.sqlite3"
+lock_dir = "../.master-agent/recurring-locks"
+occurrence_root = "../.master-agent/recurring-occurrences"
+
+[workflows.weekly_operating_review]
+enabled = false
+revoked = false
+generation = 1
+kind = "weekly_operating_review"
+delivery_mode = "local_only"
+weekday = 0 # Monday
+hour = 9
+minute = 0
+timezone = "America/New_York"
+dst_fold = "reject"
+max_lateness_minutes = 240
+catch_up_policy = "latest_only"
+approval_resume_minutes = 1440
+output_dir = "../.master-agent/recurring/weekly-operating-review"
+integration_config = "integrations.toml"
+workflow_config = "weekly-operating-review.toml"
+identity_config = "identities.toml"
+retention_config = "retention.toml"
+allowed_capabilities = [
+  "jira.issue.search",
+  "github.pull_request.search",
+  "confluence.page.read",
+  "powerpoint.presentation.generate",
+]
+allowed_recipients = []
+canonical_sources = [
+  "jira://EXAMPLE",
+  "github://example-owner/example-repository",
+  "confluence://123456789",
+]
 
 [workflows.weekly_status]
 enabled = false
+revoked = false
+generation = 1
 kind = "weekly_status_package"
 delivery_mode = "local_only"
 weekday = 3 # Thursday
 hour = 16
 minute = 0
 timezone = "America/New_York"
+dst_fold = "reject"
 max_lateness_minutes = 1440
-output_dir = ".master-agent/recurring/weekly-status"
-integration_config = "config/integrations.toml"
-workflow_config = "config/weekly-status.toml"
-identity_config = "config/identities.toml"
-retention_config = "config/retention.toml"
+catch_up_policy = "latest_only"
+approval_resume_minutes = 1440
+output_dir = "../.master-agent/recurring/weekly-status"
+integration_config = "integrations.toml"
+workflow_config = "weekly-status.toml"
+identity_config = "identities.toml"
+retention_config = "retention.toml"
 allowed_capabilities = [
   "jira.issue.search",
   "bitbucket.pull_request.search",
@@ -33,18 +71,23 @@ canonical_sources = [
 
 [workflows.communication_context]
 enabled = false
+revoked = false
+generation = 1
 kind = "communication_context_package"
 delivery_mode = "draft_only"
 weekday = 0 # Monday
 hour = 9
 minute = 0
 timezone = "America/New_York"
+dst_fold = "reject"
 max_lateness_minutes = 240
-output_dir = ".master-agent/recurring/communication-context"
-integration_config = "config/integrations.toml"
-workflow_config = "config/communication-context.toml"
-identity_config = "config/identities.toml"
-retention_config = "config/retention.toml"
+catch_up_policy = "latest_only"
+approval_resume_minutes = 1440
+output_dir = "../.master-agent/recurring/communication-context"
+integration_config = "integrations.toml"
+workflow_config = "communication-context.toml"
+identity_config = "identities.toml"
+retention_config = "retention.toml"
 allowed_capabilities = [
   "identity.person.resolve",
   "outlook.message.search",

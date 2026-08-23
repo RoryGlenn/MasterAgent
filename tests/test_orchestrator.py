@@ -1,6 +1,7 @@
 """Workflow orchestration tests."""
 
 import unittest
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,12 +11,16 @@ from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.connectors.mock import MockConnector
-from master_agent.errors import ValidationError
+from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import (
     ActionState,
+    AgentAction,
+    AuthoritySource,
     ChangePlan,
     ComplexityItem,
     ComplexityKind,
+    ResourceRef,
+    RiskLevel,
     SystemsAssessment,
 )
 from master_agent.orchestrator import WorkflowOrchestrator
@@ -126,17 +131,117 @@ class OrchestratorTests(unittest.TestCase):
             report = orchestrator.run(plan, approvals=(approval,), dry_run=True)
             self.assertTrue(report.successful)
 
+    def test_effect_guard_runs_immediately_before_connector_dispatch(self) -> None:
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            authenticator = HmacApprovalAuthenticator(
+                {
+                    "reviewer": ApprovalAuthority(
+                        key_id="reviewer",
+                        subject="Human Reviewer",
+                        issuer="master-agent.test",
+                        tenant="test-tenant",
+                        roles=("change-approver",),
+                        secret=b"effect-fence-test-secret-32-bytes!",
+                    )
+                }
+            )
+            jira = MockConnector(
+                "jira",
+                {"PROJECT-SPRINT": {"version": "7", "summary": "healthy"}},
+            )
+            guarded: list[str] = []
+
+            def reject_stale_claim(action: AgentAction) -> None:
+                guarded.append(action.capability)
+                self.assertEqual(
+                    jira.read(action.target),
+                    {"version": "7", "summary": "healthy"},
+                )
+                raise ConfigurationError("test occurrence fence was lost")
+
+            orchestrator = _orchestrator(
+                audit,
+                authenticator=authenticator,
+                pre_effect_guard=reject_stale_claim,
+                jira_connector=jira,
+            )
+            source = build_weekly_status_plan()
+            write = AgentAction(
+                capability="jira.issue.update",
+                target=ResourceRef(
+                    system="jira",
+                    resource_type="sprint",
+                    resource_id="PROJECT-SPRINT",
+                    expected_version="7",
+                ),
+                parameters={"summary": "changed"},
+                risk=RiskLevel.REVERSIBLE_WRITE,
+                authority_source=AuthoritySource.DIRECT_USER,
+                requires_approval=True,
+                idempotency_key="effect-fence-test",
+                justification="Prove the final occurrence fence blocks dispatch.",
+            )
+            unbound = replace(
+                source,
+                actions=(write,),
+                systems_assessment=None,
+                systems_decision=None,
+            )
+            plan = bind_systems_governance(
+                unbound,
+                SystemsAssessment(
+                    desired_outcome=unbound.goal,
+                    current_behavior="the sprint summary has not changed",
+                    constraint="the write must keep its occurrence fence",
+                    stocks=("the sprint record",),
+                    flows=("approved updates reach the sprint record",),
+                    feedback_loops=("verification confirms the final state",),
+                    delays=("approval precedes provider dispatch",),
+                    leverage_point="the orchestrator pre-effect boundary",
+                    simplest_intervention="reject the stale fenced write",
+                    success_metric="the provider receives no stale effect",
+                    failure_condition="the provider state changes after fence loss",
+                    unintended_consequences=("a duplicate provider effect",),
+                    removable_complexity=("the test guard",),
+                    alternatives_considered=("connector-specific fencing",),
+                    reversibility_strategy="retain the original provider state",
+                    low_risk=False,
+                    reversible=True,
+                    well_understood=True,
+                ),
+            )
+            now = datetime.now(UTC)
+            approval = authenticator.issue(
+                plan=plan,
+                approved_action_ids=(write.action_id,),
+                key_id="reviewer",
+                issued_at=now - timedelta(seconds=1),
+                expires_at=now + timedelta(minutes=5),
+            )
+
+            report = orchestrator.run(plan, approvals=(approval,), dry_run=False)
+
+            self.assertFalse(report.successful)
+            self.assertEqual(guarded, ["jira.issue.update"])
+            self.assertEqual(
+                jira.read(write.target),
+                {"version": "7", "summary": "healthy"},
+            )
+
 
 def _orchestrator(
     audit: AuditLog,
     *,
     authenticator: HmacApprovalAuthenticator | None = None,
+    pre_effect_guard: Callable[[AgentAction], None] | None = None,
+    jira_connector: MockConnector | None = None,
 ) -> WorkflowOrchestrator:
     registry = ConnectorRegistry()
     registry.register(
-        MockConnector(
-            "jira",
-            {"PROJECT-SPRINT": {"version": "7", "summary": "healthy"}},
+        jira_connector
+        or MockConnector(
+            "jira", {"PROJECT-SPRINT": {"version": "7", "summary": "healthy"}}
         )
     )
     registry.register(
@@ -162,6 +267,7 @@ def _orchestrator(
         sources=SourceOfTruthRegistry.from_toml(ROOT / "config/sources_of_truth.toml"),
         connectors=registry,
         audit=audit,
+        pre_effect_guard=pre_effect_guard,
     )
 
 
