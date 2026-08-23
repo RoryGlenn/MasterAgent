@@ -66,6 +66,9 @@ These are current-state documents.
   residual risks, and explicit prohibitions.
 - [Implementation roadmap and completion status](implementation-roadmap.md) —
   current delivery status plus clearly labeled remaining deployment work.
+- [Tier-1 Engineering Work Item Review plan](tier-1-engineering-work-item-review-plan.md)
+  — proposed first native-connector employee workflow for #171; this is planned
+  behavior and managed-workstation success criteria, not a current release claim.
 
 ## Delivery-phase contracts
 
@@ -113,6 +116,9 @@ runtime surfaces. They are not a suggestion that earlier phases are obsolete.
 - Current-state guides describe the accepted current system.
 - `implementation-roadmap.md` mixes completed status with explicitly labeled
   planned deployment work.
+- `tier-1-engineering-work-item-review-plan.md` is a proposed workflow contract;
+  it must remain clearly labeled planned until implementation and pilot evidence
+  establish current behavior.
 - `semantic-index.md` is generated from `.ai/semantic-router.toml`.
 - `semantic-router-metrics.md`, archived specifications, and release history are
   evidence for named snapshots; do not rewrite them to resemble the present.
