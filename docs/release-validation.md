@@ -221,6 +221,10 @@ job, a queued job, or ARM hosted CI alone is not x64 certification evidence.
   reviews, signs, enables, routes, executes, independently replays, audits, and
   receipts a synthetic missing pure capability through the normal
   orchestrator.
+- The installed CLI acceptance flow separately previews, exact-digest selects,
+  promotes, authenticates, policy-routes, executes, updates, disables, and
+  revokes a synthetic imported capability. Shared authority subjects or roles
+  and routing of a disabled version fail closed.
 - Hosted jobs install Linux bubblewrap and test the isolated worker boundary.
 - Unpromoted, tampered, dependency-confused, deprecated, revoked,
   path-escaped, secret/file/network/process-seeking, resource-exhausting,

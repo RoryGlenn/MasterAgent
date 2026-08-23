@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0143-kirby-operator-lifecycle"
+title = "Complete the operator-facing Kirby capability lifecycle"
+status = "archived"
+github_issue = 143
+created = "2026-08-22"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-CAPABILITY-IMPORT-001"
+destination = "runtime/MA-CAPABILITY-IMPORT-001.md"
+source = "current/MA-CAPABILITY-IMPORT-001.md"
