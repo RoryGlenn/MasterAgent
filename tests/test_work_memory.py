@@ -166,6 +166,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "machine api.example.com login alice password supersecret123",
                     "machine api.example.com password supersecret123 login alice",
                     "default login alice password supersecret123",
+                    "mysql --user alice --password supersecret123",
                     (
                         "<server><username>alice</username><password>"
                         "supersecret123</password></server>"
@@ -196,6 +197,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "hvs." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
                     "hvb." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
                     "hvr." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
+                    "ya29." + "abcdefghijklmnopqrstuvwxyz012345",
                     "sntrys_" + "abcdefghijklmnopqrstuvwxyz012345",
                     "ops_" + "eyJabcdefghijklmnopqrstuvwxyz012345",
                     "dapi" + "0123456789abcdef0123456789abcdef",
