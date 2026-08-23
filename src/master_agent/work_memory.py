@@ -83,7 +83,7 @@ _WORK_MEMORY_STATE_TABLE_SQL = """
 _WORK_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#-]*\Z")
 _SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?:"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|"
     r"\b(?:proxy-)?authorization[\"']?\s*:\s*[\"']?\S+(?:\s+\S+)?|"
     r"\b(?:set-cookie|cookie)[\"']?\s*:\s*[\"']?\S+|"
     r"\b(?:auth|identitytoken|registrytoken)[\"']\s*:\s*[\"']\S+|"

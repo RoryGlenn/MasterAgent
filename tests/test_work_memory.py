@@ -175,6 +175,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "REDISCLI_AUTH=supersecret123",
                     "PRIVATE_" + "KEY=encoded-private-key-material",
                     "SSH_PRIVATE_" + "KEY=encoded-private-key-material",
+                    "-----BEGIN PGP PRIVATE " + "KEY BLOCK-----",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
