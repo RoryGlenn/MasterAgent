@@ -159,6 +159,10 @@ class WorkMemoryTests(unittest.TestCase):
                     "postgresql://alice:secret-password@db.example/app",
                     "https://alice:secret@example.com/path",
                     "machine api.example.com login alice password supersecret123",
+                    (
+                        "https://acct.blob.core.windows.net/c/b?"
+                        "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
+                    ),
                 ):
                     with (
                         self.subTest(credential=credential),
@@ -644,31 +648,47 @@ class WorkMemoryTests(unittest.TestCase):
             self.assertFalse((root / ".missing.sqlite3.master-agent.flock").exists())
 
     def test_cli_invalid_start_fields_do_not_create_state(self) -> None:
-        with private_temporary_directory() as directory:
-            root = Path(directory)
-            database = root / "missing.sqlite3"
-            stdout = StringIO()
-            stderr = StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = main(
-                    [
-                        "work-memory",
-                        "start",
-                        "--database",
-                        str(database),
-                        "--work-id",
-                        "bad id",
-                        "--issue",
-                        "#166",
-                        "--summary",
-                        "Start work.",
-                    ]
+        for work_id, summary, expected in (
+            ("bad id", "Start work.", "work ID is invalid"),
+            (
+                "issue-166",
+                (
+                    "https://acct.blob.core.windows.net/c/b?"
+                    "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
+                ),
+                "invalid or sensitive",
+            ),
+        ):
+            with (
+                self.subTest(work_id=work_id, summary=summary),
+                private_temporary_directory() as directory,
+            ):
+                root = Path(directory)
+                database = root / "missing.sqlite3"
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = main(
+                        [
+                            "work-memory",
+                            "start",
+                            "--database",
+                            str(database),
+                            "--work-id",
+                            work_id,
+                            "--issue",
+                            "#166",
+                            "--summary",
+                            summary,
+                        ]
+                    )
+                self.assertEqual(status, 1)
+                self.assertIn(expected, stderr.getvalue())
+                self.assertFalse(database.exists())
+                self.assertFalse((root / ".missing.sqlite3.master-agent.lock").exists())
+                self.assertFalse(
+                    (root / ".missing.sqlite3.master-agent.flock").exists()
                 )
-            self.assertEqual(status, 1)
-            self.assertIn("work ID is invalid", stderr.getvalue())
-            self.assertFalse(database.exists())
-            self.assertFalse((root / ".missing.sqlite3.master-agent.lock").exists())
-            self.assertFalse((root / ".missing.sqlite3.master-agent.flock").exists())
 
     def test_cli_refuses_output_aliases_for_journal_state(self) -> None:
         for output_name in (

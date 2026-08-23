@@ -86,6 +86,8 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"\b(?:proxy-)?authorization\s*:\s*\S+(?:\s+\S+)?|"
     r"\b(?:set-cookie|cookie)\s*:\s*\S+|"
     r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@|"
+    r"\bhttps?://\S*[?&](?:sig|signature|x-amz-(?:signature|credential)|"
+    r"x-goog-(?:signature|credential)|googleaccessid)=[^&#\s]+|"
     r"\bmachine\s+\S+\s+login\s+\S+\s+password\s+\S+|"
     r"\b(?:basic|digest|aws4-hmac-sha256)\s+[A-Za-z0-9+/=,_:-]{8,}|"
     r"\bbearer\s+\S+|"
