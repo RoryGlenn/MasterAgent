@@ -166,6 +166,10 @@ class WorkMemoryTests(unittest.TestCase):
                     "machine api.example.com login alice password supersecret123",
                     "machine api.example.com password supersecret123 login alice",
                     "default login alice password supersecret123",
+                    (
+                        "<server><username>alice</username><password>"
+                        "supersecret123</password></server>"
+                    ),
                     '{"access_token":"supersecret123456789"}',
                     '{"client_secret":"supersecret123456789"}',
                     '{"Authorization":"Bearer supersecret123456789"}',
