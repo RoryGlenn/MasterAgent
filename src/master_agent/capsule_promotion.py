@@ -82,15 +82,6 @@ class CapabilityPromotionService:
         for role, authority in authorities.items():
             if role not in authority.roles:
                 raise ConfigurationError("capsule promotion authority role drifted")
-            if str(selected_environment) not in authority.environments:
-                raise ConfigurationError(
-                    "capsule promotion authority "
-                    f"{role} is not valid in {selected_environment}"
-                )
-            if trust.authorities.get(authority.key_id) != authority:
-                raise ConfigurationError(
-                    f"capsule promotion authority {role} is not bound to the trust store"
-                )
         worker_sha256 = worker.identity_sha256
         if validator.worker_sha256 != worker_sha256:
             raise ConfigurationError(
@@ -108,6 +99,16 @@ class CapabilityPromotionService:
                 raise ConfigurationError(
                     "production capsule promotion requires live green controls: "
                     + "; ".join(readiness.errors)
+                )
+        for role, authority in authorities.items():
+            if str(selected_environment) not in authority.environments:
+                raise ConfigurationError(
+                    "capsule promotion authority "
+                    f"{role} is not valid in {selected_environment}"
+                )
+            if trust.authorities.get(authority.key_id) != authority:
+                raise ConfigurationError(
+                    f"capsule promotion authority {role} is not bound to the trust store"
                 )
         self._store = store
         self._trust = trust
