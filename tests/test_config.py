@@ -158,6 +158,30 @@ network_profile = "corporate"
 
         self.assertEqual(parsed.connector("github").network_profile.name, "corporate")
 
+    def test_builtin_direct_profile_cannot_be_redefined_as_a_proxy(self) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "network-profile.toml"
+            path.write_text(
+                """
+[network_profiles.direct]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "built-in direct network profile cannot be redefined",
+            ):
+                IntegrationConfig.from_toml(path)
+
     def test_windows_ca_target_is_lexical_until_native_capture(self) -> None:
         connector = ConnectorConfig(
             system="jira",

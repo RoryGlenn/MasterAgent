@@ -284,6 +284,9 @@ Provider networking is selected by a named, secret-free profile in
 `integrations.toml`. Omitting `network_profile` preserves direct networking.
 Direct mode ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, including
 credential-bearing values inherited from a shell or desktop session.
+The built-in `direct` name is reserved for that exact profile and cannot be
+redefined as a proxy or custom-CA profile; use another reviewed name for every
+managed-network route.
 
 For a managed network with a fixed HTTP CONNECT proxy and Transport Layer
 Security (TLS) inspection, declare one organization-reviewed profile and select
@@ -328,7 +331,9 @@ organization-managed integrations file; it is not a per-action proxy override.
 
 Offline `readiness` output reports the profile name, mode, whether a proxy and
 enterprise CA are configured, and whether the required credential references
-are available. It opens no network connection. For protected real-network
+are available. It also validates the selected proxy authority and captured CA
+configuration locally, so a nonempty but malformed ambient value is not marked
+network-ready. It opens no network connection. For protected real-network
 evidence, follow [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md#managed-network-profile-evidence).
 
 ## License and SBOM policy

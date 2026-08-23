@@ -35,6 +35,7 @@ from master_agent.errors import (
     ConnectorError,
     ConnectorHttpError,
     NetworkDnsError,
+    NetworkTimeoutError,
     NetworkTlsError,
     PolicyDeniedError,
     ProxyAuthenticationError,
@@ -111,6 +112,12 @@ def diagnose_connectivity_error(error: BaseException) -> ConnectivityDiagnostic:
             "tls_ca",
             "verify the selected enterprise CA bundle and provider TLS policy",
         )
+    if isinstance(error, (NetworkTimeoutError, TimeoutError)):
+        return ConnectivityDiagnostic(
+            "timeout",
+            "verify managed network reachability and retry within the action budget",
+            retryable=True,
+        )
     if isinstance(error, AuthenticationError):
         return ConnectivityDiagnostic(
             "provider_authentication",
@@ -131,12 +138,6 @@ def diagnose_connectivity_error(error: BaseException) -> ConnectivityDiagnostic:
         return ConnectivityDiagnostic(
             "policy",
             "verify organization policy and the selected network profile",
-        )
-    if isinstance(error, TimeoutError):
-        return ConnectivityDiagnostic(
-            "timeout",
-            "verify managed network reachability and retry within the action budget",
-            retryable=True,
         )
     return ConnectivityDiagnostic(
         "transport",
@@ -366,6 +367,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             self.sock = raw_socket
             try:
                 self._tunnel()  # type: ignore[attr-defined]
+            except TimeoutError:
+                raw_socket.close()
+                raise NetworkTimeoutError(
+                    "enterprise proxy CONNECT timed out"
+                ) from None
             except OSError as error:
                 raw_socket.close()
                 if "407" in str(error):
@@ -378,6 +384,9 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
                 raw_socket,
                 server_hostname=tls_hostname,
             )
+        except TimeoutError:
+            raw_socket.close()
+            raise NetworkTimeoutError("provider TLS negotiation timed out") from None
         except ssl.SSLError as error:
             raw_socket.close()
             raise NetworkTlsError(
@@ -546,6 +555,8 @@ class UrllibTransport:
                 raise NetworkTlsError(
                     "provider TLS identity or configured CA validation failed"
                 ) from error
+            if isinstance(error.reason, TimeoutError):
+                raise NetworkTimeoutError("network request timed out") from error
             if isinstance(error.reason, socket.gaierror):
                 raise NetworkDnsError(
                     f"network destination could not be resolved for {_safe_url(url)}"
@@ -554,9 +565,7 @@ class UrllibTransport:
                 f"network request failed for {_safe_url(url)}"
             ) from error
         except TimeoutError as error:
-            raise ConnectorHttpError(
-                f"network request timed out for {_safe_url(url)}"
-            ) from error
+            raise NetworkTimeoutError("network request timed out") from error
 
 
 class SafeHttpClient:
@@ -1145,6 +1154,11 @@ def _connect_public_address(
             candidate.connect(sockaddr)
             approved_address = ipaddress.ip_address(sockaddr[0])
             return candidate, approved_address
+        except TimeoutError as error:
+            candidate.close()
+            raise NetworkTimeoutError(
+                "network request timed out connecting to the provider"
+            ) from error
         except OSError as error:
             last_error = error
             candidate.close()
@@ -1228,6 +1242,11 @@ def _connect_proxy_address(
                 candidate.bind(source_address)
             candidate.connect(sockaddr)
             return candidate, ipaddress.ip_address(sockaddr[0])
+        except TimeoutError as error:
+            candidate.close()
+            raise NetworkTimeoutError(
+                "enterprise proxy connection timed out"
+            ) from error
         except OSError as error:
             last_error = error
             candidate.close()

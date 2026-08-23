@@ -89,6 +89,10 @@ class NetworkTlsError(ConnectorHttpError):
     """Raised when provider TLS identity or configured CA validation fails."""
 
 
+class NetworkTimeoutError(ConnectorHttpError):
+    """Raised when a governed provider or proxy operation times out."""
+
+
 class ProxyAuthenticationError(AuthenticationError):
     """Raised when an explicitly selected proxy rejects brokered credentials."""
 

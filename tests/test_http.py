@@ -13,6 +13,7 @@ from master_agent.errors import (
     ConfigurationError,
     ConnectorHttpError,
     NetworkDnsError,
+    NetworkTimeoutError,
     NetworkTlsError,
     ProxyAuthenticationError,
 )
@@ -501,6 +502,7 @@ class SafeHttpClientTests(unittest.TestCase):
         cases = (
             (NetworkDnsError("secret dns detail"), "dns"),
             (NetworkTlsError("secret tls detail"), "tls_ca"),
+            (NetworkTimeoutError("secret timeout detail"), "timeout"),
             (AuthenticationError("secret provider detail"), "provider_authentication"),
         )
         for error, category in cases:
@@ -508,6 +510,39 @@ class SafeHttpClientTests(unittest.TestCase):
                 rendered = diagnose_connectivity_error(error).to_dict()
                 self.assertEqual(rendered["category"], category)
                 self.assertNotIn("secret", str(rendered))
+
+    def test_provider_connect_timeout_retains_typed_diagnostic(self) -> None:
+        candidate = MagicMock()
+        candidate.connect.side_effect = TimeoutError("provider-secret-marker")
+        records = (
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 443),
+            ),
+        )
+
+        with (
+            patch("master_agent.http._public_address_records", return_value=records),
+            patch("master_agent.http.socket.socket", return_value=candidate),
+            self.assertRaises(NetworkTimeoutError) as raised,
+        ):
+            from master_agent.http import _connect_public_address
+
+            _connect_public_address(
+                "api.example.test",
+                443,
+                timeout=3.0,
+                source_address=None,
+            )
+
+        self.assertNotIn("provider-secret-marker", str(raised.exception))
+        self.assertEqual(
+            diagnose_connectivity_error(raised.exception).category, "timeout"
+        )
+        candidate.close.assert_called_once_with()
 
     def test_https_connection_uses_vetted_address_and_original_tls_hostname(
         self,

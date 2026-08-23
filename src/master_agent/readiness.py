@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from master_agent.audit import implemented_audit_sink
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
+from master_agent.errors import ConfigurationError
 from master_agent.governance import EnvironmentKind, GovernanceProfile
 from master_agent.identity import IdentityRegistry
 from master_agent.models import DataClassification, RiskLevel
@@ -221,6 +222,22 @@ def assess_readiness(
             for item in connector.configuration_errors(readiness_environ)
             if item not in missing_errors
         )
+        network_variables = frozenset(
+            connector.network_profile.required_environment_variables()
+        )
+        missing_network_environment = tuple(
+            variable
+            for variable in missing_environment
+            if variable in network_variables
+        )
+        network_errors: tuple[str, ...] = ()
+        if not missing_network_environment and not static_errors:
+            try:
+                connector.capture_execution_target(readiness_environ)
+            except ConfigurationError:
+                network_errors = (
+                    "selected network profile or enterprise CA bundle is invalid",
+                )
         attestation_error = (
             connector.principal_attestation_error() if not missing_environment else None
         )
@@ -228,6 +245,7 @@ def assess_readiness(
             dict.fromkeys(
                 (
                     *static_errors,
+                    *network_errors,
                     *((attestation_error,) if attestation_error is not None else ()),
                 )
             )
@@ -238,11 +256,7 @@ def assess_readiness(
                 "passed": not connector_errors,
                 "deployment": str(connector.deployment),
                 "credential_ready": not missing_environment,
-                "network_ready": not any(
-                    variable
-                    in connector.network_profile.required_environment_variables()
-                    for variable in missing_environment
-                ),
+                "network_ready": not missing_network_environment and not network_errors,
                 "network_profile": connector.network_profile.name,
                 "network_mode": str(connector.network_profile.mode),
                 "proxy_configured": connector.network_profile.mode.value != "direct",

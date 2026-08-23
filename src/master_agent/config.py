@@ -869,7 +869,12 @@ class IntegrationConfig:
                 raise ConfigurationError(
                     f"network profile config must be a table: {name}"
                 )
-            profiles[str(name)] = _parse_network_profile(str(name), value)
+            parsed_profile = _parse_network_profile(str(name), value)
+            if str(name) == "direct" and parsed_profile != _DIRECT_NETWORK_PROFILE:
+                raise ConfigurationError(
+                    "the built-in direct network profile cannot be redefined"
+                )
+            profiles[str(name)] = parsed_profile
 
         raw_connectors = raw.get("connectors", {})
         if not isinstance(raw_connectors, Mapping):

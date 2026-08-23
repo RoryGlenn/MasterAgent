@@ -244,6 +244,43 @@ network_profile = "corporate"
         self.assertTrue(connector_check["network_ready"])
         self.assertNotIn("proxy-secret-marker", str(report.to_dict()))
 
+    def test_readiness_rejects_malformed_ambient_proxy_without_network_access(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[network_profiles.managed-workstation]
+mode = "ambient_proxy"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "none"
+network_profile = "managed-workstation"
+""",
+                encoding="utf-8",
+            )
+            report = assess_readiness(
+                catalog=CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml"),
+                governance=GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
+                integrations=IntegrationConfig.from_toml(path),
+                environ={"HTTPS_PROXY": "https://user:secret@proxy.example:8443"},
+            )
+
+        connector_check = next(
+            check for check in report.checks if check["name"] == "connector:github"
+        )
+        self.assertFalse(connector_check["network_ready"])
+        self.assertFalse(connector_check["passed"])
+        self.assertNotIn("secret", str(report.to_dict()))
+        self.assertIn(
+            "selected network profile or enterprise CA bundle is invalid",
+            connector_check["errors"],
+        )
+
     def test_ordinary_readiness_does_not_require_provider_egress_policy(self) -> None:
         governance = replace(
             GovernanceProfile.from_toml(ROOT / "config/governance.toml"),
