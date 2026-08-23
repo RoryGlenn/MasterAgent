@@ -1,4 +1,5 @@
 include AGENTS.md CHANGELOG.md README.md .env.example LICENSE
+include .gitattributes .gitignore
 include THIRD_PARTY_NOTICES.md requirements-runtime.lock sbom.cdx.json
 recursive-include .ai *.md *.toml
 recursive-include .github/agents *.md
