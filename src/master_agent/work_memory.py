@@ -741,6 +741,7 @@ def _validate_work_id(value: str) -> str:
         or value != value.strip()
         or len(value.encode("utf-8")) > _MAX_WORK_ID_BYTES
         or _WORK_ID_PATTERN.fullmatch(value) is None
+        or _SENSITIVE_TEXT_PATTERN.search(value) is not None
     ):
         raise ValueError("work ID is invalid")
     return value

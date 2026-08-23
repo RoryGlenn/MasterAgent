@@ -171,6 +171,16 @@ class WorkMemoryTests(unittest.TestCase):
                     memory.show("issue-2").journal_event_count,
                     1,
                 )
+                with self.assertRaisesRegex(ValueError, "work ID is invalid"):
+                    memory.start(
+                        work_id="AKIA1234567890ABCDEF",
+                        issue="#credential",
+                        summary="Do not retain a credential-shaped work ID.",
+                    )
+                self.assertEqual(
+                    memory.show("issue-2").journal_event_count,
+                    1,
+                )
                 with self.assertRaisesRegex(ValueError, "invalid or sensitive"):
                     memory.record(
                         work_id="issue-2",
