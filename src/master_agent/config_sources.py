@@ -254,9 +254,7 @@ def _trusted_explicit_file(
                 require_private=False,
             )
         except FileNotFoundError as error:
-            raise ConfigurationError(
-                f"explicit configuration not found: {selected}"
-            ) from error
+            raise _configuration_not_found(selected, organization_trust) from error
         except (OSError, ValueError) as error:
             raise ConfigurationError(
                 "explicit configuration could not be opened safely"
@@ -285,9 +283,7 @@ def _trusted_explicit_file(
             )
         parent_before = parent.lstat()
     except FileNotFoundError as error:
-        raise ConfigurationError(
-            f"explicit configuration not found: {selected}"
-        ) from error
+        raise _configuration_not_found(selected, organization_trust) from error
 
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     directory_flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -329,9 +325,7 @@ def _trusted_explicit_file(
                 dir_fd=directory_fd,
             )
         except FileNotFoundError as error:
-            raise ConfigurationError(
-                f"explicit configuration not found: {selected}"
-            ) from error
+            raise _configuration_not_found(selected, organization_trust) from error
         except OSError as error:
             raise ConfigurationError(
                 "explicit configuration could not be opened safely"
@@ -385,6 +379,17 @@ def _trusted_explicit_file(
         if file_fd is not None:
             os.close(file_fd)
         os.close(directory_fd)
+
+
+def _configuration_not_found(
+    selected: Path,
+    organization_trust: OrganizationManagedFileTrust | None,
+) -> ConfigurationError:
+    """Keep managed-profile diagnostics free of administrator path metadata."""
+
+    if organization_trust is not None:
+        return ConfigurationError("organization-managed configuration was not found")
+    return ConfigurationError(f"explicit configuration not found: {selected}")
 
 
 def _validate_trusted_metadata(

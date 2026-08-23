@@ -24,6 +24,7 @@ from scripts.bootstrap_agent import (
     _run,
     _runtime_probe,
     _stable_file_identity,
+    _validate_posix_environment_permissions,
     _validate_windows_environment_permissions,
     bootstrap,
 )
@@ -407,6 +408,49 @@ class AgentBootstrapTests(unittest.TestCase):
                 files=(),
                 directories=(),
             )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission contract")
+    def test_root_owned_interpreter_still_rejects_shared_write_bits(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            environment = root / ".venv"
+            binary = environment / "bin"
+            site_packages = environment / "lib/python3.12/site-packages"
+            site_packages.mkdir(parents=True)
+            binary.mkdir(exist_ok=True)
+            command = binary / "master-agent"
+            command.write_bytes(b"launcher")
+            configuration = environment / "pyvenv.cfg"
+            configuration.write_text("version = 3.12.0\n", encoding="utf-8")
+            interpreter = root / "system-python"
+            interpreter.write_bytes(b"python")
+            for path in (environment, binary, site_packages):
+                path.chmod(0o700)
+            for path in (command, configuration, interpreter):
+                path.chmod(0o700)
+            actual_stat = Path.stat
+
+            def projected_stat(path: Path, *args: object, **kwargs: object) -> object:
+                observed = actual_stat(path, *args, **kwargs)
+                if path != interpreter:
+                    return observed
+                values = list(observed)
+                values[0] = stat.S_IFREG | 0o775
+                values[4] = 0
+                return os.stat_result(values)
+
+            with (
+                patch("pathlib.Path.stat", side_effect=projected_stat, autospec=True),
+                self.assertRaisesRegex(BootstrapError, "untrusted principal"),
+            ):
+                _validate_posix_environment_permissions(
+                    environment,
+                    environment_python=binary / "python",
+                    resolved_interpreter=interpreter,
+                    command=command,
+                    site_packages=site_packages,
+                    site_entries=(),
+                )
 
     def test_dependency_policy_change_prevents_environment_reuse(self) -> None:
         """The marker must match the currently declared dependency policy."""

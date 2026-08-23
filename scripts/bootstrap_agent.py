@@ -825,9 +825,7 @@ def _validate_posix_environment_permissions(
         ) from error
     if interpreter_entry.st_uid not in {0, os.geteuid()}:
         raise BootstrapError("managed interpreter owner is not trusted")
-    if interpreter_entry.st_uid == os.geteuid() and stat.S_IMODE(
-        interpreter_entry.st_mode
-    ) & (stat.S_IWGRP | stat.S_IWOTH):
+    if stat.S_IMODE(interpreter_entry.st_mode) & (stat.S_IWGRP | stat.S_IWOTH):
         raise BootstrapError(
             "managed interpreter grants write access to an untrusted principal"
         )

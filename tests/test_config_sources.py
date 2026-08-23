@@ -363,6 +363,40 @@ class PackagedConfigSnapshotTests(unittest.TestCase):
         )
         self.assertEqual(snapshot.trust_reason, "content-and-writer-bound")
 
+    def test_windows_managed_missing_configuration_redacts_selected_path(self) -> None:
+        from master_agent.platform_runtime.windows.filesystem import (
+            WindowsSecureFilesystemBackend,
+        )
+
+        trust = OrganizationManagedFileTrust(
+            sha256="a" * 64,
+            windows_sids=("S-1-5-21-1-2-3-4100",),
+        )
+        backend = Mock(spec=WindowsSecureFilesystemBackend)
+        managed = Mock(spec=WindowsSecureFilesystemBackend)
+        backend.for_organization_managed_configuration.return_value = managed
+        managed.read_restricted_file.side_effect = FileNotFoundError("missing")
+        selected = Path("/Company/secret-layout/policy.toml")
+        windows_os = Mock()
+        windows_os.name = "nt"
+        with (
+            patch("master_agent.config_sources.os", windows_os),
+            patch(
+                "master_agent.config_sources.get_secure_filesystem_backend",
+                return_value=backend,
+            ),
+            patch("master_agent.config_sources.require_platform_contract"),
+            self.assertRaises(ConfigurationError) as raised,
+        ):
+            resolve_config_source(
+                selected,
+                "policy.toml",
+                organization_trust=trust,
+            )
+
+        self.assertIn("organization-managed configuration", str(raised.exception))
+        self.assertNotIn("secret-layout", str(raised.exception))
+
 
 def _resolve_packaged(root: Path, filename: str) -> ConfigSnapshot:
     with patch("master_agent.config_sources.files", return_value=root):
