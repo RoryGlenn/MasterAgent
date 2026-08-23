@@ -306,11 +306,11 @@ class NativeWindowsProcessTests(unittest.TestCase):
 
     def test_unicode_console_output_is_explicit_utf8(self) -> None:
         result = self.run_python(
-            "import sys; print('stdout-Δ-文-🙂'); print('stderr-ß-é', file=sys.stderr)",
-            environment={
-                "PYTHONIOENCODING": "utf-8",
-                "PYTHONUTF8": "1",
-            },
+            "import sys; "
+            "sys.stdout.reconfigure(encoding='utf-8'); "
+            "sys.stderr.reconfigure(encoding='utf-8'); "
+            "print('stdout-Δ-文-🙂'); "
+            "print('stderr-ß-é', file=sys.stderr)",
         )
         self.assertEqual(result.reason, ProcessExitReason.EXITED)
         self.assertEqual(

@@ -607,14 +607,11 @@ class CtypesWindowsAppContainerApi:
                 (
                     "os_parent_handle",
                     (
-                        "import ctypes\n"
-                        "from ctypes import wintypes\n"
-                        "kernel=ctypes.WinDLL('kernel32',use_last_error=True)\n"
-                        "kernel.GetHandleInformation.argtypes=(wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD))\n"
-                        "kernel.GetHandleInformation.restype=wintypes.BOOL\n"
-                        "flags=wintypes.DWORD()\n"
-                        f"allowed=bool(kernel.GetHandleInformation({inherited_handle},ctypes.byref(flags)))\n"
-                        "print('ALLOWED' if allowed else 'DENIED')\n"
+                        "import msvcrt,os\n"
+                        "try:\n"
+                        f" descriptor=msvcrt.open_osfhandle({inherited_handle},os.O_WRONLY)\n"
+                        "except OSError:\n print('DENIED')\n"
+                        "else:\n os.close(descriptor); print('ALLOWED')\n"
                     ),
                 ),
                 (

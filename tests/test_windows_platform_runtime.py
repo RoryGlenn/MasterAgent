@@ -1956,7 +1956,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
             os.link(replacement_source, target)
             with self.assertRaisesRegex(
                 WindowsPathSecurityError,
-                "identity or security changed",
+                "expected identity",
             ):
                 backend.pin_file(
                     target,

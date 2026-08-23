@@ -29,7 +29,7 @@
       "area": "filesystem",
       "group": "certification",
       "test_id": "tests.test_windows_platform_runtime.WindowsNativeIntegrationTests.test_native_hardlink_substitution_changes_identity",
-      "expected_reason": "identity_or_security_changed",
+      "expected_reason": "expected_identity_mismatch",
       "posix_equivalent": ["tests.test_git_connectors.GitWorkspaceConnectorTests.test_commit_refuses_hardlinked_reflog_without_publishing"]
     },
     {
