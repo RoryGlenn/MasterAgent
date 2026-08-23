@@ -16,8 +16,7 @@ implemented. The final certification tranche stays operationally planned on
 fixtures run on a clean enrolled standard-user Windows 11 x64 runner; #112
 retains the authenticated-proxy and enterprise-CA blockers.
 Release-hardening gates keep
-incomplete local-Git mutation, non-manifest workflow execution, recurring
-execution, raw plugin execution, and
+incomplete local-Git mutation, non-manifest workflow execution, raw plugin execution, and
 unsafe provider mutations non-routable.
 
 | Area | Software status | Operational status |
@@ -34,7 +33,7 @@ unsafe provider mutations non-routable.
 | 3 — draft-only output | Complete | Usable locally without provider credentials |
 | 4 — approved reversible writes | Typed persisted compensation complete; non-atomic recovery is manual; unsafe mutations and local Git remain disabled | Provider-specific gates and approvals required; opt-in Confluence Cloud sandbox automation is available |
 | 5 — external communication | Complete | Disabled until exact-content approval and provider send gates are configured |
-| 6 — recurring autonomy | Registration and status only | Execution disabled pending exact target, configuration, source, and runtime binding |
+| 6 — recurring autonomy | Exact authenticated occurrence, single-host fencing, approval resume/recovery, and local-only reference workflow complete | Registrations remain disabled until an organization supplies private roots, exact resources, credentials, and scheduler operations |
 | Advisory sub-agents | Checked-in contracts, deterministic broker, and optional live Copilot SDK worker complete | Direct GitHub-host invocation is disabled; the selected parent may use the broker-owned read-only adapter and falls back to direct work when unavailable |
 | Documentation completion gate | Complete | The selected parent applies the repository-owned Docs Agent contract directly; no live host child profile is implied |
 | Capability promotion | Complete for dependency-free pure test/local capsules | Provider, side-effect, dependent, raw-plugin, and production capsules remain fail closed |
@@ -151,11 +150,17 @@ absent.
 
 ### Phase 6 — recurring workflow boundary
 
-- built-in registrations and due state can be inspected;
-- schedules are timezone-aware and have maximum lateness;
-- capability, recipient, source, and delivery allowlists are explicit; and
-- execution remains disabled until every target, source, configuration, and
-  runtime identity is included in the immutable execution manifest.
+- strict canonical artifacts authenticate through separately trusted local
+  state; a self-contained digest is insufficient;
+- pre-secret validation precedes atomic reservation and credential/principal
+  attestation;
+- every effect rechecks the current occurrence generation/token immediately
+  before dispatch and uses occurrence-scoped idempotency;
+- approval waits are lease-free and resume only the same occurrence;
+- DST/tzdata, latest-only catch-up, disable/revoke, deadlines, and explicit
+  recovery are deterministic; and
+- local claims are documented as single-host, while indeterminate provider
+  outcomes remain blocked.
 
 ### Advisory sub-agent boundary
 

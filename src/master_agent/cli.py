@@ -8,16 +8,18 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import stat
 import sys
 import tempfile
 import tomllib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from fnmatch import fnmatch
 from pathlib import Path
+from threading import Event, Thread
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -30,7 +32,7 @@ from master_agent.approval_handoff import (
     write_restricted_json,
 )
 from master_agent.approvals import HmacApprovalAuthenticator
-from master_agent.audit import AuditLog, implemented_audit_sink
+from master_agent.audit import AuditLog, IdempotencyClaimState, implemented_audit_sink
 from master_agent.auth import AuthMode
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
@@ -187,12 +189,23 @@ from master_agent.readiness import (
     provider_data_egress_policy_denials,
 )
 from master_agent.recurring import (
+    OccurrenceStatus,
     RecurringConfig,
     RecurringRunner,
     RecurringRunResult,
+    RecurringStateStore,
     RegisteredWorkflow,
     WorkflowKind,
     validate_plan_scope,
+)
+from master_agent.recurring_occurrence import (
+    RecurringOccurrence,
+    authenticate_occurrence,
+    bind_local_occurrence,
+    current_runtime_identity,
+    load_occurrence,
+    occurrence_summary,
+    registration_snapshot,
 )
 from master_agent.registry import ConnectorRegistry
 from master_agent.resource_limits import MAX_PLAN_BYTES
@@ -218,6 +231,11 @@ from master_agent.workflows.draft_package import (
     DraftPackageSettings,
     build_draft_package_plan,
     render_draft_package,
+)
+from master_agent.workflows.weekly_operating_review import (
+    WeeklyOperatingReviewSettings,
+    build_weekly_operating_review_plan,
+    render_weekly_operating_review,
 )
 from master_agent.workflows.weekly_status import (
     WeeklyStatusSettings,
@@ -473,12 +491,58 @@ def main(argv: Sequence[str] | None = None) -> int:
                 recurring_path=args.recurring,
                 output=args.output,
             )
-        if args.command == "recurring-run":
-            return _recurring_run(
+        if args.command == "recurring-bind":
+            return _recurring_bind(
                 name=args.name,
+                occurrence_text=args.occurrence,
+                plan_path=args.plan,
                 recurring_path=args.recurring,
-                connector_mode=args.connector_mode,
-                force=args.force,
+                approval_authorities=args.approval_authorities,
+                capabilities_path=args.capabilities,
+                governance_path=args.governance,
+                policy_path=args.policy,
+                sources_of_truth_path=args.sources_of_truth,
+                organization_profile_path=args.organization_profile,
+                credential_mappings=tuple(args.credential_map),
+                connector_urls=tuple(args.connector_url),
+                output=args.output,
+            )
+        if args.command == "recurring-inspect":
+            return _recurring_inspect(
+                artifact_path=args.artifact,
+                expected_fingerprint=args.expected_fingerprint,
+            )
+        if args.command == "recurring-recover":
+            return _recurring_recover(
+                artifact_path=args.artifact,
+                recurring_path=args.recurring,
+                expected_fingerprint=args.expected_fingerprint,
+            )
+        if args.command == "recurring-reconcile":
+            return _recurring_reconcile(
+                artifact_path=args.artifact,
+                recurring_path=args.recurring,
+                expected_fingerprint=args.expected_fingerprint,
+            )
+        if args.command == "recurring-cancel":
+            return _recurring_cancel(
+                artifact_path=args.artifact,
+                recurring_path=args.recurring,
+                expected_fingerprint=args.expected_fingerprint,
+            )
+        if args.command == "recurring-run":
+            if (
+                args.recurring is None
+                or args.legacy_force
+                or args.legacy_connector_mode is not None
+            ):
+                _reject_non_manifest_execution("recurring-run")
+            return _recurring_apply(
+                artifact_path=args.artifact,
+                recurring_path=args.recurring,
+                apply=args.apply,
+                approval_paths=tuple(args.approval),
+                expected_fingerprint=args.expected_fingerprint,
             )
         if args.command == "discover":
             return _discover(
@@ -519,6 +583,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "weekly-status-plan":
             return _weekly_status_plan(
                 integrations_path=args.integrations,
+                workflow_path=args.workflow,
+                output=args.output,
+            )
+        if args.command == "weekly-operating-review-plan":
+            return _weekly_operating_review_plan(
                 workflow_path=args.workflow,
                 output=args.output,
             )
@@ -1078,18 +1147,92 @@ def _build_parser() -> argparse.ArgumentParser:
     recurring_status.add_argument("--recurring", type=Path, default=None)
     recurring_status.add_argument("--output", type=Path)
 
+    recurring_bind = subparsers.add_parser(
+        "recurring-bind",
+        help="bind and authenticate one exact registered workflow occurrence",
+    )
+    recurring_bind.add_argument("name")
+    recurring_bind.add_argument("--occurrence", required=True)
+    recurring_bind.add_argument("--plan", type=Path, required=True)
+    recurring_bind.add_argument("--recurring", type=Path, required=True)
+    recurring_bind.add_argument("--approval-authorities", type=Path, required=True)
+    recurring_bind.add_argument("--capabilities", type=Path)
+    recurring_bind.add_argument("--governance", type=Path)
+    recurring_bind.add_argument("--policy", type=Path)
+    recurring_bind.add_argument("--sources-of-truth", type=Path)
+    recurring_bind.add_argument("--organization-profile", type=Path)
+    recurring_bind.add_argument(
+        "--credential-map",
+        action="append",
+        default=[],
+        metavar="FILE_KEY=DECLARED_NAME",
+    )
+    recurring_bind.add_argument(
+        "--connector-url",
+        action="append",
+        default=[],
+        metavar="SYSTEM=URL",
+    )
+    recurring_bind.add_argument("--output", type=Path, required=True)
+
+    recurring_inspect = subparsers.add_parser(
+        "recurring-inspect",
+        help="inspect an occurrence without credentials, providers, or state",
+    )
+    recurring_inspect.add_argument("artifact", type=Path)
+    recurring_inspect.add_argument("--expected-fingerprint")
+
+    recurring_recover = subparsers.add_parser(
+        "recurring-recover",
+        help="review and permit retry of one certified pre-effect failure",
+    )
+    recurring_recover.add_argument("artifact", type=Path)
+    recurring_recover.add_argument("--recurring", type=Path, required=True)
+    recurring_recover.add_argument("--expected-fingerprint", required=True)
+
+    recurring_reconcile = subparsers.add_parser(
+        "recurring-reconcile",
+        help="reconcile one expired occurrence from exact idempotency records",
+    )
+    recurring_reconcile.add_argument("artifact", type=Path)
+    recurring_reconcile.add_argument("--recurring", type=Path, required=True)
+    recurring_reconcile.add_argument("--expected-fingerprint", required=True)
+
+    recurring_cancel = subparsers.add_parser(
+        "recurring-cancel",
+        help="cancel one pending exact occurrence and invalidate its fence",
+    )
+    recurring_cancel.add_argument("artifact", type=Path)
+    recurring_cancel.add_argument("--recurring", type=Path, required=True)
+    recurring_cancel.add_argument("--expected-fingerprint", required=True)
+
     recurring_run = subparsers.add_parser(
         "recurring-run",
-        help="disabled pending exact recurring target and runtime binding",
+        help="dry-run or apply one authenticated exact occurrence artifact",
     )
-    recurring_run.add_argument("name")
-    recurring_run.add_argument("--recurring", type=Path, default=None)
+    recurring_run.add_argument("artifact", type=Path)
+    recurring_run.add_argument("--recurring", type=Path)
+    recurring_run.add_argument(
+        "--force",
+        action="store_true",
+        dest="legacy_force",
+        help=argparse.SUPPRESS,
+    )
     recurring_run.add_argument(
         "--connector-mode",
-        choices=("mock", "live"),
-        default="mock",
+        dest="legacy_connector_mode",
+        help=argparse.SUPPRESS,
     )
-    recurring_run.add_argument("--force", action="store_true")
+    recurring_mode = recurring_run.add_mutually_exclusive_group()
+    recurring_mode.add_argument("--dry-run", action="store_true")
+    recurring_mode.add_argument("--apply", action="store_true")
+    recurring_run.add_argument(
+        "--approval",
+        type=Path,
+        action="append",
+        default=[],
+    )
+    recurring_run.add_argument("--expected-fingerprint")
 
     discover = subparsers.add_parser(
         "discover",
@@ -1207,6 +1350,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("examples/weekly-status-live-plan.json"),
+    )
+
+    operating_review_plan = subparsers.add_parser(
+        "weekly-operating-review-plan",
+        help="build the local-only exact recurring reference workflow plan",
+    )
+    operating_review_plan.add_argument("--workflow", type=Path, default=None)
+    operating_review_plan.add_argument(
+        "--output",
+        type=Path,
+        default=Path("examples/weekly-operating-review-plan.json"),
     )
 
     weekly = subparsers.add_parser(
@@ -3125,7 +3279,13 @@ def _inspect_approval_request(path: Path) -> int:
     """Render the complete secret-free review surface for one handoff."""
 
     request = load_approval_request(path)
-    plan = _load_plan(Path(request.run.plan_path))
+    if request.run.recurring_occurrence is not None:
+        occurrence = load_occurrence(Path(request.run.recurring_occurrence))
+        if occurrence.fingerprint != request.run.recurring_fingerprint:
+            raise ValidationError("approval request recurring fingerprint changed")
+        plan = occurrence.plan
+    else:
+        plan = _load_plan(Path(request.run.plan_path))
     request.validate_plan(plan)
     print(f"goal: {request.goal}")
     print(f"plan fingerprint: {request.plan_fingerprint}")
@@ -3164,7 +3324,13 @@ def _approve_request(
             "approval request fingerprint does not match --expected-fingerprint; "
             "inspect the current request before approving"
         )
-    plan = _load_plan(Path(request.run.plan_path))
+    if request.run.recurring_occurrence is not None:
+        occurrence = load_occurrence(Path(request.run.recurring_occurrence))
+        if occurrence.fingerprint != request.run.recurring_fingerprint:
+            raise ValidationError("approval request recurring fingerprint changed")
+        plan = occurrence.plan
+    else:
+        plan = _load_plan(Path(request.run.plan_path))
     request.validate_plan(plan)
     authority_path = Path(request.run.approval_authorities)
     authority_source = resolve_config_source(
@@ -3225,6 +3391,28 @@ def _resume_approval(
         raise ValueError(
             "approval request fingerprint does not match --expected-fingerprint; "
             "inspect the current request before resuming"
+        )
+    if request.run.recurring_occurrence is not None:
+        if high_level:
+            raise ValidationError(
+                "recurring approval resume cannot use the high-level profile path"
+            )
+        if request.run.recurring_config is None:
+            raise ValidationError("recurring approval request omitted its config")
+        occurrence = load_occurrence(Path(request.run.recurring_occurrence))
+        if occurrence.fingerprint != request.run.recurring_fingerprint:
+            raise ValidationError("approval request recurring fingerprint changed")
+        request.validate_plan(occurrence.plan)
+        carried = tuple(Path(path) for path in request.run.approval_paths) + tuple(
+            approval_paths
+        )
+        return _recurring_apply(
+            artifact_path=Path(request.run.recurring_occurrence),
+            recurring_path=Path(request.run.recurring_config),
+            apply=True,
+            approval_paths=carried,
+            expected_fingerprint=occurrence.fingerprint,
+            approval_request=request,
         )
     plan = (
         _load_operating_plan(Path(request.run.plan_path))
@@ -3302,6 +3490,12 @@ def _run(
     expected_profile_fingerprint: str | None = None,
     organization_run_root: Path | None = None,
     captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
+    pre_effect_guard: Callable[[AgentAction], None] | None = None,
+    report_observer: Callable[[RunReport, ApprovalRequest | None], None] | None = None,
+    recurring_occurrence_path: Path | None = None,
+    recurring_fingerprint: str | None = None,
+    recurring_claim_generation: int | None = None,
+    recurring_config_path: Path | None = None,
 ) -> int:
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
@@ -3713,6 +3907,7 @@ def _run(
                 governance_source=configuration_sources["governance"],
                 approval_authenticator=approval_authenticator,
                 audit=applied_audit,
+                pre_effect_guard=pre_effect_guard,
             ).run(
                 plan,
                 approvals=approvals,
@@ -3763,6 +3958,10 @@ def _run(
                 credential_mappings=credential_mappings,
                 connector_urls=connector_urls,
                 organization_profile=organization_profile_path,
+                recurring_occurrence=recurring_occurrence_path,
+                recurring_fingerprint=recurring_fingerprint,
+                recurring_claim_generation=recurring_claim_generation,
+                recurring_config=recurring_config_path,
             )
             approval_request = ApprovalRequest.build(
                 plan=plan,
@@ -3773,6 +3972,8 @@ def _run(
                 artifact_directory,
                 approval_request,
             )
+        if report_observer is not None:
+            report_observer(report, approval_request)
         _print_report(report)
         if result_json is not None and not pending_approvals:
             print(f"full result written to {evidence}")
@@ -5344,6 +5545,493 @@ def _recurring_status(
     return 0
 
 
+def _recurring_bind(
+    *,
+    name: str,
+    occurrence_text: str,
+    plan_path: Path,
+    recurring_path: Path,
+    approval_authorities: Path,
+    capabilities_path: Path | None,
+    governance_path: Path | None,
+    policy_path: Path | None,
+    sources_of_truth_path: Path | None,
+    organization_profile_path: Path | None,
+    credential_mappings: Sequence[str],
+    connector_urls: Sequence[str],
+    output: Path,
+) -> int:
+    """Publish and trusted-state-register one exact occurrence artifact."""
+
+    require_persistent_state_platform()
+    try:
+        requested = datetime.fromisoformat(occurrence_text)
+    except ValueError as error:
+        raise ValueError("--occurrence must be an ISO local wall time") from error
+    if requested.tzinfo is not None:
+        raise ValueError("--occurrence must omit an offset; the registration owns it")
+    recurring_source = resolve_config_source(recurring_path, "recurring.toml")
+    config = RecurringConfig.from_toml(recurring_source)
+    try:
+        workflow = config.workflows[name]
+    except KeyError as error:
+        raise ConfigurationError(
+            f"recurring workflow is not registered: {name}"
+        ) from error
+    plan = _load_plan(plan_path)
+    if plan.execution_context is None or plan.execution_context.runtime is None:
+        raise ConfigurationError("recurring-bind requires a bind-context plan")
+    runtime = plan.execution_context.runtime
+    bound_names = {item.name for item in runtime.configurations}
+    if "approval_authorities" not in bound_names:
+        raise ConfigurationError(
+            "recurring-bind requires a plan bound with --approval-authorities"
+        )
+    invocation = ApprovalRunInvocation.capture(
+        plan_path=plan_path,
+        approval_paths=(),
+        approval_authorities=approval_authorities,
+        database=Path(runtime.audit_database),
+        connector_mode=runtime.connector_mode,
+        integrations=workflow.integration_config,
+        result_json=_optional_path(runtime.result_json),
+        retention=workflow.retention_config,
+        evidence_type=runtime.evidence_type or "run-result/full",
+        identities=workflow.identity_config,
+        include_writes=runtime.include_writes,
+        include_communications=runtime.include_communications,
+        workspace_root=_optional_path(runtime.workspace_root),
+        draft_output_dir=Path(runtime.artifact_root),
+        capabilities=capabilities_path,
+        governance=governance_path,
+        policy=policy_path,
+        sources_of_truth=sources_of_truth_path,
+        plugin_names=(),
+        plugin_lock=None,
+        credentials_file=_optional_path(runtime.credential_file),
+        credential_mappings=credential_mappings,
+        connector_urls=connector_urls,
+        organization_profile=organization_profile_path,
+        recurring_config=recurring_path,
+    )
+    occurrence = bind_local_occurrence(
+        config=config,
+        workflow_name=name,
+        requested_local_time=requested,
+        plan=plan,
+        invocation=invocation,
+        output=output,
+    )
+    print(f"wrote {output.expanduser().resolve(strict=False)}")
+    print(f"occurrence fingerprint: {occurrence.fingerprint}")
+    print(f"execution key: {occurrence.execution_key}")
+    return 0
+
+
+def _recurring_inspect(
+    *,
+    artifact_path: Path,
+    expected_fingerprint: str | None,
+) -> int:
+    """Inspect one occurrence without consulting credentials, providers, or state."""
+
+    occurrence = load_occurrence(artifact_path)
+    _require_occurrence_fingerprint(occurrence, expected_fingerprint)
+    print(json.dumps(occurrence_summary(occurrence), indent=2, sort_keys=True))
+    print(
+        "This artifact authenticates only through separately configured trusted "
+        "state; it is not approval."
+    )
+    return 0
+
+
+def _recurring_recover(
+    *,
+    artifact_path: Path,
+    recurring_path: Path,
+    expected_fingerprint: str,
+) -> int:
+    """Explicitly permit retry of one authenticated pre-effect failure."""
+
+    require_persistent_state_platform()
+    occurrence = load_occurrence(artifact_path)
+    _require_occurrence_fingerprint(occurrence, expected_fingerprint)
+    config = RecurringConfig.from_toml(
+        resolve_config_source(recurring_path, "recurring.toml")
+    )
+    store = authenticate_occurrence(occurrence, config=config)
+    try:
+        store.mark_occurrence_recoverable(
+            artifact_fingerprint=occurrence.fingerprint,
+        )
+    finally:
+        store.close()
+    print(f"recovery authorized for occurrence: {occurrence.fingerprint}")
+    print("Only the same authenticated artifact may now be reserved again.")
+    return 0
+
+
+def _recurring_reconcile(
+    *,
+    artifact_path: Path,
+    recurring_path: Path,
+    expected_fingerprint: str,
+) -> int:
+    """Conservatively reconcile an expired attempt from exact audit state."""
+
+    require_persistent_state_platform()
+    occurrence = load_occurrence(artifact_path)
+    _require_occurrence_fingerprint(occurrence, expected_fingerprint)
+    config = RecurringConfig.from_toml(
+        resolve_config_source(recurring_path, "recurring.toml")
+    )
+    store = authenticate_occurrence(
+        occurrence,
+        config=config,
+        allow_approval_resume=True,
+    )
+    audit_path = Path(occurrence.invocation.database)
+    audit: AuditLog | None = None
+    try:
+        status = OccurrenceStatus.INDETERMINATE
+        if audit_path.exists():
+            audit = AuditLog(audit_path)
+            chain_valid, _chain_message = audit.verify_chain()
+            if chain_valid:
+                outcomes = tuple(
+                    audit.idempotency_outcome(
+                        action.idempotency_key,
+                        action_fingerprint=action.effect_fingerprint,
+                    )
+                    for action in occurrence.plan.actions
+                    if action.risk
+                    not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+                )
+                uncertain = {
+                    IdempotencyClaimState.IN_PROGRESS,
+                    IdempotencyClaimState.INDETERMINATE,
+                    IdempotencyClaimState.CONFLICT,
+                }
+                if not any(outcome in uncertain for outcome in outcomes):
+                    status = OccurrenceStatus.RECOVERABLE
+        store.reconcile_expired_occurrence(
+            artifact_fingerprint=occurrence.fingerprint,
+            status=status,
+        )
+    finally:
+        if audit is not None:
+            audit.close()
+        store.close()
+    print(f"reconciled occurrence as: {status}")
+    if status is OccurrenceStatus.RECOVERABLE:
+        print("Exact idempotency records permit a fenced re-run and re-verification.")
+        return 0
+    print("An effect may be in flight; provider-specific reconciliation is required.")
+    return 2
+
+
+def _recurring_cancel(
+    *,
+    artifact_path: Path,
+    recurring_path: Path,
+    expected_fingerprint: str,
+) -> int:
+    """Cancel one trusted pending occurrence without opening credentials."""
+
+    require_persistent_state_platform()
+    occurrence = load_occurrence(artifact_path)
+    _require_occurrence_fingerprint(occurrence, expected_fingerprint)
+    if Path(occurrence.invocation.recurring_config or "") != recurring_path.resolve():
+        raise ConfigurationError("recurring configuration path changed")
+    config = RecurringConfig.from_toml(
+        resolve_config_source(recurring_path, "recurring.toml")
+    )
+    if str(config.state_database.parent) != occurrence.roots["claim"]:
+        raise ConfigurationError("recurring claim root changed")
+    store = RecurringStateStore(config.state_database)
+    try:
+        store.authenticate_occurrence_artifact(
+            workflow_name=occurrence.workflow_name,
+            scheduled_at=occurrence.scheduled_at,
+            artifact_fingerprint=occurrence.fingerprint,
+            artifact_sha256=occurrence.artifact_sha256,
+            registration_digest=occurrence.registration_digest,
+            execution_key=occurrence.execution_key,
+        )
+        status = store.cancel_occurrence(
+            artifact_fingerprint=occurrence.fingerprint,
+        )
+    finally:
+        store.close()
+    print(f"recurring occurrence cancellation state: {status}")
+    return 0 if status is OccurrenceStatus.CANCELLED else 2
+
+
+def _recurring_apply(
+    *,
+    artifact_path: Path,
+    recurring_path: Path,
+    apply: bool,
+    approval_paths: Sequence[Path],
+    expected_fingerprint: str | None,
+    approval_request: ApprovalRequest | None = None,
+) -> int:
+    """Inspect or execute one authenticated exact occurrence."""
+
+    occurrence = load_occurrence(artifact_path)
+    _require_occurrence_fingerprint(occurrence, expected_fingerprint)
+    if not apply:
+        if approval_paths:
+            raise ValueError("--approval requires --apply")
+        print(json.dumps(occurrence_summary(occurrence), indent=2, sort_keys=True))
+        print("mode: dry-run (no claim, audit, credential, provider, or output access)")
+        return 0
+
+    require_persistent_state_platform()
+    invocation = occurrence.invocation
+    if invocation.recurring_config is None:
+        raise ConfigurationError("recurring occurrence omitted its trusted config path")
+    selected_config = recurring_path.expanduser().resolve(strict=False)
+    if selected_config != Path(invocation.recurring_config):
+        raise ConfigurationError("recurring configuration path changed")
+    config = RecurringConfig.from_toml(
+        resolve_config_source(recurring_path, "recurring.toml")
+    )
+    resume = approval_request is not None
+    store = authenticate_occurrence(
+        occurrence,
+        config=config,
+        allow_approval_resume=resume,
+    )
+    now = datetime.now(UTC)
+    if approval_request is None:
+        generation, token = store.reserve_occurrence(
+            artifact_fingerprint=occurrence.fingerprint,
+            started_at=now,
+        )
+    else:
+        approval_request.validate_plan(occurrence.plan)
+        request_run = approval_request.run
+        if (
+            request_run.recurring_occurrence
+            != str(artifact_path.expanduser().resolve(strict=False))
+            or request_run.recurring_fingerprint != occurrence.fingerprint
+            or request_run.recurring_claim_generation is None
+        ):
+            store.close()
+            raise ConfigurationError("approval request recurring occurrence changed")
+        generation, token = store.resume_approval_blocked_occurrence(
+            artifact_fingerprint=occurrence.fingerprint,
+            prior_generation=request_run.recurring_claim_generation,
+            request_fingerprint=approval_request.fingerprint,
+            started_at=now,
+        )
+
+    stop_heartbeat = Event()
+    heartbeat_errors: list[BaseException] = []
+    effect_started = False
+    local_output_started = False
+    transitioned = False
+    report_observed = False
+
+    def heartbeat() -> None:
+        interval = max(store._lease_duration.total_seconds() / 3, 0.1)
+        while not stop_heartbeat.wait(interval):
+            try:
+                if not store.renew_occurrence_fence(
+                    artifact_fingerprint=occurrence.fingerprint,
+                    claim_generation=generation,
+                    claim_token=token,
+                ):
+                    raise ConfigurationError(
+                        "recurring occurrence claim fence was lost"
+                    )
+            except (OSError, sqlite3.Error, ConfigurationError) as error:
+                heartbeat_errors.append(error)
+                return
+
+    heartbeat_thread = Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
+
+    def pre_effect_guard(_action: AgentAction) -> None:
+        nonlocal effect_started
+        if heartbeat_errors:
+            raise ConfigurationError(
+                "recurring occurrence lease could not be renewed"
+            ) from heartbeat_errors[0]
+        fresh = RecurringConfig.from_toml(
+            resolve_config_source(recurring_path, "recurring.toml")
+        )
+        try:
+            workflow = fresh.workflows[occurrence.workflow_name]
+        except KeyError as error:
+            raise ConfigurationError("recurring registration disappeared") from error
+        if (
+            not workflow.enabled
+            or workflow.revoked
+            or registration_snapshot(workflow) != occurrence.registration
+        ):
+            raise ConfigurationError("recurring registration changed before effect")
+        if current_runtime_identity() != occurrence.runtime_identity:
+            raise ConfigurationError("recurring runtime changed before effect")
+        if datetime.now(UTC) > occurrence.approval_resume_deadline:
+            raise ConfigurationError("recurring approval-resume deadline expired")
+        store.validate_occurrence_fence(
+            artifact_fingerprint=occurrence.fingerprint,
+            claim_generation=generation,
+            claim_token=token,
+        )
+        effect_started = True
+
+    def observe_report(
+        report: RunReport,
+        request: ApprovalRequest | None,
+    ) -> None:
+        nonlocal local_output_started, transitioned, report_observed
+        report_observed = True
+        stop_heartbeat.set()
+        heartbeat_thread.join()
+        by_action_id = {action.action_id: action for action in occurrence.plan.actions}
+        local_output_started = any(
+            item.state is ActionState.VERIFIED
+            and by_action_id[item.action_id].risk is RiskLevel.LOCAL_GENERATION
+            for item in report.actions
+        )
+        pending = any(
+            item.state is ActionState.APPROVAL_REQUIRED for item in report.actions
+        )
+        if pending:
+            if request is None:
+                raise ConfigurationError(
+                    "recurring approval-blocked run did not publish an exact request"
+                )
+            store.block_occurrence_for_approval(
+                artifact_fingerprint=occurrence.fingerprint,
+                claim_generation=generation,
+                claim_token=token,
+                request_fingerprint=request.fingerprint,
+            )
+            transitioned = True
+            return
+        fresh = RecurringConfig.from_toml(
+            resolve_config_source(recurring_path, "recurring.toml")
+        )
+        try:
+            fresh_workflow = fresh.workflows[occurrence.workflow_name]
+        except KeyError as error:
+            raise ConfigurationError("recurring registration disappeared") from error
+        if registration_snapshot(fresh_workflow) != occurrence.registration:
+            raise ConfigurationError("recurring registration changed before output")
+        if (
+            report.successful
+            and fresh_workflow.kind is WorkflowKind.WEEKLY_OPERATING_REVIEW
+        ):
+            settings = WeeklyOperatingReviewSettings.from_toml(
+                resolve_config_source(
+                    fresh_workflow.workflow_config,
+                    "weekly-operating-review.toml",
+                )
+            )
+            render_weekly_operating_review(
+                report,
+                settings,
+                output_root=Path(occurrence.roots["artifact"]),
+                execution_key=occurrence.execution_key,
+            )
+            local_output_started = True
+        status = (
+            OccurrenceStatus.SUCCEEDED
+            if report.successful
+            else OccurrenceStatus.INDETERMINATE
+            if any(item.state is ActionState.INDETERMINATE for item in report.actions)
+            or effect_started
+            or local_output_started
+            else OccurrenceStatus.FAILED_PRE_EFFECT
+        )
+        store.finalize_occurrence(
+            artifact_fingerprint=occurrence.fingerprint,
+            claim_generation=generation,
+            claim_token=token,
+            status=status,
+        )
+        transitioned = True
+
+    try:
+        status = _run(
+            plan_path=Path(invocation.plan_path),
+            apply=True,
+            approval_paths=[
+                Path(path)
+                for path in (
+                    *invocation.approval_paths,
+                    *(str(path) for path in approval_paths),
+                )
+            ],
+            approval_authorities=Path(invocation.approval_authorities),
+            database=Path(invocation.database),
+            connector_mode=invocation.connector_mode,
+            integrations_path=_optional_path(invocation.integrations),
+            result_json=_optional_path(invocation.result_json),
+            retention_path=_optional_path(invocation.retention),
+            evidence_type=invocation.evidence_type,
+            identities_path=_optional_path(invocation.identities),
+            include_writes=invocation.include_writes,
+            include_communications=invocation.include_communications,
+            workspace_root=_optional_path(invocation.workspace_root),
+            draft_output_dir=Path(invocation.draft_output_dir),
+            capabilities_path=_optional_path(invocation.capabilities),
+            governance_path=_optional_path(invocation.governance),
+            policy_path=_optional_path(invocation.policy),
+            sources_of_truth_path=_optional_path(invocation.sources_of_truth),
+            plugin_names=list(invocation.plugin_names),
+            plugin_lock_path=_optional_path(invocation.plugin_lock),
+            credentials_file=_optional_path(invocation.credentials_file),
+            credential_mappings=invocation.credential_mappings,
+            connector_urls=invocation.connector_urls,
+            organization_profile_path=_optional_path(invocation.organization_profile),
+            loaded_plan=occurrence.plan,
+            expected_plan_fingerprint=occurrence.plan.fingerprint,
+            pre_effect_guard=pre_effect_guard,
+            report_observer=observe_report,
+            recurring_occurrence_path=artifact_path,
+            recurring_fingerprint=occurrence.fingerprint,
+            recurring_claim_generation=generation,
+            recurring_config_path=recurring_path,
+        )
+        if not report_observed:
+            raise RuntimeError("recurring governed run did not report its outcome")
+        return status
+    except BaseException:
+        stop_heartbeat.set()
+        heartbeat_thread.join()
+        if not transitioned:
+            terminal = (
+                OccurrenceStatus.INDETERMINATE
+                if effect_started or local_output_started
+                else OccurrenceStatus.FAILED_PRE_EFFECT
+            )
+            try:
+                store.finalize_occurrence(
+                    artifact_fingerprint=occurrence.fingerprint,
+                    claim_generation=generation,
+                    claim_token=token,
+                    status=terminal,
+                )
+            except ConfigurationError:
+                pass
+        raise
+    finally:
+        store.close()
+
+
+def _require_occurrence_fingerprint(
+    occurrence: RecurringOccurrence,
+    expected: str | None,
+) -> None:
+    if expected is not None and expected != occurrence.fingerprint:
+        raise ValueError("occurrence fingerprint does not match --expected-fingerprint")
+
+
 def _recurring_run(
     *,
     name: str,
@@ -6560,6 +7248,23 @@ def _weekly_status_plan(
     return 0
 
 
+def _weekly_operating_review_plan(
+    *,
+    workflow_path: Path | None,
+    output: Path,
+) -> int:
+    """Build the safe reference plan without executing any provider action."""
+
+    settings = WeeklyOperatingReviewSettings.from_toml(
+        resolve_config_source(workflow_path, "weekly-operating-review.toml")
+    )
+    plan = build_weekly_operating_review_plan(settings)
+    _write_json(output, plan.to_dict())
+    print(f"wrote {output}")
+    print(f"plan fingerprint: {plan.fingerprint}")
+    return 0
+
+
 def _weekly_status(
     *,
     integrations_path: Path | None,
@@ -7033,6 +7738,7 @@ def _orchestrator(
     governance_source: ConfigSource | None = None,
     approval_authenticator: HmacApprovalAuthenticator | None = None,
     audit: AuditLog | None = None,
+    pre_effect_guard: Callable[[AgentAction], None] | None = None,
 ) -> WorkflowOrchestrator:
     """Build the governed runtime from repository or packaged defaults."""
 
@@ -7060,6 +7766,7 @@ def _orchestrator(
             governance_source
             or resolve_config_source(governance_path, "governance.toml")
         ),
+        pre_effect_guard=pre_effect_guard,
     )
 
 

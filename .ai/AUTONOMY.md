@@ -251,6 +251,14 @@ is never a shortcut for a write, send, administrative action, deletion, merge,
 plugin/capsule operation, or scheduled work; those operations stay on the
 bound `run --apply` route.
 
+Recurring autonomy uses one strict authenticated occurrence, never an ambient
+workflow name or scheduler prompt. The binder may select only a registered
+canonical instant and exact bound plan. Apply performs structural validation,
+then reserves before opening credentials and rechecks the current claim
+generation immediately before each provider effect. Approval-blocked work holds
+no live lease. Only certified pre-effect outcomes may enter explicit recovery;
+indeterminate effects stay blocked. The local claim backend is single-host.
+
 When the operator supplies a Jira or Confluence Cloud URL, pass it directly as
 `--connector-url SYSTEM=URL`. The runtime normalizes a page or UI URL to its
 validated `atlassian.net` tenant origin without editing persistent

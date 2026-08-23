@@ -61,6 +61,10 @@ class ApprovalRunInvocation:
     credential_mappings: tuple[str, ...]
     connector_urls: tuple[str, ...]
     organization_profile: str | None = None
+    recurring_occurrence: str | None = None
+    recurring_fingerprint: str | None = None
+    recurring_claim_generation: int | None = None
+    recurring_config: str | None = None
 
     def __post_init__(self) -> None:
         if self.connector_mode not in {"mock", "live"}:
@@ -91,6 +95,7 @@ class ApprovalRunInvocation:
             ("plugin_lock", self.plugin_lock),
             ("credentials_file", self.credentials_file),
             ("organization_profile", self.organization_profile),
+            ("recurring_config", self.recurring_config),
         ):
             if optional_value is not None:
                 _validate_absolute_path(optional_value, name)
@@ -107,6 +112,31 @@ class ApprovalRunInvocation:
                 _validate_text(value, name)
         if len(set(self.approval_paths)) != len(self.approval_paths):
             raise ValidationError("approval request approval paths must be unique")
+        recurring_values = (
+            self.recurring_occurrence,
+            self.recurring_fingerprint,
+            self.recurring_claim_generation,
+        )
+        if any(value is not None for value in recurring_values):
+            if any(value is None for value in recurring_values):
+                raise ValidationError(
+                    "approval request recurring binding must be complete"
+                )
+            assert self.recurring_occurrence is not None
+            assert self.recurring_fingerprint is not None
+            assert self.recurring_claim_generation is not None
+            _validate_absolute_path(self.recurring_occurrence, "recurring_occurrence")
+            _validate_sha256(
+                self.recurring_fingerprint,
+                "approval request recurring fingerprint",
+            )
+            if (
+                isinstance(self.recurring_claim_generation, bool)
+                or self.recurring_claim_generation <= 0
+            ):
+                raise ValidationError(
+                    "approval request recurring claim generation is invalid"
+                )
 
     @classmethod
     def capture(
@@ -136,6 +166,10 @@ class ApprovalRunInvocation:
         credential_mappings: Sequence[str],
         connector_urls: Sequence[str],
         organization_profile: Path | None = None,
+        recurring_occurrence: Path | None = None,
+        recurring_fingerprint: str | None = None,
+        recurring_claim_generation: int | None = None,
+        recurring_config: Path | None = None,
     ) -> Self:
         """Capture path spellings independently of the caller's future CWD."""
 
@@ -166,6 +200,10 @@ class ApprovalRunInvocation:
             credential_mappings=tuple(credential_mappings),
             connector_urls=tuple(connector_urls),
             organization_profile=_canonical_optional_path(organization_profile),
+            recurring_occurrence=_canonical_optional_path(recurring_occurrence),
+            recurring_fingerprint=recurring_fingerprint,
+            recurring_claim_generation=recurring_claim_generation,
+            recurring_config=_canonical_optional_path(recurring_config),
         )
 
     def with_approvals(self, paths: Sequence[Path]) -> Self:
@@ -211,6 +249,12 @@ class ApprovalRunInvocation:
         # when the high-level workflow actually bound one.
         if self.organization_profile is not None:
             payload["organization_profile"] = self.organization_profile
+        if self.recurring_occurrence is not None:
+            payload["recurring_occurrence"] = self.recurring_occurrence
+            payload["recurring_fingerprint"] = self.recurring_fingerprint
+            payload["recurring_claim_generation"] = self.recurring_claim_generation
+        if self.recurring_config is not None:
+            payload["recurring_config"] = self.recurring_config
         return payload
 
     @classmethod
@@ -244,6 +288,10 @@ class ApprovalRunInvocation:
                 "credential_mappings",
                 "connector_urls",
                 "organization_profile",
+                "recurring_occurrence",
+                "recurring_fingerprint",
+                "recurring_claim_generation",
+                "recurring_config",
             },
             "approval request run",
         )
@@ -272,6 +320,13 @@ class ApprovalRunInvocation:
             credential_mappings=_string_tuple(data, "credential_mappings"),
             connector_urls=_string_tuple(data, "connector_urls"),
             organization_profile=_optional_string(data, "organization_profile"),
+            recurring_occurrence=_optional_string(data, "recurring_occurrence"),
+            recurring_fingerprint=_optional_string(data, "recurring_fingerprint"),
+            recurring_claim_generation=_optional_int(
+                data,
+                "recurring_claim_generation",
+            ),
+            recurring_config=_optional_string(data, "recurring_config"),
         )
 
 
@@ -785,6 +840,15 @@ def _optional_string(data: Mapping[str, Any], name: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValidationError(f"approval request {name} must be a string or null")
+    return value
+
+
+def _optional_int(data: Mapping[str, Any], name: str) -> int | None:
+    value = data.get(name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"approval request {name} must be an integer or null")
     return value
 
 

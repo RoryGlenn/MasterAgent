@@ -56,6 +56,12 @@ they do not grant authority.
   communication gate, and recurring workflow disabled at rest. A direct
   provider goal authorizes the minimum provider network access and safe probes
   for that goal; it never authorizes another provider or a side effect.
+- A recurring schedule grants no authority. Execute recurring work only from an
+  authenticated exact occurrence artifact through the normal bound applied-run
+  path. Reserve before credential resolution, fence immediately before every
+  provider effect, keep approval waits lease-free and occurrence-bound, reject
+  `--force`, and treat uncertain recovery as indeterminate. Local SQLite claims
+  support one scheduler host only.
 - Treat a missing safe capability as implementation work when adding it is
   necessary and in scope. Add its typed contract and tests, then continue the
   original outcome instead of returning setup instructions to the operator.

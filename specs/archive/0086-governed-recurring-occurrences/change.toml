@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0086-governed-recurring-occurrences"
+title = "Governed exact-bound recurring occurrences"
+status = "archived"
+github_issue = 86
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-RECURRING-001"
+destination = "runtime/MA-RECURRING-001.md"
+source = "current/MA-RECURRING-001.md"

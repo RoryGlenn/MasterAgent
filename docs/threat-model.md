@@ -351,7 +351,8 @@ Controls:
   be reused; other uncertain sends remain blocked;
 - unsafe POST/PUT retry disabled;
 - provider draft/content preflight for Outlook;
-- recurring execution disabled pending exact target/config/runtime binding;
+- recurring provider effects require an authenticated exact occurrence,
+  occurrence-scoped idempotency, and an immediate pre-dispatch claim fence;
 - explicit correction instead of automatic resend.
 
 ### Partial multi-system failure
@@ -569,12 +570,25 @@ A scheduled workflow may gain capabilities, recipients, or destinations over tim
 Controls:
 
 - only built-in workflow kinds;
-- fixed registration fingerprint/configuration;
+- strict versioned occurrence artifacts authenticated by separately trusted
+  create-only local state rather than a same-file digest;
+- fixed registration generation and referenced-configuration digests;
 - capability and recipient allowlists;
 - canonical-source and output-root restrictions;
 - disabled defaults;
 - local-only/draft-only delivery modes;
-- no arbitrary plan generation from retrieved content.
+- no arbitrary plan generation from retrieved content;
+- pre-secret validation followed by atomic reservation and post-secret provider
+  attestation;
+- monotonically increasing claim generations, random tokens, lease renewal, and
+  a final fence check immediately before every provider effect;
+- occurrence-scoped write/send idempotency, fresh reads/local generation, and
+  lease-free exact approval resume;
+- deterministic UTC/IANA/offset/fold/tzdata, latest-only catch-up, revocation,
+  deadline, and no-force semantics;
+- conservative crash reconciliation that blocks uncertain effects; and
+- an explicit single-host local-claim boundary with no distributed or
+  exactly-once provider-effect claim.
 
 The complete credentialed provider matrix is not recurring automation. It has
 only a manual-dispatch trigger, is bound to reviewed default-branch code, and

@@ -79,7 +79,7 @@ unsafe surfaces remain deliberately non-routable.
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
 | Approved reversible writes | Narrow Jira, Confluence, Bitbucket, and GitHub operations implemented; unsafe or non-atomic mutations remain disabled |
 | External communication | Exact-approved Outlook sends and Teams messages/replies implemented behind separate gates |
-| Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
+| Recurring workflows | Authenticated exact occurrence artifacts, single-host fenced claims, approval resume, conservative recovery, and the local-only Weekly Operating Review are implemented; all registrations remain disabled by default |
 | Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
 | Capability import and capsule promotion | Installed CLI supports read-only inspection, exact selection, signed test/local promotion, policy-first routing, governed execution, immutable updates, disable, and revoke for dependency-free pure capabilities; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
@@ -646,6 +646,35 @@ creating another runtime planner or authorization layer. See
 | `config/dependency-licenses.toml` | Runtime and capsule dependency-license policy |
 | `config/capsule-authorities.example` | Example distinct role-scoped capsule signer identities and environment-backed key references |
 | `config/recurring.toml` | Disabled-by-default recurring workflow registrations |
+| `config/weekly-operating-review.toml` | Exact Jira, GitHub, and Confluence IDs for the local-only reference workflow |
+
+### Exact recurring occurrences
+
+A schedule selects only when an already reviewed plan may run. It does not add
+authority. The supported first release uses one private local binder and one
+pinned SQLite claim store on a single scheduler host:
+
+```bash
+master-agent weekly-operating-review-plan --output review-plan.json
+master-agent bind-context review-plan.json [normal bound-run options] --output bound-plan.json
+master-agent recurring-bind weekly_operating_review \
+  --occurrence 2026-08-24T09:00:00 \
+  --plan bound-plan.json \
+  --recurring /absolute/private/recurring.toml \
+  --approval-authorities /absolute/private/approval-authorities.toml \
+  --output /absolute/private/occurrences/review.json
+master-agent recurring-inspect /absolute/private/occurrences/review.json
+master-agent recurring-run /absolute/private/occurrences/review.json \
+  --recurring /absolute/private/recurring.toml --dry-run
+master-agent recurring-run /absolute/private/occurrences/review.json \
+  --recurring /absolute/private/recurring.toml --apply
+```
+
+Bind, inspect, and dry-run do not resolve credentials or contact providers.
+Apply authenticates the artifact in separate trusted state, reserves it before
+credentials, reuses the normal policy/approval/orchestrator path, and checks
+the current claim generation immediately before every provider effect. There
+is no `--force`, no workflow-name apply, and no cross-host exactly-once claim.
 
 ## Documentation
 

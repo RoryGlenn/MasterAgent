@@ -84,7 +84,7 @@ certification evidence.
 
 ### Runtime and provider contracts
 
-- Repository configuration and all 14 wheel-packaged TOML defaults match
+- Repository configuration and all 15 wheel-packaged TOML defaults match
   exactly.
 - The strict organization profile, capability-scoped doctor report, employee
   and developer boundaries, private setup, one-command read/effect routing, and
@@ -119,6 +119,13 @@ certification evidence.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
+- Exact recurring validation covers canonical/duplicate/oversized artifacts,
+  separate local-state authentication, registration/runtime/path drift,
+  DST gaps/folds and deadlines, occurrence-scoped outputs/idempotency, stale
+  fences, lease-free approval resume, explicit recovery, conservative expired
+  reconciliation, dry-run isolation, and rejection of `--force` and legacy
+  workflow-name execution. Release language must describe local claims as
+  single-host only.
 - All 96 typed capabilities have governance coverage.
 - GitHub administration without provider concurrency, Jira mutations without
   atomic read-check-write support, local/remote Git mutation, and high-impact

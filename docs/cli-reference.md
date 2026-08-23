@@ -45,7 +45,18 @@ checks; this does not relax publication rules for other output paths.
 | `draft-package` | Generate the Phase 3 review package | Local create-only artifacts and audit state; no provider access |
 | `compensation-plan` | Build a separately reviewable compensation plan from an original plan and run report | Writes only the selected local plan |
 | `recurring-status` | Inspect registered schedules and due state | No provider access; may mark expired claims in an existing configured SQLite state database and can write optional local JSON output |
-| `recurring-run` | Reserved recurring execution entry point | Disabled before config, credentials, connectors, or audit access |
+| `weekly-operating-review-plan` | Build the reference Jira/GitHub/Confluence read-plus-local-generation plan | Writes only the selected plan; no provider access |
+| `recurring-bind NAME --occurrence LOCAL --plan PLAN --recurring CONFIG --approval-authorities CONFIG --output ARTIFACT` | Create and trusted-state-register one exact occurrence | Creates one private canonical artifact and one local claim-state record; no credentials/providers |
+| `recurring-inspect ARTIFACT` | Inspect normalized scope, time, trust, paths, identities, and approvals | No trusted-state, credential, provider, audit, claim, or output access |
+| `recurring-run ARTIFACT --recurring CONFIG --dry-run` | Review the exact occurrence | Same zero-authority boundary as inspect |
+| `recurring-run ARTIFACT --recurring CONFIG --apply [--approval FILE]` | Reserve and execute the exact occurrence through the governed run path | Authenticates separate trusted state; credentials are resolved only after reservation; no `--force` or ambient workflow name |
+| `recurring-recover ARTIFACT --recurring CONFIG --expected-fingerprint SHA256` | Explicitly permit retry of a certified pre-effect failure | Changes only the exact occurrence state; all registration/time/runtime gates still apply |
+| `recurring-reconcile ARTIFACT --recurring CONFIG --expected-fingerprint SHA256` | Classify an expired claim from exact audit/idempotency records | Allows a fenced re-run only when no uncertain effect exists; otherwise records `indeterminate` |
+| `recurring-cancel ARTIFACT --recurring CONFIG --expected-fingerprint SHA256` | Cancel one exact pending occurrence | Pending work becomes `cancelled`; an active attempt loses its fence and becomes `indeterminate` |
+
+The exact recurring command family is `recurring-bind`, `recurring-inspect`,
+`recurring-run`, `recurring-recover`, `recurring-reconcile`, and
+`recurring-cancel`.
 | `discover` | Inspect connector configuration | Offline unless `--probe`; live probes require a model-context classification or the configured development/nonproduction default |
 | `connect` | Enable selected supported read connectors in memory and verify access | Fixed, classified, bounded provider probes; never edits credentials or persistent configuration; optional output is mode `0600` |
 | `github-repositories` | List a named user's public repositories anonymously with `--username`, or verify GitHub and list repositories visible to the authenticated user | Explicit schema-bound GitHub read returned only to the terminal; persisted `--output` is rejected |
