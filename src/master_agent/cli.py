@@ -7544,6 +7544,7 @@ def _work_memory(
             for value in (work_id, issue, kind, stage, summary, reference)
         ):
             raise ValueError("work-memory verify accepts only --database and --output")
+        _preflight_work_memory_output(output, database=database)
         verification = WorkMemory.verify_existing(database)
         _emit_work_memory_payload(verification.to_dict(), output=output)
         return 0 if verification.valid else 2

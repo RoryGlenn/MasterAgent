@@ -413,14 +413,15 @@ post-merge appends fail without changing the journal.
 `verify` checks the complete database. Both open an existing read-only pinned
 snapshot: a missing database is an error and is not created. All four actions
 emit deterministic JSON to the terminal or accept a create-only restricted
-`--output` path. A mutating action rejects an occupied output, an output that
-aliases the journal or its state files, and a prospective output that exceeds
-the restricted size boundary without committing the event. It holds the output
-reservation through journal commit and publication. `record` never initializes
-a missing database or its bookkeeping state; `start` validates all retained
-fields before initializing one. If an existing journal is missing its native
-transaction lock or integrity ledger, every mutating action fails without
-recreating the missing bookkeeping.
+`--output` path. Every action rejects an output that aliases the journal or its
+state files, including when the journal is missing. A mutating action also
+rejects an occupied output and a prospective output that exceeds the restricted
+size boundary without committing the event. It holds the output reservation
+through journal commit and publication. `record` never initializes a missing
+database or its bookkeeping state; `start` validates all retained fields before
+initializing one. If an existing journal is missing its native transaction lock
+or integrity ledger, every mutating action fails without recreating the missing
+bookkeeping.
 
 The database admits at most 1,024 events so a maximum-size journal remains
 inside the native 8 MiB state boundary on every supported platform. Its

@@ -29,10 +29,11 @@ short summaries, and references. It MUST NOT retain provider response bodies,
 credentials, authentication material, approval artifacts, execution
 transcripts, or arbitrary attachments. Remembered content MUST remain untrusted
 metadata and MUST NOT grant identity, authority, approval, or capability.
-Mutating CLI actions given an occupied create-only output target, an output that
-aliases the journal or its state files, or a snapshot that exceeds the
-output-size boundary MUST fail before appending to the journal; an occupied or
-aliased target MUST also fail before creating a missing journal.
+Every CLI action given an output that aliases the journal or its state files
+MUST fail before publication, including when the journal is missing. Mutating
+CLI actions given an occupied create-only output target or a snapshot that
+exceeds the output-size boundary MUST fail before appending to the journal; an
+occupied target MUST also fail before creating a missing journal.
 `record` MUST open only an existing initialized journal and MUST NOT create
 database or bookkeeping state for a missing path. A mutating output name MUST
 remain exclusively reserved from preflight through append commit and output

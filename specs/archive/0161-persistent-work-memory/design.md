@@ -15,13 +15,14 @@ inspection cannot create or repair state. A schema version and exact table
 definition, constraint, and column validation reject ambiguous or partially
 migrated databases. Replay
 requires the stored timestamp to use its exact canonical representation so an
-equivalent textual rewrite is still detected. Mutating CLI actions preflight a
-create-only JSON output name before opening or appending to the journal and
-rejects journal and state-file aliases. It validates the exact prospective JSON
-size inside the transaction before commit and holds a native create-only output
-reservation through journal commit and publication. `record` opens the pinned
-SQLite boundary with creation disabled, while `start` validates every retained
-field before opening the create-enabled boundary. SQLite initialization permits
+equivalent textual rewrite is still detected. Every CLI action preflights
+journal and state-file aliases before JSON publication. Mutating actions also
+preflight a create-only JSON output name before opening or appending to the
+journal. They validate the exact prospective JSON size inside the transaction
+before commit and hold a native create-only output reservation through journal
+commit and publication. `record` opens the pinned SQLite boundary with creation
+disabled, while `start` validates every retained field before opening the
+create-enabled boundary. SQLite initialization permits
 new transaction and integrity bookkeeping only when it exclusively created the
 database in the same operation; existing state with missing bookkeeping is
 never repaired implicitly.

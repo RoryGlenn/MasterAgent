@@ -179,6 +179,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "lin_api_abcdefghijklmnopqrstuvwxyz012345",
                     "dapi" + "0123456789abcdef0123456789abcdef",
                     "pypi-abcdefghijklmnopqrstuvwxyz0123456789",
+                    "rk_live_" + "1234567890abcdefghijklmnop",
+                    "whsec_" + "1234567890abcdefghijklmnop",
                     (
                         "https://acct.blob.core.windows.net/c/b?"
                         "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
@@ -799,6 +801,37 @@ class WorkMemoryTests(unittest.TestCase):
                 self.assertFalse(
                     (root / ".missing.sqlite3.master-agent.flock").exists()
                 )
+
+    def test_cli_verify_never_occupies_missing_journal_state(self) -> None:
+        for output_name in (
+            "missing.sqlite3",
+            ".missing.sqlite3.master-agent.lock",
+            ".missing.sqlite3.master-agent.flock",
+        ):
+            with (
+                self.subTest(output_name=output_name),
+                private_temporary_directory() as directory,
+            ):
+                root = Path(directory)
+                database = root / "missing.sqlite3"
+                output = root / output_name
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = main(
+                        [
+                            "work-memory",
+                            "verify",
+                            "--database",
+                            str(database),
+                            "--output",
+                            str(output),
+                        ]
+                    )
+                self.assertEqual(status, 1)
+                self.assertIn("must not alias", stderr.getvalue())
+                self.assertFalse(database.exists())
+                self.assertFalse(output.exists())
 
     def test_cli_refuses_output_aliases_for_journal_state(self) -> None:
         for output_name in (
