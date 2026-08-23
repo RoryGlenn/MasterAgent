@@ -161,6 +161,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "postgresql://alice:secret-password@db.example/app",
                     "https://alice:secret@example.com/path",
                     "machine api.example.com login alice password supersecret123",
+                    "machine api.example.com password supersecret123 login alice",
+                    "default login alice password supersecret123",
                     '{"access_token":"supersecret123456789"}',
                     '{"client_secret":"supersecret123456789"}',
                     '{"Authorization":"Bearer supersecret123456789"}',
