@@ -586,23 +586,13 @@ class RestrictedJSONReservation:
         self._path = self._directory.path / selected.name
         self._descriptor = -1
         self._owned_identity: tuple[int, int, int] | None = None
-        self._transaction: Any | None = None
+        self._windows_file: Any | None = None
         self._committed = False
         self._closed = False
         try:
             atomic = get_atomic_publication_recovery_backend()
             if atomic.backend_id == "windows-handle-atomic-state":
-                transaction = atomic.open_transaction(
-                    self._path,
-                    max_bytes=_MAX_REQUEST_BYTES,
-                    create=True,
-                )
-                self._transaction = transaction.__enter__()
-                if self._transaction.identity is not None:
-                    raise ConfigurationError(
-                        "restricted artifact already exists; use a fresh private "
-                        "output name"
-                    )
+                self._reserve_windows_name(atomic)
             else:
                 self._reserve_posix_name()
             self._directory.validate()
@@ -625,8 +615,9 @@ class RestrictedJSONReservation:
         if len(content) > _MAX_REQUEST_BYTES:
             raise ValidationError("restricted artifact exceeds the 8 MiB limit")
         try:
-            if self._transaction is not None:
-                self._transaction.publish_bytes(content, expected=None)
+            if self._windows_file is not None:
+                self._windows_file.write_bytes(content)
+                self._windows_file.publish()
             else:
                 self._commit_posix(content)
             self._directory.validate()
@@ -663,9 +654,9 @@ class RestrictedJSONReservation:
             if self._descriptor >= 0:
                 os.close(self._descriptor)
                 self._descriptor = -1
-            if self._transaction is not None:
-                self._transaction.__exit__(None, None, None)
-                self._transaction = None
+            if self._windows_file is not None:
+                self._windows_file.close()
+                self._windows_file = None
             self._directory.close()
             self._closed = True
         if rollback_error is not None:
@@ -676,6 +667,42 @@ class RestrictedJSONReservation:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def _reserve_windows_name(self, atomic: Any) -> None:
+        """Exclusively create and retain the actual Windows output name."""
+
+        from master_agent.platform_runtime.windows.atomic import (
+            WindowsAtomicPublicationRecoveryBackend,
+        )
+
+        if not isinstance(atomic, WindowsAtomicPublicationRecoveryBackend):
+            raise ConfigurationError(
+                "native Windows atomic publication backend is unavailable"
+            )
+        parent = atomic.filesystem.pin_directory(
+            self._path.parent,
+            require_private=True,
+        )
+        created: Any | None = None
+        try:
+            try:
+                created = parent.create_private_file(
+                    self._path.name,
+                    max_bytes=_MAX_REQUEST_BYTES,
+                )
+            except FileExistsError:
+                raise ConfigurationError(
+                    "restricted artifact already exists; use a fresh private "
+                    "output name"
+                ) from None
+            parent.flush_directory()
+            self._windows_file = created
+        except BaseException:
+            if created is not None:
+                created.close()
+            raise
+        finally:
+            parent.close()
 
     def _reserve_posix_name(self) -> None:
         parent = self._directory.fileno()
