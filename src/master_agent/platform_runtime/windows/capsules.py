@@ -607,11 +607,11 @@ class CtypesWindowsAppContainerApi:
                 (
                     "os_parent_handle",
                     (
-                        "import msvcrt,os\n"
+                        "import _winapi\n"
                         "try:\n"
-                        f" descriptor=msvcrt.open_osfhandle({inherited_handle},os.O_WRONLY)\n"
+                        f" _winapi.GetFileType({inherited_handle})\n"
                         "except OSError:\n print('DENIED')\n"
-                        "else:\n os.close(descriptor); print('ALLOWED')\n"
+                        "else:\n print('ALLOWED')\n"
                     ),
                 ),
                 (
