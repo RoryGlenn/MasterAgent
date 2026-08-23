@@ -37,6 +37,9 @@ handling, and independent verification.
 - The hosted Windows 11 ARM job is a required Python 3.12, 3.13, and 3.14
   matrix. A failure in any native Windows, artifact, behavioral-specification,
   or release-validation step blocks merge.
+- Every hosted Windows job runs the exact hosted-safe subset of the 52-case
+  adversarial registry. Registry drift, an unresolved exact test ID, and any
+  failed, errored, missing, or skipped required hosted case block merge.
 
 ### Protected Windows 11 x64 certification
 
@@ -51,8 +54,11 @@ GitHub-hosted job before checkout. It has no pull-request trigger or repository
 secret references, dispatches only to the exact Windows/x64/custom labels,
 verifies Windows workstation build, architecture, privilege, long-path policy,
 and absent production credential names before checkout, then runs artifact and
-full native test/specification/release validation. Workflow presence, a skipped
-job, a queued job, or ARM hosted CI alone is not x64 certification evidence.
+full native test/specification/release validation plus the hosted and
+certification-only adversarial groups. The adversarial runner rejects skips and
+dependency-blocked managed-workstation cases. Workflow presence, a skipped
+job, a queued job, a blocked registry entry, or ARM hosted CI alone is not x64
+certification evidence.
 
 ### Behavioral specifications
 

@@ -1941,6 +1941,29 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
             ancestor.rename(moved)
             self.assertEqual((moved / "payload.bin").read_bytes(), b"retained")
 
+    def test_native_hardlink_substitution_changes_identity(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            target = root / "approved.bin"
+            replacement_source = root / "replacement.bin"
+            target.write_bytes(b"approved")
+            replacement_source.write_bytes(b"replacement")
+            backend = WindowsSecureFilesystemBackend()
+            with backend.pin_file(target, require_private=False) as pinned:
+                approved_identity = pinned.identity
+
+            target.unlink()
+            os.link(replacement_source, target)
+            with self.assertRaisesRegex(
+                WindowsPathSecurityError,
+                "identity or security changed",
+            ):
+                backend.pin_file(
+                    target,
+                    require_private=False,
+                    expected_identity=approved_identity,
+                )
+
     def test_native_rejects_case_alias_and_accepts_unicode(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()

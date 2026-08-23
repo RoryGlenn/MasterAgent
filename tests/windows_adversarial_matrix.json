@@ -1,0 +1,379 @@
+{
+  "schema": "master-agent/windows-adversarial-matrix@1",
+  "cases": [
+    {
+      "invariant": "filesystem.reparse_substitution",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_reparse_cloud_and_offline_attributes_are_rejected",
+      "expected_reason": "unsafe_file_attributes",
+      "posix_equivalent": ["tests.test_directory_safety.PinnedDirectoryTests.test_symlink_child_is_rejected_without_following_it"]
+    },
+    {
+      "invariant": "filesystem.ancestor_replacement",
+      "area": "filesystem",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeIntegrationTests.test_native_retains_ancestors_against_namespace_replacement",
+      "expected_reason": "namespace_replacement_denied",
+      "posix_equivalent": ["tests.test_directory_safety.PinnedDirectoryTests.test_expected_identity_mismatch_is_rejected"]
+    },
+    {
+      "invariant": "filesystem.owner_dacl_broadening",
+      "area": "filesystem",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeStandardUserIntegrationTests.test_native_inherited_dacl_admits_then_rejects_live_broadening",
+      "expected_reason": "identity_or_security_changed"
+    },
+    {
+      "invariant": "filesystem.hardlink_substitution",
+      "area": "filesystem",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeIntegrationTests.test_native_hardlink_substitution_changes_identity",
+      "expected_reason": "identity_or_security_changed",
+      "posix_equivalent": ["tests.test_git_connectors.GitWorkspaceConnectorTests.test_commit_refuses_hardlinked_reflog_without_publishing"]
+    },
+    {
+      "invariant": "filesystem.alternate_data_stream",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_drive_path_validation_is_strict_and_deterministic",
+      "expected_reason": "unsafe_path_syntax"
+    },
+    {
+      "invariant": "filesystem.case_collision",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPinnedPathTests.test_windows_ordinal_names_preserve_sharp_s_and_ss_as_distinct",
+      "expected_reason": "case_collision"
+    },
+    {
+      "invariant": "filesystem.trailing_dot_space",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_drive_path_validation_is_strict_and_deterministic",
+      "expected_reason": "unsafe_path_component"
+    },
+    {
+      "invariant": "filesystem.reserved_device_name",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_drive_path_validation_is_strict_and_deterministic",
+      "expected_reason": "unsafe_path_component"
+    },
+    {
+      "invariant": "filesystem.unicode_long_path",
+      "area": "filesystem",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeIntegrationTests.test_native_extended_length_path_exceeds_legacy_limit",
+      "expected_reason": "lossless_extended_path"
+    },
+    {
+      "invariant": "filesystem.remote_namespace",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_drive_path_validation_is_strict_and_deterministic",
+      "expected_reason": "remote_namespace_rejected"
+    },
+    {
+      "invariant": "filesystem.cloud_placeholder",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_reparse_cloud_and_offline_attributes_are_rejected",
+      "expected_reason": "cloud_attribute_rejected"
+    },
+    {
+      "invariant": "filesystem.unsupported_filesystem",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPinnedPathTests.test_pin_rejects_unsupported_volume_before_opening_handles",
+      "expected_reason": "unsupported_filesystem"
+    },
+    {
+      "invariant": "filesystem.destination_contention",
+      "area": "filesystem",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeIntegrationTests.test_native_independent_process_exclusive_nonblocking_contends",
+      "expected_reason": "lock_contention"
+    },
+    {
+      "invariant": "filesystem.interrupted_recovery",
+      "area": "filesystem",
+      "group": "hosted",
+      "test_id": "tests.test_windows_atomic_state.WindowsAtomicStateTests.test_interrupted_prepare_and_replace_reconcile_old_or_new",
+      "expected_reason": "indeterminate_generation"
+    },
+    {
+      "invariant": "process.inherited_handle",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_only_selected_native_handle_reaches_child",
+      "expected_reason": "unselected_handle_absent"
+    },
+    {
+      "invariant": "process.environment_secret",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_runtime_reports_native_backend_and_minimal_environment",
+      "expected_reason": "ambient_secret_absent"
+    },
+    {
+      "invariant": "process.descendant_escape",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_timeout_terminates_descendant_tree",
+      "expected_reason": "descendant_tree_terminated"
+    },
+    {
+      "invariant": "process.timeout_tree_termination",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_timeout_terminates_descendant_tree",
+      "expected_reason": "timed_out"
+    },
+    {
+      "invariant": "process.process_limit",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_process_count_and_memory_limits_are_enforced",
+      "expected_reason": "process_limit_enforced"
+    },
+    {
+      "invariant": "process.memory_limit",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_process_count_and_memory_limits_are_enforced",
+      "expected_reason": "memory_limit_enforced"
+    },
+    {
+      "invariant": "process.output_flood",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_output_is_bounded_and_failure_reason_is_secret_free",
+      "expected_reason": "bounded_output"
+    },
+    {
+      "invariant": "process.encoding_console",
+      "area": "process",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.NativeWindowsProcessTests.test_unicode_console_output_is_explicit_utf8",
+      "expected_reason": "explicit_utf8"
+    },
+    {
+      "invariant": "process.application_control",
+      "area": "process",
+      "group": "hosted",
+      "test_id": "tests.test_windows_process.WindowsProcessContractTests.test_policy_denial_is_bounded_and_secret_free",
+      "expected_reason": "native_control_failed"
+    },
+    {
+      "invariant": "git.hooks_executable_config",
+      "area": "git",
+      "group": "hosted",
+      "test_id": "tests.test_windows_git.WindowsTrustedGitContractTests.test_pins_identity_and_runs_with_minimal_hardened_context",
+      "expected_reason": "hooks_disabled",
+      "posix_equivalent": ["tests.test_git_connectors.GitWorkspaceConnectorTests.test_commit_disables_repository_hooks_and_binds_exact_diff"]
+    },
+    {
+      "invariant": "git.global_system_config",
+      "area": "git",
+      "group": "hosted",
+      "test_id": "tests.test_windows_git.WindowsTrustedGitContractTests.test_pins_identity_and_runs_with_minimal_hardened_context",
+      "expected_reason": "ambient_config_disabled"
+    },
+    {
+      "invariant": "git.credential_helper",
+      "area": "git",
+      "group": "hosted",
+      "test_id": "tests.test_windows_git.WindowsTrustedGitContractTests.test_pins_identity_and_runs_with_minimal_hardened_context",
+      "expected_reason": "credential_helper_disabled"
+    },
+    {
+      "invariant": "git.repository_junction",
+      "area": "git",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeStandardUserIntegrationTests.test_native_nonprivileged_junction_alias_is_rejected",
+      "expected_reason": "reparse_alias_rejected"
+    },
+    {
+      "invariant": "git.crlf_stability",
+      "area": "git",
+      "group": "hosted",
+      "test_id": "tests.test_draft_package.DraftPackageTests.test_repository_patch_normalizes_crlf_to_deterministic_lf",
+      "expected_reason": "deterministic_lf"
+    },
+    {
+      "invariant": "git.case_collision",
+      "area": "git",
+      "group": "hosted",
+      "test_id": "tests.test_windows_git.WindowsTrustedGitContractTests.test_case_conflicting_git_directory_is_rejected",
+      "expected_reason": "case_collision"
+    },
+    {
+      "invariant": "git.index_contention",
+      "area": "git",
+      "group": "certification",
+      "test_id": "tests.test_windows_git.NativeWindowsTrustedGitTests.test_spaces_unicode_and_index_contention",
+      "expected_reason": "repository_busy"
+    },
+    {
+      "invariant": "git.unicode_long_repository",
+      "area": "git",
+      "group": "certification",
+      "test_id": "tests.test_windows_git.NativeWindowsTrustedGitTests.test_spaces_unicode_and_index_contention",
+      "expected_reason": "unicode_repository"
+    },
+    {
+      "invariant": "capsule.host_filesystem",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_host_file_denied",
+      "posix_equivalent": ["tests.test_capability_capsules.CapabilityCapsuleTests.test_worker_denies_host_files_secrets_network_processes_and_exhaustion"]
+    },
+    {
+      "invariant": "capsule.environment_secret",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_ambient_secret_denied"
+    },
+    {
+      "invariant": "capsule.network_ipv4",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_network_ipv4_denied"
+    },
+    {
+      "invariant": "capsule.network_ipv6",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_network_ipv6_denied"
+    },
+    {
+      "invariant": "capsule.network_localhost",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_network_localhost_denied"
+    },
+    {
+      "invariant": "capsule.named_pipe",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_named_pipe_denied"
+    },
+    {
+      "invariant": "capsule.subprocess_tree",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_subprocess_denied"
+    },
+    {
+      "invariant": "capsule.output_exhaustion",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_worker_output_and_wall_time_limits_fail_closed",
+      "expected_reason": "output_too_large"
+    },
+    {
+      "invariant": "capsule.handle_access",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_pure_worker_and_native_denial_suite",
+      "expected_reason": "os_parent_handle_denied"
+    },
+    {
+      "invariant": "capsule.runtime_identity_tamper",
+      "area": "capsule",
+      "group": "certification",
+      "test_id": "tests.test_windows_capsules.NativeWindowsAppContainerTests.test_runtime_identity_tamper_fails_closed",
+      "expected_reason": "capsule_runtime_identity_changed"
+    },
+    {
+      "invariant": "credentials.cross_user_dpapi",
+      "area": "credentials",
+      "group": "hosted",
+      "test_id": "tests.test_windows_credentials.WindowsCredentialStorageTests.test_dpapi_persists_ciphertext_and_enforces_current_user",
+      "expected_reason": "current_user_scope"
+    },
+    {
+      "invariant": "credentials.secret_redaction",
+      "area": "credentials",
+      "group": "hosted",
+      "test_id": "tests.test_windows_credentials.WindowsCredentialStorageTests.test_credential_manager_rolls_back_without_rendering_values",
+      "expected_reason": "secret_free_failure",
+      "posix_equivalent": ["tests.test_credentials.CredentialStoreTests.test_valid_store_is_redacted_and_overlays_environment"]
+    },
+    {
+      "invariant": "managed.organization_acl_inheritance",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_sid_canonicalization_and_dacl_evaluation",
+      "expected_reason": "requires_organization_trust_profile",
+      "blocking_issue": 111
+    },
+    {
+      "invariant": "managed.support_edr_principals",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_sid_canonicalization_and_dacl_evaluation",
+      "expected_reason": "requires_approved_principal_profile",
+      "blocking_issue": 111
+    },
+    {
+      "invariant": "managed.onedrive_reparse",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsPurePolicyTests.test_reparse_cloud_and_offline_attributes_are_rejected",
+      "expected_reason": "cloud_attribute_rejected"
+    },
+    {
+      "invariant": "managed.defender_cfa",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_directory_safety.PinnedDirectoryTests.test_windows_native_open_and_child_errors_are_bounded",
+      "expected_reason": "native_open_failed"
+    },
+    {
+      "invariant": "managed.applocker_wdac",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_process.WindowsProcessContractTests.test_policy_denial_is_bounded_and_secret_free",
+      "expected_reason": "native_control_failed"
+    },
+    {
+      "invariant": "managed.authenticated_proxy",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_http.SafeHttpClientTests.test_default_transport_ignores_ambient_proxy_configuration",
+      "expected_reason": "requires_governed_proxy_profile",
+      "blocking_issue": 112
+    },
+    {
+      "invariant": "managed.enterprise_ca",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_provider_egress.ProviderDataOrchestratorTests.test_applied_read_rejects_endpoint_and_ca_drift_before_execute",
+      "expected_reason": "requires_enterprise_ca_profile",
+      "blocking_issue": 112
+    },
+    {
+      "invariant": "managed.standard_user",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_platform_runtime.WindowsNativeStandardUserIntegrationTests.test_native_runner_token_is_not_an_administrator",
+      "expected_reason": "administrator_token_rejected"
+    },
+    {
+      "invariant": "managed.antivirus_contention",
+      "area": "managed",
+      "group": "certification",
+      "test_id": "tests.test_windows_git.NativeWindowsTrustedGitTests.test_spaces_unicode_and_index_contention",
+      "expected_reason": "repository_busy"
+    }
+  ]
+}

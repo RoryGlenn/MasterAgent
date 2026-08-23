@@ -346,6 +346,24 @@ class WindowsTrustedGitContractTests(unittest.TestCase):
                 self.assertEqual(process.calls, [])
                 del parent._children[name]
 
+    def test_case_conflicting_git_directory_is_rejected(self) -> None:
+        self.repository._children[".GIT"] = _FakePin(
+            _fixture_path("/repo/.GIT"),
+            directory=True,
+        )
+        process = _FakeProcess([])
+        backend = self.backend(process)
+        self.addCleanup(backend.close)
+
+        with self.assertRaisesRegex(TrustedGitError, "case_collision"):
+            backend.read(
+                self.repository.path,
+                ("status", "--porcelain=v1"),
+                timeout_seconds=10,
+                max_output_bytes=4096,
+            )
+        self.assertEqual(process.calls, [])
+
     def test_child_diagnostics_never_enter_failure_text(self) -> None:
         process = _FakeProcess(
             [

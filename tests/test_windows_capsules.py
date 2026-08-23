@@ -269,6 +269,8 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
                 "os_network_ipv4",
                 "os_network_ipv6",
                 "os_network_localhost",
+                "os_named_pipe",
+                "os_parent_handle",
                 "os_subprocess",
             },
         )

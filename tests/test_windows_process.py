@@ -49,6 +49,12 @@ class _FakeProcessApi:
         )
 
 
+class _PolicyDeniedProcessApi(_FakeProcessApi):
+    def run(self, **kwargs: Any) -> ProcessExecutionResult:
+        self.calls.append(kwargs)
+        raise OSError(f"application control denied {_SECRET}")
+
+
 class WindowsProcessContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.api = _FakeProcessApi()
@@ -132,6 +138,27 @@ class WindowsProcessContractTests(unittest.TestCase):
                 max_output_bytes=1024,
             )
         self.assertEqual(raised.exception.reason, "supervised_launch_required")
+        self.assertNotIn(_SECRET, str(raised.exception))
+
+    def test_policy_denial_is_bounded_and_secret_free(self) -> None:
+        backend = WindowsProcessSupervisionBackend(api=_PolicyDeniedProcessApi())
+        with self.assertRaises(ProcessSupervisionError) as raised:
+            backend.run(
+                executable=Path.cwd() / "runtime" / "blocked.exe",
+                arguments=("--secret", _SECRET),
+                cwd=Path.cwd() / "work",
+                environment={"CANARY": _SECRET},
+                timeout_seconds=2,
+                cpu_seconds=1,
+                memory_bytes=128 * 1024 * 1024,
+                max_processes=1,
+                max_output_bytes=1024,
+            )
+        self.assertEqual(raised.exception.reason, "native_control_failed")
+        self.assertEqual(
+            str(raised.exception),
+            "process supervision failed: native_control_failed",
+        )
         self.assertNotIn(_SECRET, str(raised.exception))
 
     def _restore_environment(self, previous: str | None) -> None:
@@ -276,6 +303,24 @@ class NativeWindowsProcessTests(unittest.TestCase):
         self.assertLessEqual(len(result.stdout) + len(result.stderr), 128)
         self.assertTrue(result.output_truncated)
         self.assertNotIn(_SECRET, str(result.reason))
+
+    def test_unicode_console_output_is_explicit_utf8(self) -> None:
+        result = self.run_python(
+            "import sys; print('stdout-Δ-文-🙂'); print('stderr-ß-é', file=sys.stderr)",
+            environment={
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+            },
+        )
+        self.assertEqual(result.reason, ProcessExitReason.EXITED)
+        self.assertEqual(
+            result.stdout.replace(b"\r\n", b"\n"),
+            "stdout-Δ-文-🙂\n".encode(),
+        )
+        self.assertEqual(
+            result.stderr.replace(b"\r\n", b"\n"),
+            "stderr-ß-é\n".encode(),
+        )
 
 
 if __name__ == "__main__":
