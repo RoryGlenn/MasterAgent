@@ -540,7 +540,7 @@ def _has_extended_posix_acl(descriptor: int) -> bool:
             mode = ctypes.c_uint()
             result = library.acl_equiv_mode(acl, ctypes.byref(mode))
             if result in {0, 1}:
-                return result == 1
+                return bool(result == 1)
             raise ConfigurationError("managed configuration ACL could not be verified")
         finally:
             library.acl_free(acl)
