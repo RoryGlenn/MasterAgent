@@ -119,6 +119,37 @@ class CompensationPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "complete separately approvable"):
             build_compensation_plan(original, report, created_by="operator")
 
+    def test_multiple_compensations_each_receive_a_strategy_trace(self) -> None:
+        first = _action("first")
+        second = _action("second")
+        original = ChangePlan(
+            goal="Update two resources.",
+            actions=(first, second),
+            created_by="test",
+        )
+        report = RunReport(
+            run_id=uuid4(),
+            plan_id=original.plan_id,
+            plan_fingerprint=original.fingerprint,
+            dry_run=False,
+            actions=(
+                _report(first, CompensationMode.PLAN),
+                _report(second, CompensationMode.PLAN),
+            ),
+        )
+
+        compensation = build_compensation_plan(
+            original,
+            report,
+            created_by="operator",
+        )
+
+        self.assertEqual(len(compensation.actions), 2)
+        self.assertEqual(len(compensation.strategy_traces), 2)
+        assessment = compensation.systems_assessment
+        assert assessment is not None and assessment.strategy_kernel is not None
+        self.assertEqual(len(assessment.strategy_kernel.coherent_actions), 2)
+
     def test_unversioned_legacy_compensation_metadata_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValidationError, "compensation descriptor must"):
             ExecutionResult.from_dict(

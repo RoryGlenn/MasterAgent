@@ -47,6 +47,7 @@ from master_agent.models import (
     SystemsPostExecutionReview,
 )
 from master_agent.planners.base import (
+    SystemsOutcomeObserver,
     build_systems_post_execution_review,
     enforce_systems_governance,
 )
@@ -224,6 +225,7 @@ class WorkflowOrchestrator:
         capabilities: CapabilityCatalog | None = None,
         governance: GovernanceProfile | None = None,
         pre_effect_guard: Callable[[AgentAction], None] | None = None,
+        systems_outcome_observer: SystemsOutcomeObserver | None = None,
     ) -> None:
         self._policy = policy
         self._sources = sources
@@ -232,6 +234,7 @@ class WorkflowOrchestrator:
         self._capabilities = capabilities
         self._governance = governance
         self._pre_effect_guard = pre_effect_guard
+        self._systems_outcome_observer = systems_outcome_observer
 
     def run(
         self,
@@ -991,6 +994,7 @@ class WorkflowOrchestrator:
             decision=systems_decision,
             states=(item.state for item in reports),
             dry_run=dry_run,
+            observer=self._systems_outcome_observer,
         )
         self._audit.record(
             run_id=run_id,

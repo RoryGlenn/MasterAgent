@@ -1,5 +1,6 @@
 """Workflow orchestration tests."""
 
+import hashlib
 import unittest
 from collections.abc import Callable
 from dataclasses import replace
@@ -21,10 +22,18 @@ from master_agent.models import (
     ComplexityKind,
     ResourceRef,
     RiskLevel,
+    StrategyActionIntent,
+    StrategyKernel,
     SystemsAssessment,
+    SystemsMetricStatus,
+    SystemsOutcomeEvidence,
 )
-from master_agent.orchestrator import WorkflowOrchestrator
-from master_agent.planners.base import bind_systems_governance
+from master_agent.orchestrator import RunReport, WorkflowOrchestrator
+from master_agent.planners.base import (
+    EvidenceBackedSystemsOutcomeObserver,
+    SystemsOutcomeObserver,
+    bind_static_intervention_governance,
+)
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.registry import ConnectorRegistry
@@ -54,6 +63,43 @@ class OrchestratorTests(unittest.TestCase):
             assert report.systems_review is not None
             self.assertTrue(report.systems_review.reassessment_required)
             self.assertFalse(report.systems_review.stop_condition_checked)
+
+    def test_fingerprint_bound_observer_closes_the_applied_run_loop(self) -> None:
+        class Provider:
+            def observe(self, *, assessment, decision, states):
+                self.states = states
+                return SystemsOutcomeEvidence(
+                    assessment_fingerprint=assessment.fingerprint,
+                    decision_fingerprint=decision.fingerprint,
+                    success_metric_sha256=hashlib.sha256(
+                        assessment.success_metric.encode("utf-8")
+                    ).hexdigest(),
+                    metric_status=SystemsMetricStatus.CONFIRMED_MOVED,
+                    unintended_effects_detected=False,
+                    observed_complexity_score=0,
+                    removal_candidate_count=0,
+                    stop_condition_checked=True,
+                    stop_condition_triggered=False,
+                    reason_codes=("workflow_metric_observed",),
+                )
+
+        provider = Provider()
+        observer = EvidenceBackedSystemsOutcomeObserver(provider)
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            report = _orchestrator(audit, outcome_observer=observer).run(
+                build_weekly_status_plan(), dry_run=False
+            )
+
+        self.assertTrue(provider.states)
+        self.assertEqual(
+            report.systems_review.metric_status,
+            SystemsMetricStatus.CONFIRMED_MOVED,
+        )
+        self.assertEqual(report.systems_review.complexity_growth, 0)
+        self.assertFalse(report.systems_review.reassessment_required)
+        restored = RunReport.from_dict(report.to_dict())
+        self.assertEqual(restored.systems_review, report.systems_review)
 
     def test_recurring_reads_and_local_generation_run_fresh(self) -> None:
         with TemporaryDirectory() as directory:
@@ -188,9 +234,9 @@ class OrchestratorTests(unittest.TestCase):
                 systems_assessment=None,
                 systems_decision=None,
             )
-            plan = bind_systems_governance(
+            plan = bind_static_intervention_governance(
                 unbound,
-                SystemsAssessment(
+                SystemsAssessment.for_static_intervention(
                     desired_outcome=unbound.goal,
                     current_behavior="the sprint summary has not changed",
                     constraint="the write must keep its occurrence fence",
@@ -204,9 +250,9 @@ class OrchestratorTests(unittest.TestCase):
                     failure_condition="the provider state changes after fence loss",
                     unintended_consequences=("a duplicate provider effect",),
                     removable_complexity=("the test guard",),
+                    strategy_kernel=_strategy_kernel_for_plan(unbound),
                     alternatives_considered=("connector-specific fencing",),
                     reversibility_strategy="retain the original provider state",
-                    low_risk=False,
                     reversible=True,
                     well_understood=True,
                 ),
@@ -236,6 +282,7 @@ def _orchestrator(
     authenticator: HmacApprovalAuthenticator | None = None,
     pre_effect_guard: Callable[[AgentAction], None] | None = None,
     jira_connector: MockConnector | None = None,
+    outcome_observer: SystemsOutcomeObserver | None = None,
 ) -> WorkflowOrchestrator:
     registry = ConnectorRegistry()
     registry.register(
@@ -268,6 +315,7 @@ def _orchestrator(
         connectors=registry,
         audit=audit,
         pre_effect_guard=pre_effect_guard,
+        systems_outcome_observer=outcome_observer,
     )
 
 
@@ -277,9 +325,9 @@ def _over_budget_plan() -> ChangePlan:
         systems_assessment=None,
         systems_decision=None,
     )
-    return bind_systems_governance(
+    return bind_static_intervention_governance(
         plan,
-        SystemsAssessment(
+        SystemsAssessment.for_static_intervention(
             desired_outcome=plan.goal,
             current_behavior="the weekly report is not yet generated",
             constraint="the report requires multiple governed source reads",
@@ -293,6 +341,7 @@ def _over_budget_plan() -> ChangePlan:
             failure_condition="the report is missing or unverified",
             unintended_consequences=("additional maintenance burden",),
             removable_complexity=("the test-only over-budget additions",),
+            strategy_kernel=_strategy_kernel_for_plan(plan),
             alternatives_considered=("reuse only the existing workflow",),
             added_complexity=(
                 ComplexityItem(ComplexityKind.AGENT, "test planning agent"),
@@ -306,9 +355,25 @@ def _over_budget_plan() -> ChangePlan:
                 "the test must exercise authenticated over-budget review"
             ),
             reversibility_strategy="remove the test-only additions",
-            low_risk=False,
             reversible=True,
             well_understood=True,
+        ),
+    )
+
+
+def _strategy_kernel_for_plan(plan: ChangePlan) -> StrategyKernel:
+    return StrategyKernel(
+        diagnosis="the requested test outcome has not reached verified state",
+        guiding_policy="use only the existing governed test actions",
+        proximate_objective="execute and verify the exact bounded test plan",
+        tradeoffs=("prefer deterministic coverage over production breadth",),
+        coherent_actions=tuple(
+            StrategyActionIntent(
+                intent_id=f"test_action_{index}",
+                description=action.justification,
+                expected_effect="the action reaches its independently verified state",
+            )
+            for index, action in enumerate(plan.actions, start=1)
         ),
     )
 

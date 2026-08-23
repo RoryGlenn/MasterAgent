@@ -35,6 +35,7 @@ from master_agent.resource_limits import (
 
 _CAPSULE_CAPABILITY_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9][a-z0-9_-]*)+")
 _CAPSULE_VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?")
+_STRATEGY_INTENT_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 class RiskLevel(StrEnum):
@@ -122,6 +123,163 @@ class ComplexityItem:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyActionIntent:
+    """One bounded action intent that follows a strategy's guiding policy."""
+
+    intent_id: str
+    description: str
+    expected_effect: str
+    schema: str = "master-agent/strategy-action-intent@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/strategy-action-intent@1":
+            raise ValidationError("unsupported strategy action intent schema")
+        if _STRATEGY_INTENT_PATTERN.fullmatch(self.intent_id) is None:
+            raise ValidationError("strategy action intent ID is invalid")
+        _require_systems_text(self.description, "strategy action description")
+        _require_systems_text(self.expected_effect, "strategy expected effect")
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the coherent-action intent."""
+
+        return {
+            "schema": self.schema,
+            "intent_id": self.intent_id,
+            "description": self.description,
+            "expected_effect": self.expected_effect,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> StrategyActionIntent:
+        """Parse one coherent-action intent."""
+
+        return cls(
+            schema=str(data.get("schema", "")),
+            intent_id=str(data.get("intent_id", "")),
+            description=str(data.get("description", "")),
+            expected_effect=str(data.get("expected_effect", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyKernel:
+    """A bounded diagnosis, guiding policy, and coherent action set."""
+
+    diagnosis: str
+    guiding_policy: str
+    proximate_objective: str
+    tradeoffs: tuple[str, ...]
+    coherent_actions: tuple[StrategyActionIntent, ...]
+    schema: str = "master-agent/strategy-kernel@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/strategy-kernel@1":
+            raise ValidationError("unsupported strategy kernel schema")
+        for name in ("diagnosis", "guiding_policy", "proximate_objective"):
+            _require_systems_text(getattr(self, name), f"strategy {name}")
+        tradeoffs = tuple(islice(iter(self.tradeoffs), MAX_PLAN_ACTIONS + 1))
+        if len(tradeoffs) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"strategy kernel exceeds the {MAX_PLAN_ACTIONS}-tradeoff limit"
+            )
+        tradeoffs = _normalize_systems_text_tuple(tradeoffs, "strategy tradeoffs")
+        if not tradeoffs:
+            raise ValidationError("strategy kernel must state at least one tradeoff")
+        object.__setattr__(self, "tradeoffs", tradeoffs)
+        coherent_actions = tuple(
+            islice(iter(self.coherent_actions), MAX_PLAN_ACTIONS + 1)
+        )
+        if len(coherent_actions) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"strategy kernel exceeds the {MAX_PLAN_ACTIONS}-intent limit"
+            )
+        if not coherent_actions or not all(
+            isinstance(item, StrategyActionIntent) for item in coherent_actions
+        ):
+            raise ValidationError(
+                "strategy kernel must contain coherent StrategyActionIntent values"
+            )
+        intent_ids = [item.intent_id for item in coherent_actions]
+        if len(intent_ids) != len(set(intent_ids)):
+            raise ValidationError("strategy coherent action IDs must be unique")
+        object.__setattr__(self, "coherent_actions", coherent_actions)
+
+    @property
+    def fingerprint(self) -> str:
+        """Return the stable digest of the complete strategy kernel."""
+
+        return _stable_sha256(self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the strategy kernel."""
+
+        return {
+            "schema": self.schema,
+            "diagnosis": self.diagnosis,
+            "guiding_policy": self.guiding_policy,
+            "proximate_objective": self.proximate_objective,
+            "tradeoffs": list(self.tradeoffs),
+            "coherent_actions": [item.to_dict() for item in self.coherent_actions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> StrategyKernel:
+        """Parse a strategy kernel from a bounded assessment payload."""
+
+        raw_actions = data.get("coherent_actions")
+        if not isinstance(raw_actions, list) or not all(
+            isinstance(item, Mapping) for item in raw_actions
+        ):
+            raise ValidationError("strategy coherent_actions must be a list")
+        return cls(
+            schema=str(data.get("schema", "")),
+            diagnosis=str(data.get("diagnosis", "")),
+            guiding_policy=str(data.get("guiding_policy", "")),
+            proximate_objective=str(data.get("proximate_objective", "")),
+            tradeoffs=_systems_text_list(data, "tradeoffs"),
+            coherent_actions=tuple(
+                StrategyActionIntent.from_dict(item) for item in raw_actions
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyActionTrace:
+    """Bind one exact plan action to one strategy action intent."""
+
+    action_id: UUID
+    intent_id: str
+    schema: str = "master-agent/strategy-action-trace@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/strategy-action-trace@1":
+            raise ValidationError("unsupported strategy action trace schema")
+        if not isinstance(self.action_id, UUID):
+            raise ValidationError("strategy action trace action_id is invalid")
+        if _STRATEGY_INTENT_PATTERN.fullmatch(self.intent_id) is None:
+            raise ValidationError("strategy action trace intent_id is invalid")
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the strategy trace."""
+
+        return {
+            "schema": self.schema,
+            "action_id": str(self.action_id),
+            "intent_id": self.intent_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> StrategyActionTrace:
+        """Parse a strategy trace."""
+
+        return cls(
+            schema=str(data.get("schema", "")),
+            action_id=UUID(str(data.get("action_id", ""))),
+            intent_id=str(data.get("intent_id", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SystemsAssessment:
     """Structured diagnosis completed before non-trivial planning."""
 
@@ -145,6 +303,7 @@ class SystemsAssessment:
     added_complexity: tuple[ComplexityItem, ...] = ()
     existing_mechanisms_insufficient_because: str = ""
     reversibility_strategy: str = ""
+    strategy_kernel: StrategyKernel | None = None
     schema: str = "master-agent/systems-assessment@1"
 
     def __post_init__(self) -> None:
@@ -192,6 +351,92 @@ class SystemsAssessment:
             value = getattr(self, name)
             if value:
                 _require_systems_text(value, f"systems assessment {name}")
+        if self.strategy_kernel is not None and not isinstance(
+            self.strategy_kernel, StrategyKernel
+        ):
+            raise ValidationError(
+                "systems assessment strategy_kernel must be a StrategyKernel"
+            )
+
+    @classmethod
+    def for_fast_path(
+        cls,
+        *,
+        desired_outcome: str,
+        current_behavior: str,
+        constraint: str,
+        leverage_point: str,
+        simplest_intervention: str,
+        success_metric: str,
+        failure_condition: str,
+    ) -> SystemsAssessment:
+        """Construct an explicit known-safe static workflow assessment."""
+
+        return cls(
+            desired_outcome=desired_outcome,
+            current_behavior=current_behavior,
+            constraint=constraint,
+            leverage_point=leverage_point,
+            simplest_intervention=simplest_intervention,
+            success_metric=success_metric,
+            failure_condition=failure_condition,
+            low_risk=True,
+            reversible=True,
+            well_understood=True,
+        )
+
+    @classmethod
+    def for_static_intervention(
+        cls,
+        *,
+        desired_outcome: str,
+        current_behavior: str,
+        constraint: str,
+        stocks: tuple[str, ...],
+        flows: tuple[str, ...],
+        feedback_loops: tuple[str, ...],
+        delays: tuple[str, ...],
+        leverage_point: str,
+        simplest_intervention: str,
+        success_metric: str,
+        failure_condition: str,
+        unintended_consequences: tuple[str, ...],
+        removable_complexity: tuple[str, ...],
+        strategy_kernel: StrategyKernel,
+        reversible: bool,
+        well_understood: bool,
+        alternatives_considered: tuple[str, ...] = (),
+        added_complexity: tuple[ComplexityItem, ...] = (),
+        existing_mechanisms_insufficient_because: str = "",
+        reversibility_strategy: str = "",
+    ) -> SystemsAssessment:
+        """Construct an explicit assessment for one static effect workflow."""
+
+        return cls(
+            desired_outcome=desired_outcome,
+            current_behavior=current_behavior,
+            constraint=constraint,
+            stocks=stocks,
+            flows=flows,
+            feedback_loops=feedback_loops,
+            delays=delays,
+            leverage_point=leverage_point,
+            simplest_intervention=simplest_intervention,
+            success_metric=success_metric,
+            failure_condition=failure_condition,
+            unintended_consequences=unintended_consequences,
+            removable_complexity=removable_complexity,
+            alternatives_considered=alternatives_considered,
+            added_complexity=added_complexity,
+            existing_mechanisms_insufficient_because=(
+                existing_mechanisms_insufficient_because
+            ),
+            reversibility_strategy=reversibility_strategy,
+            low_risk=False,
+            reversible=reversible,
+            well_understood=well_understood,
+            strategy_kernel=strategy_kernel,
+        )
 
     @property
     def fast_path_requested(self) -> bool:
@@ -206,6 +451,12 @@ class SystemsAssessment:
         return sum(item.weight for item in self.added_complexity)
 
     @property
+    def success_metric_sha256(self) -> str:
+        """Return the content-free identity of the stated success metric."""
+
+        return hashlib.sha256(self.success_metric.encode("utf-8")).hexdigest()
+
+    @property
     def fingerprint(self) -> str:
         """Return a stable digest that binds a decision to this assessment."""
 
@@ -214,7 +465,7 @@ class SystemsAssessment:
     def to_dict(self) -> dict[str, object]:
         """Serialize the assessment to JSON-compatible data."""
 
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "desired_outcome": self.desired_outcome,
             "current_behavior": self.current_behavior,
@@ -240,6 +491,9 @@ class SystemsAssessment:
             "well_understood": self.well_understood,
             "complexity_score": self.complexity_score,
         }
+        if self.strategy_kernel is not None:
+            payload["strategy_kernel"] = self.strategy_kernel.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SystemsAssessment:
@@ -250,6 +504,11 @@ class SystemsAssessment:
             isinstance(item, Mapping) for item in raw_complexity
         ):
             raise ValidationError("systems assessment added_complexity must be a list")
+        raw_strategy = data.get("strategy_kernel")
+        if raw_strategy is not None and not isinstance(raw_strategy, Mapping):
+            raise ValidationError(
+                "systems assessment strategy_kernel must be an object"
+            )
         assessment = cls(
             schema=str(data.get("schema", "")),
             desired_outcome=str(data.get("desired_outcome", "")),
@@ -279,6 +538,11 @@ class SystemsAssessment:
             ),
             well_understood=_strict_bool(
                 data.get("well_understood"), "systems assessment well_understood"
+            ),
+            strategy_kernel=(
+                StrategyKernel.from_dict(raw_strategy)
+                if isinstance(raw_strategy, Mapping)
+                else None
             ),
         )
         if data.get("complexity_score") != assessment.complexity_score:
@@ -382,6 +646,177 @@ class SystemsMetricStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SystemsOutcomeEvidence:
+    """Content-free, fingerprint-bound evidence from an outcome observer."""
+
+    assessment_fingerprint: str
+    decision_fingerprint: str
+    success_metric_sha256: str
+    metric_status: SystemsMetricStatus
+    unintended_effects_detected: bool
+    observed_complexity_score: int | None
+    removal_candidate_count: int
+    stop_condition_checked: bool
+    stop_condition_triggered: bool | None
+    reason_codes: tuple[str, ...]
+    schema: str = "master-agent/systems-outcome-evidence@1"
+
+    def __post_init__(self) -> None:
+        if self.schema != "master-agent/systems-outcome-evidence@1":
+            raise ValidationError("unsupported systems outcome evidence schema")
+        for name in (
+            "assessment_fingerprint",
+            "decision_fingerprint",
+            "success_metric_sha256",
+        ):
+            if not re.fullmatch(r"[0-9a-f]{64}", getattr(self, name)):
+                raise ValidationError(
+                    f"systems outcome evidence {name} must be a SHA-256 digest"
+                )
+        if not isinstance(self.metric_status, SystemsMetricStatus):
+            raise ValidationError("systems outcome evidence metric status is invalid")
+        if self.metric_status not in {
+            SystemsMetricStatus.CONFIRMED_MOVED,
+            SystemsMetricStatus.CONFIRMED_UNCHANGED,
+        }:
+            raise ValidationError(
+                "systems outcome evidence must independently observe the metric"
+            )
+        for name in (
+            "unintended_effects_detected",
+            "stop_condition_checked",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValidationError(
+                    f"systems outcome evidence {name} must be a boolean"
+                )
+        if self.stop_condition_checked and not isinstance(
+            self.stop_condition_triggered, bool
+        ):
+            raise ValidationError(
+                "checked systems outcome evidence requires a stop-condition result"
+            )
+        if (
+            not self.stop_condition_checked
+            and self.stop_condition_triggered is not None
+        ):
+            raise ValidationError(
+                "unchecked systems outcome evidence cannot state a stop result"
+            )
+        if self.observed_complexity_score is not None and (
+            not isinstance(self.observed_complexity_score, int)
+            or isinstance(self.observed_complexity_score, bool)
+            or self.observed_complexity_score < 0
+        ):
+            raise ValidationError(
+                "systems outcome evidence observed_complexity_score must be "
+                "non-negative or null"
+            )
+        if (
+            not isinstance(self.removal_candidate_count, int)
+            or isinstance(self.removal_candidate_count, bool)
+            or self.removal_candidate_count < 0
+        ):
+            raise ValidationError(
+                "systems outcome evidence removal_candidate_count must be a "
+                "non-negative integer"
+            )
+        codes = tuple(self.reason_codes)
+        if not codes or any(
+            re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item) is None for item in codes
+        ):
+            raise ValidationError("systems outcome evidence reason codes are invalid")
+        object.__setattr__(self, "reason_codes", codes)
+
+    @classmethod
+    def for_observation(
+        cls,
+        *,
+        assessment: SystemsAssessment,
+        decision: SystemsGateDecision,
+        metric_status: SystemsMetricStatus,
+        unintended_effects_detected: bool,
+        observed_complexity_score: int | None,
+        removal_candidate_count: int,
+        stop_condition_checked: bool,
+        stop_condition_triggered: bool | None,
+        reason_codes: tuple[str, ...],
+    ) -> SystemsOutcomeEvidence:
+        """Bind independently measured values to the admitted systems records."""
+
+        return cls(
+            assessment_fingerprint=assessment.fingerprint,
+            decision_fingerprint=decision.fingerprint,
+            success_metric_sha256=assessment.success_metric_sha256,
+            metric_status=metric_status,
+            unintended_effects_detected=unintended_effects_detected,
+            observed_complexity_score=observed_complexity_score,
+            removal_candidate_count=removal_candidate_count,
+            stop_condition_checked=stop_condition_checked,
+            stop_condition_triggered=stop_condition_triggered,
+            reason_codes=reason_codes,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize content-free observer evidence."""
+
+        return {
+            "schema": self.schema,
+            "assessment_fingerprint": self.assessment_fingerprint,
+            "decision_fingerprint": self.decision_fingerprint,
+            "success_metric_sha256": self.success_metric_sha256,
+            "metric_status": str(self.metric_status),
+            "unintended_effects_detected": self.unintended_effects_detected,
+            "observed_complexity_score": self.observed_complexity_score,
+            "removal_candidate_count": self.removal_candidate_count,
+            "stop_condition_checked": self.stop_condition_checked,
+            "stop_condition_triggered": self.stop_condition_triggered,
+            "reason_codes": list(self.reason_codes),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SystemsOutcomeEvidence:
+        """Parse bounded observer evidence."""
+
+        return cls(
+            schema=str(data.get("schema", "")),
+            assessment_fingerprint=str(data.get("assessment_fingerprint", "")),
+            decision_fingerprint=str(data.get("decision_fingerprint", "")),
+            success_metric_sha256=str(data.get("success_metric_sha256", "")),
+            metric_status=SystemsMetricStatus(str(data.get("metric_status", ""))),
+            unintended_effects_detected=_strict_bool(
+                data.get("unintended_effects_detected"),
+                "systems outcome evidence unintended_effects_detected",
+            ),
+            observed_complexity_score=(
+                _strict_int(
+                    data.get("observed_complexity_score"),
+                    "systems outcome evidence observed_complexity_score",
+                )
+                if data.get("observed_complexity_score") is not None
+                else None
+            ),
+            removal_candidate_count=_strict_int(
+                data.get("removal_candidate_count"),
+                "systems outcome evidence removal_candidate_count",
+            ),
+            stop_condition_checked=_strict_bool(
+                data.get("stop_condition_checked"),
+                "systems outcome evidence stop_condition_checked",
+            ),
+            stop_condition_triggered=(
+                _strict_bool(
+                    data.get("stop_condition_triggered"),
+                    "systems outcome evidence stop_condition_triggered",
+                )
+                if data.get("stop_condition_triggered") is not None
+                else None
+            ),
+            reason_codes=_systems_text_list(data, "reason_codes"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SystemsPostExecutionReview:
     """Content-free review of one admitted intervention after execution."""
 
@@ -395,10 +830,16 @@ class SystemsPostExecutionReview:
     stop_condition_checked: bool
     reassessment_required: bool
     reason_codes: tuple[str, ...]
-    schema: str = "master-agent/systems-post-execution-review@1"
+    observed_complexity_score: int | None = None
+    complexity_growth: int | None = None
+    stop_condition_triggered: bool | None = None
+    schema: str = "master-agent/systems-post-execution-review@2"
 
     def __post_init__(self) -> None:
-        if self.schema != "master-agent/systems-post-execution-review@1":
+        if self.schema not in {
+            "master-agent/systems-post-execution-review@1",
+            "master-agent/systems-post-execution-review@2",
+        }:
             raise ValidationError("unsupported systems post-execution review schema")
         for name in (
             "assessment_fingerprint",
@@ -422,6 +863,39 @@ class SystemsPostExecutionReview:
                 raise ValidationError(
                     f"systems review {name} must be a non-negative integer"
                 )
+        if self.observed_complexity_score is not None and (
+            not isinstance(self.observed_complexity_score, int)
+            or isinstance(self.observed_complexity_score, bool)
+            or self.observed_complexity_score < 0
+        ):
+            raise ValidationError(
+                "systems review observed_complexity_score must be non-negative"
+            )
+        if self.complexity_growth is not None and (
+            not isinstance(self.complexity_growth, int)
+            or isinstance(self.complexity_growth, bool)
+        ):
+            raise ValidationError("systems review complexity_growth must be an integer")
+        if self.stop_condition_triggered is not None and not isinstance(
+            self.stop_condition_triggered, bool
+        ):
+            raise ValidationError(
+                "systems review stop_condition_triggered must be a boolean or null"
+            )
+        if self.schema == "master-agent/systems-post-execution-review@2":
+            if self.stop_condition_checked and not isinstance(
+                self.stop_condition_triggered, bool
+            ):
+                raise ValidationError(
+                    "checked systems review requires a stop-condition result"
+                )
+            if (
+                not self.stop_condition_checked
+                and self.stop_condition_triggered is not None
+            ):
+                raise ValidationError(
+                    "unchecked systems review cannot state a stop-condition result"
+                )
         codes = tuple(self.reason_codes)
         if not codes or any(
             re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item) is None for item in codes
@@ -432,7 +906,7 @@ class SystemsPostExecutionReview:
     def to_dict(self) -> dict[str, object]:
         """Serialize content-free review evidence."""
 
-        return {
+        payload: dict[str, object] = {
             "schema": self.schema,
             "assessment_fingerprint": self.assessment_fingerprint,
             "decision_fingerprint": self.decision_fingerprint,
@@ -445,13 +919,21 @@ class SystemsPostExecutionReview:
             "reassessment_required": self.reassessment_required,
             "reason_codes": list(self.reason_codes),
         }
+        if self.schema == "master-agent/systems-post-execution-review@2":
+            payload.update(
+                observed_complexity_score=self.observed_complexity_score,
+                complexity_growth=self.complexity_growth,
+                stop_condition_triggered=self.stop_condition_triggered,
+            )
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SystemsPostExecutionReview:
         """Parse content-free review evidence."""
 
+        schema = str(data.get("schema", ""))
         return cls(
-            schema=str(data.get("schema", "")),
+            schema=schema,
             assessment_fingerprint=str(data.get("assessment_fingerprint", "")),
             decision_fingerprint=str(data.get("decision_fingerprint", "")),
             success_metric_sha256=str(data.get("success_metric_sha256", "")),
@@ -477,6 +959,30 @@ class SystemsPostExecutionReview:
                 "systems review reassessment_required",
             ),
             reason_codes=_systems_text_list(data, "reason_codes"),
+            observed_complexity_score=(
+                _strict_int(
+                    data.get("observed_complexity_score"),
+                    "systems review observed_complexity_score",
+                )
+                if data.get("observed_complexity_score") is not None
+                else None
+            ),
+            complexity_growth=(
+                _strict_int(
+                    data.get("complexity_growth"),
+                    "systems review complexity_growth",
+                )
+                if data.get("complexity_growth") is not None
+                else None
+            ),
+            stop_condition_triggered=(
+                _strict_bool(
+                    data.get("stop_condition_triggered"),
+                    "systems review stop_condition_triggered",
+                )
+                if data.get("stop_condition_triggered") is not None
+                else None
+            ),
         )
 
 
@@ -1654,6 +2160,7 @@ class ChangePlan:
     execution_context: ExecutionContext | None = None
     systems_assessment: SystemsAssessment | None = None
     systems_decision: SystemsGateDecision | None = None
+    strategy_traces: tuple[StrategyActionTrace, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.compensate_on_failure, bool):
@@ -1713,6 +2220,16 @@ class ChangePlan:
                 f"change plan exceeds the {MAX_PLAN_ACTIONS}-action limit"
             )
         object.__setattr__(self, "actions", actions)
+        traces = tuple(islice(iter(self.strategy_traces), MAX_PLAN_ACTIONS + 1))
+        if len(traces) > MAX_PLAN_ACTIONS:
+            raise ValidationError(
+                f"change plan exceeds the {MAX_PLAN_ACTIONS}-strategy-trace limit"
+            )
+        if not all(isinstance(item, StrategyActionTrace) for item in traces):
+            raise ValidationError(
+                "change plan strategy_traces must contain StrategyActionTrace values"
+            )
+        object.__setattr__(self, "strategy_traces", traces)
         if not actions:
             raise ValidationError("a change plan must contain at least one action")
         if not all(isinstance(action, AgentAction) for action in actions):
@@ -1783,6 +2300,10 @@ class ChangePlan:
         }
         if self.execution_context is not None:
             payload["execution_context"] = self.execution_context.to_dict()
+        if self.strategy_traces:
+            payload["strategy_traces"] = [
+                item.to_dict() for item in self.strategy_traces
+            ]
         if self.systems_assessment is not None:
             if self.systems_decision is None:  # pragma: no cover - validated above.
                 raise ValidationError("systems gate decision is missing")
@@ -1808,6 +2329,11 @@ class ChangePlan:
             )
         if not all(isinstance(item, Mapping) for item in actions_data):
             raise ValidationError("actions must contain objects")
+        traces_data = data.get("strategy_traces", [])
+        if not isinstance(traces_data, list) or not all(
+            isinstance(item, Mapping) for item in traces_data
+        ):
+            raise ValidationError("strategy_traces must contain objects")
         return cls(
             schema_version=str(data.get("schema_version", "1.0")),
             plan_id=UUID(str(data["plan_id"])),
@@ -1842,6 +2368,9 @@ class ChangePlan:
                 SystemsGateDecision.from_dict(_expect_mapping(data, "systems_decision"))
                 if data.get("systems_decision") is not None
                 else None
+            ),
+            strategy_traces=tuple(
+                StrategyActionTrace.from_dict(item) for item in traces_data
             ),
             actions=tuple(AgentAction.from_dict(item) for item in actions_data),
         )

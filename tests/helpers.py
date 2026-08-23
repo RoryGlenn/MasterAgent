@@ -16,11 +16,13 @@ from master_agent.models import (
     ChangePlan,
     ResourceRef,
     RiskLevel,
+    StrategyActionIntent,
+    StrategyKernel,
     SystemsAssessment,
 )
 from master_agent.planners.base import (
     bind_fast_path_governance,
-    bind_systems_governance,
+    bind_static_intervention_governance,
 )
 
 
@@ -57,9 +59,9 @@ def govern_test_plan(plan: ChangePlan) -> ChangePlan:
             success_metric="the expected test state is observed",
             failure_condition="the expected test state is not observed",
         )
-    return bind_systems_governance(
+    return bind_static_intervention_governance(
         plan,
-        SystemsAssessment(
+        SystemsAssessment.for_static_intervention(
             desired_outcome=plan.goal,
             current_behavior="the effect-bearing test action has not yet run",
             constraint="the runtime effect must remain within the test fixture",
@@ -73,7 +75,20 @@ def govern_test_plan(plan: ChangePlan) -> ChangePlan:
             failure_condition="execution or verification differs from the assertion",
             unintended_consequences=("fixture state could become indeterminate",),
             removable_complexity=("the disposable test fixture",),
-            low_risk=False,
+            strategy_kernel=StrategyKernel(
+                diagnosis="the test effect has not reached its asserted state",
+                guiding_policy="exercise only the isolated typed test boundary",
+                proximate_objective="reach and verify the asserted fixture state",
+                tradeoffs=("prefer isolation over production realism",),
+                coherent_actions=tuple(
+                    StrategyActionIntent(
+                        intent_id=f"test_action_{index}",
+                        description=action.justification,
+                        expected_effect="the action reaches its verified test state",
+                    )
+                    for index, action in enumerate(plan.actions, start=1)
+                ),
+            ),
             reversible=True,
             well_understood=True,
         ),

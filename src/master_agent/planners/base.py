@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol
@@ -15,10 +14,12 @@ from master_agent.models import (
     ComplexityItem,
     ComplexityKind,
     RiskLevel,
+    StrategyActionTrace,
     SystemsAssessment,
     SystemsGateDecision,
     SystemsGateRoute,
     SystemsMetricStatus,
+    SystemsOutcomeEvidence,
     SystemsPostExecutionReview,
 )
 
@@ -38,6 +39,82 @@ class SystemsAssessor(Protocol):
 
     def assess(self, goal: str) -> SystemsAssessment:
         """Return a structured assessment before planning begins."""
+
+
+class SystemsOutcomeEvidenceProvider(Protocol):
+    """Observe bounded post-execution evidence without granting authority."""
+
+    def observe(
+        self,
+        *,
+        assessment: SystemsAssessment,
+        decision: SystemsGateDecision,
+        states: tuple[ActionState, ...],
+    ) -> SystemsOutcomeEvidence:
+        """Return independently measured, content-free outcome evidence."""
+
+
+class SystemsOutcomeObserver(Protocol):
+    """Validated post-execution observer boundary."""
+
+    def observe(
+        self,
+        *,
+        assessment: SystemsAssessment,
+        decision: SystemsGateDecision,
+        states: tuple[ActionState, ...],
+    ) -> SystemsOutcomeEvidence:
+        """Return evidence after the ordinary runtime has finished actions."""
+
+
+class EvidenceBackedSystemsAssessor:
+    """Return one explicit typed assessment for its exact planning goal."""
+
+    def __init__(self, assessment: SystemsAssessment) -> None:
+        if not isinstance(assessment, SystemsAssessment):
+            raise ValidationError(
+                "evidence-backed assessor requires a SystemsAssessment"
+            )
+        self._assessment = assessment
+
+    def assess(self, goal: str) -> SystemsAssessment:
+        """Return the bound assessment and reject goal substitution."""
+
+        _require_text(goal, "planner goal")
+        if goal != self._assessment.desired_outcome:
+            raise ValidationError(
+                "systems assessment desired outcome does not match the planner goal"
+            )
+        return self._assessment
+
+
+class EvidenceBackedSystemsOutcomeObserver:
+    """Adapt one explicit evidence provider to the post-execution boundary."""
+
+    def __init__(self, provider: SystemsOutcomeEvidenceProvider) -> None:
+        if not callable(getattr(provider, "observe", None)):
+            raise ValidationError("systems outcome evidence provider is invalid")
+        self._provider = provider
+
+    def observe(
+        self,
+        *,
+        assessment: SystemsAssessment,
+        decision: SystemsGateDecision,
+        states: tuple[ActionState, ...],
+    ) -> SystemsOutcomeEvidence:
+        """Return validated typed evidence from the configured provider."""
+
+        evidence = self._provider.observe(
+            assessment=assessment,
+            decision=decision,
+            states=states,
+        )
+        if not isinstance(evidence, SystemsOutcomeEvidence):
+            raise ValidationError(
+                "systems outcome provider must return SystemsOutcomeEvidence"
+            )
+        return evidence
 
 
 class SystemsAwarePlanner(Protocol):
@@ -120,6 +197,9 @@ class SystemsGovernanceGate:
             ):
                 if not values:
                     reasons.append(f"gated assessment requires {name}")
+            if assessment.strategy_kernel is None:
+                reasons.append("gated assessment requires a strategy_kernel")
+        reasons.extend(_strategy_trace_reasons(plan, assessment))
         if assessment.added_complexity:
             if not assessment.alternatives_considered:
                 reasons.append(
@@ -198,6 +278,33 @@ def bind_systems_governance(
     return replace(plan, systems_assessment=assessment, systems_decision=decision)
 
 
+def bind_static_intervention_governance(
+    plan: ChangePlan,
+    assessment: SystemsAssessment,
+    *,
+    gate: SystemsGovernanceGate | None = None,
+) -> ChangePlan:
+    """Bind a static workflow by mapping actions to declared intents in order."""
+
+    kernel = assessment.strategy_kernel
+    if kernel is None:
+        raise ValidationError("static intervention requires a strategy kernel")
+    if len(kernel.coherent_actions) != len(plan.actions):
+        raise ValidationError(
+            "static intervention requires exactly one intent per plan action"
+        )
+    traced_plan = replace(
+        plan,
+        strategy_traces=tuple(
+            StrategyActionTrace(action_id=action.action_id, intent_id=intent.intent_id)
+            for action, intent in zip(
+                plan.actions, kernel.coherent_actions, strict=True
+            )
+        ),
+    )
+    return bind_systems_governance(traced_plan, assessment, gate=gate)
+
+
 def bind_fast_path_governance(
     plan: ChangePlan,
     *,
@@ -209,7 +316,7 @@ def bind_fast_path_governance(
 ) -> ChangePlan:
     """Bind an explicit assessment for a known-safe static workflow."""
 
-    assessment = SystemsAssessment(
+    assessment = SystemsAssessment.for_fast_path(
         desired_outcome=plan.goal,
         current_behavior=current_behavior,
         constraint=constraint,
@@ -217,9 +324,6 @@ def bind_fast_path_governance(
         simplest_intervention=plan.goal,
         success_metric=success_metric,
         failure_condition=failure_condition,
-        low_risk=True,
-        reversible=True,
-        well_understood=True,
     )
     return bind_systems_governance(plan, assessment)
 
@@ -282,8 +386,9 @@ def build_systems_post_execution_review(
     decision: SystemsGateDecision,
     states: Iterable[ActionState],
     dry_run: bool,
+    observer: SystemsOutcomeObserver | None = None,
 ) -> SystemsPostExecutionReview:
-    """Build conservative, content-free post-execution systems evidence."""
+    """Build fingerprint-bound evidence or a conservative fallback review."""
 
     observed_states = tuple(states)
     unintended_states = {
@@ -295,7 +400,83 @@ def build_systems_post_execution_review(
         item in {ActionState.PLANNED, ActionState.VERIFIED, ActionState.REUSED}
         for item in observed_states
     )
+    metric_sha256 = assessment.success_metric_sha256
+    observer_failure: str | None = None
+    evidence: SystemsOutcomeEvidence | None = None
+    if not dry_run and observer is not None:
+        try:
+            candidate = observer.observe(
+                assessment=assessment,
+                decision=decision,
+                states=observed_states,
+            )
+            if not isinstance(candidate, SystemsOutcomeEvidence):
+                observer_failure = "observer_invalid"
+            elif candidate.assessment_fingerprint != assessment.fingerprint:
+                observer_failure = "observer_assessment_mismatch"
+            elif candidate.decision_fingerprint != decision.fingerprint:
+                observer_failure = "observer_decision_mismatch"
+            elif candidate.success_metric_sha256 != metric_sha256:
+                observer_failure = "observer_metric_mismatch"
+            else:
+                evidence = candidate
+        except Exception:  # noqa: BLE001 - observation cannot invalidate completed work.
+            observer_failure = "observer_invalid"
+    if evidence is not None:
+        observed_unintended_effects = (
+            evidence.unintended_effects_detected or unintended_effects
+        )
+        complexity_growth = (
+            evidence.observed_complexity_score - assessment.complexity_score
+            if evidence.observed_complexity_score is not None
+            else None
+        )
+        reassessment_required = any(
+            (
+                evidence.metric_status is SystemsMetricStatus.CONFIRMED_UNCHANGED,
+                not successful,
+                observed_unintended_effects,
+                not evidence.stop_condition_checked,
+                evidence.stop_condition_triggered is True,
+                complexity_growth is None,
+                complexity_growth is not None and complexity_growth > 0,
+            )
+        )
+        reason_codes = list(evidence.reason_codes)
+        if not successful and "execution_unsuccessful" not in reason_codes:
+            reason_codes.append("execution_unsuccessful")
+        if unintended_effects and "unintended_effect_possible" not in reason_codes:
+            reason_codes.append("unintended_effect_possible")
+        if (
+            evidence.observed_complexity_score is None
+            and "complexity_not_observed" not in reason_codes
+        ):
+            reason_codes.append("complexity_not_observed")
+        if (
+            not evidence.stop_condition_checked
+            and "stop_condition_not_observed" not in reason_codes
+        ):
+            reason_codes.append("stop_condition_not_observed")
+        return SystemsPostExecutionReview(
+            assessment_fingerprint=assessment.fingerprint,
+            decision_fingerprint=decision.fingerprint,
+            success_metric_sha256=metric_sha256,
+            metric_status=evidence.metric_status,
+            unintended_effects_detected=observed_unintended_effects,
+            planned_complexity_score=assessment.complexity_score,
+            observed_complexity_score=evidence.observed_complexity_score,
+            complexity_growth=complexity_growth,
+            removal_candidate_count=evidence.removal_candidate_count,
+            stop_condition_checked=evidence.stop_condition_checked,
+            stop_condition_triggered=evidence.stop_condition_triggered,
+            reassessment_required=reassessment_required,
+            reason_codes=tuple(reason_codes),
+        )
     reason_codes = ["dry_run_metric_not_observed" if dry_run else "metric_not_observed"]
+    if observer_failure is not None:
+        reason_codes.append(observer_failure)
+    elif observer is None:
+        reason_codes.append("observer_unavailable")
     if not successful:
         reason_codes.append("execution_unsuccessful")
     if unintended_effects:
@@ -304,9 +485,7 @@ def build_systems_post_execution_review(
     return SystemsPostExecutionReview(
         assessment_fingerprint=assessment.fingerprint,
         decision_fingerprint=decision.fingerprint,
-        success_metric_sha256=hashlib.sha256(
-            assessment.success_metric.encode("utf-8")
-        ).hexdigest(),
+        success_metric_sha256=metric_sha256,
         metric_status=SystemsMetricStatus.NOT_OBSERVED,
         unintended_effects_detected=unintended_effects,
         planned_complexity_score=assessment.complexity_score,
@@ -315,6 +494,33 @@ def build_systems_post_execution_review(
         reassessment_required=True,
         reason_codes=tuple(reason_codes),
     )
+
+
+def _strategy_trace_reasons(
+    plan: ChangePlan, assessment: SystemsAssessment
+) -> tuple[str, ...]:
+    """Return every bounded action-to-strategy coverage failure."""
+
+    kernel = assessment.strategy_kernel
+    traces = plan.strategy_traces
+    if kernel is None:
+        return ("strategy traces require a strategy kernel",) if traces else ()
+    reasons: list[str] = []
+    action_ids = {action.action_id for action in plan.actions}
+    trace_action_ids = [trace.action_id for trace in traces]
+    if len(trace_action_ids) != len(set(trace_action_ids)):
+        reasons.append("strategy traces contain duplicate action IDs")
+    if action_ids - set(trace_action_ids):
+        reasons.append("strategy traces do not cover every plan action")
+    if set(trace_action_ids) - action_ids:
+        reasons.append("strategy traces contain unknown or stale action IDs")
+    intent_ids = {intent.intent_id for intent in kernel.coherent_actions}
+    traced_intent_ids = {trace.intent_id for trace in traces}
+    if traced_intent_ids - intent_ids:
+        reasons.append("strategy traces contain unknown intent IDs")
+    if intent_ids - traced_intent_ids:
+        reasons.append("strategy traces do not use every coherent action intent")
+    return tuple(reasons)
 
 
 class GovernedPlanner:
@@ -362,6 +568,8 @@ def _require_text(value: str, name: str) -> None:
 __all__ = [
     "ComplexityItem",
     "ComplexityKind",
+    "EvidenceBackedSystemsAssessor",
+    "EvidenceBackedSystemsOutcomeObserver",
     "GovernedPlan",
     "GovernedPlanner",
     "Planner",
@@ -371,7 +579,10 @@ __all__ = [
     "SystemsGateDecision",
     "SystemsGateRoute",
     "SystemsGovernanceGate",
+    "SystemsOutcomeEvidenceProvider",
+    "SystemsOutcomeObserver",
     "bind_fast_path_governance",
+    "bind_static_intervention_governance",
     "bind_systems_governance",
     "build_systems_post_execution_review",
     "enforce_systems_governance",

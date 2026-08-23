@@ -14,10 +14,12 @@ from master_agent.models import (
     CompensationMode,
     ResourceRef,
     RiskLevel,
+    StrategyActionIntent,
+    StrategyKernel,
     SystemsAssessment,
 )
 from master_agent.orchestrator import RunReport
-from master_agent.planners.base import bind_systems_governance
+from master_agent.planners.base import bind_static_intervention_governance
 
 
 def build_compensation_plan(
@@ -214,9 +216,9 @@ def _bind_correction_governance(
 ) -> ChangePlan:
     """Bind the full systems assessment required for corrective effects."""
 
-    return bind_systems_governance(
+    return bind_static_intervention_governance(
         plan,
-        SystemsAssessment(
+        SystemsAssessment.for_static_intervention(
             desired_outcome=plan.goal,
             current_behavior=current_behavior,
             constraint="the prior provider state cannot be changed without a new effect",
@@ -234,7 +236,25 @@ def _bind_correction_governance(
                 "a transport failure could leave the correction outcome indeterminate",
             ),
             removable_complexity=("the one-use corrective plan",),
-            low_risk=False,
+            strategy_kernel=StrategyKernel(
+                diagnosis=current_behavior,
+                guiding_policy=(
+                    "Use one explicit, approval-gated correction through the "
+                    "existing provider connector."
+                ),
+                proximate_objective=simplest_intervention,
+                tradeoffs=(
+                    "Prefer a visible correction over attempting to erase history.",
+                ),
+                coherent_actions=tuple(
+                    StrategyActionIntent(
+                        intent_id=f"correct_effect_{index}",
+                        description=action.justification,
+                        expected_effect=success_metric,
+                    )
+                    for index, action in enumerate(plan.actions, start=1)
+                ),
+            ),
             reversible=True,
             well_understood=True,
         ),

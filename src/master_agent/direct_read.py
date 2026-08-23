@@ -43,6 +43,7 @@ from master_agent.models import (
     freeze_json_mapping,
 )
 from master_agent.planners.base import (
+    SystemsOutcomeObserver,
     build_systems_post_execution_review,
     enforce_systems_governance,
 )
@@ -234,6 +235,7 @@ class DirectReadSession:
         sources: SourceOfTruthRegistry,
         connector: ReadOnlyConnector,
         execution_binding: ConnectorExecutionBinding,
+        systems_outcome_observer: SystemsOutcomeObserver | None = None,
     ) -> None:
         """Create an in-memory direct read session.
 
@@ -267,6 +269,7 @@ class DirectReadSession:
         self._sources = sources
         self._connector = connector
         self._execution_binding = execution_binding
+        self._systems_outcome_observer = systems_outcome_observer
 
     def execute(self, plan: ChangePlan) -> DirectReadReport:
         """Preflight and execute a direct provider-read plan in memory.
@@ -311,6 +314,7 @@ class DirectReadSession:
                 decision=decision,
                 states=(item.state for item in reports),
                 dry_run=False,
+                observer=self._systems_outcome_observer,
             ),
         )
 
