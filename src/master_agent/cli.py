@@ -7555,6 +7555,7 @@ def _work_memory(
             raise ValueError(
                 "work-memory show accepts only --database, --work-id, and --output"
             )
+        _preflight_work_memory_output(output, database=database)
         snapshot = WorkMemory.show_existing(database, work_id)
     elif action == "start":
         if issue is None or summary is None:

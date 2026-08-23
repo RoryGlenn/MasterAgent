@@ -83,9 +83,9 @@ with recorded history.
 
 ### Invalid output
 
-- GIVEN a mutating command selects an occupied create-only output name, aliases
-  the journal or its state files, or its prospective serialized snapshot
-  exceeds the output-size boundary
+- GIVEN a CLI command selects an output name that aliases the journal or its
+  state files, or a mutating command selects an occupied create-only name or a
+  prospective serialized snapshot that exceeds the output-size boundary
 - WHEN the command validates its output boundary
 - THEN it fails without creating or appending to the journal
 

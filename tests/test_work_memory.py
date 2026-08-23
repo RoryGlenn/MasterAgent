@@ -833,6 +833,40 @@ class WorkMemoryTests(unittest.TestCase):
                 self.assertFalse(database.exists())
                 self.assertFalse(output.exists())
 
+    def test_cli_show_never_occupies_missing_journal_sidecar(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "work-memory.sqlite3"
+            output = root / "work-memory.sqlite3-wal"
+            with WorkMemory(database) as memory:
+                memory.start(
+                    work_id="issue-164d",
+                    issue="#164d",
+                    summary="Start work.",
+                )
+            self.assertFalse(output.exists())
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "work-memory",
+                        "show",
+                        "--database",
+                        str(database),
+                        "--work-id",
+                        "issue-164d",
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(status, 1)
+            self.assertIn("must not alias", stderr.getvalue())
+            self.assertFalse(output.exists())
+            self.assertTrue(WorkMemory.verify_existing(database).valid)
+
     def test_cli_refuses_output_aliases_for_journal_state(self) -> None:
         for output_name in (
             "work-memory.sqlite3",
