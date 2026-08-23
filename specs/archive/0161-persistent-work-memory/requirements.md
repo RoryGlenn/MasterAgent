@@ -37,7 +37,8 @@ aliased target MUST also fail before creating a missing journal.
 database or bookkeeping state for a missing path. A mutating output name MUST
 remain exclusively reserved from preflight through append commit and output
 publication. `start` MUST validate every retained field before initializing a
-missing journal.
+missing journal. An existing journal with missing native transaction or
+integrity bookkeeping MUST fail closed and MUST NOT recreate that bookkeeping.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim

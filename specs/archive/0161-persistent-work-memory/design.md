@@ -21,7 +21,10 @@ rejects journal and state-file aliases. It validates the exact prospective JSON
 size inside the transaction before commit and holds a native create-only output
 reservation through journal commit and publication. `record` opens the pinned
 SQLite boundary with creation disabled, while `start` validates every retained
-field before opening the create-enabled boundary.
+field before opening the create-enabled boundary. SQLite initialization permits
+new transaction and integrity bookkeeping only when it exclusively created the
+database in the same operation; existing state with missing bookkeeping is
+never repaired implicitly.
 
 ## Affected components
 

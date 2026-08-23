@@ -168,6 +168,9 @@ class WorkMemoryTests(unittest.TestCase):
                     '{"identitytoken":"supersecret123456789"}',
                     "client-key-data: REDACTED",
                     "Bearer abcDEF1234567890xyz",
+                    "PGPASSWORD=supersecret123",
+                    "MYSQL_PWD=supersecret123",
+                    "REDISCLI_AUTH=supersecret123",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
@@ -406,6 +409,27 @@ class WorkMemoryTests(unittest.TestCase):
             with self.assertRaises(WorkMemoryError):
                 WorkMemory.show_existing(database, "issue-6")
             self.assertFalse(database.exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX bookkeeping fixture")
+    def test_start_does_not_repair_missing_journal_bookkeeping(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "work-memory.sqlite3"
+            ledger = root / ".work-memory.sqlite3.master-agent.lock"
+            with WorkMemory(database) as memory:
+                memory.start(
+                    work_id="issue-bookkeeping",
+                    issue="#bookkeeping",
+                    summary="Start work.",
+                )
+            before = database.read_bytes()
+            ledger.unlink()
+
+            with self.assertRaises(WorkMemoryError):
+                WorkMemory(database)
+
+            self.assertEqual(database.read_bytes(), before)
+            self.assertFalse(ledger.exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX permission fixture")
     def test_unsafe_database_parent_is_rejected(self) -> None:

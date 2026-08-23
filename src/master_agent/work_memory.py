@@ -104,6 +104,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"client[_-]?secret|client[_-]?key[_-]?data|access[_-]?token|"
     r"refresh[_-]?token|id[_-]?token|auth[_-]?token|secret|token)"
     r"[\"']?\s*[:=]\s*[\"']?\S+|"
+    r"\b(?:pgpassword|mysql_pwd|rediscli_auth)[\"']?\s*[:=]\s*[\"']?\S+|"
     r"\b(?:aws_(?:access_key_id|secret_access_key|session_token)|"
     r"azure_client_secret|accountkey|sharedaccesssignature)"
     r"[\"']?\s*[:=]\s*[\"']?\S+|"
