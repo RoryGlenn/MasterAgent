@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ from master_agent.platform_runtime.windows.capsules import (
     _copy_runtime_directory,
     _network_probe_source,
     _parent_handle_probe_source,
+    _require_parent_handle_denied,
     _sddl,
     _tree_sha256,
 )
@@ -243,11 +245,46 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         source = _parent_handle_probe_source(12345)
         compile(source, "<parent-handle-probe>", "exec")
         self.assertIn("_winapi.WriteFile(12345,b'\\x00',False)", source)
-        self.assertIn("except OSError", source)
+        self.assertIn("print('PROBE_READY',flush=True)", source)
+        self.assertNotIn("except OSError", source)
         self.assertNotIn("ctypes", source)
 
         with self.assertRaisesRegex(ValueError, "parent handle must be positive"):
             _parent_handle_probe_source(0)
+
+    def test_parent_handle_denial_is_observed_on_the_parent_pipe(self) -> None:
+        read_descriptor, write_descriptor = os.pipe()
+        self.addCleanup(os.close, read_descriptor)
+        self.addCleanup(os.close, write_descriptor)
+        os.set_blocking(read_descriptor, False)
+        reached_probe = ProcessExecutionResult(
+            reason=ProcessExitReason.NONZERO_EXIT,
+            exit_code=1,
+            stdout=b"PROBE_READY\n",
+            stderr=b"fixed invalid-handle traceback",
+            output_truncated=False,
+        )
+
+        _require_parent_handle_denied(reached_probe, read_descriptor)
+        os.write(write_descriptor, b"\x00")
+        with self.assertRaisesRegex(
+            ProcessSupervisionError,
+            "appcontainer_os_parent_handle_probe_failed_ALLOWED",
+        ):
+            _require_parent_handle_denied(reached_probe, read_descriptor)
+
+        missing_marker = ProcessExecutionResult(
+            reason=ProcessExitReason.NONZERO_EXIT,
+            exit_code=1,
+            stdout=b"",
+            stderr=b"",
+            output_truncated=False,
+        )
+        with self.assertRaisesRegex(
+            ProcessSupervisionError,
+            "appcontainer_os_parent_handle_probe_failed$",
+        ):
+            _require_parent_handle_denied(missing_marker, read_descriptor)
 
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")

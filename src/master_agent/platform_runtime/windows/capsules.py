@@ -550,6 +550,7 @@ class CtypesWindowsAppContainerApi:
             inherited_read, inherited_write = os.pipe()
             resources.callback(os.close, inherited_read)
             resources.callback(os.close, inherited_write)
+            os.set_blocking(inherited_read, False)
             os.set_inheritable(inherited_write, True)
             inherited_handle = int(msvcrt.get_osfhandle(inherited_write))  # type: ignore[attr-defined]
             pipe_name = rf"\\.\pipe\master-agent-capsule-{secrets.token_hex(12)}"
@@ -622,6 +623,10 @@ class CtypesWindowsAppContainerApi:
             results: list[Mapping[str, str]] = []
             for name, source in probes:
                 result = self._run_probe(projection, source=source)
+                if name == "os_parent_handle":
+                    _require_parent_handle_denied(result, inherited_read)
+                    results.append(MappingProxyType({"name": name, "status": "denied"}))
+                    continue
                 if (
                     result.reason is not ProcessExitReason.EXITED
                     or result.exit_code != 0
@@ -1035,11 +1040,29 @@ def _parent_handle_probe_source(handle: int) -> str:
         raise ValueError("parent handle must be positive")
     return (
         "import _winapi\n"
-        "try:\n"
-        f" _winapi.WriteFile({handle},b'\\x00',False)\n"
-        "except OSError:\n print('DENIED')\n"
-        "else:\n print('ALLOWED')\n"
+        "print('PROBE_READY',flush=True)\n"
+        f"_winapi.WriteFile({handle},b'\\x00',False)\n"
     )
+
+
+def _require_parent_handle_denied(
+    result: ProcessExecutionResult,
+    read_descriptor: int,
+) -> None:
+    try:
+        leaked_parent_byte = os.read(read_descriptor, 1)
+    except BlockingIOError:
+        leaked_parent_byte = b""
+    except OSError as error:
+        raise ProcessSupervisionError(
+            "appcontainer_parent_handle_observation_failed"
+        ) from error
+    if not result.stdout.startswith(b"PROBE_READY\n"):
+        raise ProcessSupervisionError("appcontainer_os_parent_handle_probe_failed")
+    if leaked_parent_byte:
+        raise ProcessSupervisionError(
+            "appcontainer_os_parent_handle_probe_failed_ALLOWED"
+        )
 
 
 def _loopback_listener(host: str, *, family: socket.AddressFamily) -> socket.socket:
