@@ -166,6 +166,8 @@ class WorkMemoryTests(unittest.TestCase):
                     '{"Authorization":"Bearer supersecret123456789"}',
                     '{"auths":{"registry.example":{"auth":"dXNlcjpwYXNz"}}}',
                     '{"identitytoken":"supersecret123456789"}',
+                    "client-key-data: REDACTED",
+                    "Bearer abcDEF1234567890xyz",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
@@ -228,7 +230,12 @@ class WorkMemoryTests(unittest.TestCase):
                     kind=WorkEventKind.DECISION,
                     summary="Use Digest authentication for the integration.",
                 )
-                self.assertEqual(memory.show("issue-2").journal_event_count, 3)
+                memory.record(
+                    work_id="issue-2",
+                    kind=WorkEventKind.DECISION,
+                    summary="Use Bearer authentication for API requests.",
+                )
+                self.assertEqual(memory.show("issue-2").journal_event_count, 4)
 
     def test_maximum_journal_payload_fits_windows_state_boundary(self) -> None:
         connection = sqlite3.connect(":memory:")
