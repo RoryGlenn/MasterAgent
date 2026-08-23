@@ -14,8 +14,9 @@ process restart.
 The journal MUST use an explicitly selected owner-private SQLite database and
 the certified pinned SQLite persistence boundary. Events MUST be append-only
 and globally hash-chained with a durable count and head checkpoint. Verification
-MUST fail closed on an unsafe or missing path, unexpected schema, malformed
-row, unsupported event kind or stage, duplicate or missing start, lifecycle
+MUST fail closed on an unsafe or missing path, unexpected complete schema
+definition or constraint, malformed row, unsupported event kind or stage,
+duplicate or missing start, lifecycle
 regression, event after merge, sequence gap, previous-hash mismatch, event-hash
 mismatch, deletion, reordering, or checkpoint mismatch. Concurrent writers
 MUST serialize through the native database boundary without losing events.
@@ -30,6 +31,10 @@ Mutating CLI actions given an occupied create-only output target, an output that
 aliases the journal or its state files, or a snapshot that exceeds the
 output-size boundary MUST fail before appending to the journal; an occupied or
 aliased target MUST also fail before creating a missing journal.
+`record` MUST open only an existing initialized journal and MUST NOT create
+database or bookkeeping state for a missing path. A mutating output name MUST
+remain exclusively reserved from preflight through append commit and output
+publication.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim

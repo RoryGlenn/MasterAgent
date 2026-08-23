@@ -128,6 +128,7 @@ class _PosixPinnedSQLiteDatabase:
         path: Path,
         *,
         parent_directory: PinnedDirectory | None = None,
+        create: bool = True,
     ) -> None:
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
@@ -153,7 +154,7 @@ class _PosixPinnedSQLiteDatabase:
             parent_descriptor = (
                 self._parent_pin.duplicate_fd()
                 if self._parent_pin is not None
-                else _open_trusted_parent(self._parent, create=True)
+                else _open_trusted_parent(self._parent, create=create)
             )
         except BaseException:
             if self._parent_pin is not None:
@@ -173,6 +174,7 @@ class _PosixPinnedSQLiteDatabase:
                 lock_descriptor, self._lock_created = _open_flock_file(
                     parent_descriptor,
                     self._lock_name,
+                    create=create,
                 )
                 lock_identity = _validated_state_file_identity(
                     os.fstat(lock_descriptor),
@@ -188,7 +190,7 @@ class _PosixPinnedSQLiteDatabase:
                     database_descriptor, self._created = _open_database_file(
                         parent_descriptor,
                         self._name,
-                        create=True,
+                        create=create,
                     )
                     database_identity = _validated_state_file_identity(
                         os.fstat(database_descriptor),
@@ -201,7 +203,7 @@ class _PosixPinnedSQLiteDatabase:
                     ledger = _read_ledger_generation(
                         parent_descriptor,
                         self._ledger_name,
-                        missing_ok=True,
+                        missing_ok=create,
                     )
                     ledger_created = ledger is None
                     self._ledger_created = ledger_created
@@ -602,6 +604,7 @@ class _WindowsPinnedSQLiteDatabase:
         *,
         atomic: AtomicPublicationRecoveryBackend,
         parent_directory: PinnedDirectory | None,
+        create: bool = True,
     ) -> None:
         self._parent_pin = (
             parent_directory.duplicate() if parent_directory is not None else None
@@ -638,9 +641,11 @@ class _WindowsPinnedSQLiteDatabase:
             with atomic.open_transaction(
                 self._path,
                 max_bytes=_MAX_LEDGER_BYTES,
-                create=True,
+                create=create,
             ) as transaction:
                 if transaction.identity is None:
+                    if not create:
+                        raise ConfigurationError("SQLite state database does not exist")
                     identity = transaction.publish_bytes(b"", expected=None)
                     self._created = True
                     self._cleanup_identity = identity
@@ -740,6 +745,7 @@ class PinnedSQLiteDatabase:
         path: Path,
         *,
         parent_directory: PinnedDirectory | None = None,
+        create: bool = True,
     ) -> None:
         require_persistent_state_platform()
         atomic = get_atomic_publication_recovery_backend()
@@ -750,11 +756,13 @@ class PinnedSQLiteDatabase:
                 path,
                 atomic=atomic,
                 parent_directory=parent_directory,
+                create=create,
             )
         else:
             self._implementation = _PosixPinnedSQLiteDatabase(
                 path,
                 parent_directory=parent_directory,
+                create=create,
             )
 
     @property

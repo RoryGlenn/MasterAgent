@@ -27,6 +27,7 @@ from master_agent import __version__
 from master_agent.approval_handoff import (
     ApprovalRequest,
     ApprovalRunInvocation,
+    RestrictedJSONReservation,
     load_approval_request,
     publish_approval_request,
     validate_restricted_json_payload,
@@ -7560,32 +7561,56 @@ def _work_memory(
         if any(value is not None for value in (kind, stage, reference)):
             raise ValueError("work-memory start received incompatible arguments")
         _preflight_work_memory_output(output, database=database)
-        with WorkMemory(database) as memory:
-            snapshot = memory.start(
-                work_id=work_id,
-                issue=issue,
-                summary=summary,
-                snapshot_validator=(
-                    _validate_work_memory_output_payload if output is not None else None
-                ),
+        with ExitStack() as resources:
+            reservation = (
+                resources.enter_context(RestrictedJSONReservation(output))
+                if output is not None
+                else None
             )
+            with WorkMemory(database) as memory:
+                snapshot = memory.start(
+                    work_id=work_id,
+                    issue=issue,
+                    summary=summary,
+                    snapshot_validator=(
+                        _validate_work_memory_output_payload
+                        if output is not None
+                        else None
+                    ),
+                )
+            if reservation is not None:
+                reservation.commit(snapshot.to_dict())
+                print(f"wrote {reservation.path}")
+                return 0
     elif action == "record":
         if kind is None or summary is None:
             raise ValueError("work-memory record requires --kind and --summary")
         if issue is not None:
             raise ValueError("work-memory record does not accept --issue")
         _preflight_work_memory_output(output, database=database)
-        with WorkMemory(database) as memory:
-            snapshot = memory.record(
-                work_id=work_id,
-                kind=WorkEventKind(kind),
-                stage=WorkStage(stage) if stage is not None else None,
-                summary=summary,
-                reference=reference,
-                snapshot_validator=(
-                    _validate_work_memory_output_payload if output is not None else None
-                ),
+        with ExitStack() as resources:
+            reservation = (
+                resources.enter_context(RestrictedJSONReservation(output))
+                if output is not None
+                else None
             )
+            with WorkMemory(database, create=False) as memory:
+                snapshot = memory.record(
+                    work_id=work_id,
+                    kind=WorkEventKind(kind),
+                    stage=WorkStage(stage) if stage is not None else None,
+                    summary=summary,
+                    reference=reference,
+                    snapshot_validator=(
+                        _validate_work_memory_output_payload
+                        if output is not None
+                        else None
+                    ),
+                )
+            if reservation is not None:
+                reservation.commit(snapshot.to_dict())
+                print(f"wrote {reservation.path}")
+                return 0
     else:
         raise ValueError("unknown work-memory operation")
     _emit_work_memory_payload(snapshot.to_dict(), output=output)

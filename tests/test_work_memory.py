@@ -11,7 +11,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from master_agent.approval_handoff import validate_restricted_json_payload
+from master_agent.approval_handoff import (
+    validate_restricted_json_payload,
+    write_restricted_json,
+)
 from master_agent.cli import main
 from master_agent.errors import ValidationError
 from master_agent.sqlite_safety import PinnedSQLiteDatabase
@@ -153,6 +156,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature12345678",
                     "Cookie: sessionid=abc1234567890",
                     "Set-Cookie: auth=abc1234567890; Secure; HttpOnly",
+                    "postgresql://alice:secret-password@db.example/app",
+                    "https://alice:secret@example.com/path",
                 ):
                     with (
                         self.subTest(credential=credential),
@@ -288,6 +293,34 @@ class WorkMemoryTests(unittest.TestCase):
             verification = WorkMemory.verify_existing(database)
             self.assertFalse(verification.valid)
             self.assertIn("schema tables", verification.message)
+
+        with private_temporary_directory() as directory:
+            database = Path(directory) / "work-memory.sqlite3"
+            with WorkMemory(database) as memory:
+                memory.start(work_id="issue-5b", issue="#5b", summary="Start work.")
+            state = PinnedSQLiteDatabase(database)
+            try:
+                with state.connect() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    connection.execute(
+                        "ALTER TABLE work_memory_state RENAME TO work_memory_state_old"
+                    )
+                    connection.execute(
+                        "CREATE TABLE work_memory_state ("
+                        "id INTEGER PRIMARY KEY, "
+                        "event_count INTEGER NOT NULL, "
+                        "head_hash TEXT NOT NULL)"
+                    )
+                    connection.execute(
+                        "INSERT INTO work_memory_state "
+                        "SELECT * FROM work_memory_state_old"
+                    )
+                    connection.execute("DROP TABLE work_memory_state_old")
+            finally:
+                state.close()
+            verification = WorkMemory.verify_existing(database)
+            self.assertFalse(verification.valid)
+            self.assertIn("schema definitions", verification.message)
 
     def test_missing_verification_and_show_do_not_create_database(self) -> None:
         with private_temporary_directory() as directory:
@@ -522,6 +555,92 @@ class WorkMemoryTests(unittest.TestCase):
             after = WorkMemory.show_existing(database, "issue-164")
             self.assertEqual(after.journal_event_count, before.journal_event_count)
             self.assertEqual(after.journal_head_hash, before.journal_head_hash)
+
+    def test_cli_reserves_output_before_journal_commit(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "work-memory.sqlite3"
+            output = root / "snapshot.json"
+            with WorkMemory(database) as memory:
+                memory.start(
+                    work_id="issue-164b",
+                    issue="#164b",
+                    summary="Start work.",
+                )
+            before = WorkMemory.show_existing(database, "issue-164b")
+
+            def create_after_preflight(
+                selected_output: Path | None,
+                *,
+                database: Path,
+            ) -> None:
+                del database
+                assert selected_output is not None
+                write_restricted_json(selected_output, {"racer": True})
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with (
+                patch(
+                    "master_agent.cli._preflight_work_memory_output",
+                    side_effect=create_after_preflight,
+                ),
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+            ):
+                status = main(
+                    [
+                        "work-memory",
+                        "record",
+                        "--database",
+                        str(database),
+                        "--work-id",
+                        "issue-164b",
+                        "--kind",
+                        "decision",
+                        "--summary",
+                        "Choose the journal.",
+                        "--output",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(status, 1)
+            self.assertIn("already exists", stderr.getvalue())
+            self.assertEqual(
+                json.loads(output.read_text(encoding="utf-8")),
+                {"racer": True},
+            )
+            after = WorkMemory.show_existing(database, "issue-164b")
+            self.assertEqual(after.journal_event_count, before.journal_event_count)
+            self.assertEqual(after.journal_head_hash, before.journal_head_hash)
+
+    def test_cli_record_missing_database_does_not_create_state(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "missing.sqlite3"
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "work-memory",
+                        "record",
+                        "--database",
+                        str(database),
+                        "--work-id",
+                        "issue-164c",
+                        "--kind",
+                        "decision",
+                        "--summary",
+                        "Choose the journal.",
+                    ]
+                )
+            self.assertEqual(status, 1)
+            self.assertIn("could not be opened safely", stderr.getvalue())
+            self.assertFalse(database.exists())
+            self.assertFalse((root / ".missing.sqlite3.master-agent.lock").exists())
+            self.assertFalse((root / ".missing.sqlite3.master-agent.flock").exists())
 
     def test_cli_refuses_output_aliases_for_journal_state(self) -> None:
         for output_name in (

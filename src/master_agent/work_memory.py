@@ -58,12 +58,34 @@ _STATE_SCHEMA = (
     ("event_count", "INTEGER", 1, None, 0),
     ("head_hash", "TEXT", 1, None, 0),
 )
+_WORK_EVENTS_TABLE_SQL = """
+    CREATE TABLE work_events (
+        sequence INTEGER PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        work_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        reference TEXT,
+        previous_hash TEXT NOT NULL,
+        event_hash TEXT NOT NULL
+    )
+"""
+_WORK_MEMORY_STATE_TABLE_SQL = """
+    CREATE TABLE work_memory_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        event_count INTEGER NOT NULL,
+        head_hash TEXT NOT NULL
+    )
+"""
 _WORK_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/#-]*\Z")
 _SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?:"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"\b(?:proxy-)?authorization\s*:\s*\S+(?:\s+\S+)?|"
     r"\b(?:set-cookie|cookie)\s*:\s*\S+|"
+    r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@|"
     r"\b(?:basic|digest|aws4-hmac-sha256)\s+[A-Za-z0-9+/=,_:-]{8,}|"
     r"\bbearer\s+\S+|"
     r"\b(?:password|passwd|api[_-]?key|client[_-]?secret|access[_-]?token|"
@@ -205,16 +227,16 @@ class WorkMemory:
     capability, authority, or approval.
     """
 
-    def __init__(self, database: Path) -> None:
+    def __init__(self, database: Path, *, create: bool = True) -> None:
         self._database_path = database
         try:
-            self._database = PinnedSQLiteDatabase(database)
+            self._database = PinnedSQLiteDatabase(database, create=create)
         except (ConfigurationError, OSError, RuntimeError, sqlite3.Error) as error:
             raise WorkMemoryError(
                 "work-memory database could not be opened safely"
             ) from error
         try:
-            self._initialize()
+            self._initialize(create_schema=create)
         except BaseException:
             self._database.close(remove_created=True)
             raise
@@ -370,38 +392,19 @@ class WorkMemory:
             head_hash=replay.head_hash,
         )
 
-    def _initialize(self) -> None:
+    def _initialize(self, *, create_schema: bool) -> None:
         try:
             with self._database.connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 version = _schema_version(connection)
                 tables = _user_tables(connection)
                 if version == 0 and not tables:
-                    connection.execute(
-                        """
-                        CREATE TABLE work_events (
-                            sequence INTEGER PRIMARY KEY,
-                            event_id TEXT NOT NULL,
-                            timestamp TEXT NOT NULL,
-                            work_id TEXT NOT NULL,
-                            kind TEXT NOT NULL,
-                            stage TEXT NOT NULL,
-                            summary TEXT NOT NULL,
-                            reference TEXT,
-                            previous_hash TEXT NOT NULL,
-                            event_hash TEXT NOT NULL
+                    if not create_schema:
+                        raise WorkMemoryError(
+                            "work-memory database does not contain an initialized journal"
                         )
-                        """
-                    )
-                    connection.execute(
-                        """
-                        CREATE TABLE work_memory_state (
-                            id INTEGER PRIMARY KEY CHECK (id = 1),
-                            event_count INTEGER NOT NULL,
-                            head_hash TEXT NOT NULL
-                        )
-                        """
-                    )
+                    connection.execute(_WORK_EVENTS_TABLE_SQL)
+                    connection.execute(_WORK_MEMORY_STATE_TABLE_SQL)
                     connection.execute(
                         "INSERT INTO work_memory_state (id, event_count, head_hash) "
                         "VALUES (1, 0, ?)",
@@ -428,6 +431,20 @@ class WorkMemory:
             ("table", "work_memory_state"),
         }:
             raise WorkMemoryError("work-memory schema tables are incompatible")
+        definitions = {
+            str(row[0]): _normalize_schema_sql(row[1])
+            for row in connection.execute(
+                "SELECT name, sql FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+            if isinstance(row[1], str)
+        }
+        expected_definitions = {
+            "work_events": _normalize_schema_sql(_WORK_EVENTS_TABLE_SQL),
+            "work_memory_state": _normalize_schema_sql(_WORK_MEMORY_STATE_TABLE_SQL),
+        }
+        if definitions != expected_definitions:
+            raise WorkMemoryError("work-memory schema definitions are incompatible")
         event_schema = tuple(
             (str(row[1]), str(row[2]), int(row[3]), row[4], int(row[5]))
             for row in connection.execute("PRAGMA table_info(work_events)")
@@ -497,6 +514,12 @@ class WorkMemory:
         )
         if cursor.rowcount != 1:
             raise WorkMemoryError("work-memory checkpoint changed concurrently")
+
+
+def _normalize_schema_sql(value: str) -> str:
+    """Normalize insignificant SQL whitespace for exact definition checks."""
+
+    return " ".join(value.split())
 
 
 def _schema_version(connection: sqlite3.Connection) -> int:

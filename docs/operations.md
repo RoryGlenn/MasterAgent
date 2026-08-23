@@ -125,9 +125,13 @@ For mutating commands that use `--output`, choose a fresh file outside the
 journal's database and bookkeeping names. MasterAgent rejects occupied or
 aliased output paths before opening the journal and validates the prospective
 JSON size inside the append transaction so an oversized export rolls back.
+The create-only output reservation remains held until journal commit and JSON
+publication finish, closing the concurrent-name race. `record` opens existing
+state only; use `start` to initialize a new journal.
 
-The chain detects ordinary row edits, deletion, reordering, schema drift, and
-checkpoint mismatch. It does not authenticate the person who typed a summary,
+The chain detects ordinary row edits, deletion, reordering, complete table
+definition or constraint drift, and checkpoint mismatch. It does not
+authenticate the person who typed a summary,
 prove a remembered claim true, or protect against a same-account administrator
 replacing every database and bookkeeping file while MasterAgent is stopped.
 It also cannot detect deletion of the entire journal without an external

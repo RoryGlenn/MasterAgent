@@ -415,14 +415,17 @@ snapshot: a missing database is an error and is not created. All four actions
 emit deterministic JSON to the terminal or accept a create-only restricted
 `--output` path. A mutating action rejects an occupied output, an output that
 aliases the journal or its state files, and a prospective output that exceeds
-the restricted size boundary without committing the event.
+the restricted size boundary without committing the event. It holds the output
+reservation through journal commit and publication. `record` never initializes
+a missing database or its bookkeeping state.
 
 The database admits at most 4,096 events. Its allowlist contains event IDs,
 timestamps, work IDs, kinds, stages, short summaries, compact references, and
-chain hashes. Obvious credential-shaped text, control characters, unsafe URLs,
-and oversized fields are rejected. Do not paste provider bodies, credentials,
-approval artifacts, or execution transcripts into a summary. Remembered text
-is untrusted metadata and cannot authorize or approve any action.
+chain hashes. Obvious credential-shaped text, URI user information, control
+characters, unsafe URLs, and oversized fields are rejected. Do not paste
+provider bodies, credentials, approval artifacts, or execution transcripts into
+a summary. Remembered text is untrusted metadata and cannot authorize or
+approve any action.
 
 ## Evidence expiration maintenance
 

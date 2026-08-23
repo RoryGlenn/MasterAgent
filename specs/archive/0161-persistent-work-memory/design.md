@@ -12,12 +12,15 @@ checkpoint in the same transaction.
 Current work state is derived by replaying events. No independently mutable
 work-status row exists. `show` and `verify` use a read-only pinned snapshot so
 inspection cannot create or repair state. A schema version and exact table
-column validation reject ambiguous or partially migrated databases. Replay
+definition, constraint, and column validation reject ambiguous or partially
+migrated databases. Replay
 requires the stored timestamp to use its exact canonical representation so an
 equivalent textual rewrite is still detected. Mutating CLI actions preflight a
 create-only JSON output name before opening or appending to the journal and
 rejects journal and state-file aliases. It validates the exact prospective JSON
-size inside the transaction before commit.
+size inside the transaction before commit and holds a native create-only output
+reservation through journal commit and publication. `record` opens the pinned
+SQLite boundary with creation disabled.
 
 ## Affected components
 
