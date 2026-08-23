@@ -7559,7 +7559,7 @@ def _work_memory(
             raise ValueError("work-memory start requires --issue and --summary")
         if any(value is not None for value in (kind, stage, reference)):
             raise ValueError("work-memory start received incompatible arguments")
-        _preflight_work_memory_output(output)
+        _preflight_work_memory_output(output, database=database)
         with WorkMemory(database) as memory:
             snapshot = memory.start(
                 work_id=work_id,
@@ -7574,7 +7574,7 @@ def _work_memory(
             raise ValueError("work-memory record requires --kind and --summary")
         if issue is not None:
             raise ValueError("work-memory record does not accept --issue")
-        _preflight_work_memory_output(output)
+        _preflight_work_memory_output(output, database=database)
         with WorkMemory(database) as memory:
             snapshot = memory.record(
                 work_id=work_id,
@@ -7592,7 +7592,11 @@ def _work_memory(
     return 0
 
 
-def _preflight_work_memory_output(output: Path | None) -> None:
+def _preflight_work_memory_output(
+    output: Path | None,
+    *,
+    database: Path,
+) -> None:
     """Reject an occupied create-only output before mutating the journal."""
 
     if output is None:
@@ -7603,6 +7607,29 @@ def _preflight_work_memory_output(output: Path | None) -> None:
         selected = Path.cwd() / selected
     if selected.name in {"", ".", ".."}:
         raise ConfigurationError("restricted artifact output path is invalid")
+    selected = selected.resolve(strict=False)
+    selected_database = database.expanduser()
+    if not selected_database.is_absolute():
+        selected_database = Path.cwd() / selected_database
+    selected_database = selected_database.resolve(strict=False)
+    if (
+        selected.parent.as_posix().casefold()
+        == selected_database.parent.as_posix().casefold()
+    ):
+        database_name = selected_database.name.casefold()
+        reserved_names = {
+            database_name,
+            f".{database_name}.master-agent.lock",
+            f".{database_name}.master-agent.flock",
+            f"{database_name}-journal",
+            f"{database_name}-shm",
+            f"{database_name}-wal",
+        }
+        output_name = selected.name.casefold()
+        if output_name in reserved_names or output_name.startswith(".master-agent-"):
+            raise ConfigurationError(
+                "work-memory output must not alias the journal or its state files"
+            )
     with PinnedDirectory.open(selected.parent) as directory:
         requested_name = selected.name.casefold()
         if any(name.casefold() == requested_name for name in directory.list_children()):

@@ -121,6 +121,11 @@ that file. Do not repair rows with SQLite tools. Restoring the exact known-good
 database plus its private MasterAgent lock/ledger state is safer than editing
 the history.
 
+For mutating commands that use `--output`, choose a fresh file outside the
+journal's database and bookkeeping names. MasterAgent rejects occupied or
+aliased output paths before opening the journal and validates the prospective
+JSON size inside the append transaction so an oversized export rolls back.
+
 The chain detects ordinary row edits, deletion, reordering, schema drift, and
 checkpoint mismatch. It does not authenticate the person who typed a summary,
 prove a remembered claim true, or protect against a same-account administrator

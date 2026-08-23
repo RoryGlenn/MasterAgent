@@ -413,7 +413,9 @@ post-merge appends fail without changing the journal.
 `verify` checks the complete database. Both open an existing read-only pinned
 snapshot: a missing database is an error and is not created. All four actions
 emit deterministic JSON to the terminal or accept a create-only restricted
-`--output` path.
+`--output` path. A mutating action rejects an occupied output, an output that
+aliases the journal or its state files, and a prospective output that exceeds
+the restricted size boundary without committing the event.
 
 The database admits at most 4,096 events. Its allowlist contains event IDs,
 timestamps, work IDs, kinds, stages, short summaries, compact references, and

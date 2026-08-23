@@ -16,7 +16,8 @@ column validation reject ambiguous or partially migrated databases. Replay
 requires the stored timestamp to use its exact canonical representation so an
 equivalent textual rewrite is still detected. Mutating CLI actions preflight a
 create-only JSON output name before opening or appending to the journal and
-validate the exact prospective JSON size inside the transaction before commit.
+rejects journal and state-file aliases. It validates the exact prospective JSON
+size inside the transaction before commit.
 
 ## Affected components
 

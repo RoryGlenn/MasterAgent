@@ -151,6 +151,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "xoxb-1234567890-secret",
                     "AIza1234567890abcdefghijklmnopqrstuvwxyz",
                     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature12345678",
+                    "Cookie: sessionid=abc1234567890",
+                    "Set-Cookie: auth=abc1234567890; Secure; HttpOnly",
                 ):
                     with (
                         self.subTest(credential=credential),
@@ -520,6 +522,45 @@ class WorkMemoryTests(unittest.TestCase):
             after = WorkMemory.show_existing(database, "issue-164")
             self.assertEqual(after.journal_event_count, before.journal_event_count)
             self.assertEqual(after.journal_head_hash, before.journal_head_hash)
+
+    def test_cli_refuses_output_aliases_for_journal_state(self) -> None:
+        for output_name in (
+            "work-memory.sqlite3",
+            ".work-memory.sqlite3.master-agent.lock",
+            ".work-memory.sqlite3.master-agent.flock",
+            "work-memory.sqlite3-wal",
+            ".master-agent-00000000000000000000000000000000.ledger",
+        ):
+            with (
+                self.subTest(output_name=output_name),
+                private_temporary_directory() as directory,
+            ):
+                root = Path(directory)
+                database = root / "work-memory.sqlite3"
+                output = root / output_name
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = main(
+                        [
+                            "work-memory",
+                            "start",
+                            "--database",
+                            str(database),
+                            "--work-id",
+                            "issue-165",
+                            "--issue",
+                            "#165",
+                            "--summary",
+                            "Start work.",
+                            "--output",
+                            str(output),
+                        ]
+                    )
+                self.assertEqual(status, 1)
+                self.assertIn("must not alias", stderr.getvalue())
+                self.assertFalse(database.exists())
+                self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":
