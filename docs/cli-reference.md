@@ -33,7 +33,13 @@ checks; this does not relax publication rules for other output paths.
 | `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector, target, credential, path, or gate arguments |
 | `run` | Evaluate a plan or execute an approved, manifest-bound plan | No provider side effect without `--apply`; live apply is governed by every catalog, policy, approval, connector, and runtime gate |
 | `plugins` | Inventory connector entry-point metadata without importing plugin code | Optional local JSON output; never executes plugin code |
-| `capability-import` | Inspect a versioned declarative custom-agent export and classify its abilities against the typed catalog | Read-only local inspection; optional restricted JSON preview; never executes imported source or changes the catalog |
+| `capability-import` | Inspect a custom-agent export, or select one exact-digest compatible ability into quarantine | Preview is read-only; `--select` writes only a signed quarantined capsule and never executes or routes it |
+| `capability-promote` | Validate and advance one exact quarantine through distinct signed roles to enablement | Executes only the bounded capsule tests and denial probes in the native isolated worker; appends immutable manifests; production remains readiness-gated |
+| `capability-status` | Authenticate and display one capsule's complete immutable state chain | Read-only capsule-store verification; optional restricted JSON output |
+| `capability-route` | Policy-filter an intent against explicitly selected enabled capsule versions | Read-only local governance, policy, signature-chain, and lexical routing; never executes the capsule |
+| `capability-run` | Route and execute one enabled pure capsule through the normal typed orchestrator | Runs only the exact promoted capsule in the native isolated worker, performs deterministic replay, and writes the selected audit database and optional result |
+| `capability-disable` | Append signed deprecation to an enabled capsule version | Writes one immutable manifest; stops future routing without deleting history |
+| `capability-revoke` | Append signed revocation to a supported current capsule state | Writes one immutable terminal manifest; stops future routing without deleting history |
 | `readiness` | Validate governance, configuration, OAuth, permissions, implemented production adapters, and optional provider/classification egress readiness | Offline; optional local JSON output; `--egress-check` performs no network request |
 | `oauth-device-code` | Run an enabled Microsoft delegated device-code flow | Performs Microsoft authentication requests and writes a mode-`0600` token file |
 | `draft-package` | Generate the Phase 3 review package | Local create-only artifacts and audit state; no provider access |

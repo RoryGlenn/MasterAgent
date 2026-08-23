@@ -338,6 +338,13 @@ identity that binds that digest and the declared publisher. The result is only
 an installed signed quarantine; it does not create a catalog definition or
 routing card.
 
+The installed CLI composes the complete supported operator lifecycle. It can
+promote an exact quarantine using distinct environment-backed role authorities,
+authenticate state, policy-filter an explicit set of enabled versions for
+intent routing, and execute the chosen pure capability only after binding it
+into a normal typed plan. Disable and revoke append terminal manifests; a new
+version repeats preview and promotion without overwriting prior evidence.
+
 The current worker admits only dependency-free pure read/local-generation
 capsules. It executes their AST-restricted program in Linux bubblewrap or a
 native Windows zero-capability AppContainer with no network, no ambient

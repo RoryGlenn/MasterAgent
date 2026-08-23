@@ -11,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.capability_import import (
@@ -21,6 +22,7 @@ from master_agent.capability_import import (
     quarantine_selected_ability,
 )
 from master_agent.capability_routing import CapabilityCard
+from master_agent.capsule_authorities import load_capsule_authorities
 from master_agent.capsule_promotion import CapabilityPromotionService
 from master_agent.capsule_runtime import CapsuleValidation
 from master_agent.capsules import (
@@ -513,6 +515,258 @@ class CapabilityImportTests(unittest.TestCase):
         self.assertNotIn("def run", stdout.getvalue())
         self.assertIn("preview only", payload["activation"])
 
+    def test_cli_completes_selection_promotion_routing_execution_and_revocation(
+        self,
+    ) -> None:
+        worker = _CliWorker()
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            source = _write_source(root, _package([_ability("greeting")]))
+            authorities = _write_authority_config(root)
+            request = root / "request.json"
+            request.write_text(json.dumps({"name": "Ada"}), encoding="utf-8")
+            request.chmod(0o600)
+            preview_path = root / "preview.json"
+            run_path = root / "run.json"
+            arguments = (
+                "--capsule-store",
+                str(root / "capsules"),
+                "--capsule-authorities",
+                str(authorities),
+            )
+            with patch.dict(os.environ, _authority_environment(), clear=False):
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(source),
+                            "--output",
+                            str(preview_path),
+                        ]
+                    ),
+                    0,
+                )
+                source_sha256 = str(
+                    json.loads(preview_path.read_text(encoding="utf-8"))["agent"][
+                        "source_sha256"
+                    ]
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(source),
+                            "--select",
+                            "greeting",
+                            "--expected-source-sha256",
+                            source_sha256,
+                            "--worker-sha256",
+                            worker.identity_sha256,
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                with (
+                    patch("master_agent.cli.CapsuleWorker", return_value=worker),
+                    patch(
+                        "master_agent.cli.CapsuleValidator",
+                        return_value=_StaticValidator(),
+                    ),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-promote",
+                                "foreign.greeting.generate",
+                                "1.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-route",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-run",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                "--request",
+                                str(request),
+                                "--database",
+                                str(root / "audit.sqlite3"),
+                                "--output",
+                                str(run_path),
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                report = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertTrue(report["successful"])
+                self.assertEqual(
+                    report["actions"][0]["result"]["after"],
+                    {"message": "Hello, Ada"},
+                )
+                updated_source = _write_source(
+                    root,
+                    _package(
+                        [_ability("greeting", version="2.0.0")],
+                        agent_version="2.0.0",
+                    ),
+                    name="agent-capabilities-v2.json",
+                )
+                updated_preview = root / "preview-v2.json"
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(updated_source),
+                            "--output",
+                            str(updated_preview),
+                        ]
+                    ),
+                    0,
+                )
+                updated_digest = str(
+                    json.loads(updated_preview.read_text(encoding="utf-8"))["agent"][
+                        "source_sha256"
+                    ]
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(updated_source),
+                            "--select",
+                            "greeting",
+                            "--expected-source-sha256",
+                            updated_digest,
+                            "--worker-sha256",
+                            worker.identity_sha256,
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                with (
+                    patch("master_agent.cli.CapsuleWorker", return_value=worker),
+                    patch(
+                        "master_agent.cli.CapsuleValidator",
+                        return_value=_StaticValidator(),
+                    ),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-promote",
+                                "foreign.greeting.generate",
+                                "2.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-disable",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-route",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        1,
+                    )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-revoke",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                status = root / "status.json"
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-status",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            "--output",
+                            str(status),
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    json.loads(status.read_text(encoding="utf-8"))["state"],
+                    "revoked",
+                )
+
+    def test_capsule_authority_config_rejects_shared_subjects_and_roles(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            config = _write_authority_config(root)
+            original = config.read_text(encoding="utf-8")
+            environment = _authority_environment()
+            config.write_text(
+                original.replace(
+                    'subject = "validator"',
+                    'subject = "import-generator"',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError, "subjects must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+            config.write_text(
+                original.replace(
+                    'roles = ["generator"]',
+                    'roles = ["generator", "reviewer"]',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "exactly one role"):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+
 
 def _catalog_definition(name: str) -> CapabilityDefinition:
     return CapabilityDefinition(
@@ -712,6 +966,44 @@ def _authorities(
     )
 
 
+def _write_authority_config(root: Path) -> Path:
+    path = root / "capsule-authorities.toml"
+    subjects = {
+        "generator": "import-generator",
+        "validator": "validator",
+        "sandbox_validator": "sandbox-validator",
+        "reviewer": "reviewer",
+        "publisher": "foreign.publisher",
+        "revoker": "security",
+    }
+    sections = []
+    for index, (role, subject) in enumerate(subjects.items()):
+        sections.append(
+            "\n".join(
+                (
+                    f"[authorities.test-{index}]",
+                    f'subject = "{subject}"',
+                    f'roles = ["{role}"]',
+                    'environments = ["non_production"]',
+                    f'secret_env = "TEST_CAPSULE_KEY_{index}"',
+                    "enabled = true",
+                )
+            )
+        )
+    path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def _authority_environment() -> dict[str, str]:
+    return {
+        f"TEST_CAPSULE_KEY_{index}": hashlib.sha256(
+            f"cli-authority:{index}".encode()
+        ).hexdigest()
+        for index in range(6)
+    }
+
+
 def _jsonable(value: object) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -725,6 +1017,26 @@ MappingLike = dict[str, Any]
 
 class _StaticWorker:
     identity_sha256 = "b" * 64
+
+
+class _CliWorker(_StaticWorker):
+    backend = "test-subprocess"
+    production_isolated = False
+
+    @property
+    def identity_components(self) -> Mapping[str, str]:
+        return {"backend": self.backend}
+
+    def denial_probes(self) -> list[dict[str, str]]:
+        return []
+
+    def execute(
+        self,
+        bundle: CapsuleBundle,
+        request: Mapping[str, Any],
+    ) -> dict[str, object]:
+        del bundle
+        return {"message": "Hello, " + str(request.get("name", "")).strip()}
 
 
 class _StaticValidator:
