@@ -182,6 +182,10 @@ class WorkMemoryTests(unittest.TestCase):
                     "glpat-abcdefghijklmnopqrst",
                     "hf_abcdefghijklmnopqrstuvwxyz012345",
                     "lin_api_abcdefghijklmnopqrstuvwxyz012345",
+                    "sk-" + "abcdefghijklmnopqrstuvwxyz0123456789",
+                    "hvs." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
+                    "hvb." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
+                    "hvr." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
                     "dapi" + "0123456789abcdef0123456789abcdef",
                     "pypi-abcdefghijklmnopqrstuvwxyz0123456789",
                     "rk_live_" + "1234567890abcdefghijklmnop",
@@ -244,6 +248,14 @@ class WorkMemoryTests(unittest.TestCase):
                     work_id="issue-2",
                     kind=WorkEventKind.DECISION,
                     summary="Use Bearer authentication for API requests.",
+                )
+                self.assertEqual(
+                    work_memory._validate_work_id("sk-12345678"),
+                    "sk-12345678",
+                )
+                self.assertEqual(
+                    work_memory._validate_summary("Use sk-telemetry as the label."),
+                    "Use sk-telemetry as the label.",
                 )
                 self.assertEqual(memory.show("issue-2").journal_event_count, 4)
 
