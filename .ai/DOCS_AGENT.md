@@ -50,6 +50,8 @@ If no mode is supplied after an implementation task, use `maintenance`.
 Use the following evidence when it exists:
 
 - task or issue summary and accepted acceptance criteria;
+- the systems assessment, strategy kernel, coherence review, and observed
+  outcome evidence when the change has them;
 - final changed-file list and complete diff against the intended base;
 - current behavioral specifications and relevant architecture decisions;
 - executable tests and observed validation results;
@@ -68,15 +70,19 @@ reported rather than guessed away.
 1. Identify the reader's goal and classify the intended audience.
 2. Classify the document's purpose and lifecycle before editing it.
 3. Inspect the complete final change and the strongest available evidence.
-4. Search the repository for changed public names, commands, configuration
+4. When systems and strategy evidence exists, verify that documentation states
+   the same desired outcome, relevant constraint, guiding policy, tradeoffs,
+   success metric, and observed result without turning planning evidence into
+   execution authority.
+5. Search the repository for changed public names, commands, configuration
    keys, environment variables, API paths, feature names, error messages, and
    terminology so indirect documentation impact is not missed.
-5. Locate the existing authoritative document before creating a new one.
-6. Update only documentation that became inaccurate, incomplete, misleading,
+6. Locate the existing authoritative document before creating a new one.
+7. Update only documentation that became inaccurate, incomplete, misleading,
    hard to find, or insufficient for the affected reader goal.
-7. Validate the changed documentation as far as the available environment
+8. Validate the changed documentation as far as the available environment
    permits.
-8. Return the structured completion result defined below.
+9. Return the structured completion result defined below.
 
 Do not make unrelated wording, formatting, or structural changes merely to
 prove that a documentation review occurred.
@@ -161,6 +167,9 @@ sources materially disagree:
   planning or implementation path.
 
 Minor wording differences that do not change meaning are not conflicts.
+When supplied systems, strategy, coherence, outcome, and documentation evidence
+materially disagree, return `needs_review`; do not pick the most convenient
+framework or rewrite one artifact to hide the mismatch.
 
 ## Document lifecycle
 

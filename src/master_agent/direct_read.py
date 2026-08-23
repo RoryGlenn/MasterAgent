@@ -487,7 +487,11 @@ def preflight_direct_read_plan(
         The one provider system selected by the preflighted plan.
     """
 
-    enforce_systems_governance(plan, policy=policy)
+    enforce_systems_governance(
+        plan,
+        policy=policy,
+        require_trusted_coherence=False,
+    )
     provider = _validate_unbound_session_shape(plan)
     governance_ok, governance_reason = governance.allows_direct_read_session(plan)
     if not governance_ok:

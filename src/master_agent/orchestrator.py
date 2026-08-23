@@ -50,6 +50,7 @@ from master_agent.planners.base import (
     SystemsOutcomeObserver,
     build_systems_post_execution_review,
     enforce_systems_governance,
+    strategy_coherence_execution_authenticated,
 )
 from master_agent.policy import PolicyEngine
 from master_agent.provider_egress import (
@@ -260,15 +261,23 @@ class WorkflowOrchestrator:
             Per-action state, evidence, and compensation outcomes.
         """
 
-        # Never execute caller-owned objects.  The deserialize/validate pass
-        # creates a private, recursively immutable snapshot whose fingerprint
-        # is the exact artifact evaluated by policy and passed to connectors.
-        plan = ChangePlan.from_dict(plan.to_dict())
+        # Never execute caller-owned objects. The validated snapshot preserves
+        # only process-local admission created by a trusted planning binder;
+        # serialized inputs cannot supply that provenance.
+        plan = plan.execution_snapshot()
         approvals_tuple = tuple(approvals)
         systems_decision = enforce_systems_governance(
             plan,
             policy=self._policy,
             approvals=approvals_tuple,
+            require_trusted_coherence=False,
+        )
+        coherence_approval_required = not dry_run and not (
+            strategy_coherence_execution_authenticated(
+                plan,
+                policy=self._policy,
+                approvals=approvals_tuple,
+            )
         )
         systems_assessment = plan.systems_assessment
         if systems_assessment is None:  # pragma: no cover - enforced above.
@@ -341,6 +350,27 @@ class WorkflowOrchestrator:
                     executed=side_effects_may_have_occurred,
                     dry_run=dry_run,
                 )
+                continue
+
+            if coherence_approval_required:
+                source_ok, source_reason = self._sources.validate(plan, action)
+                report = ActionReport(
+                    action_id=action.action_id,
+                    capability=action.capability,
+                    state=(
+                        ActionState.APPROVAL_REQUIRED
+                        if source_ok
+                        else ActionState.PROHIBITED
+                    ),
+                    message=(
+                        "authenticated whole-plan strategy coherence review is required"
+                        if source_ok
+                        else source_reason
+                    ),
+                )
+                reports.append(report)
+                state_by_id[action.action_id] = report.state
+                self._record_action(run_id, plan, action, report)
                 continue
 
             failed_dependencies = [

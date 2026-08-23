@@ -124,16 +124,18 @@ MasterAgent separates a flexible planning layer from a deterministic execution
 layer:
 
 1. A user or registered workflow states an outcome.
-2. A planner builds typed actions inside an immutable `ChangePlan`.
-3. The runtime checks the capability catalog, organization governance, risk,
+2. For non-trivial work, a systems diagnosis identifies the governing constraint
+   and a separate coherence review checks the proposed strategy.
+3. A planner builds typed actions inside an immutable `ChangePlan`.
+4. The runtime checks the capability catalog, organization governance, risk,
    source-of-truth rules, model-context data handling, provider identity, and
    current target state.
-4. Approval-required actions pause on a private request bound to the exact plan
+5. Approval-required actions pause on a private request bound to the exact plan
    fingerprint and action IDs.
-5. Only the registered typed connector executes each permitted action.
-6. MasterAgent independently re-reads the result, reports partial success
-   honestly, compensates only when a typed safe precondition exists, and writes
-   retention-aware audit evidence.
+6. Only the registered typed connector executes each permitted action.
+7. MasterAgent independently re-reads the result, reports partial success
+   honestly, records outcome feedback, compensates only when a typed safe
+   precondition exists, and writes retention-aware audit evidence.
 
 This is a control plane, not an omnipotent model process. There is no arbitrary
 HTTP, arbitrary shell, force push, autonomous merge, broad delete, or generic
@@ -298,6 +300,11 @@ For every non-trivial repository change, the selected parent also applies the
 [Docs Agent contract](.ai/DOCS_AGENT.md). A material conflict returns
 `needs_review` rather than turning an apparent defect into documented intent.
 
+A missing safe capability remains implementation work, but it must stay inside
+the admitted proximate objective, coherent actions, tradeoffs, and complexity
+budget. Useful adjacent gaps become follow-up evidence instead of silently
+expanding the current goal.
+
 ## Development plane and runtime plane
 
 MasterAgent keeps changing the software separate from using the software:
@@ -308,8 +315,9 @@ Issue → behavioral change specification → code and tests
       → documentation review → validation → archived requirement delta
 
 Runtime plane
-Request → immutable ChangePlan → policy and governance → exact approval
-        → registered connector → verification, compensation, and audit
+Request → systems diagnosis → strategy + coherence review
+        → immutable ChangePlan → policy and governance → exact approval
+        → registered connector → verification, audit, and feedback
 ```
 
 Specifications govern changes to MasterAgent. A runtime `ChangePlan` governs
@@ -424,3 +432,4 @@ discoverable.
 - **Issues:** [GitHub Issues](https://github.com/RoryGlenn/MasterAgent/issues)
 - **History:** [CHANGELOG.md](CHANGELOG.md)
 - **License:** proprietary; see [LICENSE](LICENSE).
+
