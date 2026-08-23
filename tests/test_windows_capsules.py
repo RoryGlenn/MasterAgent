@@ -24,6 +24,7 @@ from master_agent.platform_runtime.windows import (
 from master_agent.platform_runtime.windows.capsules import (
     _copy_runtime_directory,
     _network_probe_source,
+    _parent_handle_probe_source,
     _sddl,
     _tree_sha256,
 )
@@ -235,6 +236,18 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         self.assertIn("10060", source.splitlines()[1])
         self.assertNotIn("10061", source)
         self.assertIn("54321", source)
+
+    def test_parent_handle_probe_writes_only_to_the_exact_withheld_handle(
+        self,
+    ) -> None:
+        source = _parent_handle_probe_source(12345)
+        compile(source, "<parent-handle-probe>", "exec")
+        self.assertIn("_winapi.WriteFile(12345,b'\\x00',False)", source)
+        self.assertIn("except OSError", source)
+        self.assertNotIn("ctypes", source)
+
+        with self.assertRaisesRegex(ValueError, "parent handle must be positive"):
+            _parent_handle_probe_source(0)
 
 
 @unittest.skipUnless(sys.platform == "win32", "native Windows test")

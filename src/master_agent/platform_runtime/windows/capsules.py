@@ -606,13 +606,7 @@ class CtypesWindowsAppContainerApi:
                 ),
                 (
                     "os_parent_handle",
-                    (
-                        "import _winapi\n"
-                        "try:\n"
-                        f" _winapi.GetFileType({inherited_handle})\n"
-                        "except OSError:\n print('DENIED')\n"
-                        "else:\n print('ALLOWED')\n"
-                    ),
+                    _parent_handle_probe_source(inherited_handle),
                 ),
                 (
                     "os_subprocess",
@@ -1033,6 +1027,18 @@ def _network_probe_source(
         "except OSError as error:\n"
         " code=int(error.winerror or error.errno or 0)\n"
         "print('DENIED' if code in denied else f'UNEXPECTED_{code}')\n"
+    )
+
+
+def _parent_handle_probe_source(handle: int) -> str:
+    if handle <= 0:
+        raise ValueError("parent handle must be positive")
+    return (
+        "import _winapi\n"
+        "try:\n"
+        f" _winapi.WriteFile({handle},b'\\x00',False)\n"
+        "except OSError:\n print('DENIED')\n"
+        "else:\n print('ALLOWED')\n"
     )
 
 
