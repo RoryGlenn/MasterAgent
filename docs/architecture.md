@@ -92,6 +92,17 @@ authenticates one current approval bound to the exact plan fingerprint and
 covering every action. Missing, invalid, expired, partial, or differently bound
 approvals fail before audit initialization or connector access.
 
+Every gated assessment also carries a `StrategyKernel`: a diagnosis of the
+constraint, one guiding policy, a proximate objective, explicit tradeoffs, and
+bounded coherent-action intents. `StrategyActionTrace` records map every exact
+plan action to one known intent, with no missing, duplicate, unknown, stale, or
+unused entries. The kernel is covered by the assessment fingerprint and the
+traces by the plan fingerprint. This makes strategy reviewable without making
+strategy authoritative. `EvidenceBackedSystemsAssessor` is the concrete
+planning boundary for explicitly supplied evidence; it rejects a substituted
+goal instead of filling gaps with generated prose. Built-in workflows use the
+explicit fast-path or static-intervention constructors.
+
 After execution, `RunReport.systems_review`, `DirectReadReport.systems_review`,
 and the orchestrator's terminal audit event contain content-free evidence for
 metric observation, possible unintended effects, planned complexity, removal
@@ -102,6 +113,15 @@ instead of claiming success from connector completion alone. Systems governance
 is an admission layer only: capability, source-of-truth, organization
 governance, policy, approval, credential, provider, execution, verification,
 compensation, retention, and audit controls remain independently decisive.
+
+An optional `EvidenceBackedSystemsOutcomeObserver` runs only after ordinary
+action execution. It accepts content-free `SystemsOutcomeEvidence` bound to the
+assessment, decision, and success-metric fingerprints and records observed
+complexity growth and stop-condition status. Missing, malformed, mismatched, or
+dry-run evidence falls back to the conservative review. The observer cannot
+change admission, action states, or execution authority. See the developer
+guide in [`systems-governance.md`](systems-governance.md) for the construction
+and integration contracts.
 
 Direct GitHub-host advisory invocation is disabled because that surface cannot
 prove the selected-parent allowlist, depth-one routing, or per-goal counters.

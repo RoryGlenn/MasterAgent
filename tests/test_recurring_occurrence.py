@@ -29,11 +29,13 @@ from master_agent.models import (
     RiskLevel,
     RuntimeExecutionBinding,
     RuntimePathExecutionBinding,
+    StrategyActionIntent,
+    StrategyKernel,
     SystemsAssessment,
 )
 from master_agent.planners.base import (
     bind_fast_path_governance,
-    bind_systems_governance,
+    bind_static_intervention_governance,
 )
 from master_agent.recurring import (
     DstFoldPolicy,
@@ -746,9 +748,9 @@ def _recurring_fixture(
         ),
     )
     if include_effect:
-        plan = bind_systems_governance(
+        plan = bind_static_intervention_governance(
             unbound,
-            SystemsAssessment(
+            SystemsAssessment.for_static_intervention(
                 desired_outcome=unbound.goal,
                 current_behavior="the review marker is not yet applied",
                 constraint="the effect requires normal approval and verification",
@@ -762,9 +764,26 @@ def _recurring_fixture(
                 failure_condition="any stale or broadened occurrence is rejected",
                 unintended_consequences=("a duplicate provider effect",),
                 removable_complexity=("the optional marker action",),
+                strategy_kernel=StrategyKernel(
+                    diagnosis="the occurrence has not reached its verified final state",
+                    guiding_policy="run only the exact occurrence-bound actions",
+                    proximate_objective="verify and finalize the selected occurrence",
+                    tradeoffs=(
+                        "prefer exact occurrence binding over flexible rescheduling",
+                    ),
+                    coherent_actions=tuple(
+                        StrategyActionIntent(
+                            intent_id=f"occurrence_action_{index}",
+                            description=action.justification,
+                            expected_effect=(
+                                "the action reaches its independently verified state"
+                            ),
+                        )
+                        for index, action in enumerate(unbound.actions, start=1)
+                    ),
+                ),
                 alternatives_considered=("local generation without the marker",),
                 reversibility_strategy="verify and compensate the marker update",
-                low_risk=False,
                 reversible=True,
                 well_understood=True,
             ),

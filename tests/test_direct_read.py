@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
@@ -37,7 +38,13 @@ from master_agent.models import (
     PluginExecutionBinding,
     ResourceRef,
     RiskLevel,
+    SystemsMetricStatus,
+    SystemsOutcomeEvidence,
     VerificationResult,
+)
+from master_agent.planners.base import (
+    EvidenceBackedSystemsOutcomeObserver,
+    SystemsOutcomeObserver,
 )
 from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.provider_egress import (
@@ -205,6 +212,44 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertTrue(report.systems_review.reassessment_required)
         self.assertIn("systems_review", report.to_dict())
         transport.assert_drained()
+
+    def test_accepts_fingerprint_bound_outcome_observation_after_reads(self) -> None:
+        transport = QueueTransport(
+            ExpectedRequest("GET", "/items/one", {"name": "one"}),
+            ExpectedRequest("GET", "/items/one", {"name": "one"}),
+        )
+
+        class Provider:
+            def observe(self, *, assessment, decision, states):
+                self.states = states
+                return SystemsOutcomeEvidence(
+                    assessment_fingerprint=assessment.fingerprint,
+                    decision_fingerprint=decision.fingerprint,
+                    success_metric_sha256=hashlib.sha256(
+                        assessment.success_metric.encode("utf-8")
+                    ).hexdigest(),
+                    metric_status=SystemsMetricStatus.CONFIRMED_MOVED,
+                    unintended_effects_detected=False,
+                    observed_complexity_score=0,
+                    removal_candidate_count=0,
+                    stop_condition_checked=True,
+                    stop_condition_triggered=False,
+                    reason_codes=("provider_metric_observed",),
+                )
+
+        provider = Provider()
+        observer = EvidenceBackedSystemsOutcomeObserver(provider)
+        report = self._session(transport, observer=observer).execute(
+            _plan(_action("one"))
+        )
+
+        self.assertEqual(provider.states, (ActionState.VERIFIED,))
+        self.assertEqual(
+            report.systems_review.metric_status,
+            SystemsMetricStatus.CONFIRMED_MOVED,
+        )
+        self.assertTrue(report.systems_review.stop_condition_checked)
+        self.assertFalse(report.systems_review.reassessment_required)
 
     def test_confidential_direct_read_is_denied_before_provider_access(self) -> None:
         transport = QueueTransport()
@@ -503,6 +548,7 @@ class DirectReadSessionTests(unittest.TestCase):
         sources: SourceOfTruthRegistry | None = None,
         execution_binding: ConnectorExecutionBinding | None = None,
         max_pages: int = 4,
+        observer: SystemsOutcomeObserver | None = None,
     ) -> DirectReadSession:
         with patch(
             "master_agent.direct_read._is_builtin_direct_read_connector",
@@ -515,6 +561,7 @@ class DirectReadSessionTests(unittest.TestCase):
                 sources=sources or SourceOfTruthRegistry(()),
                 connector=_ReadConnector(transport, max_pages=max_pages),
                 execution_binding=execution_binding or _binding(),
+                systems_outcome_observer=observer,
             )
 
 

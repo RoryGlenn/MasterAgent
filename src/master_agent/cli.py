@@ -137,6 +137,8 @@ from master_agent.models import (
     ExecutionContext,
     ResourceRef,
     RiskLevel,
+    StrategyActionIntent,
+    StrategyKernel,
     SystemsAssessment,
 )
 from master_agent.oauth import EntraDeviceCodeProvider, write_token_file
@@ -159,7 +161,7 @@ from master_agent.operating import (
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.base import (
     bind_fast_path_governance,
-    bind_systems_governance,
+    bind_static_intervention_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.platform_paths import current_user_product_root
@@ -4825,9 +4827,9 @@ def _capability_run(
         created_by=principal,
         execution_context=context,
     )
-    plan = bind_systems_governance(
+    plan = bind_static_intervention_governance(
         plan,
-        SystemsAssessment(
+        SystemsAssessment.for_static_intervention(
             desired_outcome=intent,
             current_behavior="the selected capability has not yet processed the request",
             constraint="one authenticated request must remain bound to one promoted capsule",
@@ -4845,7 +4847,29 @@ def _capability_run(
                 "a provider-side effect could become indeterminate after a transport failure",
             ),
             removable_complexity=("the per-run capsule activation",),
-            low_risk=False,
+            strategy_kernel=StrategyKernel(
+                diagnosis=(
+                    "The requested outcome is blocked at the single promoted capsule "
+                    "execution boundary."
+                ),
+                guiding_policy=(
+                    "Use only the authenticated, routed, and activated capsule selected "
+                    "for this request."
+                ),
+                proximate_objective="Execute and verify the one selected capsule action.",
+                tradeoffs=(
+                    "Prefer one tightly bound capability over broader dynamic dispatch.",
+                ),
+                coherent_actions=(
+                    StrategyActionIntent(
+                        intent_id="execute_capsule",
+                        description="Execute only the selected capsule action.",
+                        expected_effect=(
+                            "The selected action completes and verifies independently."
+                        ),
+                    ),
+                ),
+            ),
             reversible=manifest.spec.risk is not RiskLevel.DESTRUCTIVE,
             well_understood=True,
         ),

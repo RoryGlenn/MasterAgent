@@ -11,20 +11,23 @@ Windows atomic state, credentials, process supervision, trusted Git, and
 AppContainer capsule isolation respectively. Issue #106 adds hosted matrix,
 release-workflow specification, and verification ownership; the certification route remains planned until a
 clean enrolled standard-user runner supplies successful evidence.
+Issue #156 moves systems assessment and planning-gate ownership into the
+governed applied-run route, adds strategy and outcome-observer aliases, and adds
+one deterministic routing fixture for that vocabulary.
 
 ## Results
 
 | Measure | Manual index baseline | Generated router | Result |
 | --- | ---: | ---: | --- |
-| Checked-in router bytes | 29,903 | 20,650 | 30.9% smaller |
-| Approximate context tokens (`bytes / 4`) | 7,476 | 5,163 | 30.9% smaller |
-| Production-module coverage | 80/97 direct links | 124/124 exact owners | Complete and machine-checked |
-| Test-module coverage | 68/80 direct links | 95/95 exact owners | Complete and machine-checked |
-| Current-requirement coverage | 0/16 direct links | 30/30 exact owners | Complete and machine-checked |
-| Stable machine route IDs | 0 | 23 | Every declared route is addressable |
-| Automated routing fixtures | 0/24 | 24/24 | 100% deterministic fixture accuracy |
-| Median lookup time | 652.75 microseconds | 121.44 microseconds | 5.38 times faster |
-| Example selected-route payload | Not available | 1,014 bytes | One route and its local agent contract |
+| Checked-in router bytes | 29,903 | 23,345 | 21.9% smaller |
+| Approximate context tokens (`bytes / 4`) | 7,476 | 5,837 | 21.9% smaller |
+| Production-module coverage | 80/97 direct links | 130/130 exact owners | Complete and machine-checked |
+| Test-module coverage | 68/80 direct links | 101/101 exact owners | Complete and machine-checked |
+| Current-requirement coverage | 0/16 direct links | 35/35 exact owners | Complete and machine-checked |
+| Stable machine route IDs | 0 | 24 | Every declared route is addressable |
+| Automated routing fixtures | 0/24 | 28/28 | 100% deterministic fixture accuracy |
+| Median lookup time | 652.75 microseconds | 147.74 microseconds | 4.42 times faster |
+| Example selected-route payload | Not available | 1,629 bytes | One route and its local agent contract |
 
 The baseline coverage rows count direct links in the prose index; the generated
 rows count exact manifest owners after the issue #83 merge added repository
@@ -53,7 +56,7 @@ python3 scripts/semantic_router.py route "semantic router topology"
 python3 scripts/semantic_router.py changes HEAD
 ```
 
-The metrics command parses the bounded TOML manifest, verifies all 24 routing
+The metrics command parses the bounded TOML manifest, verifies all 28 routing
 fixtures, and reports the median of 11 repeated in-process route-selection
 batches. This is bounded route-selection latency, not end-to-end task duration.
 The route command emits only the selected route and its selected agent's local
@@ -63,8 +66,8 @@ without reading file contents.
 
 ## Coverage
 
-The manifest exactly owns 124 production Python modules, 95 test modules, 30
-current requirements, 31 configurations, 35 CLI commands, 82
-capabilities, 26 connector modules, 11 platform capabilities, and all three
+The manifest exactly owns 130 production Python modules, 101 test modules, 35
+current requirements, 33 configurations, 48 CLI commands, 96
+capabilities, 28 connector modules, 11 platform capabilities, and all three
 checked-in agent profiles. Adding, deleting, or renaming an owned asset without
 updating the manifest fails semantic-router validation.

@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0156-strategy-systems-feedback"
+title = "Add evidence-backed strategy and systems feedback"
+status = "archived"
+github_issue = 156
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-SYSTEMS-GOVERNANCE-001"
+destination = "runtime/MA-SYSTEMS-GOVERNANCE-001.md"
+source = "current/MA-SYSTEMS-GOVERNANCE-001.md"

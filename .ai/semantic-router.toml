@@ -131,14 +131,14 @@ agent = "master-agent"
 id = "governed-applied-run"
 title = "Governed applied-run runtime"
 lifecycle = "released"
-summary = "Own typed plans, policy, approvals, exact execution binding, orchestration, verification, and compensation."
-authority = ["specs/current/runtime/MA-SYSTEMS-GOVERNANCE-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md"]
-implementation = ["src/master_agent/models.py", "src/master_agent/policy.py", "src/master_agent/orchestrator.py"]
+summary = "Own typed plans, systems strategy, policy, approvals, exact execution binding, outcome observation, orchestration, verification, and compensation."
+authority = ["specs/current/runtime/MA-SYSTEMS-GOVERNANCE-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md", "docs/systems-governance.md"]
+implementation = ["src/master_agent/models.py", "src/master_agent/planners/base.py", "src/master_agent/planners/__init__.py", "src/master_agent/policy.py", "src/master_agent/orchestrator.py"]
 configuration = ["config/capabilities.toml", "config/governance.toml", "config/policy.toml", "config/sources_of_truth.toml", "src/master_agent/defaults/capabilities.toml", "src/master_agent/defaults/governance.toml", "src/master_agent/defaults/policy.toml", "src/master_agent/defaults/sources_of_truth.toml"]
-tests = ["tests/test_orchestrator.py", "tests/test_policy.py", "tests/test_execution_context.py"]
+tests = ["tests/test_orchestrator.py", "tests/test_strict_types.py", "tests/test_policy.py", "tests/test_execution_context.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog", "systems governance", "systems assessment", "complexity budget"]
+aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog", "systems governance", "systems assessment", "thinking in systems", "strategy kernel", "guiding policy", "coherent actions", "outcome observer", "complexity budget"]
 agent = "master-agent"
 
 [[routes]]
@@ -257,7 +257,7 @@ agent = "master-agent"
 id = "local-workflows"
 title = "Local generation and bounded workflows"
 lifecycle = "released"
-summary = "Own draft packages, weekly status, the Weekly Operating Review, communication context, identity resolution, planners, and exact recurring occurrences."
+summary = "Own draft packages, weekly status, the Weekly Operating Review, communication context, identity resolution, and exact recurring occurrences."
 authority = ["specs/current/runtime/MA-RECURRING-001.md", "docs/architecture.md", "docs/implementation-roadmap.md"]
 implementation = ["src/master_agent/workflows/draft_package.py", "src/master_agent/workflows/weekly_status.py", "src/master_agent/workflows/weekly_operating_review.py", "src/master_agent/recurring.py", "src/master_agent/recurring_occurrence.py"]
 configuration = ["config/draft-package.toml", "config/weekly-status.toml", "config/weekly-operating-review.toml", "config/communication-context.toml", "config/recurring.toml", "config/identities.toml", "src/master_agent/defaults/communication-context.toml", "src/master_agent/defaults/draft-package.toml", "src/master_agent/defaults/identities.toml", "src/master_agent/defaults/recurring.toml", "src/master_agent/defaults/weekly-status.toml", "src/master_agent/defaults/weekly-operating-review.toml"]
@@ -491,8 +491,8 @@ agent = "master-agent"
 "src/master_agent/oauth_config.py" = "provider-security"
 "src/master_agent/operating.py" = "operating-modes"
 "src/master_agent/orchestrator.py" = "governed-applied-run"
-"src/master_agent/planners/__init__.py" = "local-workflows"
-"src/master_agent/planners/base.py" = "local-workflows"
+"src/master_agent/planners/__init__.py" = "governed-applied-run"
+"src/master_agent/planners/base.py" = "governed-applied-run"
 "src/master_agent/planners/static.py" = "local-workflows"
 "src/master_agent/platform_paths.py" = "packaging-release"
 "src/master_agent/platform_runtime/__init__.py" = "platform-runtime"
@@ -936,6 +936,10 @@ route = "operating-modes"
 
 [[routing_cases]]
 query = "run an approved change plan"
+route = "governed-applied-run"
+
+[[routing_cases]]
+query = "design a strategy kernel and observe systems outcomes"
 route = "governed-applied-run"
 
 [[routing_cases]]

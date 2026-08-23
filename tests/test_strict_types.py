@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from master_agent.capabilities import CapabilityCatalog
@@ -11,22 +13,32 @@ from master_agent.config import IntegrationConfig
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.governance import GovernanceProfile
 from master_agent.models import (
+    ActionState,
     AgentAction,
     AuthoritySource,
     ChangePlan,
     ResourceRef,
     RiskLevel,
+    StrategyActionIntent,
+    StrategyActionTrace,
+    StrategyKernel,
+    SystemsMetricStatus,
+    SystemsOutcomeEvidence,
 )
 from master_agent.oauth_config import OAuthProfiles
 from master_agent.orchestrator import RunReport
 from master_agent.planners.base import (
     ComplexityItem,
     ComplexityKind,
+    EvidenceBackedSystemsAssessor,
+    EvidenceBackedSystemsOutcomeObserver,
     GovernedPlanner,
     SystemsAssessment,
     SystemsGateRoute,
     SystemsGovernanceGate,
     bind_systems_governance,
+    build_systems_post_execution_review,
+    enforce_systems_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.provider_egress import ProviderDataEgressPolicy
@@ -167,13 +179,112 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         )
 
         decision = SystemsGovernanceGate().evaluate(
-            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
             assessment,
         )
 
         self.assertTrue(decision.permitted, decision.reasons)
         self.assertEqual(decision.route, SystemsGateRoute.GATED)
         self.assertEqual(decision.complexity_score, 2)
+
+    def test_gated_strategy_requires_exact_action_to_intent_coverage(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("open work",),
+            flows=("new work arrives",),
+            feedback_loops=("verification changes the next plan",),
+            delays=("provider latency",),
+            unintended_consequences=("work could remain incomplete",),
+        )
+        untraced = _systems_plan(RiskLevel.REVERSIBLE_WRITE)
+        missing = SystemsGovernanceGate().evaluate(untraced, assessment)
+        self.assertFalse(missing.permitted)
+        self.assertIn("cover every plan action", " ".join(missing.reasons))
+
+        action = untraced.actions[0]
+        unknown = replace(
+            untraced,
+            strategy_traces=(
+                StrategyActionTrace(action_id=action.action_id, intent_id="unknown"),
+            ),
+        )
+        unknown_decision = SystemsGovernanceGate().evaluate(unknown, assessment)
+        self.assertFalse(unknown_decision.permitted)
+        self.assertIn("unknown intent", " ".join(unknown_decision.reasons))
+
+        duplicate = replace(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            strategy_traces=(
+                StrategyActionTrace(
+                    action_id=action.action_id,
+                    intent_id="prepare_summary",
+                ),
+                StrategyActionTrace(
+                    action_id=action.action_id,
+                    intent_id="prepare_summary",
+                ),
+            ),
+        )
+        duplicate_decision = SystemsGovernanceGate().evaluate(duplicate, assessment)
+        self.assertFalse(duplicate_decision.permitted)
+        self.assertIn("duplicate action", " ".join(duplicate_decision.reasons))
+
+        without_kernel = SystemsGovernanceGate().evaluate(
+            untraced,
+            replace(assessment, strategy_kernel=None),
+        )
+        self.assertFalse(without_kernel.permitted)
+        self.assertIn("strategy_kernel", " ".join(without_kernel.reasons))
+
+    def test_evidence_backed_assessor_rejects_goal_substitution(self) -> None:
+        assessment = replace(
+            _systems_assessment(),
+            desired_outcome="prepare a local summary",
+        )
+        assessor = EvidenceBackedSystemsAssessor(assessment)
+
+        self.assertIs(assessor.assess("prepare a local summary"), assessment)
+        with self.assertRaisesRegex(ValidationError, "does not match"):
+            assessor.assess("send the summary externally")
+
+    def test_mismatched_outcome_evidence_falls_back_conservatively(self) -> None:
+        plan = bind_systems_governance(
+            _systems_plan(RiskLevel.LOCAL_GENERATION),
+            _systems_assessment(),
+        )
+        assessment = plan.systems_assessment
+        decision = plan.systems_decision
+        assert assessment is not None and decision is not None
+
+        class Provider:
+            def observe(self, *, assessment, decision, states):
+                del decision, states
+                return SystemsOutcomeEvidence(
+                    assessment_fingerprint="f" * 64,
+                    decision_fingerprint=plan.systems_decision.fingerprint,
+                    success_metric_sha256=hashlib.sha256(
+                        assessment.success_metric.encode("utf-8")
+                    ).hexdigest(),
+                    metric_status=SystemsMetricStatus.CONFIRMED_MOVED,
+                    unintended_effects_detected=False,
+                    observed_complexity_score=0,
+                    removal_candidate_count=0,
+                    stop_condition_checked=True,
+                    stop_condition_triggered=False,
+                    reason_codes=("metric_observed",),
+                )
+
+        review = build_systems_post_execution_review(
+            assessment=assessment,
+            decision=decision,
+            states=(ActionState.VERIFIED,),
+            dry_run=False,
+            observer=EvidenceBackedSystemsOutcomeObserver(Provider()),
+        )
+
+        self.assertEqual(review.metric_status, SystemsMetricStatus.NOT_OBSERVED)
+        self.assertTrue(review.reassessment_required)
+        self.assertIn("observer_assessment_mismatch", review.reason_codes)
 
     def test_added_complexity_requires_justification_and_removal_plan(self) -> None:
         assessment = _systems_assessment(
@@ -192,7 +303,7 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         )
 
         decision = SystemsGovernanceGate().evaluate(
-            _systems_plan(RiskLevel.LOCAL_GENERATION),
+            _systems_plan(RiskLevel.LOCAL_GENERATION, assessment=assessment),
             assessment,
         )
 
@@ -221,7 +332,7 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         )
 
         decision = SystemsGovernanceGate().evaluate(
-            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
             assessment,
         )
 
@@ -230,7 +341,7 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         self.assertIn("exceeds automatic budget", " ".join(decision.reasons))
         with self.assertRaisesRegex(ValidationError, "authenticated human review"):
             SystemsGovernanceGate().enforce(
-                _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+                _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
                 assessment,
             )
 
@@ -298,6 +409,26 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "complexity"):
             ChangePlan.from_dict(payload)
 
+    def test_runtime_rejects_a_trace_changed_after_admission(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("work",),
+            flows=("work arrives",),
+            feedback_loops=("verification updates planning",),
+            delays=("provider latency",),
+            unintended_consequences=("the outcome could remain incomplete",),
+        )
+        governed = bind_systems_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
+            assessment,
+        )
+        payload = governed.to_dict()
+        payload["strategy_traces"][0]["intent_id"] = "forged_intent"
+        forged = ChangePlan.from_dict(payload)
+
+        with self.assertRaisesRegex(ValidationError, "stale or forged"):
+            enforce_systems_governance(forged)
+
     def test_plan_rejects_boolean_complexity_weight(self) -> None:
         assessment = _systems_assessment(
             low_risk=False,
@@ -314,7 +445,7 @@ class SystemsGovernanceGateTests(unittest.TestCase):
             reversibility_strategy="remove the dependency",
         )
         governed = bind_systems_governance(
-            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE, assessment=assessment),
             assessment,
         )
         payload = governed.to_dict()
@@ -324,7 +455,9 @@ class SystemsGovernanceGateTests(unittest.TestCase):
             ChangePlan.from_dict(payload)
 
 
-def _systems_plan(risk: RiskLevel) -> ChangePlan:
+def _systems_plan(
+    risk: RiskLevel, *, assessment: SystemsAssessment | None = None
+) -> ChangePlan:
     action = AgentAction(
         capability="example.summary.generate",
         target=ResourceRef("example", "summary", "systems-gate"),
@@ -339,6 +472,16 @@ def _systems_plan(risk: RiskLevel) -> ChangePlan:
         goal="prepare a local summary",
         actions=(action,),
         created_by="test",
+        strategy_traces=(
+            (
+                StrategyActionTrace(
+                    action_id=action.action_id,
+                    intent_id=assessment.strategy_kernel.coherent_actions[0].intent_id,
+                ),
+            )
+            if assessment is not None and assessment.strategy_kernel is not None
+            else ()
+        ),
     )
 
 
@@ -357,6 +500,23 @@ def _systems_assessment(
     existing_mechanisms_insufficient_because: str = "",
     reversibility_strategy: str = "",
 ) -> SystemsAssessment:
+    strategy_kernel = (
+        None
+        if low_risk and reversible and well_understood
+        else StrategyKernel(
+            diagnosis="manual preparation is constrained by one information flow",
+            guiding_policy="change only the smallest typed planning boundary",
+            proximate_objective="produce and verify one governed summary action",
+            tradeoffs=("prefer bounded reuse over a broader new workflow",),
+            coherent_actions=(
+                StrategyActionIntent(
+                    intent_id="prepare_summary",
+                    description="prepare the one governed summary",
+                    expected_effect="the summary reaches its verified target state",
+                ),
+            ),
+        )
+    )
     return SystemsAssessment(
         desired_outcome="produce an accurate local summary",
         current_behavior="the summary is prepared manually",
@@ -379,6 +539,7 @@ def _systems_assessment(
             existing_mechanisms_insufficient_because
         ),
         reversibility_strategy=reversibility_strategy,
+        strategy_kernel=strategy_kernel,
     )
 
 

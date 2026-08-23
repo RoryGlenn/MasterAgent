@@ -682,6 +682,7 @@ is no `--force`, no workflow-name apply, and no cross-host exactly-once claim.
 
 - [Development specifications](docs/development-specifications.md)
 - [Architecture](docs/architecture.md)
+- [Systems governance for developers](docs/systems-governance.md)
 - [Semantic codebase index](docs/semantic-index.md)
 - [Semantic router measurements](docs/semantic-router-metrics.md)
 - [CLI reference](docs/cli-reference.md)
