@@ -269,16 +269,16 @@ agent = "master-agent"
 
 [[routes]]
 id = "retention-audit"
-title = "Evidence, retention, citations, and audit integrity"
+title = "Evidence, retention, work memory, citations, and audit integrity"
 lifecycle = "released"
-summary = "Own retained publication, descriptor-safe expiry, orphan repair, citations, SQLite integrity, and audit verification."
-authority = ["specs/current/security/MA-RETENTION-001.md", "docs/operations.md"]
-implementation = ["src/master_agent/retention.py", "src/master_agent/evidence.py", "src/master_agent/audit.py"]
+summary = "Own retained publication, descriptor-safe expiry, orphan repair, bounded persistent work memory, citations, SQLite integrity, and audit verification."
+authority = ["specs/current/security/MA-RETENTION-001.md", "specs/current/runtime/MA-WORK-MEMORY-001.md", "docs/operations.md"]
+implementation = ["src/master_agent/retention.py", "src/master_agent/evidence.py", "src/master_agent/audit.py", "src/master_agent/work_memory.py"]
 configuration = ["config/retention.toml", "src/master_agent/defaults/retention.toml"]
-tests = ["tests/test_retention.py", "tests/test_audit_safety.py", "tests/test_identity_and_citations.py"]
+tests = ["tests/test_retention.py", "tests/test_audit_safety.py", "tests/test_identity_and_citations.py", "tests/test_work_memory.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["evidence prune", "evidence repair", "retention", "audit verify", "citations", "sqlite safety"]
+aliases = ["evidence prune", "evidence repair", "retention", "audit verify", "citations", "sqlite safety", "work memory", "persistent work memory", "issue to merge"]
 agent = "master-agent"
 
 [[routes]]
@@ -533,6 +533,7 @@ agent = "master-agent"
 "src/master_agent/terminal.py" = "provider-security"
 "src/master_agent/text.py" = "governed-applied-run"
 "src/master_agent/trust_store.py" = "retention-audit"
+"src/master_agent/work_memory.py" = "retention-audit"
 "src/master_agent/workflows/__init__.py" = "local-workflows"
 "src/master_agent/workflows/communication_context.py" = "local-workflows"
 "src/master_agent/workflows/draft_package.py" = "local-workflows"
@@ -640,6 +641,7 @@ agent = "master-agent"
 "tests/test_windows_git.py" = "windows-git"
 "tests/test_windows_platform_runtime.py" = "windows-filesystem"
 "tests/test_windows_process.py" = "windows-process"
+"tests/test_work_memory.py" = "retention-audit"
 "tests/test_write_connectors.py" = "governed-applied-run"
 
 [ownership.current_requirements]
@@ -662,6 +664,7 @@ agent = "master-agent"
 "specs/current/runtime/MA-RECURRING-001.md" = "local-workflows"
 "specs/current/runtime/MA-SYSTEMS-GOVERNANCE-001.md" = "governed-applied-run"
 "specs/current/runtime/MA-USER-WORKFLOW-001.md" = "operating-modes"
+"specs/current/runtime/MA-WORK-MEMORY-001.md" = "retention-audit"
 "specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md" = "windows-atomic-state"
 "specs/current/runtime/MA-WINDOWS-CAPSULES-001.md" = "windows-capsules"
 "specs/current/runtime/MA-WINDOWS-CERTIFICATION-001.md" = "packaging-release"
@@ -763,6 +766,7 @@ agent = "master-agent"
 "weekly-status" = "local-workflows"
 "weekly-status-plan" = "local-workflows"
 "weekly-operating-review-plan" = "local-workflows"
+"work-memory" = "retention-audit"
 
 [ownership.capabilities]
 "bitbucket.branch.push" = "atlassian-connectors"
@@ -988,6 +992,10 @@ route = "local-workflows"
 
 [[routing_cases]]
 query = "repair retained evidence"
+route = "retention-audit"
+
+[[routing_cases]]
+query = "persist work memory from issue to merge"
 route = "retention-audit"
 
 [[routing_cases]]

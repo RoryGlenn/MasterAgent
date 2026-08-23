@@ -13,7 +13,8 @@
 - approved provider-data destination, model tenancy, and classification;
 - organization-profile mode, capability allowlist, and configuration binding;
 - capability capsule signing authorities, immutable artifacts, and receipts;
-- recurring workflow scope.
+- recurring workflow scope;
+- bounded issue-to-merge work history and lifecycle integrity.
 
 ## Trust boundaries
 
@@ -30,6 +31,8 @@
   fields, handling, audit, or DLP requirements;
 - the organization profile is reviewed workflow input, not capability,
   credential, approval, signing, or code-promotion authority;
+- persistent work-memory summaries and references are untrusted metadata, not
+  identity, approval, authority, capability, or evidence that a claim is true;
 - local artifact/workspace roots are explicit security boundaries.
 
 The operating-system service account, installed MasterAgent runtime, and
@@ -596,6 +599,35 @@ keeps repository enablement variables absent or false until every protected
 environment, credential, fixture, reviewer, and restriction is ready. A static
 workflow contract test guards that boundary.
 
+### Persistent work-memory poisoning or tampering
+
+An operator, retrieved issue, or local process may insert a misleading work
+summary, claim approval, regress or skip lifecycle state, edit earlier history,
+or replace persistent state.
+
+Controls:
+
+- an explicit owner-private database path with the native pinned SQLite,
+  cross-process locking, and atomic generation boundary;
+- a strict allowlist of bounded IDs, event kinds, lifecycle stages, short
+  summaries, compact references, timestamps, and hashes;
+- control-character, obvious credential-shape, unsafe-URL, field-size, and
+  total-event limits;
+- replay-derived state with no independently mutable current-status row;
+- exact one-step lifecycle transitions, one start, and terminal merge;
+- one global append-only SHA-256 event chain with a durable count/head
+  checkpoint, verified before every append and read;
+- non-mutating `show` and `verify` paths that reject missing, malformed,
+  unexpected-schema, truncated, reordered, edited, or checkpoint-inconsistent
+  journals without creating or repairing them; and
+- no provider access, network synchronization, hook, poller, server, or path
+  from remembered metadata into execution authority.
+
+Hash-chain validity proves only internal consistency. It does not authenticate
+an author, prove the remembered text true, detect complete journal removal
+without an external anchor, or resist a same-account administrator who replaces
+all state and bookkeeping while the runtime is stopped.
+
 ### Audit/evidence tampering
 
 An operator or process may alter records or retained content.
@@ -685,6 +717,7 @@ Controls:
   reviewed deployment assertion until a host-attestation adapter exists;
 - exact HTML normalization may cause safe false negatives;
 - local SQLite is not sufficient for every production threat model;
+- local work memory has no external availability or authenticity anchor;
 - HMAC capsule/receipt signing assumes externally protected authority keys;
 - local advisory-budget HMAC state protects ordinary corruption and
   cross-process races, not a same-account attacker who can replace both its

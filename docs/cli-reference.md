@@ -68,6 +68,7 @@ The exact recurring command family is `recurring-bind`, `recurring-inspect`,
 | `retain-evidence` | Persist evidence under the selected retention rule | Local create-only evidence and sidecar output; never contacts a provider |
 | `evidence-prune` | Preview or explicitly delete expired evidence | Preview is non-mutating; POSIX uses pinned descriptors and a private pair stage, while Windows uses retained handles and a content-free exact-identity recovery intent |
 | `evidence-repair` | Detect or quarantine orphaned evidence | Preview by default; `--apply` uses exact native identities and private quarantine on POSIX or Windows |
+| `work-memory` | Start, record, show, or verify bounded issue-to-merge decisions, references, and lifecycle state | Explicit owner-private SQLite only; no provider/network access, daemon, hook, approval, or authority; show and verify are non-mutating |
 | `citations` | Extract resource citations from a result JSON file | Read-only local extraction; optional local JSON output |
 | `communication-context-plan` | Build a read-only Outlook/Teams context plan | Writes only the selected local plan |
 | `communication-context` | Reserved direct communication-context package entry point | Disabled before config, credentials, connectors, or audit access |
@@ -396,6 +397,30 @@ must satisfy the ownership, permission, and identity checks described in
 Provider mutation is available only through an exact, manifest-bound
 `run --apply`. The direct workflow commands retained for compatibility do not
 offer an alternate execution path.
+
+## Persistent work memory
+
+Every `work-memory` action requires an explicit `--database`. `start` accepts a
+bounded `--work-id`, `--issue`, and short `--summary`; the ID cannot already
+exist. `record` accepts `--kind decision`, `checkpoint`, or `reference`, a short
+summary, an optional next `--stage`, and an optional `--reference`. A reference
+event requires `--reference`. Stages can remain unchanged or advance exactly
+one step through `issue`, `planned`, `implementing`, `reviewing`, `verified`,
+and terminal `merged`; regression, skipping, duplicate start, missing work, and
+post-merge appends fail without changing the journal.
+
+`show --work-id ID` replays the verified history and returns the derived state.
+`verify` checks the complete database. Both open an existing read-only pinned
+snapshot: a missing database is an error and is not created. All four actions
+emit deterministic JSON to the terminal or accept a create-only restricted
+`--output` path.
+
+The database admits at most 4,096 events. Its allowlist contains event IDs,
+timestamps, work IDs, kinds, stages, short summaries, compact references, and
+chain hashes. Obvious credential-shaped text, control characters, unsafe URLs,
+and oversized fields are rejected. Do not paste provider bodies, credentials,
+approval artifacts, or execution transcripts into a summary. Remembered text
+is untrusted metadata and cannot authorize or approve any action.
 
 ## Evidence expiration maintenance
 

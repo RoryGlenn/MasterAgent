@@ -225,6 +225,7 @@ from master_agent.terminal import (
     MAX_TERMINAL_FIELD_CHARACTERS,
     render_terminal_text,
 )
+from master_agent.work_memory import WorkEventKind, WorkMemory, WorkStage
 from master_agent.workflows.communication_context import (
     CommunicationContextSettings,
     build_communication_context_plan,
@@ -631,6 +632,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _evidence_repair(
                 root=args.root,
                 apply=args.apply,
+                output=args.output,
+            )
+        if args.command == "work-memory":
+            return _work_memory(
+                action=args.work_memory_command,
+                database=args.database,
+                work_id=getattr(args, "work_id", None),
+                issue=getattr(args, "issue", None),
+                kind=getattr(args, "kind", None),
+                stage=getattr(args, "stage", None),
+                summary=getattr(args, "summary", None),
+                reference=getattr(args, "reference", None),
                 output=args.output,
             )
         if args.command == "citations":
@@ -1429,6 +1442,34 @@ def _build_parser() -> argparse.ArgumentParser:
     repair.add_argument("--root", type=Path, default=Path(".master-agent"))
     repair.add_argument("--apply", action="store_true")
     repair.add_argument("--output", type=Path)
+
+    work_memory = subparsers.add_parser(
+        "work-memory",
+        help="keep bounded local issue-to-merge work metadata",
+    )
+    work_memory.add_argument(
+        "work_memory_command",
+        choices=("start", "record", "show", "verify"),
+        metavar="{start,record,show,verify}",
+    )
+    work_memory.add_argument("--database", type=Path, required=True)
+    work_memory.add_argument("--work-id")
+    work_memory.add_argument("--issue")
+    work_memory.add_argument(
+        "--kind",
+        choices=(
+            WorkEventKind.DECISION.value,
+            WorkEventKind.CHECKPOINT.value,
+            WorkEventKind.REFERENCE.value,
+        ),
+    )
+    work_memory.add_argument(
+        "--stage",
+        choices=tuple(stage.value for stage in WorkStage),
+    )
+    work_memory.add_argument("--summary")
+    work_memory.add_argument("--reference")
+    work_memory.add_argument("--output", type=Path)
 
     citations = subparsers.add_parser(
         "citations",
@@ -7474,6 +7515,77 @@ def _evidence_repair(*, root: Path, apply: bool, output: Path | None) -> int:
         _write_json(output, payload)
         print(f"wrote {output}")
     return 2 if result.errors else 0
+
+
+def _work_memory(
+    *,
+    action: str,
+    database: Path,
+    work_id: str | None,
+    issue: str | None,
+    kind: str | None,
+    stage: str | None,
+    summary: str | None,
+    reference: str | None,
+    output: Path | None,
+) -> int:
+    """Run one explicit local persistent-work-memory operation."""
+
+    if action == "verify":
+        if any(
+            value is not None
+            for value in (work_id, issue, kind, stage, summary, reference)
+        ):
+            raise ValueError("work-memory verify accepts only --database and --output")
+        verification = WorkMemory.verify_existing(database)
+        _emit_work_memory_payload(verification.to_dict(), output=output)
+        return 0 if verification.valid else 2
+    if work_id is None:
+        raise ValueError("work-memory operation requires --work-id")
+    if action == "show":
+        if any(value is not None for value in (issue, kind, stage, summary, reference)):
+            raise ValueError(
+                "work-memory show accepts only --database, --work-id, and --output"
+            )
+        snapshot = WorkMemory.show_existing(database, work_id)
+    elif action == "start":
+        if issue is None or summary is None:
+            raise ValueError("work-memory start requires --issue and --summary")
+        if any(value is not None for value in (kind, stage, reference)):
+            raise ValueError("work-memory start received incompatible arguments")
+        with WorkMemory(database) as memory:
+            snapshot = memory.start(work_id=work_id, issue=issue, summary=summary)
+    elif action == "record":
+        if kind is None or summary is None:
+            raise ValueError("work-memory record requires --kind and --summary")
+        if issue is not None:
+            raise ValueError("work-memory record does not accept --issue")
+        with WorkMemory(database) as memory:
+            snapshot = memory.record(
+                work_id=work_id,
+                kind=WorkEventKind(kind),
+                stage=WorkStage(stage) if stage is not None else None,
+                summary=summary,
+                reference=reference,
+            )
+    else:
+        raise ValueError("unknown work-memory operation")
+    _emit_work_memory_payload(snapshot.to_dict(), output=output)
+    return 0
+
+
+def _emit_work_memory_payload(
+    payload: Mapping[str, object],
+    *,
+    output: Path | None,
+) -> None:
+    """Publish bounded work metadata as deterministic JSON."""
+
+    if output is not None:
+        _write_json(output, payload)
+        print(f"wrote {output}")
+        return
+    print(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True))
 
 
 def _citations(path: Path, *, output: Path | None) -> int:

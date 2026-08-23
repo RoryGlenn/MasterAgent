@@ -77,6 +77,58 @@ belongs in a separate trusted developer change. Generated effects stay
 quarantined until independent review, tests, specification archival, signing,
 deployment, and normal runtime admission complete.
 
+## Persistent work memory
+
+Use persistent work memory when work needs to survive separate terminal or
+agent sessions but hosting a cockpit is unavailable. It is an explicit local
+journal, not a service:
+
+```bash
+master-agent work-memory start \
+  --database /private/master-agent/work-memory.sqlite3 \
+  --work-id issue-161 \
+  --issue https://github.com/RoryGlenn/MasterAgent/issues/161 \
+  --summary "Add bounded persistent work memory."
+
+master-agent work-memory record \
+  --database /private/master-agent/work-memory.sqlite3 \
+  --work-id issue-161 \
+  --kind checkpoint \
+  --stage planned \
+  --summary "Implementation scope and safety boundaries are fixed."
+
+master-agent work-memory show \
+  --database /private/master-agent/work-memory.sqlite3 \
+  --work-id issue-161
+
+master-agent work-memory verify \
+  --database /private/master-agent/work-memory.sqlite3
+```
+
+Start at `issue`, then advance exactly one step at a time through `planned`,
+`implementing`, `reviewing`, `verified`, and `merged`. Keep decisions and
+same-stage notes with `--kind decision` or `checkpoint`; use a reference event
+with `--kind reference --reference VALUE` for a compact issue, commit,
+pull-request, check, or release reference. The database parent must be owned by
+the current account and must not be writable by group or world. On Windows it
+must satisfy the equivalent private-DACL and retained-handle checks.
+
+Every append verifies the existing global event chain and updates its durable
+count and head in one serialized transaction. `show` and `verify` are
+non-mutating and never create missing state. Treat a verification failure as a
+corrupt or unsafe journal: preserve it for diagnosis and start no new record in
+that file. Do not repair rows with SQLite tools. Restoring the exact known-good
+database plus its private MasterAgent lock/ledger state is safer than editing
+the history.
+
+The chain detects ordinary row edits, deletion, reordering, schema drift, and
+checkpoint mismatch. It does not authenticate the person who typed a summary,
+prove a remembered claim true, or protect against a same-account administrator
+replacing every database and bookkeeping file while MasterAgent is stopped.
+It also cannot detect deletion of the entire journal without an external
+anchor. Missing state fails closed. Remembered content never supplies identity,
+authority, capability, or approval.
+
 ## Helpdesk support bundles
 
 When an employee needs help, create one fresh diagnostic artifact instead of
