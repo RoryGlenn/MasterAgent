@@ -312,10 +312,19 @@ class SemanticRouterTests(unittest.TestCase):
         (managed_environment / "pyvenv.cfg").write_text(
             "home = /trusted/python\n", encoding="utf-8"
         )
+        similarly_prefixed_source = (
+            self.root / ".venv-master-agent-components" / "tracked.py"
+        )
+        similarly_prefixed_source.parent.mkdir()
+        similarly_prefixed_source.write_text("VALUE = 1\n", encoding="utf-8")
 
         inventory = collect_inventory(self.root)
 
         self.assertIn("setup.py", inventory["production_modules"])
+        self.assertIn(
+            ".venv-master-agent-components/tracked.py",
+            inventory["production_modules"],
+        )
         self.assertIn(
             "examples/generate_demo_package.py", inventory["production_modules"]
         )
@@ -337,7 +346,7 @@ class SemanticRouterTests(unittest.TestCase):
         )
         self.assertFalse(
             any(
-                path.startswith(".venv-master-agent-")
+                path.startswith(".venv-master-agent-0123456789ab/")
                 for paths in inventory.values()
                 if isinstance(paths, set)
                 for path in paths

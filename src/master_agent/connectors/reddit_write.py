@@ -16,7 +16,7 @@ from master_agent.connectors.reddit import (
     _validate_config,
 )
 from master_agent.connectors.utils import enforce_expected_version, string_parameter
-from master_agent.errors import ConnectorError, ResourceNotFoundError
+from master_agent.errors import ConnectorError, RateLimitError, ResourceNotFoundError
 from master_agent.http import HttpTransport
 from master_agent.models import (
     ActionState,
@@ -265,6 +265,11 @@ class RedditWriteConnector:
             raise ConnectorError("Reddit mutation response must be an object")
         errors = _reddit_errors(data)
         if errors:
+            if "RATELIMIT" in errors:
+                raise RateLimitError(
+                    "Reddit rate limit exceeded",
+                    retry_after_seconds=_reddit_retry_after(data),
+                )
             raise ConnectorError(
                 "Reddit rejected the approved mutation: " + ", ".join(errors)
             )
@@ -384,6 +389,34 @@ def _reddit_errors(data: Mapping[str, Any]) -> list[str]:
     if raw_errors and not names:
         raise ConnectorError("Reddit mutation errors are malformed")
     return names
+
+
+def _reddit_retry_after(data: Mapping[str, Any]) -> int | None:
+    payload = data.get("json")
+    if not isinstance(payload, Mapping):
+        return None
+    raw_errors = payload.get("errors")
+    if not isinstance(raw_errors, list):
+        return None
+    unit_seconds = {"second": 1, "minute": 60, "hour": 3600}
+    for item in raw_errors:
+        if (
+            not isinstance(item, list)
+            or len(item) < 2
+            or item[0] != "RATELIMIT"
+            or not isinstance(item[1], str)
+        ):
+            continue
+        match = re.search(
+            r"\b(\d{1,6})\s*(second|minute|hour)s?\b",
+            item[1],
+            flags=re.IGNORECASE,
+        )
+        if match is not None:
+            return min(
+                int(match.group(1)) * unit_seconds[match.group(2).casefold()], 86400
+            )
+    return None
 
 
 def _response_fullname(data: Mapping[str, Any]) -> str:

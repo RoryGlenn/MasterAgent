@@ -186,6 +186,40 @@ class RedditWriteConnectorTests(unittest.TestCase):
         self.assertEqual(len(transport.requests), 1)
         transport.assert_drained()
 
+    def test_json_rate_limit_is_typed_and_write_is_not_retried(self) -> None:
+        transport = QueueTransport(
+            ExpectedRequest(
+                "POST",
+                "/api/comment",
+                {
+                    "json": {
+                        "errors": [
+                            [
+                                "RATELIMIT",
+                                "you are doing that too much; try again in 8 minutes.",
+                                "ratelimit",
+                            ]
+                        ]
+                    }
+                },
+            )
+        )
+        connector = RedditWriteConnector(_config(), transport=transport)
+        action = _action(
+            "reddit.comment.reply",
+            "new-comment",
+            {"parent_fullname": "t1_parent", "body": "Approved reply"},
+            RiskLevel.EXTERNAL_COMMUNICATION,
+        )
+
+        with self.assertRaises(RateLimitError) as raised:
+            connector.execute(action)
+
+        self.assertEqual(str(raised.exception), "Reddit rate limit exceeded")
+        self.assertEqual(raised.exception.retry_after_seconds, 480)
+        self.assertEqual(len(transport.requests), 1)
+        transport.assert_drained()
+
     def test_delete_requires_owned_versioned_content_and_verifies_absence(self) -> None:
         before = _comment()
         transport = QueueTransport(
