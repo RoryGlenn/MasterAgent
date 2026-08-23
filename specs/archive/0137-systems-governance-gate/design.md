@@ -13,11 +13,11 @@ The change is introduced in four bounded layers:
 3. **Planning sequence:** `GovernedPlanner` invokes a `SystemsAssessor` before a
    `SystemsAwarePlanner`, passes the exact assessment into planning, and returns
    a `GovernedPlan` bound to the gate decision.
-4. **Runtime migration:** a later slice will place the assessment and decision
-   in the immutable plan/execution binding, enforce them in orchestration, audit
-   content-free governance evidence, and perform the post-execution review.
+4. **Runtime binding:** the assessment and decision live inside the immutable
+   plan, are re-evaluated by both execution entry points, produce content-free
+   audit evidence, and yield a conservative post-execution systems review.
 
-The initial implementation lives in the existing planner-contract module rather
+The implementation extends the existing planner contract and runtime rather
 than creating a new agent or service. It adds no dependency, connector, state
 store, persistent process, or independent configuration surface.
 
@@ -27,10 +27,11 @@ store, persistent process, or independent configuration surface.
   gate, decision, protocols, and governed wrapper.
 - `src/master_agent/planners/__init__.py` — public exports.
 - `tests/test_strict_types.py` — fail-closed and sequencing regression tests.
-- `src/master_agent/models.py` and `src/master_agent/orchestrator.py` — planned
-  follow-up integration for immutable plan binding and runtime enforcement.
-- `docs/architecture.md` — planned documentation update after the runtime path
-  is complete.
+- `src/master_agent/models.py` and `src/master_agent/orchestrator.py` — immutable
+  plan binding, runtime enforcement, audit metadata, and post-execution review.
+- `src/master_agent/direct_read.py` — fail-closed enforcement for the stateless
+  provider-read path.
+- `docs/architecture.md` — runtime and operator-facing governance guidance.
 
 ## Data flow
 
@@ -41,8 +42,7 @@ User goal
     -> SystemsAwarePlanner.plan(goal, systems_assessment=assessment)
     -> ChangePlan
     -> SystemsGovernanceGate.enforce(plan, assessment)
-    -> GovernedPlan(plan, assessment, bound decision)
-    -> future immutable ChangePlan/runtime binding
+    -> GovernedPlan(immutable ChangePlan with assessment and bound decision)
     -> ordinary policy, approval, execution, verification, and audit gates
 ```
 
@@ -52,12 +52,13 @@ reused with another assessment.
 
 ## Compatibility
 
-The existing `Planner` protocol and current static workflows remain unchanged in
-the first slice. New planners can adopt `GovernedPlanner` immediately. Runtime
-migration will be explicit and tested before the gate becomes mandatory for all
-non-trivial entry points. Serialized plan compatibility and approval
-fingerprints must be preserved or versioned when the assessment is added to
-`ChangePlan`.
+The existing `Planner` protocol remains available for planning-only callers.
+Executable plans require the new optional serialized fields, while older plans
+still deserialize for inspection and fail closed only when submitted to an
+execution entry point. Registered workflows and provider shortcuts now bind an
+explicit assessment. The systems records are part of the existing plan
+fingerprint, so approvals automatically cover them without a second authority
+mechanism.
 
 ## Security
 

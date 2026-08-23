@@ -13,8 +13,14 @@ from master_agent.config import DeploymentType, ResolvedConnectorConfig
 from master_agent.models import (
     AgentAction,
     AuthoritySource,
+    ChangePlan,
     ResourceRef,
     RiskLevel,
+    SystemsAssessment,
+)
+from master_agent.planners.base import (
+    bind_fast_path_governance,
+    bind_systems_governance,
 )
 
 
@@ -33,6 +39,45 @@ def private_temporary_directory() -> Iterator[str]:
             yield directory
     finally:
         os.umask(previous_umask)
+
+
+def govern_test_plan(plan: ChangePlan) -> ChangePlan:
+    """Return a governed copy of an executable test plan."""
+
+    safe = all(
+        action.risk in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+        for action in plan.actions
+    )
+    if safe:
+        return bind_fast_path_governance(
+            plan,
+            current_behavior="the test action has not yet run",
+            constraint="the runtime boundary must be exercised deterministically",
+            leverage_point="the smallest typed test action",
+            success_metric="the expected test state is observed",
+            failure_condition="the expected test state is not observed",
+        )
+    return bind_systems_governance(
+        plan,
+        SystemsAssessment(
+            desired_outcome=plan.goal,
+            current_behavior="the effect-bearing test action has not yet run",
+            constraint="the runtime effect must remain within the test fixture",
+            stocks=("the isolated fixture state",),
+            flows=("one typed action through the test connector",),
+            feedback_loops=("verification determines the asserted final state",),
+            delays=("connector execution and verification latency",),
+            leverage_point="the isolated connector action",
+            simplest_intervention="execute the smallest isolated test plan",
+            success_metric="the asserted effect and verification state are observed",
+            failure_condition="execution or verification differs from the assertion",
+            unintended_consequences=("fixture state could become indeterminate",),
+            removable_complexity=("the disposable test fixture",),
+            low_risk=False,
+            reversible=True,
+            well_understood=True,
+        ),
+    )
 
 
 def resolved_config(

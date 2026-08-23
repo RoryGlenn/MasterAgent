@@ -12,6 +12,9 @@ from master_agent.planners.base import (
     SystemsGateDecision,
     SystemsGateRoute,
     SystemsGovernanceGate,
+    bind_fast_path_governance,
+    bind_systems_governance,
+    enforce_systems_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
 
@@ -27,5 +30,8 @@ __all__ = [
     "SystemsGateDecision",
     "SystemsGateRoute",
     "SystemsGovernanceGate",
+    "bind_fast_path_governance",
+    "bind_systems_governance",
     "build_weekly_status_plan",
+    "enforce_systems_governance",
 ]

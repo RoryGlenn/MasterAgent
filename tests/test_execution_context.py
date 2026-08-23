@@ -43,7 +43,7 @@ from master_agent.models import (
 )
 from master_agent.registry import ConnectorRegistry
 from tests.fakes import ExpectedRequest, QueueTransport
-from tests.helpers import private_temporary_directory
+from tests.helpers import govern_test_plan, private_temporary_directory
 
 
 class ExecutionContextTests(unittest.TestCase):
@@ -2213,8 +2213,8 @@ def _plan() -> ChangePlan:
         idempotency_key="execution-context-test",
         justification="test live identity binding",
     )
-    return ChangePlan(
-        goal="test execution context", actions=(action,), created_by="test"
+    return govern_test_plan(
+        ChangePlan(goal="test execution context", actions=(action,), created_by="test")
     )
 
 
@@ -2238,10 +2238,12 @@ def _draft_plan() -> ChangePlan:
         idempotency_key="execution-context-draft-test",
         justification="test canonical draft execution paths",
     )
-    return ChangePlan(
-        goal="test canonical execution paths",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="test canonical execution paths",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 
@@ -2262,10 +2264,12 @@ def _git_mutation_plan() -> ChangePlan:
         idempotency_key="disabled-git-mutation",
         justification="prove local Git mutations are not routable",
     )
-    return ChangePlan(
-        goal="test disabled Git mutation",
-        actions=(action,),
-        created_by="test",
+    return govern_test_plan(
+        ChangePlan(
+            goal="test disabled Git mutation",
+            actions=(action,),
+            created_by="test",
+        )
     )
 
 

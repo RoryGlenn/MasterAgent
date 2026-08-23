@@ -58,6 +58,7 @@ from master_agent.provider_egress import (
     verification_metadata,
 )
 from master_agent.registry import ConnectorRegistry
+from tests.helpers import govern_test_plan
 
 _RESERVED_RESULT_FIELD_ALIASES = (
     "query",
@@ -1004,6 +1005,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                 connectors=(_connector_binding(),),
             ),
         )
+        plan = govern_test_plan(plan)
         governance = GovernanceProfile(
             organization="test-organization",
             environment=EnvironmentKind.DEVELOPMENT,
@@ -1081,6 +1083,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                 connectors=(_connector_binding(),),
             ),
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
             report = WorkflowOrchestrator(
@@ -1115,6 +1118,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                 connectors=(_connector_binding(),),
             ),
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             database = Path(directory) / "audit.sqlite3"
             report = WorkflowOrchestrator(
@@ -1155,6 +1159,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                         connectors=(_connector_binding(),),
                     ),
                 )
+                plan = govern_test_plan(plan)
                 report = WorkflowOrchestrator(
                     policy=_automatic_read_policy(),
                     sources=SourceOfTruthRegistry(()),
@@ -1182,6 +1187,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                 connectors=(_connector_binding(),),
             ),
         )
+        plan = govern_test_plan(plan)
         with TemporaryDirectory() as directory:
             report = WorkflowOrchestrator(
                 policy=_automatic_read_policy(),
@@ -1231,6 +1237,7 @@ class ProviderDataOrchestratorTests(unittest.TestCase):
                     runtime=runtime,
                 ),
             )
+            plan = govern_test_plan(plan)
             report = WorkflowOrchestrator(
                 policy=_automatic_read_policy(),
                 sources=SourceOfTruthRegistry(()),

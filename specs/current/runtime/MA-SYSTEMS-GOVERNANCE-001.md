@@ -79,13 +79,15 @@ boundaries.
 
 - `src/master_agent/planners/base.py`
 - `src/master_agent/planners/__init__.py`
-- `src/master_agent/models.py` (planned runtime binding)
-- `src/master_agent/orchestrator.py` (planned enforcement and review)
+- `src/master_agent/models.py`
+- `src/master_agent/orchestrator.py`
+- `src/master_agent/direct_read.py`
 
 ## Verification
 
 - `tests/test_strict_types.py`
-- `tests/test_orchestrator.py` (planned runtime integration)
+- `tests/test_orchestrator.py`
+- `tests/test_direct_read.py`
 
 ## History
 

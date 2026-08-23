@@ -50,7 +50,7 @@ from master_agent.provider_egress import (
 )
 from master_agent.registry import ConnectorRegistry
 from tests.fakes import ScriptedTransport
-from tests.helpers import private_temporary_directory
+from tests.helpers import govern_test_plan, private_temporary_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -338,6 +338,7 @@ class CliTests(unittest.TestCase):
             actions=(action,),
             created_by="direct-user",
         )
+        plan = govern_test_plan(plan)
         binding = ConnectorExecutionBinding(
             system="github",
             deployment="cloud",
@@ -415,6 +416,7 @@ class CliTests(unittest.TestCase):
             actions=(action,),
             created_by="direct-user",
         )
+        plan = govern_test_plan(plan)
 
         with private_temporary_directory() as directory:
             plan_path = Path(directory) / "plan.json"

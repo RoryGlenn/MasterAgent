@@ -132,13 +132,13 @@ id = "governed-applied-run"
 title = "Governed applied-run runtime"
 lifecycle = "released"
 summary = "Own typed plans, policy, approvals, exact execution binding, orchestration, verification, and compensation."
-authority = [".ai/MASTER_AGENT.md", "docs/architecture.md"]
+authority = ["specs/current/runtime/MA-SYSTEMS-GOVERNANCE-001.md", ".ai/MASTER_AGENT.md", "docs/architecture.md"]
 implementation = ["src/master_agent/models.py", "src/master_agent/policy.py", "src/master_agent/orchestrator.py"]
 configuration = ["config/capabilities.toml", "config/governance.toml", "config/policy.toml", "config/sources_of_truth.toml", "src/master_agent/defaults/capabilities.toml", "src/master_agent/defaults/governance.toml", "src/master_agent/defaults/policy.toml", "src/master_agent/defaults/sources_of_truth.toml"]
 tests = ["tests/test_orchestrator.py", "tests/test_policy.py", "tests/test_execution_context.py"]
 release_gates = ["scripts/validate_release.py", ".github/workflows/ci.yml"]
 dependencies = ["packaging-release"]
-aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog"]
+aliases = ["governed applied run", "change plan", "approval binding", "orchestrator", "compensation", "capability catalog", "systems governance", "systems assessment", "complexity budget"]
 agent = "master-agent"
 
 [[routes]]
@@ -655,6 +655,7 @@ agent = "master-agent"
 "specs/current/runtime/MA-WINDOWS-INSTALL-001.md" = "packaging-release"
 "specs/current/runtime/MA-OPERATING-MODES-001.md" = "operating-modes"
 "specs/current/runtime/MA-PLATFORM-001.md" = "platform-runtime"
+"specs/current/runtime/MA-SYSTEMS-GOVERNANCE-001.md" = "governed-applied-run"
 "specs/current/runtime/MA-USER-WORKFLOW-001.md" = "operating-modes"
 "specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md" = "windows-atomic-state"
 "specs/current/runtime/MA-WINDOWS-CAPSULES-001.md" = "windows-capsules"

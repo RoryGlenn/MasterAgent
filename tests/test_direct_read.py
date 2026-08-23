@@ -47,6 +47,7 @@ from master_agent.provider_egress import (
     ProviderDataRoute,
 )
 from tests.fakes import ExpectedRequest, QueueTransport
+from tests.helpers import govern_test_plan
 
 _CAPABILITY = "provider.item.read"
 _CONFIG_IDENTITY = "a" * 64
@@ -645,10 +646,12 @@ def _action(resource_id: str) -> AgentAction:
 
 
 def _plan(*actions: AgentAction) -> ChangePlan:
-    return ChangePlan(
-        goal="Read directly requested provider resources.",
-        actions=actions,
-        created_by="direct-user",
+    return govern_test_plan(
+        ChangePlan(
+            goal="Read directly requested provider resources.",
+            actions=actions,
+            created_by="direct-user",
+        )
     )
 
 

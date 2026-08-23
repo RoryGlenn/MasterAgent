@@ -14,8 +14,10 @@ from master_agent.models import (
     CompensationMode,
     ResourceRef,
     RiskLevel,
+    SystemsAssessment,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.planners.base import bind_systems_governance
 
 
 def build_compensation_plan(
@@ -90,10 +92,17 @@ def build_compensation_plan(
         raise ValidationError(
             "run contains no separately approvable compensation operations"
         )
-    return ChangePlan(
+    plan = ChangePlan(
         goal=f"Compensate reversible effects of plan {original.plan_id}.",
         actions=tuple(compensation_actions),
         created_by=created_by,
+    )
+    return _bind_correction_governance(
+        plan,
+        current_behavior="verified reversible effects from the original run remain applied",
+        simplest_intervention="execute the connector-provided reverse operations in reverse order",
+        success_metric="every reversible effect is restored and independently verified",
+        failure_condition="any compensation is unavailable, conflicts, or fails verification",
     )
 
 
@@ -127,10 +136,17 @@ def build_outlook_correction_plan(
         idempotency_key=f"outlook-correction:{original_reference}",
         justification="Send an explicit correction for a prior non-reversible email.",
     )
-    return ChangePlan(
+    plan = ChangePlan(
         goal=f"Send a correction for Outlook message {original_reference}.",
         actions=(action,),
         created_by=created_by,
+    )
+    return _bind_correction_governance(
+        plan,
+        current_behavior="a prior Outlook message requires an explicit correction",
+        simplest_intervention="send one approval-gated correction email",
+        success_metric="the correction is sent once and independently verified",
+        failure_condition="approval, delivery, or verification does not succeed",
     )
 
 
@@ -174,8 +190,52 @@ def build_teams_correction_plan(
         idempotency_key=f"teams-correction:{original_reference}",
         justification="Post an explicit correction for a prior non-reversible Teams message.",
     )
-    return ChangePlan(
+    plan = ChangePlan(
         goal=f"Post a correction for Teams message {original_reference}.",
         actions=(action,),
         created_by=created_by,
+    )
+    return _bind_correction_governance(
+        plan,
+        current_behavior="a prior Teams message requires an explicit correction",
+        simplest_intervention="post one approval-gated correction message",
+        success_metric="the correction is posted once and independently verified",
+        failure_condition="approval, posting, or verification does not succeed",
+    )
+
+
+def _bind_correction_governance(
+    plan: ChangePlan,
+    *,
+    current_behavior: str,
+    simplest_intervention: str,
+    success_metric: str,
+    failure_condition: str,
+) -> ChangePlan:
+    """Bind the full systems assessment required for corrective effects."""
+
+    return bind_systems_governance(
+        plan,
+        SystemsAssessment(
+            desired_outcome=plan.goal,
+            current_behavior=current_behavior,
+            constraint="the prior provider state cannot be changed without a new effect",
+            stocks=("the current provider state and its verified evidence",),
+            flows=("an approval-gated corrective action to the provider",),
+            feedback_loops=(
+                "post-effect verification confirms or rejects the correction",
+            ),
+            delays=("approval, provider processing, and verification latency",),
+            leverage_point="the smallest connector-supported corrective action",
+            simplest_intervention=simplest_intervention,
+            success_metric=success_metric,
+            failure_condition=failure_condition,
+            unintended_consequences=(
+                "a transport failure could leave the correction outcome indeterminate",
+            ),
+            removable_complexity=("the one-use corrective plan",),
+            low_risk=False,
+            reversible=True,
+            well_understood=True,
+        ),
     )

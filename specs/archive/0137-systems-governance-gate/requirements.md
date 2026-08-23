@@ -27,7 +27,7 @@ insufficient, and include an explicit removal or reversibility strategy. A score
 above the configured automatic budget MUST require human review and MUST NOT be
 automatically admitted.
 
-The runtime MUST eventually require the admitted assessment and decision before
+The runtime MUST require the admitted assessment and decision before
 executing non-trivial work, preserve their integrity through immutable plan
 binding, and perform a post-execution systems review covering metric movement,
 unintended effects, complexity growth, removal candidates, and stop or

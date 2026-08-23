@@ -32,8 +32,8 @@ This change adds:
 - an assessor-before-planner wrapper that passes the completed assessment into
   plan construction and binds the decision to its fingerprint;
 - tests for safe, denied, over-budget, and sequencing behavior; and
-- follow-up integration into immutable plans, orchestration, audit, and
-  post-execution review.
+- immutable plan integration, orchestration enforcement, content-free audit
+  evidence, and post-execution review.
 
 ## Rationale
 
@@ -56,9 +56,9 @@ prompt-only while preserving current workflows until the migration is complete.
 
 ## Non-goals
 
-The first implementation slice does not generate assessments with a language
-model, change provider authority, replace capability or approval policy, or
-allow a complexity review to authorize an otherwise prohibited action.
+This change does not generate assessments with a language model, change
+provider authority, replace capability or approval policy, or allow a
+complexity review to authorize an otherwise prohibited action.
 
 ## Risks
 

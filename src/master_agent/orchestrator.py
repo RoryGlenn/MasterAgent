@@ -44,7 +44,10 @@ from master_agent.models import (
     ConnectorExecutionBinding,
     ExecutionResult,
     RiskLevel,
+    SystemsMetricStatus,
+    SystemsPostExecutionReview,
 )
+from master_agent.planners.base import enforce_systems_governance
 from master_agent.policy import PolicyEngine
 from master_agent.provider_egress import (
     ProviderDataEgressBinding,
@@ -128,6 +131,7 @@ class RunReport:
     plan_fingerprint: str
     dry_run: bool
     actions: tuple[ActionReport, ...]
+    systems_review: SystemsPostExecutionReview | None = None
 
     @property
     def successful(self) -> bool:
@@ -152,7 +156,7 @@ class RunReport:
     def to_dict(self) -> dict[str, object]:
         """Serialize the run report and retrieved evidence."""
 
-        return {
+        payload: dict[str, object] = {
             "run_id": str(self.run_id),
             "plan_id": str(self.plan_id),
             "plan_fingerprint": self.plan_fingerprint,
@@ -161,6 +165,9 @@ class RunReport:
             "compensated": self.compensated,
             "actions": [item.to_dict() for item in self.actions],
         }
+        if self.systems_review is not None:
+            payload["systems_review"] = self.systems_review.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> RunReport:
@@ -174,12 +181,22 @@ class RunReport:
             if not isinstance(item, Mapping):
                 raise StructuredDataTypeError("run report action must be an object")
             actions.append(ActionReport.from_dict(item))
+        raw_review = data.get("systems_review")
+        if raw_review is not None and not isinstance(raw_review, Mapping):
+            raise StructuredDataTypeError(
+                "run report systems_review must be an object or null"
+            )
         return cls(
             run_id=UUID(str(data["run_id"])),
             plan_id=UUID(str(data["plan_id"])),
             plan_fingerprint=str(data["plan_fingerprint"]),
             dry_run=_strict_bool(data.get("dry_run"), "run report dry_run"),
             actions=tuple(actions),
+            systems_review=(
+                SystemsPostExecutionReview.from_dict(raw_review)
+                if isinstance(raw_review, Mapping)
+                else None
+            ),
         )
 
 
@@ -240,6 +257,10 @@ class WorkflowOrchestrator:
         # creates a private, recursively immutable snapshot whose fingerprint
         # is the exact artifact evaluated by policy and passed to connectors.
         plan = ChangePlan.from_dict(plan.to_dict())
+        systems_decision = enforce_systems_governance(plan)
+        systems_assessment = plan.systems_assessment
+        if systems_assessment is None:  # pragma: no cover - enforced above.
+            raise ValidationError("plan is missing a systems governance assessment")
         run_id = uuid4()
         approvals_tuple = tuple(approvals)
         reports: list[ActionReport] = []
@@ -261,6 +282,10 @@ class WorkflowOrchestrator:
                 "workflow_id": plan.workflow_id,
                 "workflow_fingerprint": plan.workflow_fingerprint,
                 "compensate_on_failure": plan.compensate_on_failure,
+                "systems_assessment_fingerprint": systems_assessment.fingerprint,
+                "systems_decision_fingerprint": systems_decision.fingerprint,
+                "systems_route": systems_decision.route,
+                "systems_complexity_score": systems_decision.complexity_score,
                 **(
                     {
                         "capsule_bindings": [
@@ -948,6 +973,12 @@ class WorkflowOrchestrator:
                     dry_run=dry_run,
                 )
 
+        systems_review = _build_systems_review(
+            assessment=systems_assessment,
+            decision=systems_decision,
+            reports=reports,
+            dry_run=dry_run,
+        )
         self._audit.record(
             run_id=run_id,
             plan_id=plan.plan_id,
@@ -958,6 +989,7 @@ class WorkflowOrchestrator:
                 "compensated": any(
                     report.state is ActionState.COMPENSATED for report in reports
                 ),
+                "systems_review": systems_review.to_dict(),
             },
         )
 
@@ -967,6 +999,7 @@ class WorkflowOrchestrator:
             plan_fingerprint=plan.fingerprint,
             dry_run=dry_run,
             actions=tuple(reports),
+            systems_review=systems_review,
         )
 
     def authenticated_approvals(
@@ -1509,6 +1542,56 @@ def _uses_idempotency(action: AgentAction) -> bool:
     """
 
     return action.risk not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+
+
+def _build_systems_review(
+    *,
+    assessment: object,
+    decision: object,
+    reports: list[ActionReport],
+    dry_run: bool,
+) -> SystemsPostExecutionReview:
+    """Build conservative, content-free post-execution systems evidence."""
+
+    from master_agent.models import SystemsAssessment, SystemsGateDecision
+
+    if not isinstance(assessment, SystemsAssessment) or not isinstance(
+        decision, SystemsGateDecision
+    ):
+        raise ValidationError("systems review inputs are invalid")
+    unintended_states = {
+        ActionState.INDETERMINATE,
+        ActionState.COMPENSATION_FAILED,
+    }
+    unintended_effects = any(item.state in unintended_states for item in reports)
+    successful = all(
+        item.state in {ActionState.PLANNED, ActionState.VERIFIED, ActionState.REUSED}
+        for item in reports
+    )
+    reason_codes: list[str] = []
+    if dry_run:
+        reason_codes.append("dry_run_metric_not_observed")
+    else:
+        reason_codes.append("metric_not_observed")
+    if not successful:
+        reason_codes.append("execution_unsuccessful")
+    if unintended_effects:
+        reason_codes.append("unintended_effect_possible")
+    reason_codes.append("stop_condition_not_observed")
+    return SystemsPostExecutionReview(
+        assessment_fingerprint=assessment.fingerprint,
+        decision_fingerprint=decision.fingerprint,
+        success_metric_sha256=hashlib.sha256(
+            assessment.success_metric.encode("utf-8")
+        ).hexdigest(),
+        metric_status=SystemsMetricStatus.NOT_OBSERVED,
+        unintended_effects_detected=unintended_effects,
+        planned_complexity_score=assessment.complexity_score,
+        removal_candidate_count=len(assessment.removable_complexity),
+        stop_condition_checked=False,
+        reassessment_required=True,
+        reason_codes=tuple(reason_codes),
+    )
 
 
 def _strict_bool(value: object, name: str) -> bool:

@@ -22,6 +22,7 @@ from master_agent.models import (
     RiskLevel,
 )
 from master_agent.orchestrator import RunReport
+from master_agent.planners.base import bind_fast_path_governance
 from master_agent.platform_runtime import require_persistent_state_platform
 
 
@@ -208,12 +209,20 @@ def build_draft_package_plan(settings: DraftPackageSettings) -> ChangePlan:
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
-    return ChangePlan(
+    plan = ChangePlan(
         goal=settings.goal,
         actions=actions,
         created_by="registered-workflow:draft-package",
         workflow_id="draft-package-v1",
         workflow_fingerprint=workflow_fingerprint,
+    )
+    return bind_fast_path_governance(
+        plan,
+        current_behavior="review drafts are prepared manually across several formats",
+        constraint="manual draft assembly is slow and inconsistent",
+        leverage_point="deterministic local-generation actions",
+        success_metric="the complete package is generated locally without external writes",
+        failure_condition="an expected draft is missing or any external system changes",
     )
 
 

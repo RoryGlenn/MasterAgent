@@ -1,10 +1,10 @@
 schema = "master-agent/change@1"
 id = "0137-systems-governance-gate"
 title = "Add mandatory systems-thinking governance gate"
-status = "implementing"
+status = "archived"
 github_issue = 137
 created = "2026-08-22"
-updated = "2026-08-22"
+updated = "2026-08-23"
 design_required = true
 
 [[deltas]]

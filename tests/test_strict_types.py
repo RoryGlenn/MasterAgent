@@ -26,6 +26,7 @@ from master_agent.planners.base import (
     SystemsAssessment,
     SystemsGateRoute,
     SystemsGovernanceGate,
+    bind_systems_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
 from master_agent.provider_egress import ProviderDataEgressPolicy
@@ -263,11 +264,59 @@ class SystemsGovernanceGateTests(unittest.TestCase):
             events,
             ["assess:prepare a local summary", "plan:prepare a local summary"],
         )
-        self.assertIs(result.plan, expected_plan)
+        self.assertEqual(result.plan.plan_id, expected_plan.plan_id)
+        self.assertIs(result.plan.systems_assessment, assessment)
+        self.assertEqual(result.plan.systems_decision, result.decision)
         self.assertEqual(
             result.decision.assessment_fingerprint,
             assessment.fingerprint,
         )
+
+    def test_plan_round_trip_binds_assessment_decision_and_fingerprint(self) -> None:
+        unbound = _systems_plan(RiskLevel.LOCAL_GENERATION)
+        governed = bind_systems_governance(unbound, _systems_assessment())
+
+        restored = ChangePlan.from_dict(governed.to_dict())
+
+        self.assertNotEqual(unbound.fingerprint, governed.fingerprint)
+        self.assertEqual(restored, governed)
+        self.assertEqual(restored.fingerprint, governed.fingerprint)
+
+    def test_plan_rejects_tampered_systems_decision(self) -> None:
+        governed = bind_systems_governance(
+            _systems_plan(RiskLevel.LOCAL_GENERATION),
+            _systems_assessment(),
+        )
+        payload = governed.to_dict()
+        payload["systems_decision"]["complexity_score"] = 1
+
+        with self.assertRaisesRegex(ValidationError, "complexity"):
+            ChangePlan.from_dict(payload)
+
+    def test_plan_rejects_boolean_complexity_weight(self) -> None:
+        assessment = _systems_assessment(
+            low_risk=False,
+            stocks=("work",),
+            flows=("work arrives",),
+            feedback_loops=("verification feeds the next run",),
+            delays=("provider latency",),
+            unintended_consequences=("fixture drift",),
+            alternatives_considered=("reuse the current component",),
+            added_complexity=(
+                ComplexityItem(ComplexityKind.DEPENDENCY, "one dependency"),
+            ),
+            existing_mechanisms_insufficient_because="the fixture needs this dependency",
+            reversibility_strategy="remove the dependency",
+        )
+        governed = bind_systems_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+        payload = governed.to_dict()
+        payload["systems_assessment"]["added_complexity"][0]["weight"] = True
+
+        with self.assertRaisesRegex(ValidationError, "weight"):
+            ChangePlan.from_dict(payload)
 
 
 def _systems_plan(risk: RiskLevel) -> ChangePlan:

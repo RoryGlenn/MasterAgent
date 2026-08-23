@@ -1,12 +1,14 @@
 """Workflow orchestration tests."""
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from master_agent.audit import AuditLog
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.connectors.mock import MockConnector
+from master_agent.errors import ValidationError
 from master_agent.models import ActionState
 from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
@@ -34,6 +36,10 @@ class OrchestratorTests(unittest.TestCase):
             )
             valid, _ = audit.verify_chain()
             self.assertTrue(valid)
+            self.assertIsNotNone(report.systems_review)
+            assert report.systems_review is not None
+            self.assertTrue(report.systems_review.reassessment_required)
+            self.assertFalse(report.systems_review.stop_condition_checked)
 
     def test_recurring_reads_and_local_generation_run_fresh(self) -> None:
         with TemporaryDirectory() as directory:
@@ -46,6 +52,23 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(second.successful)
             self.assertTrue(
                 all(action.state is ActionState.VERIFIED for action in second.actions)
+            )
+
+    def test_missing_systems_binding_fails_before_runtime_audit(self) -> None:
+        with TemporaryDirectory() as directory:
+            audit = AuditLog(Path(directory) / "audit.sqlite3")
+            plan = replace(
+                build_weekly_status_plan(),
+                systems_assessment=None,
+                systems_decision=None,
+            )
+
+            with self.assertRaisesRegex(ValidationError, "systems governance"):
+                _orchestrator(audit).run(plan, dry_run=False)
+
+            self.assertEqual(
+                audit.verify_chain(),
+                (False, "audit database contains no events"),
             )
 
 

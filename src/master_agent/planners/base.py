@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from master_agent.errors import ValidationError
-from master_agent.models import ChangePlan, RiskLevel
+from master_agent.models import (
+    ChangePlan,
+    ComplexityItem,
+    ComplexityKind,
+    RiskLevel,
+    SystemsAssessment,
+    SystemsGateDecision,
+    SystemsGateRoute,
+)
 
 
 class Planner(Protocol):
@@ -38,226 +43,6 @@ class SystemsAwarePlanner(Protocol):
         """Return a plan that consumes the systems assessment."""
 
 
-class SystemsGateRoute(StrEnum):
-    """Path selected by the systems-governance gate."""
-
-    FAST_PATH = "fast_path"
-    GATED = "gated"
-
-
-class ComplexityKind(StrEnum):
-    """Kinds of durable complexity introduced by an intervention."""
-
-    DEPENDENCY = "dependency"
-    PERSISTENT_SERVICE = "persistent_service"
-    AGENT = "agent"
-    CONFIGURATION_SURFACE = "configuration_surface"
-    AUTHORITATIVE_DOCUMENT = "authoritative_document"
-    STATE_STORE = "state_store"
-    CONNECTOR = "connector"
-    USER_WORKFLOW = "user_workflow"
-
-
-_COMPLEXITY_WEIGHTS: dict[ComplexityKind, int] = {
-    ComplexityKind.DEPENDENCY: 1,
-    ComplexityKind.PERSISTENT_SERVICE: 2,
-    ComplexityKind.AGENT: 2,
-    ComplexityKind.CONFIGURATION_SURFACE: 1,
-    ComplexityKind.AUTHORITATIVE_DOCUMENT: 1,
-    ComplexityKind.STATE_STORE: 2,
-    ComplexityKind.CONNECTOR: 1,
-    ComplexityKind.USER_WORKFLOW: 1,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class ComplexityItem:
-    """One weighted complexity cost introduced by an intervention."""
-
-    kind: ComplexityKind
-    description: str
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.kind, ComplexityKind):
-            raise ValidationError("complexity item kind is invalid")
-        _require_text(self.description, "complexity item description")
-
-    @property
-    def weight(self) -> int:
-        """Return the budget cost for this item."""
-
-        return _COMPLEXITY_WEIGHTS[self.kind]
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize the complexity item."""
-
-        return {
-            "kind": str(self.kind),
-            "description": self.description,
-            "weight": self.weight,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class SystemsAssessment:
-    """Structured diagnosis completed before non-trivial planning."""
-
-    desired_outcome: str
-    current_behavior: str
-    constraint: str
-    leverage_point: str
-    simplest_intervention: str
-    success_metric: str
-    failure_condition: str
-    low_risk: bool
-    reversible: bool
-    well_understood: bool
-    stocks: tuple[str, ...] = ()
-    flows: tuple[str, ...] = ()
-    feedback_loops: tuple[str, ...] = ()
-    delays: tuple[str, ...] = ()
-    unintended_consequences: tuple[str, ...] = ()
-    removable_complexity: tuple[str, ...] = ()
-    alternatives_considered: tuple[str, ...] = ()
-    added_complexity: tuple[ComplexityItem, ...] = ()
-    existing_mechanisms_insufficient_because: str = ""
-    reversibility_strategy: str = ""
-    schema: str = "master-agent/systems-assessment@1"
-
-    def __post_init__(self) -> None:
-        if self.schema != "master-agent/systems-assessment@1":
-            raise ValidationError("unsupported systems assessment schema")
-        for name in (
-            "desired_outcome",
-            "current_behavior",
-            "constraint",
-            "leverage_point",
-            "simplest_intervention",
-            "success_metric",
-            "failure_condition",
-        ):
-            _require_text(getattr(self, name), f"systems assessment {name}")
-        for name in ("low_risk", "reversible", "well_understood"):
-            if not isinstance(getattr(self, name), bool):
-                raise ValidationError(f"systems assessment {name} must be a boolean")
-        for name in (
-            "stocks",
-            "flows",
-            "feedback_loops",
-            "delays",
-            "unintended_consequences",
-            "removable_complexity",
-            "alternatives_considered",
-        ):
-            object.__setattr__(
-                self,
-                name,
-                _normalize_text_tuple(
-                    getattr(self, name), f"systems assessment {name}"
-                ),
-            )
-        complexity = tuple(self.added_complexity)
-        if not all(isinstance(item, ComplexityItem) for item in complexity):
-            raise ValidationError(
-                "systems assessment added_complexity must contain ComplexityItem values"
-            )
-        object.__setattr__(self, "added_complexity", complexity)
-        for name in (
-            "existing_mechanisms_insufficient_because",
-            "reversibility_strategy",
-        ):
-            value = getattr(self, name)
-            if value and value != value.strip():
-                raise ValidationError(f"systems assessment {name} must be trimmed")
-
-    @property
-    def fast_path_requested(self) -> bool:
-        """Return whether all explicit fast-path predicates are true."""
-
-        return self.low_risk and self.reversible and self.well_understood
-
-    @property
-    def complexity_score(self) -> int:
-        """Return the total weighted complexity cost."""
-
-        return sum(item.weight for item in self.added_complexity)
-
-    @property
-    def fingerprint(self) -> str:
-        """Return a stable digest that binds a decision to this assessment."""
-
-        material = json.dumps(
-            self.to_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-        return hashlib.sha256(material).hexdigest()
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize the assessment to JSON-compatible data."""
-
-        return {
-            "schema": self.schema,
-            "desired_outcome": self.desired_outcome,
-            "current_behavior": self.current_behavior,
-            "constraint": self.constraint,
-            "stocks": list(self.stocks),
-            "flows": list(self.flows),
-            "feedback_loops": list(self.feedback_loops),
-            "delays": list(self.delays),
-            "leverage_point": self.leverage_point,
-            "simplest_intervention": self.simplest_intervention,
-            "success_metric": self.success_metric,
-            "failure_condition": self.failure_condition,
-            "unintended_consequences": list(self.unintended_consequences),
-            "removable_complexity": list(self.removable_complexity),
-            "alternatives_considered": list(self.alternatives_considered),
-            "added_complexity": [item.to_dict() for item in self.added_complexity],
-            "existing_mechanisms_insufficient_because": (
-                self.existing_mechanisms_insufficient_because
-            ),
-            "reversibility_strategy": self.reversibility_strategy,
-            "low_risk": self.low_risk,
-            "reversible": self.reversible,
-            "well_understood": self.well_understood,
-            "complexity_score": self.complexity_score,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class SystemsGateDecision:
-    """Immutable result of evaluating one plan and assessment."""
-
-    route: SystemsGateRoute
-    permitted: bool
-    reasons: tuple[str, ...]
-    complexity_score: int
-    assessment_fingerprint: str
-    requires_human_review: bool = False
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.route, SystemsGateRoute):
-            raise ValidationError("systems gate decision route is invalid")
-        if not isinstance(self.permitted, bool):
-            raise ValidationError("systems gate decision permitted must be a boolean")
-        if not isinstance(self.requires_human_review, bool):
-            raise ValidationError(
-                "systems gate decision requires_human_review must be a boolean"
-            )
-        reasons = _normalize_text_tuple(self.reasons, "systems gate reasons")
-        if not reasons:
-            raise ValidationError("systems gate decision must include a reason")
-        object.__setattr__(self, "reasons", reasons)
-        if self.complexity_score < 0:
-            raise ValidationError("systems gate complexity score cannot be negative")
-        _require_text(
-            self.assessment_fingerprint,
-            "systems gate assessment fingerprint",
-        )
-
-
 @dataclass(frozen=True, slots=True)
 class GovernedPlan:
     """Plan bundled with the assessment and decision that admitted it."""
@@ -267,25 +52,16 @@ class GovernedPlan:
     decision: SystemsGateDecision
 
     def __post_init__(self) -> None:
-        if not self.decision.permitted:
-            raise ValidationError(
-                "a denied systems decision cannot bind a governed plan"
-            )
-        if self.decision.assessment_fingerprint != self.assessment.fingerprint:
-            raise ValidationError(
-                "systems gate decision is not bound to the supplied assessment"
-            )
+        if self.plan.systems_assessment != self.assessment:
+            raise ValidationError("governed plan does not contain its assessment")
+        if self.plan.systems_decision != self.decision:
+            raise ValidationError("governed plan does not contain its gate decision")
 
 
 class SystemsGovernanceGate:
     """Fail closed before a planner may return an actionable plan."""
 
-    _FAST_PATH_RISKS = frozenset(
-        {
-            RiskLevel.READ_ONLY,
-            RiskLevel.LOCAL_GENERATION,
-        }
-    )
+    _FAST_PATH_RISKS = frozenset({RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION})
 
     def __init__(self, *, max_automatic_complexity_score: int = 4) -> None:
         if (
@@ -299,9 +75,7 @@ class SystemsGovernanceGate:
         self._max_automatic_complexity_score = max_automatic_complexity_score
 
     def evaluate(
-        self,
-        plan: ChangePlan,
-        assessment: SystemsAssessment,
+        self, plan: ChangePlan, assessment: SystemsAssessment
     ) -> SystemsGateDecision:
         """Evaluate a plan against the systems-governance contract."""
 
@@ -312,7 +86,6 @@ class SystemsGovernanceGate:
         )
         reasons: list[str] = []
         requires_human_review = False
-
         if route is SystemsGateRoute.FAST_PATH:
             unsafe = sorted(
                 {
@@ -338,7 +111,6 @@ class SystemsGovernanceGate:
             ):
                 if not values:
                     reasons.append(f"gated assessment requires {name}")
-
         if assessment.added_complexity:
             if not assessment.alternatives_considered:
                 reasons.append(
@@ -354,7 +126,6 @@ class SystemsGovernanceGate:
                     "added complexity requires an explicit removal or reversibility "
                     "strategy"
                 )
-
         if assessment.complexity_score > self._max_automatic_complexity_score:
             requires_human_review = True
             reasons.append(
@@ -362,7 +133,6 @@ class SystemsGovernanceGate:
                 f"{assessment.complexity_score} exceeds automatic budget "
                 f"{self._max_automatic_complexity_score}"
             )
-
         permitted = not reasons
         if permitted:
             reasons.append(
@@ -380,9 +150,7 @@ class SystemsGovernanceGate:
         )
 
     def enforce(
-        self,
-        plan: ChangePlan,
-        assessment: SystemsAssessment,
+        self, plan: ChangePlan, assessment: SystemsAssessment
     ) -> SystemsGateDecision:
         """Return a permitted decision or raise a validation error."""
 
@@ -392,6 +160,63 @@ class SystemsGovernanceGate:
                 "systems governance denied plan: " + "; ".join(decision.reasons)
             )
         return decision
+
+
+def bind_systems_governance(
+    plan: ChangePlan,
+    assessment: SystemsAssessment,
+    *,
+    gate: SystemsGovernanceGate | None = None,
+) -> ChangePlan:
+    """Admit an unbound plan and return an immutable governed replacement."""
+
+    if plan.systems_assessment is not None or plan.systems_decision is not None:
+        raise ValidationError("plan already contains a systems governance binding")
+    decision = (gate or SystemsGovernanceGate()).enforce(plan, assessment)
+    return replace(plan, systems_assessment=assessment, systems_decision=decision)
+
+
+def bind_fast_path_governance(
+    plan: ChangePlan,
+    *,
+    current_behavior: str,
+    constraint: str,
+    leverage_point: str,
+    success_metric: str,
+    failure_condition: str,
+) -> ChangePlan:
+    """Bind an explicit assessment for a known-safe static workflow."""
+
+    assessment = SystemsAssessment(
+        desired_outcome=plan.goal,
+        current_behavior=current_behavior,
+        constraint=constraint,
+        leverage_point=leverage_point,
+        simplest_intervention=plan.goal,
+        success_metric=success_metric,
+        failure_condition=failure_condition,
+        low_risk=True,
+        reversible=True,
+        well_understood=True,
+    )
+    return bind_systems_governance(plan, assessment)
+
+
+def enforce_systems_governance(
+    plan: ChangePlan,
+    *,
+    gate: SystemsGovernanceGate | None = None,
+) -> SystemsGateDecision:
+    """Reject missing, stale, denied, or forged plan governance evidence."""
+
+    assessment = plan.systems_assessment
+    bound_decision = plan.systems_decision
+    if assessment is None or bound_decision is None:
+        raise ValidationError("plan is missing a systems governance binding")
+    expected = (gate or SystemsGovernanceGate()).enforce(plan, assessment)
+    if bound_decision != expected:
+        raise ValidationError("plan systems governance decision is stale or forged")
+    return bound_decision
 
 
 class GovernedPlanner:
@@ -409,7 +234,7 @@ class GovernedPlanner:
         self._gate = gate or SystemsGovernanceGate()
 
     def plan(self, goal: str) -> GovernedPlan:
-        """Assess, plan, and enforce the systems gate in that order."""
+        """Assess, plan, enforce, and immutably bind in that order."""
 
         _require_text(goal, "planner goal")
         assessment = self._assessor.assess(goal)
@@ -420,8 +245,13 @@ class GovernedPlanner:
         plan = self._planner.plan(goal, systems_assessment=assessment)
         if not isinstance(plan, ChangePlan):
             raise ValidationError("systems-aware planner must return a ChangePlan")
-        decision = self._gate.enforce(plan, assessment)
-        return GovernedPlan(plan=plan, assessment=assessment, decision=decision)
+        governed_plan = bind_systems_governance(plan, assessment, gate=self._gate)
+        decision = governed_plan.systems_decision
+        if decision is None:  # pragma: no cover - guaranteed by binding.
+            raise ValidationError("systems governance decision was not bound")
+        return GovernedPlan(
+            plan=governed_plan, assessment=assessment, decision=decision
+        )
 
 
 def _require_text(value: str, name: str) -> None:
@@ -431,8 +261,19 @@ def _require_text(value: str, name: str) -> None:
         raise ValidationError(f"{name} must be trimmed")
 
 
-def _normalize_text_tuple(values: tuple[str, ...], name: str) -> tuple[str, ...]:
-    normalized = tuple(values)
-    for value in normalized:
-        _require_text(value, name)
-    return normalized
+__all__ = [
+    "ComplexityItem",
+    "ComplexityKind",
+    "GovernedPlan",
+    "GovernedPlanner",
+    "Planner",
+    "SystemsAssessment",
+    "SystemsAssessor",
+    "SystemsAwarePlanner",
+    "SystemsGateDecision",
+    "SystemsGateRoute",
+    "SystemsGovernanceGate",
+    "bind_fast_path_governance",
+    "bind_systems_governance",
+    "enforce_systems_governance",
+]
