@@ -15,15 +15,18 @@ from scripts.run_windows_adversarial import (
     load_matrix,
     run_group,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 
 class PassingEvidenceFixture(unittest.TestCase):
+    @adversarial_reasons("fixture_passed")
     def required_case(self) -> None:
         self.assertTrue(True)
 
 
 class SkippedEvidenceFixture(unittest.TestCase):
     @unittest.skip("required native evidence unavailable")
+    @adversarial_reasons("skip_forbidden")
     def required_case(self) -> None:
         self.fail("a skipped fixture must not execute")
 
@@ -43,7 +46,7 @@ class WindowsAdversarialRunnerTests(unittest.TestCase):
         self.assertEqual(hosted | certification, REQUIRED_INVARIANTS)
         self.assertEqual(
             {item.blocking_issue for item in cases if item.blocking_issue is not None},
-            {111, 112},
+            {107, 111, 112},
         )
 
     def test_missing_duplicate_unknown_and_unresolvable_cases_fail_closed(self) -> None:
@@ -76,6 +79,13 @@ class WindowsAdversarialRunnerTests(unittest.TestCase):
                     "cases": [valid_case | {"test_id": "tests.missing.Case.test"}],
                 },
                 "test_unresolvable",
+            ),
+            (
+                {
+                    "schema": MATRIX_SCHEMA,
+                    "cases": [valid_case | {"expected_reason": "wrong_reason"}],
+                },
+                "reason_binding_mismatch",
             ),
         )
         for document, reason in documents:
@@ -117,6 +127,21 @@ class WindowsAdversarialRunnerTests(unittest.TestCase):
         blocked_output = io.StringIO()
         self.assertEqual(run_group((blocked,), "hosted", stream=blocked_output), 1)
         self.assertIn("requires GitHub issue #112", blocked_output.getvalue())
+
+    def test_started_test_reason_mismatch_returns_failure(self) -> None:
+        case = AdversarialCase(
+            invariant="fixture.active",
+            area="fixture",
+            group="hosted",
+            test_id=(
+                "tests.test_windows_adversarial_runner."
+                "PassingEvidenceFixture.required_case"
+            ),
+            expected_reason="wrong_reason",
+        )
+        output = io.StringIO()
+        self.assertEqual(run_group((case,), "hosted", stream=output), 1)
+        self.assertIn("MISMATCHED required reasons", output.getvalue())
 
     def test_active_exact_case_returns_success(self) -> None:
         case = AdversarialCase(

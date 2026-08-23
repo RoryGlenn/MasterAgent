@@ -6,15 +6,18 @@ Add a JSON registry whose invariant identifiers are checked against a
 hard-coded required set in a small standard-library runner. Each entry selects
 exactly one `hosted` or `certification` group, names an exact `unittest` ID,
 declares the stable expected failure reason, and may point to an equivalent
-POSIX test. One exact test may cover multiple tightly coupled invariants. The
-runner loads only the selected IDs, verifies they resolve to one test each,
-records execution, and exits unsuccessfully for any skip, failure,
-error, unexpected success, or missing result.
+POSIX test. One exact test may cover multiple tightly coupled invariants. Each
+active test method declares its exact reason set through a test-owned
+decorator. The runner loads only the selected IDs, verifies they resolve to one
+test each, records the reason binding when execution starts, and exits
+unsuccessfully for any skip, failure, error, unexpected success, missing
+result, or reason mismatch.
 
 Pull-request Windows jobs run the hosted group. The protected Windows 11 x64
 workflow runs both groups after its existing non-administrator host check.
 Managed-workstation cases live in the certification group and treat absent
-fixtures or incomplete #111/#112 behavior as failures, never successful skips.
+fixtures, the mocked Defender/CFA and AppLocker/WDAC placeholders, or
+incomplete #111/#112 behavior as failures, never successful skips.
 
 ## Affected components
 

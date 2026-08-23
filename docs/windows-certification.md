@@ -39,17 +39,21 @@ The repository binds 52 Windows security invariants to exact test IDs in
 
 The workflow invokes `scripts/run_windows_adversarial.py` for each group. The
 runner validates the complete invariant set and exact test IDs before running
-anything. A missing, renamed, failed, errored, or skipped required test makes
-the group fail. Ordinary `unittest` skip semantics therefore cannot turn
-missing native evidence into successful certification.
+anything. Every active test method also declares its exact stable reason set;
+the runner captures that binding when the test starts and compares it with the
+matrix. A missing, renamed, failed, errored, skipped, or reason-mismatched
+required test makes the group fail. Ordinary `unittest` skip semantics
+therefore cannot turn missing native evidence into successful certification.
 
 The matrix also records stable content-free failure reasons and links
 equivalent POSIX evidence where useful. It never stores workstation paths,
 security identifiers (SIDs), credentials, proxy details, or native diagnostic
 text.
 
-Four managed-workstation entries are explicit blockers until their owning
-features are complete: organization ACL inheritance and approved support or
+Six managed-workstation entries are explicit blockers until their owning
+features or evidence are complete: Defender/Controlled Folder Access and
+AppLocker/WDAC remain blocked on #107 until real managed-host fixtures replace
+mocked error injection; organization ACL inheritance and approved support or
 endpoint-detection-and-response (EDR) principals depend on #111; authenticated
 proxy and enterprise certificate-authority behavior depend on #112. The
 certification runner reports those issue numbers and fails. Do not remove,

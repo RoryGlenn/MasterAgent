@@ -27,6 +27,7 @@ from master_agent.workflows.draft_package import (
     build_draft_package_plan,
     render_draft_package,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -94,6 +95,7 @@ class DraftPackageTests(unittest.TestCase):
             finally:
                 connector.close()
 
+    @adversarial_reasons("deterministic_lf")
     def test_repository_patch_normalizes_crlf_to_deterministic_lf(self) -> None:
         settings = DraftPackageSettings.from_toml(ROOT / "config/draft-package.toml")
         action = build_draft_package_plan(settings).actions[-1]

@@ -10,8 +10,9 @@ native Windows filesystem/ACL, locking, atomic local-state, credential,
 process, trusted Git, and AppContainer pure-capsule tranche is implemented.
 Three-version hosted Windows CI, an exhaustive skip-intolerant adversarial
 registry, and the protected x64 workflow are implemented. The final
-certification tranche stays operationally planned until #111 and #112 clear
-the managed-workstation registry blockers and a clean enrolled standard-user
+certification tranche stays operationally planned until #107 replaces the
+mocked Defender/CFA and AppLocker/WDAC placeholders, #111 and #112 clear their
+managed-workstation registry blockers, and a clean enrolled standard-user
 Windows 11 x64 runner supplies successful evidence.
 Release-hardening gates keep
 incomplete local-Git mutation, non-manifest workflow execution, recurring

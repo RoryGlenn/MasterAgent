@@ -30,6 +30,7 @@ from master_agent.platform_runtime.windows.capsules import (
     _sddl,
     _tree_sha256,
 )
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
 APP_SID = "S-1-15-2-1234567890"
@@ -295,6 +296,16 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         if backend is not None and hasattr(backend, "close"):
             self.addCleanup(backend.close)  # type: ignore[attr-defined]
 
+    @adversarial_reasons(
+        "os_ambient_secret_denied",
+        "os_host_file_denied",
+        "os_named_pipe_denied",
+        "os_network_ipv4_denied",
+        "os_network_ipv6_denied",
+        "os_network_localhost_denied",
+        "os_parent_handle_denied",
+        "os_subprocess_denied",
+    )
     def test_pure_worker_and_native_denial_suite(self) -> None:
         output = self.worker.execute_program(
             source=b'def run(request):\n    return {"value": request["value"] + 1}\n',
@@ -326,6 +337,7 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         )
         self.assertTrue(all(item["status"] == "denied" for item in probes))
 
+    @adversarial_reasons("capsule_runtime_identity_changed")
     def test_runtime_identity_tamper_fails_closed(self) -> None:
         _ = self.worker.identity_components
         backend = self.worker._isolation_backend
@@ -363,6 +375,7 @@ class NativeWindowsAppContainerTests(unittest.TestCase):
         ):
             _ = self.worker.identity_components
 
+    @adversarial_reasons("output_too_large")
     def test_worker_output_and_wall_time_limits_fail_closed(self) -> None:
         with self.assertRaisesRegex(
             ConnectorError,

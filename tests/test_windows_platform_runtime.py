@@ -78,6 +78,7 @@ from master_agent.retention import (
     write_retained_text,
 )
 from master_agent.sqlite_safety import PinnedSQLiteDatabase, path_entry_exists
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
@@ -368,6 +369,11 @@ assert 'msvcrt' not in sys.modules
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @adversarial_reasons(
+        "remote_namespace_rejected",
+        "unsafe_path_component",
+        "unsafe_path_syntax",
+    )
     def test_drive_path_validation_is_strict_and_deterministic(self) -> None:
         selected = validate_windows_drive_path("c:/Users/Rory/state.db")
         self.assertEqual(selected.drive, "C")
@@ -597,6 +603,7 @@ assert 'msvcrt' not in sys.modules
             ).trusted
         )
 
+    @adversarial_reasons("cloud_attribute_rejected", "unsafe_file_attributes")
     def test_reparse_cloud_and_offline_attributes_are_rejected(self) -> None:
         self.assertTrue(windows_file_attributes_are_safe(0))
         for attribute in (
@@ -1181,6 +1188,7 @@ assert 'msvcrt' not in sys.modules
 class WindowsPinnedPathTests(unittest.TestCase):
     """Exercise handle-chain behavior through a deterministic native adapter."""
 
+    @adversarial_reasons("unsupported_filesystem")
     def test_pin_rejects_unsupported_volume_before_opening_handles(self) -> None:
         cases = (
             (
@@ -1266,6 +1274,7 @@ class WindowsPinnedPathTests(unittest.TestCase):
         )
         self.assertIn(("C:\\Secure", True, False, True), api.open_calls)
 
+    @adversarial_reasons("case_collision")
     def test_windows_ordinal_names_preserve_sharp_s_and_ss_as_distinct(self) -> None:
         api = _FakeFilesystemApi()
         api.directories[r"C:\Secure"] = (
@@ -1675,12 +1684,14 @@ class WindowsNativeStandardUserIntegrationTests(unittest.TestCase):
             "Windows native acceptance requires Windows 11 or later",
         )
 
+    @adversarial_reasons("administrator_token_rejected")
     def test_native_runner_token_is_not_an_administrator(self) -> None:
         self.assertFalse(
             NativeWindowsApi().current_token_is_administrator(),
             "Windows standard-user acceptance must not run as Administrators",
         )
 
+    @adversarial_reasons("identity_or_security_changed")
     def test_native_inherited_dacl_admits_then_rejects_live_broadening(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1716,6 +1727,7 @@ class WindowsNativeStandardUserIntegrationTests(unittest.TestCase):
             ):
                 backend.pin_file(target, require_private=False)
 
+    @adversarial_reasons("reparse_alias_rejected")
     def test_native_nonprivileged_junction_alias_is_rejected(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1925,6 +1937,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                     created.write_bytes(b"temporary")
                 self.assertFalse((root / "cleanup.bin").exists())
 
+    @adversarial_reasons("namespace_replacement_denied")
     def test_native_retains_ancestors_against_namespace_replacement(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1941,6 +1954,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
             ancestor.rename(moved)
             self.assertEqual((moved / "payload.bin").read_bytes(), b"retained")
 
+    @adversarial_reasons("expected_identity_mismatch")
     def test_native_hardlink_substitution_changes_identity(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -2027,6 +2041,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                     require_private=False,
                 )
 
+    @adversarial_reasons("lossless_extended_path")
     def test_native_extended_length_path_exceeds_legacy_limit(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -2104,6 +2119,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                 backend.release(descriptor)
                 os.close(descriptor)
 
+    @adversarial_reasons("lock_contention")
     def test_native_independent_process_exclusive_nonblocking_contends(self) -> None:
         with TemporaryDirectory() as raw:
             path = Path(raw) / "exclusive-contention.bin"

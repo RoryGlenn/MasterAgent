@@ -336,14 +336,16 @@
       "area": "managed",
       "group": "certification",
       "test_id": "tests.test_directory_safety.PinnedDirectoryTests.test_windows_native_open_and_child_errors_are_bounded",
-      "expected_reason": "native_open_failed"
+      "expected_reason": "native_open_failed",
+      "blocking_issue": 107
     },
     {
       "invariant": "managed.applocker_wdac",
       "area": "managed",
       "group": "certification",
       "test_id": "tests.test_windows_process.WindowsProcessContractTests.test_policy_denial_is_bounded_and_secret_free",
-      "expected_reason": "native_control_failed"
+      "expected_reason": "native_control_failed",
+      "blocking_issue": 107
     },
     {
       "invariant": "managed.authenticated_proxy",

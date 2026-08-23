@@ -14,6 +14,9 @@ from typing import Any, TextIO, cast
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from tests.windows_adversarial_evidence import reasons_for_test
+
 DEFAULT_MATRIX = ROOT / "tests" / "windows_adversarial_matrix.json"
 MATRIX_SCHEMA = "master-agent/windows-adversarial-matrix@1"
 GROUPS = frozenset({"hosted", "certification"})
@@ -151,6 +154,7 @@ def load_matrix(
         }
     ):
         _resolve_exact_test(test_id)
+    _validate_reason_bindings(parsed)
     return tuple(sorted(parsed, key=lambda item: item.invariant))
 
 
@@ -171,6 +175,7 @@ def run_group(
     active_ids = tuple(
         dict.fromkeys(item.test_id for item in selected if item.blocking_issue is None)
     )
+    expected_reasons = _expected_reasons(selected)
     suite = unittest.TestSuite(_resolve_exact_test(test_id) for test_id in active_ids)
     runner = unittest.TextTestRunner(
         stream=stream,
@@ -184,6 +189,11 @@ def run_group(
     expected = set(active_ids)
     missing = sorted(expected - result.started_ids)
     skipped = sorted(test.id() for test, _reason in result.skipped)
+    mismatched_reasons = sorted(
+        test_id
+        for test_id, reasons in expected_reasons.items()
+        if result.reason_bindings.get(test_id) != reasons
+    )
     stream.writelines(
         f"BLOCKED {item.invariant}: requires GitHub issue #{item.blocking_issue}\n"
         for item in blocked
@@ -192,9 +202,41 @@ def run_group(
         stream.write(f"MISSING required tests: {', '.join(missing)}\n")
     if skipped:
         stream.write(f"SKIPPED required tests: {', '.join(skipped)}\n")
-    if blocked or missing or skipped or not result.wasSuccessful():
+    if mismatched_reasons:
+        stream.write(
+            "MISMATCHED required reasons: " + ", ".join(mismatched_reasons) + "\n"
+        )
+    if (
+        blocked
+        or missing
+        or skipped
+        or mismatched_reasons
+        or not result.wasSuccessful()
+    ):
         return 1
     return 0
+
+
+def _expected_reasons(
+    cases: tuple[AdversarialCase, ...],
+) -> dict[str, frozenset[str]]:
+    expected: dict[str, set[str]] = {}
+    for item in cases:
+        if item.blocking_issue is None:
+            expected.setdefault(item.test_id, set()).add(item.expected_reason)
+    return {test_id: frozenset(reasons) for test_id, reasons in expected.items()}
+
+
+def _validate_reason_bindings(cases: tuple[AdversarialCase, ...]) -> None:
+    for test_id, expected in _expected_reasons(cases).items():
+        try:
+            declared = reasons_for_test(_resolve_exact_test(test_id))
+        except ValueError as error:
+            raise MatrixError(
+                f"adversarial_matrix_reason_binding_invalid:{test_id}"
+            ) from error
+        if declared != expected:
+            raise MatrixError(f"adversarial_matrix_reason_binding_mismatch:{test_id}")
 
 
 def _parse_case(value: object) -> AdversarialCase:
@@ -299,9 +341,11 @@ class _RecordingResult(unittest.TextTestResult):
         else:
             super().__init__(typed_stream, descriptions, verbosity)
         self.started_ids: set[str] = set()
+        self.reason_bindings: dict[str, frozenset[str]] = {}
 
     def startTest(self, test: unittest.TestCase) -> None:
         self.started_ids.add(test.id())
+        self.reason_bindings[test.id()] = reasons_for_test(test)
         super().startTest(test)
 
 
