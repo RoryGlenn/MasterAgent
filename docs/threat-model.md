@@ -515,8 +515,16 @@ Controls:
 - bind the exact source digest and declared publisher into the derived capsule
   policy identity, while treating the publisher as unverified until the normal
   independent publisher authority signs promotion;
+- load capsule signing identities only from an explicit owner-controlled TOML
+  ring whose secrets are environment-backed, whose enabled entries own one role
+  each, and whose required key IDs, case-folded subjects, environment references,
+  and resolved signing key values are distinct;
 - install only the signed quarantine state; catalog and routing construction
-  still require the final independently signed enabled state; and
+  still require the final independently signed enabled state;
+- authenticate the complete latest state chain, then apply governance and
+  policy before lexical intent routing; execute only an exact enabled binding
+  through the typed orchestrator and a worker environment that omits signing
+  secrets; and
 - use append-only deprecation or revocation to remove future routing without
   erasing promotion history.
 

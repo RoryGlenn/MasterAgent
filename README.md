@@ -82,7 +82,7 @@ unsafe surfaces remain deliberately non-routable.
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
 | Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
-| Capability import and capsule promotion | Read-only declarative custom-agent inspection plus signed test/local promotion for explicitly selected dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
+| Capability import and capsule promotion | Installed CLI supports read-only inspection, exact selection, signed test/local promotion, policy-first routing, governed execution, immutable updates, disable, and revoke for dependency-free pure capabilities; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
 | Semantic ownership | Exact machine-readable module, test, requirement, command, capability, connector, profile, configuration, and platform routing with generated-index drift checks implemented |
 
@@ -107,7 +107,7 @@ The catalog contains **82 typed capabilities**:
 | SharePoint/OneDrive | sites, drives, folders, metadata, and bounded text | local files and decks | replacement remains disabled pending exact atomic provider preconditions |
 | OneNote | notebooks, sections, and pages | generated HTML/proposals | writes remain disabled pending target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | publishing follows the separately governed SharePoint path |
-| Capability imports/capsules | declarative preview and promoted pure reads | explicitly selected, promoted deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
+| Capability imports/capsules | declarative preview and policy-routed promoted pure reads | CLI-selected, promoted, routed, and governed deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
 
 ## Core safety properties
 
@@ -640,6 +640,7 @@ creating another runtime planner or authorization layer. See
 | `config/identities.toml` | Cross-system identity mappings, never credentials |
 | `config/retention.toml` | Evidence persistence modes and TTLs |
 | `config/dependency-licenses.toml` | Runtime and capsule dependency-license policy |
+| `config/capsule-authorities.example` | Example distinct role-scoped capsule signer identities and environment-backed key references |
 | `config/recurring.toml` | Disabled-by-default recurring workflow registrations |
 
 ## Documentation

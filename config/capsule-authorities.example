@@ -1,0 +1,46 @@
+# TOML syntax. Copy to an operator-controlled location outside an imported
+# agent or repository. Every signer has one role and a different subject.
+# Secrets remain in the environment and must be at least 32 bytes.
+
+[authorities.capsule-generator]
+subject = "capability-import-generator"
+roles = ["generator"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_GENERATOR_KEY"
+enabled = true
+
+[authorities.capsule-validator]
+subject = "capability-validator"
+roles = ["validator"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_VALIDATOR_KEY"
+enabled = true
+
+[authorities.capsule-sandbox-validator]
+subject = "capability-sandbox-validator"
+roles = ["sandbox_validator"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_SANDBOX_VALIDATOR_KEY"
+enabled = true
+
+[authorities.capsule-reviewer]
+subject = "capability-reviewer"
+roles = ["reviewer"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_REVIEWER_KEY"
+enabled = true
+
+[authorities.capsule-publisher]
+# This reviewed identity must exactly match the imported capsule publisher.
+subject = "foreign.publisher"
+roles = ["publisher"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_PUBLISHER_KEY"
+enabled = true
+
+[authorities.capsule-revoker]
+subject = "capability-security-revoker"
+roles = ["revoker"]
+environments = ["development", "non_production"]
+secret_env = "MASTER_AGENT_CAPSULE_REVOKER_KEY"
+enabled = true
