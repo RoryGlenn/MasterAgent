@@ -12,7 +12,10 @@ checkpoint in the same transaction.
 Current work state is derived by replaying events. No independently mutable
 work-status row exists. `show` and `verify` use a read-only pinned snapshot so
 inspection cannot create or repair state. A schema version and exact table
-column validation reject ambiguous or partially migrated databases.
+column validation reject ambiguous or partially migrated databases. Replay
+requires the stored timestamp to use its exact canonical representation so an
+equivalent textual rewrite is still detected. Mutating CLI actions preflight a
+create-only JSON output name before opening or appending to the journal.
 
 ## Affected components
 

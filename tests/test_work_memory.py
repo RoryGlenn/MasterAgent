@@ -231,6 +231,13 @@ class WorkMemoryTests(unittest.TestCase):
                 "UPDATE work_memory_state SET head_hash = " + "'" + ("0" * 64) + "'",
                 "checkpoint head",
             ),
+            (
+                (
+                    "UPDATE work_events SET timestamp = "
+                    "replace(timestamp, 'T', ' ') WHERE sequence = 1"
+                ),
+                "malformed event row",
+            ),
         ):
             with (
                 self.subTest(mutation=mutation),
@@ -394,6 +401,70 @@ class WorkMemoryTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertIn("incompatible arguments", stderr.getvalue())
             self.assertFalse(database.exists())
+
+    def test_cli_refuses_occupied_output_before_mutating_journal(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "work-memory.sqlite3"
+            output = root / "occupied.json"
+            output.write_text("{}", encoding="utf-8")
+
+            for arguments in (
+                [
+                    "work-memory",
+                    "start",
+                    "--database",
+                    str(database),
+                    "--work-id",
+                    "issue-163",
+                    "--issue",
+                    "#163",
+                    "--summary",
+                    "Start work.",
+                    "--output",
+                    str(output),
+                ],
+                [
+                    "work-memory",
+                    "record",
+                    "--database",
+                    str(database),
+                    "--work-id",
+                    "issue-163",
+                    "--kind",
+                    "decision",
+                    "--summary",
+                    "Choose the journal.",
+                    "--output",
+                    str(output),
+                ],
+            ):
+                if not database.exists():
+                    stdout = StringIO()
+                    stderr = StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        status = main(arguments)
+                    self.assertEqual(status, 1)
+                    self.assertIn("already exists", stderr.getvalue())
+                    self.assertFalse(database.exists())
+                    with WorkMemory(database) as memory:
+                        memory.start(
+                            work_id="issue-163",
+                            issue="#163",
+                            summary="Start work.",
+                        )
+                    continue
+
+                before = WorkMemory.show_existing(database, "issue-163")
+                stdout = StringIO()
+                stderr = StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = main(arguments)
+                self.assertEqual(status, 1)
+                self.assertIn("already exists", stderr.getvalue())
+                after = WorkMemory.show_existing(database, "issue-163")
+                self.assertEqual(after.journal_event_count, before.journal_event_count)
+                self.assertEqual(after.journal_head_hash, before.journal_head_hash)
 
 
 if __name__ == "__main__":

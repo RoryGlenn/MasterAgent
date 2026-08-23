@@ -28,6 +28,8 @@ short summaries, and references. It MUST NOT retain provider response bodies,
 credentials, authentication material, approval artifacts, execution
 transcripts, or arbitrary attachments. Remembered content MUST remain untrusted
 metadata and MUST NOT grant identity, authority, approval, or capability.
+Mutating CLI actions given an occupied create-only output target MUST fail
+before appending to or creating the journal.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim
@@ -62,9 +64,16 @@ with recorded history.
 
 ### Tampered journal
 
-- GIVEN a row was edited, deleted, or reordered, or the checkpoint disagrees
+- GIVEN a row, including its exact timestamp representation, was edited,
+  deleted, or reordered, or the checkpoint disagrees
 - WHEN inspection or verification opens a read-only snapshot
 - THEN it fails closed without creating or repairing state
+
+### Occupied output
+
+- GIVEN a mutating command selects a create-only output name that already exists
+- WHEN the command validates its output boundary
+- THEN it fails without creating or appending to the journal
 
 ### Untrusted metadata
 

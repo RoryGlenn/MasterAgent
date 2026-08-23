@@ -625,6 +625,8 @@ def _decode_event(row: tuple[object, ...], *, expected_sequence: int) -> WorkEve
             timestamp
         ):
             raise ValueError
+        if timestamp.isoformat() != timestamp_raw:
+            raise ValueError
         kind = WorkEventKind(kind_raw)
         stage = WorkStage(stage_raw)
         work_id = _validate_work_id(work_id_raw)

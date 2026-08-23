@@ -7553,6 +7553,7 @@ def _work_memory(
             raise ValueError("work-memory start requires --issue and --summary")
         if any(value is not None for value in (kind, stage, reference)):
             raise ValueError("work-memory start received incompatible arguments")
+        _preflight_work_memory_output(output)
         with WorkMemory(database) as memory:
             snapshot = memory.start(work_id=work_id, issue=issue, summary=summary)
     elif action == "record":
@@ -7560,6 +7561,7 @@ def _work_memory(
             raise ValueError("work-memory record requires --kind and --summary")
         if issue is not None:
             raise ValueError("work-memory record does not accept --issue")
+        _preflight_work_memory_output(output)
         with WorkMemory(database) as memory:
             snapshot = memory.record(
                 work_id=work_id,
@@ -7572,6 +7574,25 @@ def _work_memory(
         raise ValueError("unknown work-memory operation")
     _emit_work_memory_payload(snapshot.to_dict(), output=output)
     return 0
+
+
+def _preflight_work_memory_output(output: Path | None) -> None:
+    """Reject an occupied create-only output before mutating the journal."""
+
+    if output is None:
+        return
+    require_persistent_state_platform()
+    selected = output.expanduser()
+    if not selected.is_absolute():
+        selected = Path.cwd() / selected
+    if selected.name in {"", ".", ".."}:
+        raise ConfigurationError("restricted artifact output path is invalid")
+    with PinnedDirectory.open(selected.parent) as directory:
+        requested_name = selected.name.casefold()
+        if any(name.casefold() == requested_name for name in directory.list_children()):
+            raise ConfigurationError(
+                "restricted artifact already exists; use a fresh private output name"
+            )
 
 
 def _emit_work_memory_payload(
