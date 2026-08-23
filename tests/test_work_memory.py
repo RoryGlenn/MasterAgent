@@ -164,6 +164,8 @@ class WorkMemoryTests(unittest.TestCase):
                     '{"access_token":"supersecret123456789"}',
                     '{"client_secret":"supersecret123456789"}',
                     '{"Authorization":"Bearer supersecret123456789"}',
+                    "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
+                    "npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     (
                         "https://acct.blob.core.windows.net/c/b?"
                         "sv=2024-11-04&sig=abcDEF123%2Fxyz%3D&sp=r"
@@ -208,6 +210,17 @@ class WorkMemoryTests(unittest.TestCase):
                         kind=WorkEventKind.DECISION,
                         summary="x" * 2_049,
                     )
+                memory.record(
+                    work_id="issue-2",
+                    kind=WorkEventKind.DECISION,
+                    summary="Use Basic authentication for the integration.",
+                )
+                memory.record(
+                    work_id="issue-2",
+                    kind=WorkEventKind.DECISION,
+                    summary="Use Digest authentication for the integration.",
+                )
+                self.assertEqual(memory.show("issue-2").journal_event_count, 3)
 
     def test_maximum_journal_payload_fits_windows_state_boundary(self) -> None:
         connection = sqlite3.connect(":memory:")
