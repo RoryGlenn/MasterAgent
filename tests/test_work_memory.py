@@ -164,7 +164,10 @@ class WorkMemoryTests(unittest.TestCase):
                     '{"access_token":"supersecret123456789"}',
                     '{"client_secret":"supersecret123456789"}',
                     '{"Authorization":"Bearer supersecret123456789"}',
+                    '{"auths":{"registry.example":{"auth":"dXNlcjpwYXNz"}}}',
+                    '{"identitytoken":"supersecret123456789"}',
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
+                    "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     (
                         "https://acct.blob.core.windows.net/c/b?"
