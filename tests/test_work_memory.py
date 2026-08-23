@@ -171,6 +171,8 @@ class WorkMemoryTests(unittest.TestCase):
                     "PGPASSWORD=supersecret123",
                     "MYSQL_PWD=supersecret123",
                     "REDISCLI_AUTH=supersecret123",
+                    "PRIVATE_" + "KEY=encoded-private-key-material",
+                    "SSH_PRIVATE_" + "KEY=encoded-private-key-material",
                     "NPM_TOKEN=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "_authToken=npm_abcdefghijklmnopqrstuvwxyz0123456789",
                     "npm_abcdefghijklmnopqrstuvwxyz0123456789",

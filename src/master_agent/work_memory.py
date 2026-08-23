@@ -102,7 +102,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?=[A-Za-z0-9._~+/=-]*(?-i:[A-Z0-9._~+/-]))"
     r"[A-Za-z0-9._~+/-]{16,}=*(?=\s|$)|"
     r"\b_?(?:[A-Za-z][A-Za-z0-9_-]*[_-])?(?:password|passwd|api[_-]?key|"
-    r"client[_-]?secret|client[_-]?key[_-]?data|access[_-]?token|"
+    r"private[_-]?key|client[_-]?secret|client[_-]?key[_-]?data|access[_-]?token|"
     r"refresh[_-]?token|id[_-]?token|auth[_-]?token|secret|token)"
     r"[\"']?\s*[:=]\s*[\"']?\S+|"
     r"\b(?:pgpassword|mysql_pwd|rediscli_auth)[\"']?\s*[:=]\s*[\"']?\S+|"
