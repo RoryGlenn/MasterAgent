@@ -260,7 +260,7 @@ class WindowsAppContainerContractTests(unittest.TestCase):
         reached_probe = ProcessExecutionResult(
             reason=ProcessExitReason.NONZERO_EXIT,
             exit_code=1,
-            stdout=b"PROBE_READY\n",
+            stdout=b"PROBE_READY\r\n",
             stderr=b"fixed invalid-handle traceback",
             output_truncated=False,
         )

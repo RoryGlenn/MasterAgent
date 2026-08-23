@@ -1057,7 +1057,7 @@ def _require_parent_handle_denied(
         raise ProcessSupervisionError(
             "appcontainer_parent_handle_observation_failed"
         ) from error
-    if not result.stdout.startswith(b"PROBE_READY\n"):
+    if result.stdout.splitlines()[:1] != [b"PROBE_READY"]:
         raise ProcessSupervisionError("appcontainer_os_parent_handle_probe_failed")
     if leaked_parent_byte:
         raise ProcessSupervisionError(
