@@ -4,6 +4,14 @@ MasterAgent coordinates work across many systems without giving a model
 unrestricted access. Start with the outcome you want; use the deeper references
 only when you need to configure, operate, extend, or audit the runtime.
 
+MasterAgent is specifically designed for restricted corporate environments
+where a third-party Model Context Protocol (MCP) server may be unavailable,
+unreliable, or unapproved. Its built-in provider workflows use first-party
+native connectors maintained with the runtime; MCP is optional rather than a
+prerequisite. Read [Native-first enterprise purpose](native-first-enterprise.md)
+for the product boundary and the distinction between current behavior and
+planned connector certification.
+
 This index is the canonical map of the current documentation set. It separates
 reader guidance from exact reference material, operational procedures,
 architecture, and historical evidence so the same facts do not need to be
@@ -13,6 +21,9 @@ maintained in several places.
 
 - [Project overview](../README.md) — the product promise, capability summary,
   safety model, and shortest paths into the project.
+- [Native-first enterprise purpose](native-first-enterprise.md) — why
+  first-party connectors are the primary enterprise path, what “native” means,
+  and why third-party MCP servers are optional.
 - [Quickstart](quickstart.md) — get a credential-free result from a source
   checkout on macOS, Ubuntu, or Windows.
 - [Use cases](use-cases.md) — choose a concrete outcome and see its credential,
