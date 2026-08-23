@@ -283,7 +283,9 @@ class _PosixPinnedSQLiteDatabase:
                 except (ConfigurationError, OSError):
                     pass
             if database_descriptor is not None:
-                os.close(database_descriptor)
+                descriptor_to_close = database_descriptor
+                database_descriptor = None
+                os.close(descriptor_to_close)
             if lock_descriptor is not None:
                 os.close(lock_descriptor)
             os.close(parent_descriptor)
