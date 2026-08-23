@@ -18,6 +18,14 @@ separate trusted planning boundary and does not allow the plan-producing object
 to review itself. `bind_static_intervention_governance` creates the same review
 at the explicit code-owned static workflow boundary.
 
+Fingerprint agreement is not reviewer authentication. The two trusted binders
+therefore attach non-serialized process-local provenance to the exact admitted
+plan. Execution snapshots preserve that marker, but JSON cannot supply it. A
+deserialized gated plan may be inspected in a dry run; applied execution
+requires a current authenticated approval covering the exact plan and every
+action. This supports approval handoff/resume without trusting self-described
+review fields.
+
 ## Affected components
 
 - `src/master_agent/models.py`: immutable coherence review and plan
@@ -48,16 +56,19 @@ systems assessment + strategy kernel
 
 Fast-path plans remain loadable without strategy or coherence artifacts. Older
 gated plans without a coherence review are deliberately rejected and must be
-replanned. Static registered workflows receive the review through their
-existing static binder.
+replanned. Static registered workflows receive the review and process-local
+provenance through their existing static binder. Serialized gated plans require
+authenticated whole-plan review before applied execution.
 
 ## Security
 
 The review is planning evidence, not approval or authority. Fingerprints prevent
-substitution; strict booleans prevent truthiness confusion; bounded reason codes
-avoid retained content. The runtime does not use semantic heuristics or a model
-inside the deterministic gate. A trusted caller that lies remains a caller
-validation failure, not a capability escalation.
+substitution but do not authenticate authorship; process-local binder provenance
+or an authenticated whole-plan review closes that boundary before execution.
+Strict booleans prevent truthiness confusion, and bounded reason codes avoid
+retained content. The runtime does not use semantic heuristics or a model inside
+the deterministic gate. A trusted caller that lies remains a caller validation
+failure, not a capability escalation.
 
 ## Rejected alternatives
 

@@ -6,8 +6,10 @@ import hashlib
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from master_agent.approvals import ApprovalAuthority, HmacApprovalAuthenticator
 from master_agent.capabilities import CapabilityCatalog
 from master_agent.config import IntegrationConfig
 from master_agent.errors import ConfigurationError, ValidationError
@@ -38,12 +40,16 @@ from master_agent.planners.base import (
     SystemsAssessment,
     SystemsGateRoute,
     SystemsGovernanceGate,
+    bind_static_intervention_governance,
     bind_systems_governance,
     build_systems_post_execution_review,
     enforce_systems_governance,
 )
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.policy import PolicyConfig, PolicyEngine
 from master_agent.provider_egress import ProviderDataEgressPolicy
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class StrictBooleanTests(unittest.TestCase):
@@ -666,6 +672,78 @@ class SystemsGovernanceGateTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValidationError, "does not match"):
             ChangePlan.from_dict(payload)
+
+    def test_serialized_gated_plan_cannot_self_attest_coherence(self) -> None:
+        assessment = _gated_systems_assessment()
+        admitted = bind_static_intervention_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+
+        self.assertEqual(
+            enforce_systems_governance(admitted), admitted.systems_decision
+        )
+        self.assertEqual(
+            enforce_systems_governance(admitted.execution_snapshot()),
+            admitted.systems_decision,
+        )
+        serialized = ChangePlan.from_dict(admitted.to_dict())
+        with self.assertRaisesRegex(
+            ValidationError, "trusted strategy coherence provenance"
+        ):
+            enforce_systems_governance(serialized)
+        self.assertEqual(
+            enforce_systems_governance(
+                serialized,
+                require_trusted_coherence=False,
+            ),
+            serialized.systems_decision,
+        )
+
+    def test_authenticated_whole_plan_review_readmits_serialized_coherence(
+        self,
+    ) -> None:
+        assessment = _gated_systems_assessment()
+        admitted = bind_static_intervention_governance(
+            _systems_plan(RiskLevel.REVERSIBLE_WRITE),
+            assessment,
+        )
+        serialized = ChangePlan.from_dict(admitted.to_dict())
+        authenticator = HmacApprovalAuthenticator(
+            {
+                "strategy-reviewer": ApprovalAuthority(
+                    key_id="strategy-reviewer",
+                    subject="Strategy Reviewer",
+                    issuer="master-agent.test",
+                    tenant="test-tenant",
+                    roles=("change-approver",),
+                    secret=b"strategy-reviewer-test-secret-32-bytes",
+                )
+            }
+        )
+        policy = PolicyEngine(
+            PolicyConfig.from_toml(ROOT / "config/policy.toml"),
+            approval_authenticator=authenticator,
+        )
+        now = datetime.now(UTC)
+        approval = authenticator.issue(
+            plan=serialized,
+            approved_action_ids=tuple(
+                action.action_id for action in serialized.actions
+            ),
+            key_id="strategy-reviewer",
+            issued_at=now - timedelta(seconds=1),
+            expires_at=now + timedelta(minutes=5),
+        )
+
+        self.assertEqual(
+            enforce_systems_governance(
+                serialized,
+                policy=policy,
+                approvals=(approval,),
+            ),
+            serialized.systems_decision,
+        )
 
     def test_plan_rejects_boolean_complexity_weight(self) -> None:
         assessment = _systems_assessment(

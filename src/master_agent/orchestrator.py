@@ -260,15 +260,16 @@ class WorkflowOrchestrator:
             Per-action state, evidence, and compensation outcomes.
         """
 
-        # Never execute caller-owned objects.  The deserialize/validate pass
-        # creates a private, recursively immutable snapshot whose fingerprint
-        # is the exact artifact evaluated by policy and passed to connectors.
-        plan = ChangePlan.from_dict(plan.to_dict())
+        # Never execute caller-owned objects. The validated snapshot preserves
+        # only process-local admission created by a trusted planning binder;
+        # serialized inputs cannot supply that provenance.
+        plan = plan.execution_snapshot()
         approvals_tuple = tuple(approvals)
         systems_decision = enforce_systems_governance(
             plan,
             policy=self._policy,
             approvals=approvals_tuple,
+            require_trusted_coherence=not dry_run,
         )
         systems_assessment = plan.systems_assessment
         if systems_assessment is None:  # pragma: no cover - enforced above.

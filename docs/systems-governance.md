@@ -122,6 +122,14 @@ token overlap, keyword matching, or the planner's own assertion as a substitute
 for the trusted review. A false finding is valid evidence of incoherence, and
 the systems gate denies that plan.
 
+Fingerprint agreement does not authenticate the reviewer. A plan returned
+directly by `GovernedPlanner` or `bind_static_intervention_governance` carries a
+non-serialized process-local admission marker. `execution_snapshot()` preserves
+that marker for the runtime's private immutable copy, but `ChangePlan.from_dict`
+does not accept it from JSON. A deserialized gated plan may be dry-run for
+inspection; applied execution requires a current authenticated approval bound
+to the exact plan and covering every action.
+
 ## Observe outcomes after execution
 
 An outcome observer is optional because many success metrics cannot be measured
@@ -172,7 +180,9 @@ Existing serialized fast-path plans remain loadable without a kernel or traces.
 Older gated plans must be replanned because they cannot prove coherent strategy
 and do not carry a coherence review. Adding or changing an assessment, kernel,
 review, or trace changes the plan fingerprint, so old approvals no longer
-match.
+match. A current gated plan may still be serialized for approval handoff, but
+its public fingerprints are not reviewer credentials: the authenticated
+whole-plan approval re-establishes trusted provenance at applied execution.
 
 Systems assessment, strategy, coherence, and outcome evidence never grant
 capability, credential, target, provider, policy, approval, or execution

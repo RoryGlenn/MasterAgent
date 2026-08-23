@@ -2328,6 +2328,9 @@ class ExecutionContext:
         )
 
 
+_TRUSTED_STRATEGY_COHERENCE_ADMISSION = object()
+
+
 @dataclass(frozen=True, slots=True)
 class ChangePlan:
     """Immutable set of actions proposed for one user goal."""
@@ -2346,6 +2349,12 @@ class ChangePlan:
     systems_decision: SystemsGateDecision | None = None
     strategy_traces: tuple[StrategyActionTrace, ...] = ()
     strategy_coherence_review: StrategyCoherenceReview | None = None
+    _trusted_strategy_coherence_admission: object | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.compensate_on_failure, bool):
@@ -2491,6 +2500,32 @@ class ChangePlan:
             allow_nan=False,
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    def _with_trusted_strategy_coherence_admission(self) -> ChangePlan:
+        """Mark an exact in-process plan admitted by a trusted planning binder."""
+
+        object.__setattr__(
+            self,
+            "_trusted_strategy_coherence_admission",
+            _TRUSTED_STRATEGY_COHERENCE_ADMISSION,
+        )
+        return self
+
+    def _has_trusted_strategy_coherence_admission(self) -> bool:
+        """Return whether trusted in-process admission created this exact plan."""
+
+        return (
+            self._trusted_strategy_coherence_admission
+            is _TRUSTED_STRATEGY_COHERENCE_ADMISSION
+        )
+
+    def execution_snapshot(self) -> ChangePlan:
+        """Clone immutable plan data while preserving trusted local admission."""
+
+        snapshot = ChangePlan.from_dict(self.to_dict())
+        if self._has_trusted_strategy_coherence_admission():
+            snapshot._with_trusted_strategy_coherence_admission()
+        return snapshot
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the plan to JSON-compatible data."""

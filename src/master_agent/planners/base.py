@@ -353,7 +353,9 @@ def bind_static_intervention_governance(
             StrategyCoherenceReview.for_static_intervention(assessment)
         ),
     )
-    return bind_systems_governance(traced_plan, assessment, gate=gate)
+    return bind_systems_governance(
+        traced_plan, assessment, gate=gate
+    )._with_trusted_strategy_coherence_admission()
 
 
 def bind_fast_path_governance(
@@ -385,9 +387,12 @@ def enforce_systems_governance(
     gate: SystemsGovernanceGate | None = None,
     policy: PolicyEngine | None = None,
     approvals: Iterable[Approval] = (),
+    require_trusted_coherence: bool = True,
 ) -> SystemsGateDecision:
     """Reject missing, stale, denied, or forged plan governance evidence."""
 
+    if not isinstance(require_trusted_coherence, bool):
+        raise ValidationError("require_trusted_coherence must be a boolean")
     assessment = plan.systems_assessment
     bound_decision = plan.systems_decision
     if assessment is None or bound_decision is None:
@@ -400,14 +405,24 @@ def enforce_systems_governance(
         raise ValidationError(
             "systems governance denied plan: " + "; ".join(expected.reasons)
         )
-    if expected.requires_human_review and (
-        policy is None
-        or not _has_authenticated_whole_plan_review(
+    authenticated_whole_plan_review = policy is not None and (
+        _has_authenticated_whole_plan_review(
             policy=policy,
             plan=plan,
             approvals=tuple(approvals),
         )
+    )
+    if (
+        expected.route is SystemsGateRoute.GATED
+        and require_trusted_coherence
+        and not plan._has_trusted_strategy_coherence_admission()
+        and not authenticated_whole_plan_review
     ):
+        raise ValidationError(
+            "gated plan requires trusted strategy coherence provenance or an "
+            "authenticated whole-plan review"
+        )
+    if expected.requires_human_review and (not authenticated_whole_plan_review):
         raise ValidationError(
             "systems governance requires authenticated human review: "
             + "; ".join(expected.reasons)
@@ -645,7 +660,9 @@ class GovernedPlanner:
                     "strategy coherence reviewer must return a StrategyCoherenceReview"
                 )
             plan = replace(plan, strategy_coherence_review=review)
-        governed_plan = bind_systems_governance(plan, assessment, gate=self._gate)
+        governed_plan = bind_systems_governance(
+            plan, assessment, gate=self._gate
+        )._with_trusted_strategy_coherence_admission()
         decision = governed_plan.systems_decision
         if decision is None:  # pragma: no cover - guaranteed by binding.
             raise ValidationError("systems governance decision was not bound")

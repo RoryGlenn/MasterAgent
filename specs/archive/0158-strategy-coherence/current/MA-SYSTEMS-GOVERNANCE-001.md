@@ -36,7 +36,12 @@ concrete reviewer MUST return explicitly supplied evidence only for its exact
 assessment and kernel and MUST NOT infer semantic agreement. Static registered
 interventions MAY use their explicit code-owned binder as the review boundary.
 The review fingerprint MUST be covered by the gate decision and the immutable
-plan fingerprint.
+plan fingerprint. Fingerprints alone MUST NOT authenticate the reviewer. Before
+gated execution, the runtime MUST require either process-local provenance from
+the trusted planner/static binder that admitted that exact plan or a current
+authenticated approval covering the exact serialized plan and every action.
+Serialized self-attestation MUST fail closed; a dry run MAY validate its
+structure while withholding execution.
 
 An explicit fast path MAY admit only low-risk, reversible, well-understood plans
 containing `read_only` or `local_generation` actions and no durable complexity.
@@ -103,6 +108,14 @@ meaning.
 - THEN the gate may admit the otherwise valid plan without granting any runtime
   authority from the review
 
+### Serialized self-attestation does not authenticate a reviewer
+
+- GIVEN a submitter serializes a structurally valid gated plan and recomputes
+  every public fingerprint
+- WHEN the plan reaches applied execution without trusted process-local
+  provenance or an authenticated whole-plan review
+- THEN the runtime rejects it before any connector can execute
+
 ### Added complexity is not justified
 
 - GIVEN a proposal that adds durable complexity
@@ -144,4 +157,4 @@ meaning.
 - Strengthened with strategy traceability and observable feedback by GitHub
   issue #156.
 - Strengthened with fingerprint-bound cross-framework coherence by GitHub issue
-  #158.
+  #158, including authenticated provenance after PR review.

@@ -116,6 +116,14 @@ explicitly supplied evidence; they reject substituted inputs instead of
 filling gaps with generated prose. Built-in workflows use the explicit
 fast-path or code-owned static-intervention constructors.
 
+Public fingerprints prove exactness, not authorship. The governed planner and
+static-intervention binder therefore attach non-serialized, process-local
+provenance to the exact plan they admit. Execution snapshots preserve it, while
+plans reconstructed from JSON cannot claim it. Applied execution of such a
+serialized gated plan requires a current authenticated approval covering the
+exact plan and every action; dry runs may inspect its structure without
+executing it.
+
 After execution, `RunReport.systems_review`, `DirectReadReport.systems_review`,
 and the orchestrator's terminal audit event contain content-free evidence for
 metric observation, possible unintended effects, planned complexity, removal

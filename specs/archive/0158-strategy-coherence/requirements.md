@@ -22,7 +22,10 @@ the exact assessment and kernel and MUST NOT infer agreement. Static registered
 interventions MAY use an explicit code-owned review constructor. The fast path
 MUST remain compatible without a strategy kernel or coherence review. Coherence
 evidence MUST be covered by the immutable plan fingerprint and MUST NOT grant or
-weaken execution authority.
+weaken execution authority. Public fingerprints MUST NOT authenticate reviewer
+provenance: applied gated execution MUST require either provenance from the
+trusted in-process binder that admitted the exact plan or an authenticated
+whole-plan review. Serialized self-attestation MUST fail closed.
 
 ### MA-DOCS-001 — Documentation review is a completion gate
 

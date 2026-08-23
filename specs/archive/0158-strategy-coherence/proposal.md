@@ -55,6 +55,8 @@ existing low-risk fast path.
 
 Existing gated serialized plans lack the new review and must be replanned.
 Static registered workflows remain concise because their binder is the explicit
-code-owned review boundary. Incorrect positive findings remain a trusted-input
-failure, so documentation must state that the review is an attestation, not a
-semantic theorem.
+code-owned review boundary. Public fingerprints cannot authenticate a reviewer,
+so a deserialized gated plan needs authenticated whole-plan review before
+applied execution. Incorrect positive findings from a trusted boundary remain a
+trusted-input failure, so documentation must state that the review is an
+attestation, not a semantic theorem.
