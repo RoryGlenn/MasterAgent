@@ -20,7 +20,8 @@ create-only JSON output name before opening or appending to the journal and
 rejects journal and state-file aliases. It validates the exact prospective JSON
 size inside the transaction before commit and holds a native create-only output
 reservation through journal commit and publication. `record` opens the pinned
-SQLite boundary with creation disabled.
+SQLite boundary with creation disabled, while `start` validates every retained
+field before opening the create-enabled boundary.
 
 ## Affected components
 

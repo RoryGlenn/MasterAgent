@@ -86,6 +86,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"\b(?:proxy-)?authorization\s*:\s*\S+(?:\s+\S+)?|"
     r"\b(?:set-cookie|cookie)\s*:\s*\S+|"
     r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@|"
+    r"\bmachine\s+\S+\s+login\s+\S+\s+password\s+\S+|"
     r"\b(?:basic|digest|aws4-hmac-sha256)\s+[A-Za-z0-9+/=,_:-]{8,}|"
     r"\bbearer\s+\S+|"
     r"\b(?:password|passwd|api[_-]?key|client[_-]?secret|access[_-]?token|"
@@ -268,9 +269,11 @@ class WorkMemory:
     ) -> WorkSnapshot:
         """Start one new work record at the issue stage."""
 
-        selected_id = _validate_work_id(work_id)
-        selected_issue = _validate_reference(issue, label="issue reference")
-        selected_summary = _validate_summary(summary)
+        selected_id, selected_issue, selected_summary = self.validate_start_fields(
+            work_id=work_id,
+            issue=issue,
+            summary=summary,
+        )
         with self._database.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._validate_schema(connection)
@@ -291,6 +294,21 @@ class WorkMemory:
             if snapshot_validator is not None:
                 snapshot_validator(snapshot)
             return snapshot
+
+    @staticmethod
+    def validate_start_fields(
+        *,
+        work_id: str,
+        issue: str,
+        summary: str,
+    ) -> tuple[str, str, str]:
+        """Validate every start field before a caller initializes journal state."""
+
+        return (
+            _validate_work_id(work_id),
+            _validate_reference(issue, label="issue reference"),
+            _validate_summary(summary),
+        )
 
     def record(
         self,

@@ -417,7 +417,8 @@ emit deterministic JSON to the terminal or accept a create-only restricted
 aliases the journal or its state files, and a prospective output that exceeds
 the restricted size boundary without committing the event. It holds the output
 reservation through journal commit and publication. `record` never initializes
-a missing database or its bookkeeping state.
+a missing database or its bookkeeping state; `start` validates all retained
+fields before initializing one.
 
 The database admits at most 4,096 events. Its allowlist contains event IDs,
 timestamps, work IDs, kinds, stages, short summaries, compact references, and

@@ -127,7 +127,8 @@ aliased output paths before opening the journal and validates the prospective
 JSON size inside the append transaction so an oversized export rolls back.
 The create-only output reservation remains held until journal commit and JSON
 publication finish, closing the concurrent-name race. `record` opens existing
-state only; use `start` to initialize a new journal.
+state only; use `start` to initialize a new journal. Invalid start fields are
+rejected before that initialization.
 
 The chain detects ordinary row edits, deletion, reordering, complete table
 definition or constraint drift, and checkpoint mismatch. It does not

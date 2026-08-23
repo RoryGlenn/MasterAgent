@@ -158,6 +158,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "Set-Cookie: auth=abc1234567890; Secure; HttpOnly",
                     "postgresql://alice:secret-password@db.example/app",
                     "https://alice:secret@example.com/path",
+                    "machine api.example.com login alice password supersecret123",
                 ):
                     with (
                         self.subTest(credential=credential),
@@ -638,6 +639,33 @@ class WorkMemoryTests(unittest.TestCase):
                 )
             self.assertEqual(status, 1)
             self.assertIn("could not be opened safely", stderr.getvalue())
+            self.assertFalse(database.exists())
+            self.assertFalse((root / ".missing.sqlite3.master-agent.lock").exists())
+            self.assertFalse((root / ".missing.sqlite3.master-agent.flock").exists())
+
+    def test_cli_invalid_start_fields_do_not_create_state(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            database = root / "missing.sqlite3"
+            stdout = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    [
+                        "work-memory",
+                        "start",
+                        "--database",
+                        str(database),
+                        "--work-id",
+                        "bad id",
+                        "--issue",
+                        "#166",
+                        "--summary",
+                        "Start work.",
+                    ]
+                )
+            self.assertEqual(status, 1)
+            self.assertIn("work ID is invalid", stderr.getvalue())
             self.assertFalse(database.exists())
             self.assertFalse((root / ".missing.sqlite3.master-agent.lock").exists())
             self.assertFalse((root / ".missing.sqlite3.master-agent.flock").exists())

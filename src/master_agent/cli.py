@@ -7560,6 +7560,11 @@ def _work_memory(
             raise ValueError("work-memory start requires --issue and --summary")
         if any(value is not None for value in (kind, stage, reference)):
             raise ValueError("work-memory start received incompatible arguments")
+        WorkMemory.validate_start_fields(
+            work_id=work_id,
+            issue=issue,
+            summary=summary,
+        )
         _preflight_work_memory_output(output, database=database)
         with ExitStack() as resources:
             reservation = (

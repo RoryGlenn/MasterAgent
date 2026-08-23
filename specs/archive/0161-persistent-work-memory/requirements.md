@@ -34,7 +34,8 @@ aliased target MUST also fail before creating a missing journal.
 `record` MUST open only an existing initialized journal and MUST NOT create
 database or bookkeeping state for a missing path. A mutating output name MUST
 remain exclusively reserved from preflight through append commit and output
-publication.
+publication. `start` MUST validate every retained field before initializing a
+missing journal.
 
 The feature MUST NOT perform provider access, network synchronization,
 background polling, hook installation, or server startup. It MUST NOT claim
