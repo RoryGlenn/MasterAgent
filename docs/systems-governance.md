@@ -90,6 +90,7 @@ outcome, implement the bounded provider contract and return
 from master_agent.models import SystemsMetricStatus, SystemsOutcomeEvidence
 from master_agent.planners import EvidenceBackedSystemsOutcomeObserver
 
+
 class OutcomeProvider:
     def observe(self, *, assessment, decision, states):
         measured = independently_measure_outcome()
@@ -108,6 +109,7 @@ class OutcomeProvider:
             stop_condition_triggered=measured.stop,
             reason_codes=("independent_measurement_complete",),
         )
+
 
 observer = EvidenceBackedSystemsOutcomeObserver(OutcomeProvider())
 ```
