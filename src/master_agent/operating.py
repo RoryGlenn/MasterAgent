@@ -34,10 +34,12 @@ from master_agent.config import (
 from master_agent.config_sources import (
     ConfigSnapshot,
     ConfigSource,
+    OrganizationManagedFileTrust,
     resolve_config_source,
 )
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import ChangePlan, RiskLevel
+from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
     PlatformContract,
     PlatformRuntimeStatus,
@@ -73,9 +75,13 @@ _TOP_LEVEL_KEYS = frozenset(
         "communications_enabled",
         "capabilities",
         "configuration",
+        "configuration_trust",
     }
 )
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"configuration"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"configuration", "configuration_trust"}
+_CONFIGURATION_TRUST_KEYS = frozenset(
+    {"class", "sha256", "posix_uids", "posix_gids", "windows_sids"}
+)
 _CONFIGURATION_NAMES = frozenset(
     {
         "approval_authorities",
@@ -219,6 +225,7 @@ class OrganizationProfile:
     communications_enabled: bool
     capabilities: tuple[str, ...]
     configuration: Mapping[str, Path]
+    configuration_trust: Mapping[str, OrganizationManagedFileTrust]
     fingerprint: str
     source_path: Path
     schema: str = ORGANIZATION_PROFILE_SCHEMA
@@ -272,10 +279,28 @@ class OrganizationProfile:
                     f"organization profile configuration path is not absolute: {name}"
                 )
             _validate_path_length(path, f"configuration path {name}")
+        configuration_trust = dict(self.configuration_trust)
+        if not set(configuration_trust) <= set(configuration):
+            raise ConfigurationError(
+                "organization profile trust requires a matching configuration path"
+            )
+        if any(
+            not isinstance(name, str)
+            or not isinstance(policy, OrganizationManagedFileTrust)
+            for name, policy in configuration_trust.items()
+        ):
+            raise ConfigurationError(
+                "organization profile configuration trust is invalid"
+            )
         if re.fullmatch(r"[0-9a-f]{64}", self.fingerprint) is None:
             raise ConfigurationError("organization profile fingerprint is malformed")
         object.__setattr__(self, "capabilities", capabilities)
         object.__setattr__(self, "configuration", MappingProxyType(configuration))
+        object.__setattr__(
+            self,
+            "configuration_trust",
+            MappingProxyType(configuration_trust),
+        )
         object.__setattr__(self, "source_path", source_path)
 
     @classmethod
@@ -377,6 +402,18 @@ class OrganizationProfile:
             )
             for name, value in raw_configuration.items()
         }
+        raw_trust = raw.get("configuration_trust", {})
+        if not isinstance(raw_trust, Mapping) or not all(
+            isinstance(name, str) and isinstance(value, Mapping)
+            for name, value in raw_trust.items()
+        ):
+            raise ConfigurationError(
+                "[configuration_trust] must contain named TOML tables"
+            )
+        configuration_trust = {
+            str(name): _organization_managed_file_trust(str(name), value)
+            for name, value in raw_trust.items()
+        }
         return cls(
             schema=schema,
             organization=_required_string(raw, "organization"),
@@ -387,6 +424,7 @@ class OrganizationProfile:
             communications_enabled=_required_bool(raw, "communications_enabled"),
             capabilities=capabilities,
             configuration=configuration,
+            configuration_trust=configuration_trust,
             fingerprint=hashlib.sha256(payload).hexdigest(),
             source_path=source_path,
         )
@@ -397,6 +435,29 @@ class OrganizationProfile:
         if name not in _CONFIGURATION_NAMES:
             raise ConfigurationError(f"unknown organization configuration path: {name}")
         return self.configuration.get(name)
+
+    def configuration_trust_policy(
+        self,
+        name: str,
+    ) -> OrganizationManagedFileTrust | None:
+        """Return the private-profile-bound trust policy for one config."""
+
+        if name not in _CONFIGURATION_NAMES:
+            raise ConfigurationError(f"unknown organization configuration path: {name}")
+        return self.configuration_trust.get(name)
+
+    def configuration_trust_summary(self) -> tuple[tuple[str, str], ...]:
+        """Return secret-free selected trust classes for readiness output."""
+
+        return tuple(
+            (
+                name,
+                "organization-managed"
+                if name in self.configuration_trust
+                else "user-private",
+            )
+            for name in sorted(self.configuration)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the secret-free profile identity and gates."""
@@ -413,6 +474,13 @@ class OrganizationProfile:
             "configuration": {
                 name: os.fspath(path)
                 for name, path in sorted(self.configuration.items())
+            },
+            "configuration_trust": {
+                name: {
+                    "class": "organization-managed",
+                    "reason": "content-and-writer-bound",
+                }
+                for name in sorted(self.configuration_trust)
             },
             "fingerprint": self.fingerprint,
             "source_path": os.fspath(self.source_path),
@@ -558,6 +626,7 @@ class OperatingReadinessReport:
     profile_source: Path
     capabilities: tuple[CapabilityReadiness, ...]
     platform_runtime: PlatformRuntimeStatus
+    configuration_trust: tuple[tuple[str, str], ...] = ()
     enterprise_blocker: str = (
         "enterprise readiness requires the organization trust controls tracked by #113"
     )
@@ -627,6 +696,17 @@ class OperatingReadinessReport:
                 str(ReadinessLevel.EFFECT): self.effect_ready,
                 str(ReadinessLevel.ENTERPRISE): self.enterprise_ready,
             },
+            "configuration_trust": {
+                name: {
+                    "class": trust_class,
+                    "reason": (
+                        "content-and-writer-bound"
+                        if trust_class == "organization-managed"
+                        else "owner-and-write-authority"
+                    ),
+                }
+                for name, trust_class in self.configuration_trust
+            },
             "enterprise_blocker": self.enterprise_blocker,
             "capabilities": [item.to_dict() for item in self.capabilities],
         }
@@ -637,7 +717,12 @@ class OperatingReadinessReport:
         return _bounded_json(self.to_dict())
 
 
-def default_organization_profile_path(*, home: Path | None = None) -> Path:
+def default_organization_profile_path(
+    *,
+    home: Path | None = None,
+    platform_name: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
     """Return the safe current-user default profile path.
 
     Parameters
@@ -645,12 +730,20 @@ def default_organization_profile_path(*, home: Path | None = None) -> Path:
     home
         Explicit home directory for tests or embedding.  Defaults to
         :meth:`pathlib.Path.home` and never consults the current directory.
+    platform_name
+        Explicit ``os.name`` value for tests.
+    environ
+        Explicit environment mapping for Windows path selection in tests.
     """
 
-    selected_home = _absolute_path(home or Path.home())
-    if selected_home == Path(selected_home.anchor):
-        raise ConfigurationError("organization profile home directory is invalid")
-    return selected_home / ".master-agent" / "MasterAgent" / _PROFILE_FILENAME
+    return (
+        current_user_product_root(
+            home=home,
+            platform_name=platform_name,
+            environ=environ,
+        )
+        / _PROFILE_FILENAME
+    )
 
 
 def load_organization_profile(source: ConfigSource) -> OrganizationProfile:
@@ -1071,6 +1164,7 @@ def assess_operating_readiness(
         profile_source=profile.source_path,
         capabilities=tuple(readiness),
         platform_runtime=selected_platform_status,
+        configuration_trust=profile.configuration_trust_summary(),
     )
 
 
@@ -1460,6 +1554,57 @@ def _required_string_list(raw: Mapping[str, Any], name: str) -> tuple[str, ...]:
         raise ConfigurationError(
             "organization profile capability allowlist exceeds 512 items"
         )
+    return tuple(value)
+
+
+def _organization_managed_file_trust(
+    name: str,
+    raw: Mapping[str, Any],
+) -> OrganizationManagedFileTrust:
+    unknown = sorted(str(key) for key in raw if key not in _CONFIGURATION_TRUST_KEYS)
+    if unknown:
+        raise ConfigurationError(
+            f"configuration trust {name} has unknown keys: " + ", ".join(unknown)
+        )
+    if raw.get("class") != "organization-managed":
+        raise ConfigurationError(
+            f"configuration trust {name} class must be organization-managed"
+        )
+    sha256 = raw.get("sha256")
+    if not isinstance(sha256, str):
+        raise ConfigurationError(f"configuration trust {name} SHA-256 is invalid")
+    return OrganizationManagedFileTrust(
+        sha256=sha256,
+        posix_uids=_required_nonnegative_int_list(raw, "posix_uids", name=name),
+        posix_gids=_required_nonnegative_int_list(raw, "posix_gids", name=name),
+        windows_sids=_required_trust_string_list(raw, "windows_sids", name=name),
+    )
+
+
+def _required_nonnegative_int_list(
+    raw: Mapping[str, Any],
+    key: str,
+    *,
+    name: str,
+) -> tuple[int, ...]:
+    value = raw.get(key, [])
+    if not isinstance(value, list) or any(
+        isinstance(item, bool) or not isinstance(item, int) or item < 0
+        for item in value
+    ):
+        raise ConfigurationError(f"configuration trust {name} {key} is invalid")
+    return tuple(value)
+
+
+def _required_trust_string_list(
+    raw: Mapping[str, Any],
+    key: str,
+    *,
+    name: str,
+) -> tuple[str, ...]:
+    value = raw.get(key, [])
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ConfigurationError(f"configuration trust {name} {key} is invalid")
     return tuple(value)
 
 

@@ -496,6 +496,57 @@ class ConfluenceDraftConnector(_LocalDraftConnector):
         )
 
 
+class RedditDraftConnector(_LocalDraftConnector):
+    """Generate local Reddit post, comment, and reply proposals."""
+
+    _CAPABILITIES = frozenset(
+        {"reddit.post.draft", "reddit.comment.draft", "reddit.comment.reply.draft"}
+    )
+
+    def __init__(
+        self,
+        output_root: Path | PinnedDirectory,
+        *,
+        artifact_budget: ArtifactBudget | None = None,
+        output_limits: Mapping[str, int] | None = None,
+    ) -> None:
+        super().__init__(
+            system="reddit",
+            capabilities=self._CAPABILITIES,
+            output_root=output_root,
+            artifact_budget=artifact_budget,
+            output_limits=output_limits,
+        )
+
+    def execute(self, action: AgentAction) -> ExecutionResult:
+        """Write a Markdown proposal without contacting Reddit."""
+
+        _require_capability(action, self)
+        body = _required_text(action.parameters, "body")
+        if action.capability == "reddit.post.draft":
+            title = _required_text(action.parameters, "title")
+            subreddit = _required_text(action.parameters, "subreddit")
+            heading = f"Reddit post draft — r/{subreddit}: {title}"
+            metadata = {"subreddit": subreddit, "title": title, "body": body}
+        else:
+            parent = _required_text(action.parameters, "parent_fullname")
+            heading = f"Reddit comment draft — reply to {parent}"
+            metadata = {"parent_fullname": parent, "body": body}
+        text = f"# {heading}\n\n{body}\n"
+        artifact = self._write_text(
+            action,
+            self._artifact_path(action, default_suffix=".reddit-draft.md"),
+            text,
+            "text/markdown",
+        )
+        return self._result(
+            action,
+            artifact,
+            message="generated Reddit draft without publishing",
+            extra={"publish": False, **metadata},
+        )
+
+
 class OutlookDraftConnector(_LocalDraftConnector):
     """Generate RFC 5322 email drafts without sending."""
 
@@ -750,8 +801,12 @@ class RepositoryDraftConnector(_LocalDraftConnector):
             relative_path = _safe_relative_path(
                 _required_text(action.parameters, "relative_path")
             )
-            before = str(action.parameters.get("before_text", ""))
-            after = str(action.parameters.get("after_text", ""))
+            before = _normalize_patch_newlines(
+                str(action.parameters.get("before_text", ""))
+            )
+            after = _normalize_patch_newlines(
+                str(action.parameters.get("after_text", ""))
+            )
             diff = "".join(
                 difflib.unified_diff(
                     before.splitlines(keepends=True),
@@ -799,6 +854,12 @@ def _require_capability(action: AgentAction, connector: _LocalDraftConnector) ->
         )
     if action.capability not in connector.capabilities:
         raise ConnectorError(f"unsupported draft capability: {action.capability}")
+
+
+def _normalize_patch_newlines(value: str) -> str:
+    """Return platform-independent LF text without changing content boundaries."""
+
+    return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _render_preview(

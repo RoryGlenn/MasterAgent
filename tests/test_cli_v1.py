@@ -87,7 +87,7 @@ class VersionOneCliTests(unittest.TestCase):
                 self.assertEqual(status, 0, stderr)
                 self.assertIn("ready: True", stdout)
                 self.assertIn(
-                    "live connectors: 5 available, 0 credential-ready", stdout
+                    "live connectors: 6 available, 0 credential-ready", stdout
                 )
                 readiness = json.loads((root / "readiness.json").read_text())
                 self.assertTrue(readiness["ready"])
@@ -134,7 +134,7 @@ class VersionOneCliTests(unittest.TestCase):
             try:
                 os.chdir(checkout)
                 with (
-                    patch("master_agent.cli.Path.home", return_value=home),
+                    patch("master_agent.platform_paths.Path.home", return_value=home),
                     patch("master_agent.cli.build_live_registry") as live_registry,
                 ):
                     status, stdout, stderr = _run_cli(["demo"])

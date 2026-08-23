@@ -88,29 +88,115 @@ jobs:
         run: python scripts/validate_release.py
 
   windows-startup:
-    name: Windows 11 native filesystem, credentials, process, and startup
+    name: Windows 11 ARM Python ${{ matrix.python-version }} native certification
     runs-on: windows-11-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           architecture: arm64
           cache: pip
-      - name: Install the package in an isolated runtime
+      - name: Build and install the wheel at a native long Unicode path
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $runtime = Join-Path $env:RUNNER_TEMP "master-agent-windows"
+          $buildRuntime = Join-Path $env:RUNNER_TEMP "master-agent-windows-build"
+          python -m venv $buildRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build environment creation failed with exit code $LASTEXITCODE"
+          }
+          $buildPython = Join-Path $buildRuntime "Scripts\python.exe"
+          & $buildPython -m pip install build
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows build-tool installation failed with exit code $LASTEXITCODE"
+          }
+          & $buildPython -m build
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows package build failed with exit code $LASTEXITCODE"
+          }
+          $wheel = @((Get-ChildItem -LiteralPath dist -Filter *.whl).FullName)
+          $sdist = @((Get-ChildItem -LiteralPath dist -Filter *.tar.gz).FullName)
+          if ($wheel.Count -ne 1 -or $sdist.Count -ne 1) {
+            throw "Windows package build did not produce exactly one wheel and source distribution"
+          }
+          $runtimeParent = Join-Path $env:RUNNER_TEMP (
+            "Master Agent Windows Ω path with spaces\" +
+            "nested path segment 001\nested path segment 002\" +
+            "nested path segment 003\nested path segment 004\" +
+            "nested path segment 005\long06"
+          )
+          New-Item -ItemType Directory -Path $runtimeParent -Force | Out-Null
+          $runtime = Join-Path $runtimeParent "wheel runtime"
+          if ($runtime.Length -lt 190) {
+            throw "Windows wheel test path is not long enough"
+          }
+          if ($runtime.Length -gt 195) {
+            throw "Windows wheel test path leaves insufficient tool-path headroom"
+          }
+          $longPathPolicy = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
+          Set-ItemProperty `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled `
+            -Type DWord `
+            -Value 1
+          if ((Get-ItemPropertyValue `
+            -LiteralPath $longPathPolicy `
+            -Name LongPathsEnabled) -ne 1) {
+            throw "Windows long-path policy is not enabled"
+          }
           python -m venv $runtime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows long-path environment creation failed with exit code $LASTEXITCODE"
+          }
           $runtimePython = Join-Path $runtime "Scripts\python.exe"
           $runtimeCli = Join-Path $runtime "Scripts\master-agent.exe"
-          & $runtimePython -m pip install .
+          & $runtimePython -m pip install $wheel[0]
           if ($LASTEXITCODE -ne 0) {
-            throw "isolated package installation failed with exit code $LASTEXITCODE"
+            throw "isolated wheel installation failed with exit code $LASTEXITCODE"
           }
+          $wheelWithDrafts = "$($wheel[0])[drafts]"
+          & $runtimePython -m pip install $wheelWithDrafts
+          if ($LASTEXITCODE -ne 0) {
+            throw "isolated wheel drafts-extra installation failed with exit code $LASTEXITCODE"
+          }
+          & $runtimeCli --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows console launcher failed with exit code $LASTEXITCODE"
+          }
+          $sourceRuntime = Join-Path $env:RUNNER_TEMP "master-agent-windows-sdist"
+          python -m venv $sourceRuntime
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows source-distribution environment creation failed"
+          }
+          $sourcePython = Join-Path $sourceRuntime "Scripts\python.exe"
+          $sourceCli = Join-Path $sourceRuntime "Scripts\master-agent.exe"
+          & $sourcePython -m pip install $sdist[0]
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows source-distribution installation failed"
+          }
+          Set-Location $env:RUNNER_TEMP
+          & $sourceCli --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows source-distribution console smoke failed"
+          }
+          Set-Location $env:GITHUB_WORKSPACE
           "MASTER_AGENT_WINDOWS_PYTHON=$runtimePython" | Out-File -FilePath $env:GITHUB_ENV -Append
           "MASTER_AGENT_WINDOWS_CLI=$runtimeCli" | Out-File -FilePath $env:GITHUB_ENV -Append
+          foreach ($generatedPath in @(
+            "build",
+            "dist",
+            "src\master_agent.egg-info"
+          )) {
+            if (Test-Path -LiteralPath $generatedPath) {
+              Remove-Item -LiteralPath $generatedPath -Recurse -Force
+            }
+          }
       - name: Run native filesystem and locking tests as a standard user
         shell: pwsh
         run: |
@@ -201,8 +287,9 @@ jobs:
                 $ErrorActionPreference = "Stop"
                 $env:TEMP = $TemporaryRoot
                 $env:TMP = $TemporaryRoot
-                $env:PYTHONPATH = Join-Path $Workspace "src"
                 $env:PYTHONDONTWRITEBYTECODE = "1"
+                $env:PYTHONUTF8 = "1"
+                $env:PYTHONIOENCODING = "utf-8"
                 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
                 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
                 if (
@@ -212,7 +299,38 @@ jobs:
                 ) {
                   throw "native Windows tests received an administrator token"
                 }
-                $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_platform_runtime", "tests.test_windows_credentials", "tests.test_windows_process")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
+                $sourceRoot = Join-Path $TemporaryRoot (
+                  "source checkout Ω with spaces\" +
+                  "long segment 001\long segment 002\long segment 003\" +
+                  "long segment 004\long segment 005\long segment 006\" +
+                  "long segment 007\long segment 008"
+                )
+                New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
+                if ($sourceRoot.Length -lt 190) {
+                  throw "Windows source bootstrap path is not long enough"
+                }
+                if ($sourceRoot.Length -gt 210) {
+                  throw "Windows source bootstrap path leaves insufficient tool-path headroom"
+                }
+                Get-ChildItem -LiteralPath $Workspace -Force |
+                  Where-Object { $_.Name -notin @(".git", ".venv") } |
+                  Copy-Item -Destination $sourceRoot -Recurse -Force
+                $bootstrap = Join-Path $sourceRoot "scripts\bootstrap_agent.py"
+                & $Python $bootstrap
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source bootstrap failed with exit code $LASTEXITCODE"
+                }
+                & $Python $bootstrap
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source bootstrap was not idempotent"
+                }
+                $bootstrapCli = Join-Path $sourceRoot ".venv\Scripts\master-agent.exe"
+                & $bootstrapCli --version
+                if ($LASTEXITCODE -ne 0) {
+                  throw "standard-user source console launcher failed"
+                }
+                $env:PYTHONPATH = Join-Path $Workspace "src"
+                $runner = 'import sys, unittest; loader = unittest.defaultTestLoader; suite = unittest.TestSuite(loader.loadTestsFromName(name) for name in ("tests.test_windows_atomic_state", "tests.test_windows_capsules", "tests.test_windows_certification_workflow", "tests.test_windows_credential_cli", "tests.test_windows_credentials", "tests.test_windows_git", "tests.test_windows_platform_runtime", "tests.test_windows_process")); result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite); raise SystemExit(0 if result.wasSuccessful() else 1)'
                 & $Python -c $runner
                 if ($LASTEXITCODE -ne 0) {
                   throw "native Windows filesystem tests failed with exit code $LASTEXITCODE"
@@ -236,7 +354,7 @@ jobs:
                 $crossContextPath
               )
             $job | Wait-Job -Timeout 900 | Out-Null
-            Receive-Job -Job $job
+            Receive-Job -Job $job -ErrorAction Continue
             if ($job.State -ne "Completed") {
               throw "standard-user native Windows test job ended in state $($job.State)"
             }
@@ -257,6 +375,31 @@ jobs:
             Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
           }
+      - name: Run platform-independent hosted Windows gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $testRuntime = Join-Path $env:RUNNER_TEMP "master-agent-windows-complete"
+          python -m venv $testRuntime
+          if ($LASTEXITCODE -ne 0) { throw "Windows test environment creation failed" }
+          $testPython = Join-Path $testRuntime "Scripts\python.exe"
+          $ruff = Join-Path $testRuntime "Scripts\ruff.exe"
+          & $testPython -m pip install ".[dev,drafts]"
+          if ($LASTEXITCODE -ne 0) { throw "Windows test dependency installation failed" }
+          & $ruff check .
+          if ($LASTEXITCODE -ne 0) { throw "Windows Ruff lint failed" }
+          & $ruff format --check .
+          if ($LASTEXITCODE -ne 0) { throw "Windows Ruff format check failed" }
+          & $testPython scripts\run_windows_adversarial.py --group hosted
+          if ($LASTEXITCODE -ne 0) { throw "hosted-safe Windows adversarial tests failed" }
+          & $testPython -m unittest -v tests.test_windows_certification_workflow
+          if ($LASTEXITCODE -ne 0) { throw "Windows workflow tests failed" }
+          & $testPython scripts\specs.py validate
+          if ($LASTEXITCODE -ne 0) { throw "Windows specification validation failed" }
+          & $testPython scripts\generate_sbom.py --check --verify-installed
+          if ($LASTEXITCODE -ne 0) { throw "Windows SBOM validation failed" }
+          & $testPython scripts\validate_release.py
+          if ($LASTEXITCODE -ne 0) { throw "Windows release validation failed" }
       - name: Prove startup and config-only readiness outside the source tree
         shell: pwsh
         run: |
@@ -287,10 +430,6 @@ jobs:
             throw "install-level doctor failed with exit code $LASTEXITCODE"
           }
 
-          $unavailableContracts = @(
-            "trusted_git",
-            "capsule_isolation"
-          )
           foreach ($report in @($readinessOutput, $doctorOutput)) {
             if ($report -notmatch 'platform runtime: windows \(windows-native-partial\)') {
               throw "platform runtime did not report the partial native Windows backend"
@@ -307,10 +446,11 @@ jobs:
             if ($report -notmatch 'process_supervision: available \(windows-job-object\)') {
               throw "platform runtime did not report native Windows process supervision"
             }
-            foreach ($contractName in $unavailableContracts) {
-              if ($report -notmatch "$contractName`: unavailable \(windows-native-partial\)") {
-                throw "platform runtime did not fail closed for $contractName"
-              }
+            if ($report -notmatch 'trusted_git: available \(windows-trusted-git\)') {
+              throw "platform runtime did not report native Windows trusted Git"
+            }
+            if ($report -notmatch 'capsule_isolation: available \(windows-appcontainer\)') {
+              throw "platform runtime did not report native Windows capsule isolation"
             }
           }
 

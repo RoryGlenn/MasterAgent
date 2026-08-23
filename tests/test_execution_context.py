@@ -49,6 +49,30 @@ from tests.helpers import private_temporary_directory
 class ExecutionContextTests(unittest.TestCase):
     """Verify approvals cover runtime destinations and trust roots."""
 
+    def test_connector_binding_round_trips_network_profile_and_proxy_identity(
+        self,
+    ) -> None:
+        binding = ConnectorExecutionBinding(
+            system="github",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://api.github.com",
+            resolved_origin="https://api.github.com",
+            network_profile_name="corporate",
+            network_profile_sha256="b" * 64,
+            proxy_origin="http://proxy.corp.example:8080",
+            ca_bundle_path="/managed/enterprise-ca.pem",
+            ca_bundle_sha256="c" * 64,
+        )
+
+        restored = ConnectorExecutionBinding.from_dict(binding.to_dict())
+
+        self.assertEqual(restored, binding)
+        self.assertNotIn("proxy-marker", json.dumps(binding.to_dict()))
+        self.assertNotIn("password", json.dumps(binding.to_dict()))
+        with self.assertRaisesRegex(ValidationError, "proxy origin"):
+            replace(binding, proxy_origin="http://user:secret@proxy.example:8080")
+
     def test_windows_runtime_path_is_lexical_before_native_pin(self) -> None:
         selected = MagicMock(spec=Path)
         selected.expanduser.return_value = selected

@@ -1,0 +1,208 @@
+name: Windows 11 x64 release certification
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: windows-11-x64-certification
+  cancel-in-progress: false
+
+jobs:
+  authorize-commit:
+    name: Authorize protected default-branch commit before checkout
+    if: >-
+      vars.MASTER_AGENT_WINDOWS_CERTIFICATION_ENABLED == 'true' &&
+      (
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.authorize.outputs.sha }}
+    steps:
+      - name: Bind the current protected default-branch SHA
+        id: authorize
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SELECTED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          case "$SELECTED_SHA" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "selected revision is not a full Git SHA" >&2; exit 1 ;;
+          esac
+          branch_json="$(gh api "repos/$REPOSITORY/branches/$DEFAULT_BRANCH")"
+          test "$(jq -r '.protected' <<<"$branch_json")" = "true"
+          branch_sha="$(jq -r '.commit.sha' <<<"$branch_json")"
+          test "$SELECTED_SHA" = "$branch_sha"
+          printf 'sha=%s\n' "$SELECTED_SHA" >> "$GITHUB_OUTPUT"
+
+  certify:
+    name: Standard-user Windows 11 x64 release gate
+    needs: authorize-commit
+    if: needs.authorize-commit.outputs.sha != ''
+    runs-on: [self-hosted, Windows, X64, masteragent-windows-11-x64]
+    environment: windows-11-certification
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the clean standard-user Windows 11 host before checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if ($principal.IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator
+          )) {
+            throw "certification runner must use a non-administrator account"
+          }
+          $operatingSystem = Get-CimInstance Win32_OperatingSystem
+          if ($operatingSystem.ProductType -ne 1) {
+            throw "certification requires a Windows workstation, not Windows Server"
+          }
+          if ([Version]$operatingSystem.Version -lt [Version]"10.0.22000") {
+            throw "certification requires Windows 11 or newer"
+          }
+          if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            throw "certification requires native x64 Windows"
+          }
+          $longPaths = Get-ItemPropertyValue `
+            -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name LongPathsEnabled
+          if ($longPaths -ne 1) {
+            throw "certification requires Windows long-path support"
+          }
+          foreach ($name in @(
+            "MASTER_AGENT_GITHUB_TOKEN",
+            "MASTER_AGENT_JIRA_TOKEN",
+            "MASTER_AGENT_CONFLUENCE_TOKEN",
+            "MASTER_AGENT_BITBUCKET_TOKEN",
+            "MASTER_AGENT_GRAPH_TOKEN_FILE"
+          )) {
+            if (Test-Path -LiteralPath "Env:$name") {
+              throw "production credential environment names are forbidden"
+            }
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.authorize-commit.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          architecture: x64
+          cache: pip
+      - name: Build and smoke-test wheel and source distribution outside checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $buildRuntime = Join-Path $env:RUNNER_TEMP "master-agent-cert-build"
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "master-agent-cert-artifacts"
+          New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+          python -m venv $buildRuntime
+          $buildPython = Join-Path $buildRuntime "Scripts\python.exe"
+          & $buildPython -m pip install build
+          if ($LASTEXITCODE -ne 0) { throw "build dependency installation failed" }
+          & $buildPython -m build --outdir $artifactRoot
+          if ($LASTEXITCODE -ne 0) { throw "distribution build failed" }
+          $wheel = @((Get-ChildItem -LiteralPath $artifactRoot -Filter *.whl).FullName)
+          $sdist = @((Get-ChildItem -LiteralPath $artifactRoot -Filter *.tar.gz).FullName)
+          if ($wheel.Count -ne 1 -or $sdist.Count -ne 1) {
+            throw "certification requires exactly one wheel and source distribution"
+          }
+
+          $wheelRuntime = Join-Path $env:RUNNER_TEMP "master-agent-cert-wheel"
+          python -m venv $wheelRuntime
+          $wheelPython = Join-Path $wheelRuntime "Scripts\python.exe"
+          $wheelCli = Join-Path $wheelRuntime "Scripts\master-agent.exe"
+          & $wheelPython -m pip install $wheel[0]
+          if ($LASTEXITCODE -ne 0) { throw "wheel installation failed" }
+          & $wheelCli --version
+          if ($LASTEXITCODE -ne 0) { throw "wheel console smoke failed" }
+
+          $sourceRoot = Join-Path $env:RUNNER_TEMP "master-agent-cert-sdist"
+          New-Item -ItemType Directory -Path $sourceRoot | Out-Null
+          & tar.exe -xf $sdist[0] -C $sourceRoot
+          if ($LASTEXITCODE -ne 0) { throw "source distribution extraction failed" }
+          $extracted = @((Get-ChildItem -LiteralPath $sourceRoot -Directory).FullName)
+          if ($extracted.Count -ne 1) {
+            throw "source distribution did not contain one root directory"
+          }
+          $sdistRuntime = Join-Path $env:RUNNER_TEMP "master-agent-cert-sdist-runtime"
+          python -m venv $sdistRuntime
+          $sdistPython = Join-Path $sdistRuntime "Scripts\python.exe"
+          $sdistCli = Join-Path $sdistRuntime "Scripts\master-agent.exe"
+          & $sdistPython -m pip install $extracted[0]
+          if ($LASTEXITCODE -ne 0) { throw "source distribution installation failed" }
+          & $sdistCli --version
+          if ($LASTEXITCODE -ne 0) { throw "source distribution console smoke failed" }
+      - name: Run the complete native Windows suite as the runner account
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $testRuntime = Join-Path $env:RUNNER_TEMP "master-agent-cert-tests"
+          python -m venv $testRuntime
+          $testPython = Join-Path $testRuntime "Scripts\python.exe"
+          & $testPython -m pip install ".[dev,drafts]"
+          if ($LASTEXITCODE -ne 0) { throw "test dependency installation failed" }
+          & $testPython -m unittest -v `
+            tests.test_windows_atomic_state `
+            tests.test_windows_capsules `
+            tests.test_windows_certification_workflow `
+            tests.test_windows_credential_cli `
+            tests.test_windows_credentials `
+            tests.test_windows_git `
+            tests.test_windows_platform_runtime `
+            tests.test_windows_process
+          if ($LASTEXITCODE -ne 0) { throw "native Windows test suite failed" }
+          & $testPython scripts\run_windows_adversarial.py --group hosted
+          if ($LASTEXITCODE -ne 0) { throw "hosted-safe Windows adversarial tests failed" }
+          & $testPython scripts\run_windows_adversarial.py --group certification
+          if ($LASTEXITCODE -ne 0) { throw "certification-only Windows adversarial tests failed" }
+          & $testPython scripts\specs.py validate
+          if ($LASTEXITCODE -ne 0) { throw "specification validation failed" }
+          & $testPython scripts\validate_release.py
+          if ($LASTEXITCODE -ne 0) { throw "release validation failed" }
+      - name: Remove certification work products
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            "build",
+            "dist",
+            "src\master_agent.egg-info",
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-build"),
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-artifacts"),
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-wheel"),
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-sdist"),
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-sdist-runtime"),
+            (Join-Path $env:RUNNER_TEMP "master-agent-cert-tests")
+          )) {
+            if (Test-Path -LiteralPath $path) {
+              Remove-Item -LiteralPath $path -Recurse -Force
+            }
+          }

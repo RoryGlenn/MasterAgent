@@ -59,6 +59,154 @@ class ProcessSupervisionError(ConfigurationError):
         super().__init__(f"process supervision failed: {reason}")
 
 
+class TrustedGitError(ConfigurationError):
+    """A trusted Git inspection could not be completed safely."""
+
+    def __init__(self, reason: str) -> None:
+        if not reason or reason != reason.strip() or len(reason) > 80:
+            raise ValueError("trusted Git failure reason is invalid")
+        self.reason = reason
+        super().__init__(f"trusted Git inspection failed: {reason}")
+
+
+_TRUSTED_GIT_MAX_ARGUMENTS = 256
+_TRUSTED_GIT_MAX_ARGUMENT_BYTES = 256 * 1024
+_TRUSTED_GIT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024
+_TRUSTED_GIT_OBJECT_TYPES = frozenset({"blob", "commit", "tree"})
+_TRUSTED_GIT_LS_FILES_OPTIONS = frozenset(
+    {"--cached", "--exclude-standard", "--others", "--stage", "-z"}
+)
+_TRUSTED_GIT_STATUS_OPTIONS = frozenset(
+    {"--porcelain=v1", "--untracked-files=all", "--untracked-files=no", "-z"}
+)
+_TRUSTED_GIT_DIFF_OPTIONS = frozenset(
+    {
+        "--binary",
+        "--cached",
+        "--ignore-submodules=all",
+        "--name-only",
+        "--name-status",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--staged",
+        "--stat",
+        "-z",
+    }
+)
+
+
+def validate_trusted_git_request(
+    repository: Path,
+    arguments: Sequence[str],
+    *,
+    timeout_seconds: float,
+    max_output_bytes: int,
+) -> tuple[str, ...]:
+    """Return one strictly parsed, fixed read-only Git command vector."""
+
+    if not isinstance(repository, Path) or not repository.is_absolute():
+        raise ValueError("trusted Git repository must be an absolute path")
+    if isinstance(arguments, (str, bytes)):
+        raise TypeError("trusted Git arguments must be a sequence of strings")
+    parsed = tuple(arguments)
+    if (
+        not parsed
+        or len(parsed) > _TRUSTED_GIT_MAX_ARGUMENTS
+        or any(
+            not isinstance(item, str) or "\x00" in item or "\r" in item or "\n" in item
+            for item in parsed
+        )
+        or sum(len(item.encode("utf-8")) for item in parsed)
+        > _TRUSTED_GIT_MAX_ARGUMENT_BYTES
+    ):
+        raise ValueError("trusted Git arguments are invalid or not read-only")
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not 0 < timeout_seconds <= 60
+    ):
+        raise ValueError("trusted Git timeout is invalid")
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or not 0 < max_output_bytes <= _TRUSTED_GIT_MAX_OUTPUT_BYTES
+    ):
+        raise ValueError("trusted Git output limit is invalid")
+    command = parsed[0]
+    if command == "cat-file":
+        if (
+            len(parsed) != 3
+            or parsed[1] not in _TRUSTED_GIT_OBJECT_TYPES
+            or not _trusted_git_object_id_is_safe(parsed[2])
+        ):
+            raise ValueError("trusted Git cat-file request is invalid")
+    elif command == "rev-parse":
+        if parsed != ("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"):
+            raise ValueError("trusted Git revision request is invalid")
+    elif command == "ls-files":
+        _validate_trusted_git_options(parsed[1:], _TRUSTED_GIT_LS_FILES_OPTIONS)
+    elif command == "status":
+        if any(value not in _TRUSTED_GIT_STATUS_OPTIONS for value in parsed[1:]):
+            raise ValueError("trusted Git status request is invalid")
+    elif command == "diff":
+        _validate_trusted_git_options(parsed[1:], _TRUSTED_GIT_DIFF_OPTIONS)
+    else:
+        raise ValueError("trusted Git command is invalid or not read-only")
+    return parsed
+
+
+def harden_trusted_git_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
+    """Add non-overridable safety options to one validated Git command."""
+
+    if arguments[0] == "diff":
+        separator = arguments.index("--") if "--" in arguments else len(arguments)
+        return (
+            "diff",
+            *arguments[1:separator],
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=all",
+            *arguments[separator:],
+        )
+    if arguments[0] == "status":
+        return ("status", *arguments[1:], "--ignore-submodules=all")
+    return arguments
+
+
+def _validate_trusted_git_options(
+    arguments: tuple[str, ...],
+    allowed: frozenset[str],
+) -> None:
+    separator = arguments.index("--") if "--" in arguments else len(arguments)
+    if any(value not in allowed for value in arguments[:separator]):
+        raise ValueError("trusted Git command options are invalid")
+    if separator == len(arguments):
+        return
+    if "--" in arguments[separator + 1 :]:
+        raise ValueError("trusted Git pathspec separator is duplicated")
+    if any(
+        not _trusted_git_literal_pathspec_is_safe(value)
+        for value in arguments[separator + 1 :]
+    ):
+        raise ValueError("trusted Git pathspec is invalid")
+
+
+def _trusted_git_literal_pathspec_is_safe(value: str) -> bool:
+    prefix = ":(literal)"
+    if not value.startswith(prefix):
+        return False
+    relative = value[len(prefix) :]
+    if not relative or relative.startswith(("/", "\\")) or "\\" in relative:
+        return False
+    return all(component not in {"", ".", ".."} for component in relative.split("/"))
+
+
+def _trusted_git_object_id_is_safe(value: str) -> bool:
+    return len(value) in (40, 64) and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessExecutionResult:
     """Bounded terminal state returned by a native process supervisor."""
@@ -509,11 +657,17 @@ class ProcessSupervisionBackend(PlatformBackend, Protocol):
 
 @runtime_checkable
 class TrustedGitBackend(PlatformBackend, Protocol):
-    """Identity for native trusted-Git execution semantics.
+    """Native fixed-command, configuration-isolated Git inspection."""
 
-    Issue #98 exposes backend selection only.  Native execution remains in the
-    existing POSIX Git path until its dedicated platform tranche is complete.
-    """
+    def read(
+        self,
+        repository: Path,
+        arguments: Sequence[str],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+    ) -> bytes:
+        """Return bounded stdout from one read-only Git inspection."""
 
 
 @runtime_checkable
@@ -521,8 +675,43 @@ class CapsuleIsolationBackend(PlatformBackend, Protocol):
     """Native OS containment for executable capability-capsule workers."""
 
     @property
-    def executable(self) -> Path:
-        """Return the validated native containment executable."""
+    def executable(self) -> Path | None:
+        """Return an external containment executable when the backend uses one."""
+
+    @property
+    def production_isolated(self) -> bool:
+        """Return whether the backend enforces the production OS boundary."""
+
+    def identity_components(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+    ) -> Mapping[str, str | None]:
+        """Return exact secret-free artifact digests for promotion binding."""
+
+    def run_worker(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+        request: bytes,
+        environment: Mapping[str, str],
+        timeout_seconds: float,
+        cpu_seconds: int,
+        memory_bytes: int,
+        max_processes: int,
+        max_output_bytes: int,
+    ) -> ProcessExecutionResult:
+        """Run one bounded request through the backend's isolated worker."""
+
+    def denial_probes(
+        self,
+        *,
+        worker: Path,
+        interpreter: Path,
+    ) -> Sequence[Mapping[str, str]]:
+        """Return OS-enforced denial evidence required by this backend."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,6 +870,14 @@ class PlatformRuntime:
         return cast(
             ProcessSupervisionBackend,
             self.require_contract(PlatformContract.PROCESS_SUPERVISION),
+        )
+
+    def require_trusted_git(self) -> TrustedGitBackend:
+        """Return the trusted-Git backend or fail closed."""
+
+        return cast(
+            TrustedGitBackend,
+            self.require_contract(PlatformContract.TRUSTED_GIT),
         )
 
     def require_capsule_isolation(self) -> CapsuleIsolationBackend:

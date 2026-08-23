@@ -225,6 +225,92 @@ class InMemoryTokenCache:
             return token
 
 
+class RedditRefreshTokenProvider:
+    """Refresh a Reddit delegated access token without persisting credentials."""
+
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+        scopes: tuple[str, ...],
+        user_agent: str,
+        transport: HttpTransport | None = None,
+        timeout_seconds: float = 20.0,
+        ca_bundle_data: bytes | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
+    ) -> None:
+        for name, value in (
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+            ("user_agent", user_agent),
+        ):
+            if not value.strip() or any(character in value for character in "\r\n\x00"):
+                raise ConfigurationError(f"Reddit {name} is invalid")
+        self._refresh_token = refresh_token
+        self._scopes = scopes
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode(
+            "ascii"
+        )
+        self._client = SafeHttpClient(
+            base_url="https://www.reddit.com/api/v1/",
+            default_headers={
+                "Authorization": f"Basic {credentials}",
+                "User-Agent": user_agent,
+                "Accept": "application/json",
+            },
+            transport=transport,
+            timeout_seconds=timeout_seconds,
+            max_response_bytes=1024 * 1024,
+            retry_attempts=0,
+            ca_bundle_data=ca_bundle_data,
+            proxy_url=proxy_url,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
+            allowed_methods=frozenset({"POST"}),
+        )
+
+    def get_token(self) -> AccessToken:
+        """Exchange the refresh credential at Reddit's fixed token endpoint."""
+
+        data, _ = self._client.request_form(
+            "POST",
+            "access_token",
+            form={
+                "grant_type": "refresh_token",
+                "refresh_token": self._refresh_token,
+            },
+        )
+        if not isinstance(data, Mapping):
+            raise AuthenticationError("Reddit OAuth token response must be an object")
+        if data.get("error"):
+            return _token_from_response(
+                data,
+                fallback_scopes=(),
+                source="reddit-refresh-token",
+            )
+        raw_scope = data.get("scope")
+        if not isinstance(raw_scope, str) or not raw_scope.strip():
+            raise AuthenticationError(
+                "Reddit OAuth token response did not report effective scopes"
+            )
+        reported_scopes = frozenset(raw_scope.split())
+        unexpected = sorted(reported_scopes - set(self._scopes))
+        if unexpected:
+            raise AuthenticationError(
+                "Reddit OAuth token response exceeded the configured credential profile"
+            )
+        return _token_from_response(
+            data,
+            fallback_scopes=(),
+            source="reddit-refresh-token",
+        )
+
+
 class EntraClientCredentialsProvider:
     """Acquire Microsoft Entra application tokens with client credentials."""
 
@@ -238,6 +324,9 @@ class EntraClientCredentialsProvider:
         transport: HttpTransport | None = None,
         timeout_seconds: float = 20.0,
         ca_bundle_data: bytes | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
     ) -> None:
         for name, value in (
             ("tenant_id", tenant_id),
@@ -259,6 +348,9 @@ class EntraClientCredentialsProvider:
             max_response_bytes=1024 * 1024,
             retry_attempts=1,
             ca_bundle_data=ca_bundle_data,
+            proxy_url=proxy_url,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
             allowed_methods=frozenset({"POST"}),
         )
 

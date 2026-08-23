@@ -77,6 +77,13 @@ deployment's configuration, exact installed capabilities, private state root,
 and disabled-at-rest effect gates. Install it for the service account, then
 check each progressive level without opening a provider connection:
 
+Keep ordinary configuration user-private. When policy must instead be owned by
+deployment administrators and read-only to the employee, add a matching
+`[configuration_trust.NAME]` table to the private profile with the exact
+content SHA-256 and approved POSIX UID/GID or Windows SID writers. Confirm the
+employee cannot write the file or its retained parent. Never reuse that trust
+table for credentials, executable provenance, or writable state.
+
 ```bash
 master-agent setup \
   --profile /trusted/config/organization-profile.toml \
@@ -94,10 +101,38 @@ configuration diagnosis can read approved local paths. It also selects the
 native handle-relative atomic-state backend, so `setup`, restricted output,
 SQLite state, retention, token/configuration publication, and local artifact
 stores no longer use POSIX fallbacks. A focused Windows 11 ARM job exercises
-that boundary through a non-administrator local account. Process supervision,
-trusted Git, capsule isolation, Credential Manager/DPAPI, and full hosted
-certification remain separate gates. Do not treat focused tests as full
-enterprise or release-host certification.
+that boundary through a non-administrator local account together with
+Credential Manager/DPAPI, Job Object supervision, trusted Git, and AppContainer
+capsule isolation. It also builds and installs the wheel, proves the `.exe`
+console launcher, and runs the idempotent source bootstrap from a spaced,
+Unicode, long path. Do not treat hosted tests as enterprise deployment
+approval.
+
+Native Windows release certification is a separate protected gate. Follow
+[Windows 11 x64 release certification](windows-certification.md) to provision
+an ephemeral clean Windows 11 x64 VM, register its dedicated non-administrator
+runner account with the exact labels, protect the default branch and review
+environment, and enable the workflow only while that infrastructure is
+healthy. A release cannot infer x64 certification from the hosted ARM matrix,
+workflow presence, a skip, or a queued self-hosted job.
+
+On native Windows, the no-profile default is
+`%LOCALAPPDATA%\MasterAgent\organization-profile.toml`; the current directory
+is never an implicit configuration source. Use explicit local drive paths for
+reviewed deployment configuration and state. UNC/device namespaces, reparse or
+cloud-placeholder paths, unsupported filesystems, unsafe names, and untrusted
+writable ancestors fail closed. Ensure Python 3.12 or newer, the `venv` module,
+long-path host policy, and a supported local filesystem are available. WSL is
+a separate Linux deployment and follows the POSIX path, permission, and
+bubblewrap requirements.
+
+Bootstrap reuse also requires the versioned local attestation to match a fresh
+source/build and dependency-policy digest, project version, launcher,
+distributions, and every installed file. It verifies POSIX permissions and
+extended ACLs or retained Windows DACLs and compares the complete runtime
+digest before executing the isolated interpreter probe. A legacy marker or any
+mismatch is preserved and repaired at the reported side-by-side path; use the
+launcher printed on the final `command:` line.
 
 Keep the detailed low-level deployment assessment below for connector, OAuth,
 identity, and provider-data egress diagnostics:

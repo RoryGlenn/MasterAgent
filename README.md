@@ -73,7 +73,7 @@ unsafe surfaces remain deliberately non-routable.
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
 | Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, handle-relative atomic local-state recovery, current-user Credential Manager, and DPAPI, while process, Git, capsule isolation, and full certification remain planned |
+| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, atomic local-state recovery, current-user credentials, Job Object supervision, trusted Git, and AppContainer pure-capsule isolation; three-version hosted CI and a protected x64 certification workflow are implemented, while live x64 certification remains gated on an enrolled clean standard-user runner |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -82,24 +82,25 @@ unsafe surfaces remain deliberately non-routable.
 | Recurring workflows | Registration and status implemented; execution remains disabled pending complete immutable runtime binding |
 | Advisory specialists | Optional broker-owned live Researcher and Plan Reviewer adapter implemented; direct GitHub-host child invocation remains disabled |
 | Documentation completion | Audience-aware maintenance, authoring, and audit contract implemented; the selected parent applies it directly before completing non-trivial repository changes |
-| Capability import and capsule promotion | Read-only declarative custom-agent inspection plus signed test/local promotion for explicitly selected dependency-free pure capabilities implemented; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
+| Capability import and capsule promotion | Installed CLI supports read-only inspection, exact selection, signed test/local promotion, policy-first routing, governed execution, immutable updates, disable, and revoke for dependency-free pure capabilities; provider, side-effect, dependent, raw-plugin, whole-agent, and production activation remain fail closed |
 | Behavioral specifications | Native current/change/archive lifecycle, validation, archival, templates, CI integration, and a completed self-hosted pilot implemented |
 | Semantic ownership | Exact machine-readable module, test, requirement, command, capability, connector, profile, configuration, and platform routing with generated-index drift checks implemented |
 
 ## Capability surface
 
-The catalog contains **82 typed capabilities**:
+The catalog contains **96 typed capabilities**:
 
-- 46 read-only capabilities;
-- 10 local-generation capabilities;
+- 52 read-only capabilities;
+- 13 local-generation capabilities;
 - 20 reversible-write definitions;
-- 4 external-communication capabilities;
-- 2 high-impact capability definitions, both disabled.
+- 8 external-communication capabilities;
+- 3 high-impact capability definitions, all disabled.
 
 | Domain | Read | Draft/local generation | Approved effects |
 |---|---|---|---|
 | Jira | issue search/read and server info | issue/comment/transition proposals | narrow version-aware mutations; unsupported atomic operations remain disabled |
 | Confluence | page search/read | page create/update proposals | version-aware Cloud/Data Center page operations and bounded Cloud space creation |
+| Reddit | purpose-scoped search, content, rules, history, inbox | post/comment/reply Markdown | separate communication credential for exact approved post/comment/reply; edit/delete quarantined pending provider CAS |
 | Bitbucket | public workspace repositories, authenticated repositories, pull requests, changes, and CI status | branch plans and source patches | pull-request creation; merge and local-Git publication disabled |
 | GitHub | public/authenticated repositories, repository metadata, pull requests, and checks | — | issue and pull-request creation; unsafe administration disabled |
 | Outlook | folders, messages, and allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
@@ -107,7 +108,7 @@ The catalog contains **82 typed capabilities**:
 | SharePoint/OneDrive | sites, drives, folders, metadata, and bounded text | local files and decks | replacement remains disabled pending exact atomic provider preconditions |
 | OneNote | notebooks, sections, and pages | generated HTML/proposals | writes remain disabled pending target-aware DOM verification |
 | PowerPoint | — | local `.pptx` generation | publishing follows the separately governed SharePoint path |
-| Capability imports/capsules | declarative preview and promoted pure reads | explicitly selected, promoted deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
+| Capability imports/capsules | declarative preview and policy-routed promoted pure reads | CLI-selected, promoted, routed, and governed deterministic local generation | provider/side-effect, dependent, raw-agent, and recursive import execution disabled |
 
 ## Core safety properties
 
@@ -146,7 +147,8 @@ The catalog contains **82 typed capabilities**:
 ## Requirements
 
 - Python 3.12 or newer.
-- Ubuntu 24.04 LTS or macOS for the documented setup commands.
+- Ubuntu 24.04 LTS, macOS, native Windows 11, or WSL for the documented setup
+  commands. Native Windows and WSL use separate environments and path rules.
 - Linux bubblewrap only when validating or executing capability capsules.
 - Approved provider endpoints and credentials only for the selected
   authenticated capability. Anonymous public-data capabilities neither require
@@ -282,12 +284,18 @@ Neither command contacts a workplace provider. Missing credentials for an
 optional provider are reported under that provider's read or effect level; they
 do not make `install_ready` false.
 
-### Windows partial native runtime
+### Native Windows 11 installation and runtime
 
-The Windows surface is deliberately useful before every native security
-backend is complete. From PowerShell, an installed wheel supports package
-imports, command help and version, deployment readiness, and a bounded
-install-level diagnosis when the selected organization profile is absent:
+Use a standard-user PowerShell session; activation is neither required nor
+recommended. A source checkout can run the same idempotent first-run bootstrap
+used on POSIX:
+
+```powershell
+py -3.12 scripts\bootstrap_agent.py
+.\.venv\Scripts\master-agent.exe doctor --require-level install
+```
+
+From a built wheel, use the native interpreter and console launcher paths:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -296,6 +304,34 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\master-agent.exe readiness
 .\.venv\Scripts\master-agent.exe doctor --require-level install
 ```
+
+A source distribution works the same way after extraction:
+
+```powershell
+tar -xzf .\master_agent-1.0.0.tar.gz
+Set-Location .\master_agent-1.0.0
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\master-agent.exe readiness
+```
+
+For an internal/offline wheelhouse, keep index credentials in the approved pip
+configuration and use only local paths on the command line:
+
+```powershell
+py -3.12 scripts\bootstrap_agent.py --no-index `
+  --find-links C:\ApprovedPackages
+```
+
+Bootstrap never rewrites or executes an unattested `.venv`; a legacy marker is
+not sufficient. Reuse requires a fresh isolated interpreter check plus exact
+source, dependency-policy, project-version, launcher, distribution, and
+installed-file identity. A collision or mismatch produces a managed
+`.venv-master-agent-<digest>` beside it. Use the exact launcher shown on
+bootstrap's final `command:` line rather than assuming the selected path is
+`.venv`. Runtime configuration and state default to
+`%LOCALAPPDATA%\MasterAgent`, never the checkout or current working directory.
+An explicit reviewed profile may select a different private local path.
 
 These commands initialize no workplace connector and do not claim that every
 stateful operation is available. Native Windows selects
@@ -316,18 +352,29 @@ The `platform_runtime` report marks `atomic_publication_recovery` available.
 Setup, SQLite-backed state, approval and readiness output, retained evidence,
 OAuth token files, configuration snapshots, capsule/plugin stores, and draft
 artifacts use that native backend rather than POSIX emulation. Process
-supervision, trusted Git, and capsule isolation remain unavailable; an
-operation that needs one of them still stops with `runtime_defect` instead of
-using a weaker compatibility path.
+supervision, trusted Git, and dependency-free pure capsule isolation use the
+native Job Object, trusted-Git, and AppContainer backends. A missing exact
+contract still stops with `runtime_defect` instead of using a weaker
+compatibility path.
 On POSIX hosts, capsule isolation is also reported precisely: Linux selects
 the bubblewrap implementation only when a trusted executable is available and
 otherwise reports the contract unavailable; macOS reports it unavailable until
 a native executable-containment backend exists.
+Native Windows uses `windows-appcontainer`; WSL is Linux and therefore requires
+the trusted bubblewrap path.
 Reading an existing or explicitly selected organization profile is a protected
 filesystem operation. Native Windows reads it only through the retained-handle
 and ACL boundary. Organization-managed trusted-writer policy remains a later
 deployment feature; the current default admits only the effective user and
 fixed operating-system administration principals.
+
+Native operation requires a local drive and filesystem supported by the
+retained-handle backend. UNC and device namespaces, reparse points (including
+symlinked or cloud-placeholder paths), unsafe names, unsupported filesystems,
+and directories writable by untrusted principals fail closed. Long paths must
+be enabled by Windows host policy. WSL installations are separate Linux
+installations and use `.venv/bin`, POSIX permissions, and the Linux containment
+requirements; do not mix a WSL environment with a native Windows checkout.
 
 ## Progressive employee workflow
 
@@ -597,6 +644,7 @@ creating another runtime planner or authorization layer. See
 | `config/identities.toml` | Cross-system identity mappings, never credentials |
 | `config/retention.toml` | Evidence persistence modes and TTLs |
 | `config/dependency-licenses.toml` | Runtime and capsule dependency-license policy |
+| `config/capsule-authorities.example` | Example distinct role-scoped capsule signer identities and environment-backed key references |
 | `config/recurring.toml` | Disabled-by-default recurring workflow registrations |
 
 ## Documentation
@@ -623,6 +671,7 @@ creating another runtime planner or authorization layer. See
 ### Providers and phase contracts
 
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
+- [Reddit connector](docs/reddit-connector.md)
 - [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Live connector contracts](docs/live-connectors.md)
 - [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)
@@ -640,6 +689,7 @@ creating another runtime planner or authorization layer. See
 - [Deployment runbook](docs/deployment-runbook.md)
 - [Operations guide](docs/operations.md)
 - [Release validation](docs/release-validation.md)
+- [Windows 11 x64 release certification](docs/windows-certification.md)
 
 ## Explicitly prohibited in v1
 

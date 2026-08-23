@@ -24,6 +24,7 @@ from master_agent.connectors.drafts import (
     JiraDraftConnector,
     OutlookDraftConnector,
     PowerPointDraftConnector,
+    RedditDraftConnector,
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
@@ -41,6 +42,8 @@ from master_agent.connectors.microsoft import (
 )
 from master_agent.connectors.onenote import OneNoteReadConnector
 from master_agent.connectors.outlook import OutlookConnector
+from master_agent.connectors.reddit import RedditConnector
+from master_agent.connectors.reddit_write import RedditWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.directory_safety import PinnedDirectory, pin_directory
@@ -50,7 +53,7 @@ from master_agent.execution_context import (
     capture_connector_executions,
 )
 from master_agent.http import HttpTransport
-from master_agent.models import ExecutionContext
+from master_agent.models import ConnectorExecutionBinding, ExecutionContext
 from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.registry import ConnectorRegistry
 
@@ -65,6 +68,7 @@ _READ_SYSTEMS = frozenset(
         "outlook",
         "teams",
         "onenote",
+        "reddit",
     }
 )
 
@@ -78,11 +82,13 @@ _BUILTIN_CONNECTOR_TYPES = (
     OutlookConnector,
     TeamsConnector,
     OneNoteReadConnector,
+    RedditConnector,
     JiraWriteConnector,
     ConfluenceWriteConnector,
     BitbucketWriteConnector,
     GitHubWriteConnector,
     GitHubAdminConnector,
+    RedditWriteConnector,
     SharePointWriteConnector,
     OutlookSendConnector,
     TeamsSendConnector,
@@ -92,6 +98,7 @@ _BUILTIN_CONNECTOR_TYPES = (
     TeamsDraftConnector,
     PowerPointDraftConnector,
     RepositoryDraftConnector,
+    RedditDraftConnector,
     IdentityMapConnector,
 )
 
@@ -127,6 +134,7 @@ def configured_builtin_capabilities(
         TeamsDraftConnector,
         PowerPointDraftConnector,
         RepositoryDraftConnector,
+        RedditDraftConnector,
     )
     capabilities = {
         capability
@@ -178,6 +186,20 @@ def configured_builtin_capabilities(
                     capabilities.update(GitHubWriteConnector._CAPABILITIES)
                 if _feature_enabled(connector, "admin_enabled"):
                     capabilities.update(GitHubAdminConnector._CAPABILITIES)
+        elif name == "reddit":
+            capabilities.update(RedditConnector._CAPABILITIES)
+            if include_communications:
+                if _feature_enabled(connector, "posts_enabled"):
+                    capabilities.add("reddit.post.create")
+                if _feature_enabled(connector, "comments_enabled"):
+                    capabilities.update(
+                        {"reddit.comment.create", "reddit.comment.reply"}
+                    )
+            if include_writes:
+                if _feature_enabled(connector, "edits_enabled"):
+                    capabilities.add("reddit.content.edit")
+                if _feature_enabled(connector, "deletes_enabled"):
+                    capabilities.add("reddit.content.delete")
         elif name == "microsoft":
             capabilities.update(MicrosoftIdentityConnector._CAPABILITIES)
             capabilities.update(SharePointConnector._CAPABILITIES)
@@ -309,7 +331,14 @@ def build_live_connectors(
             unresolved.system, selected
         ):
             continue
-        if name not in {"jira", "confluence", "bitbucket", "github", "microsoft"}:
+        if name not in {
+            "jira",
+            "confluence",
+            "bitbucket",
+            "github",
+            "microsoft",
+            "reddit",
+        }:
             continue
         resolved = resolved_configs[unresolved.system]
 
@@ -361,6 +390,18 @@ def build_live_connectors(
                 and _feature_enabled(unresolved, "admin_enabled")
             ):
                 connectors.append(GitHubAdminConnector(resolved, transport=transport))
+            continue
+
+        if name == "reddit" and "reddit" in selected:
+            connectors.append(RedditConnector(resolved, transport=transport))
+            effects = RedditWriteConnector(
+                resolved,
+                transport=transport,
+                include_writes=include_writes,
+                include_communications=include_communications,
+            )
+            if effects.capabilities:
+                connectors.append(effects)
             continue
 
         if name != "microsoft":
@@ -477,6 +518,9 @@ def register_draft_connectors(
             RepositoryDraftConnector(
                 root, artifact_budget=budget, output_limits=output_limits
             ),
+            RedditDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
         ):
             registry.register(connector)
     finally:
@@ -557,6 +601,8 @@ def _verify_approved_execution_context(
             detail = "CA path"
         elif actual.ca_bundle_sha256 != reviewed.ca_bundle_sha256:
             detail = "CA digest"
+        elif network_detail := _network_binding_difference(actual, reviewed):
+            detail = network_detail
         else:
             continue
         raise ConfigurationError(
@@ -626,11 +672,53 @@ def _verify_supplied_captured_executions(
             ca_bundle.sha256 if ca_bundle is not None else None
         ):
             detail = "CA digest"
+        elif target.network_profile_name != configured.network_profile.name:
+            detail = "network profile"
+        elif target.network_profile_sha256 != configured.network_profile.identity:
+            detail = "network profile digest"
+        elif binding.network_profile_name != target.network_profile_name:
+            detail = "bound network profile"
+        elif binding.network_profile_sha256 != target.network_profile_sha256:
+            detail = "bound network profile digest"
+        elif binding.proxy_origin != target.proxy_url:
+            detail = "bound proxy origin"
+        elif resolved.network_profile_name != target.network_profile_name:
+            detail = "resolved network profile"
+        elif resolved.network_profile_sha256 != target.network_profile_sha256:
+            detail = "resolved network profile digest"
+        elif resolved.proxy_url != target.proxy_url:
+            detail = "resolved proxy origin"
         else:
             continue
         raise ConfigurationError(
             f"captured connector {system} {detail} differs from its immutable target"
         )
+
+
+def _network_binding_difference(
+    actual: ConnectorExecutionBinding,
+    reviewed: ConnectorExecutionBinding,
+) -> str | None:
+    """Return network drift while admitting legacy direct-only bindings."""
+
+    legacy_direct = (
+        reviewed.network_profile_name == "direct"
+        and reviewed.network_profile_sha256 is None
+        and reviewed.proxy_origin is None
+    )
+    if legacy_direct:
+        if actual.network_profile_name != "direct":
+            return "network profile"
+        if actual.proxy_origin is not None:
+            return "proxy origin"
+        return None
+    if actual.network_profile_name != reviewed.network_profile_name:
+        return "network profile"
+    if actual.network_profile_sha256 != reviewed.network_profile_sha256:
+        return "network profile digest"
+    if actual.proxy_origin != reviewed.proxy_origin:
+        return "proxy origin"
+    return None
 
 
 def _captured_origin(base_url: str) -> str:

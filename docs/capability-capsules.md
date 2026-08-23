@@ -61,23 +61,112 @@ classifies every ability as:
   credentials, approval, identity, background access, hooks, shell, network,
   plugins, recursion, hidden source behavior, or inconsistent dependencies.
 
-Selection is deliberately separate from preview. The current CLI is
-preview-only. A trusted development integration calls
-`quarantine_selected_ability` with exactly one ability name, the previewed
-source digest, the current catalog and license policy, and an authenticated
-generator authority. The function takes a fresh immutable snapshot,
-reclassifies it, rejects source drift, replaces the foreign provenance string
-with an exact `agent-import:sha256:...` binding, signs the first manifest, and
-installs only `quarantined`. It cannot batch-select, self-sign, promote, or add
-the ability to planning or routing.
+Selection is deliberately separate from preview. Copy
+[`config/capsule-authorities.example`](../config/capsule-authorities.example)
+to an operator-controlled location, set mode `0600`, and populate its six
+referenced environment variables from an approved secret source. Each enabled
+entry owns exactly one role. Key IDs, secret references, resolved secret values,
+and case-insensitive subjects must be distinct;
+the reviewed publisher subject must exactly match the imported capsule's
+declared publisher. The imported program never receives those environment
+variables: the worker starts with a fixed, sanitized environment.
 
-An imported quarantine follows the same independent lifecycle below.
-`promote_quarantined` validates the exact installed bundle before the trusted
-validator, sandbox validator, reviewer, and publisher may advance it. Only the
-final `enabled` manifest creates a catalog definition and routing card. An
-update is a new semantic version plus a newly previewed source digest.
-`disable` appends deprecation; `remove` appends revocation. Both stop future
-resolution and routing while retaining the immutable history.
+Use the exact digest printed by preview to quarantine one named ability:
+
+```bash
+master-agent capability-import \
+  /trusted/imports/agent-capabilities.json \
+  --select greeting \
+  --expected-source-sha256 <preview-source-sha256> \
+  --environment development \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+Selection takes a fresh immutable snapshot, reclassifies it, rejects source
+drift, replaces the foreign provenance string with an exact
+`agent-import:sha256:...` binding, signs the first manifest, and installs only
+`quarantined`. It cannot batch-select, self-promote, or add the ability to
+planning or routing. On a supported isolation host, `--worker-sha256` defaults
+to the current worker identity. A review performed on another host may supply
+the exact future promotion-worker digest explicitly; promotion still rejects
+any different worker.
+
+Promote the exact quarantine through validation, sandbox validation, review,
+publication, and enablement:
+
+```bash
+master-agent capability-promote \
+  foreign.greeting.generate 1.0.0 \
+  --environment development \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+The command validates the installed immutable bundle before each distinct
+role-signed transition. It preflights every authority for the selected
+environment and exact trust-store binding, then safely resumes an authenticated
+partial chain after an interruption; already-recorded evidence must match the
+fresh validation. Only the final `enabled` manifest can create a typed catalog
+definition or routing card. Inspect the authenticated chain at any time:
+
+```bash
+master-agent capability-status \
+  foreign.greeting.generate 1.0.0 \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+Route an operator intent across an explicit bounded set of enabled versions:
+
+```bash
+master-agent capability-route "generate a greeting" \
+  --capsule foreign.greeting.generate@1.0.0 \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+Routing authenticates each complete chain, requires its latest state to be
+`enabled`, requires the manifest environment to exactly match the selected
+governance profile environment, applies organization governance and runtime
+policy, and only then matches the bounded intent hints. The quarantine and
+promotion examples use `development`, matching the packaged default governance
+profile; pass an explicit matching `--governance` file for another environment.
+To execute, save an owner-only JSON request whose fields match the capsule input
+schema, then run:
+
+```bash
+master-agent capability-run "generate a greeting" \
+  --capsule foreign.greeting.generate@1.0.0 \
+  --request /trusted/requests/greeting.json \
+  --database /trusted/master-agent/capsule-audit.sqlite3 \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+This binds the exact selected manifest into a typed `ChangePlan`, activates its
+catalog definition and connector, then uses the normal governance, policy,
+audit, isolated worker, independent replay, and `WorkflowOrchestrator` path.
+
+An update is a new semantic version in a newly previewed source. Repeat preview,
+selection, and promotion for that version; the prior version is not overwritten.
+Name only the reviewed new version during routing. Stop an old version without
+deleting history by appending deprecation or revocation:
+
+```bash
+master-agent capability-disable \
+  foreign.greeting.generate 1.0.0 \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+
+master-agent capability-revoke \
+  foreign.greeting.generate 1.0.0 \
+  --capsule-store /trusted/master-agent/capsules \
+  --capsule-authorities /trusted/master-agent/capsule-authorities.toml
+```
+
+Deprecation and revocation immediately stop future resolution and routing while
+retaining the signed artifact and complete immutable state history.
 
 Promotion accepts only the canonical `development`, `non_production`, and
 `production` environment names. The signed quarantine must name the same
@@ -150,8 +239,15 @@ changing files, and serializes transitions with a directory lock.
 
 ## Isolation boundary
 
-`CapsuleWorker` requires Linux bubblewrap by default. It launches an isolated
-interpreter with:
+`CapsuleWorker` requires a certified native isolation backend by default. On
+Linux, that backend is a trusted bubblewrap executable. On native Windows 11,
+it is `windows-appcontainer`: an ephemeral zero-capability AppContainer profile
+containing a private, read-only projection of the exact interpreter, standard
+library, and Windows capsule worker. Windows Subsystem for Linux (WSL) is a
+Linux environment and therefore uses the Linux bubblewrap path; it does not use
+or certify the native Windows AppContainer backend.
+
+The Linux boundary launches an isolated interpreter with:
 
 - new user, mount, PID, IPC, UTS, cgroup, and network namespaces;
 - no inherited environment or network;
@@ -162,11 +258,27 @@ interpreter with:
 - a small AST-validated Python subset with no import, file, socket, subprocess,
   private-introspection, exception, context-manager, or dynamic-call surface.
 
+The native Windows boundary launches the projected interpreter suspended with
+`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, an empty capability list, and
+only its protocol pipes inherited. Before resuming, it assigns the process to a
+kill-on-close Job Object with CPU, committed-memory, process-count, wall-time,
+and shared stdout/stderr limits. The profile and runtime DACL grant the
+AppContainer read/execute only; each request receives one fresh writable work
+directory and a minimal allowlisted environment. The runtime projection rejects
+links and reparse points, is size- and path-bounded, and is rehashed before
+every validation or execution.
+
 Validation runs without provider credentials and includes denial probes for
-host files, ambient secrets, network, subprocesses, and private object
-introspection. The worker, interpreter, and bubblewrap binaries are trusted
-regular files and their digests form the worker identity. That identity is
-rechecked for each connector action. Package builds normalize worker mode; CI,
+host files, ambient secrets, IPv4, IPv6, localhost, subprocesses, and private
+object introspection. Native Windows promotion additionally requires those
+operations to fail inside the actual AppContainer. A network probe accepts
+only native access-denied, unavailable-family/network, or listener-backed
+timeout/drop results; connection refusal or reachability fails validation. The
+signed worker identity
+binds the backend, worker, interpreter, process boundary, projected runtime,
+and DACL policy; Linux also binds the trusted bubblewrap executable. That
+identity is rechecked for each connector action, so source, helper, runtime, or
+projection tampering fails closed. Package builds normalize worker mode; CI,
 sandbox workflows, and the repository bootstrap install into owner-private
 virtual environments under umask `077`. Hosted jobs first remove group/other
 write access from the exact setup-python runtime tree. A worker or interpreter
@@ -181,6 +293,8 @@ If the profile is absent or cannot be loaded, isolation readiness fails closed.
 
 There is no automatic subprocess fallback. A non-isolated subprocess backend
 can be selected only by direct test code and is never production-ready.
+Provider-backed, credentialed, dependent, or side-effect capsules remain
+blocked before connector construction on both native platforms.
 
 ## Governed activation and execution
 

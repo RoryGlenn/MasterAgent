@@ -74,16 +74,24 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/.ai/semantic-router.toml",
             "/.github/workflows/github-actions-live-integration.yml",
             "/.github/workflows/live-connector-integration.yml",
+            "/.github/workflows/windows-certification.yml",
             "/docs/semantic-index.md",
             "/docs/semantic-router-metrics.md",
+            "/docs/windows-certification.md",
             "/scripts/semantic_router.py",
             "/tests/test_semantic_router.py",
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
             "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CAPSULES-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CERTIFICATION-001.md",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
+            "/src/master_agent/platform_runtime/windows/capsules.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
             "/tests/test_windows_atomic_state.py",
+            "/tests/test_windows_capsules.py",
+            "/tests/test_windows_certification_workflow.py",
         ):
             with self.subTest(suffix=suffix):
                 self.assertIn(
@@ -109,6 +117,15 @@ class ReleaseMetadataTests(unittest.TestCase):
             "master_agent/platform_runtime/windows/atomic.py",
             report.errors,
         )
+        for required in (
+            "master_agent/platform_runtime/windows/capsules.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(
+                    f"release archive is missing required file: {required}",
+                    report.errors,
+                )
 
     def test_wheel_rejects_spoof_prefixed_capsule_workers(self) -> None:
         with TemporaryDirectory() as directory:
@@ -118,6 +135,7 @@ class ReleaseMetadataTests(unittest.TestCase):
                     "master_agent/__init__.py",
                     "evilmaster_agent/capsule_worker.py",
                     "evilmaster_agent/platform_runtime/posix/capsule_worker.py",
+                    "evilmaster_agent/platform_runtime/windows/capsule_worker.py",
                     "master_agent/defaults/capabilities.toml",
                     "master_agent/defaults/dependency-licenses.toml",
                     "master_agent-1.0.0.dist-info/METADATA",
@@ -129,6 +147,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         for required in (
             "master_agent/capsule_worker.py",
             "master_agent/platform_runtime/posix/capsule_worker.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(
@@ -158,6 +177,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         for required in (
             "/src/master_agent/capsule_worker.py",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(
@@ -193,6 +213,44 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "source archive must contain exactly one top-level root directory",
                 report.errors,
             )
+
+    def test_release_archive_rejects_runtime_build_and_environment_directories(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "master_agent-1.0.0.tar.gz"
+            with tarfile.open(archive_path, mode="w:gz") as archive:
+                for relative in (
+                    ".venv/Scripts/python.exe",
+                    ".venv-master-agent-0123456789ab/bin/python",
+                    ".master-agent/audit.sqlite3",
+                    "build/copied.txt",
+                    "dist/copied.whl",
+                    "__pycache__/cached.pyc",
+                ):
+                    payload = b"forbidden"
+                    info = tarfile.TarInfo(f"master_agent-1.0.0/{relative}")
+                    info.size = len(payload)
+                    archive.addfile(info, BytesIO(payload))
+
+            report = validate_archive(archive_path)
+
+        for relative in (
+            ".venv/Scripts/python.exe",
+            ".venv-master-agent-0123456789ab/bin/python",
+            ".master-agent/audit.sqlite3",
+            "build/copied.txt",
+            "dist/copied.whl",
+            "__pycache__/cached.pyc",
+        ):
+            with self.subTest(relative=relative):
+                self.assertTrue(
+                    any(
+                        relative in error and "forbidden runtime directory" in error
+                        for error in report.errors
+                    ),
+                    report.errors,
+                )
 
     def test_release_rejects_a_world_writable_capsule_worker(self) -> None:
         with TemporaryDirectory() as directory:
@@ -279,6 +337,8 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         for required in (
             "runs-on: windows-11-arm",
+            'python-version: ["3.12", "3.13", "3.14"]',
+            "python-version: ${{ matrix.python-version }}",
             "architecture: arm64",
             "New-LocalUser",
             "Add-LocalGroupMember -SID $usersSid -Member $user",
@@ -292,18 +352,84 @@ class ReleaseMetadataTests(unittest.TestCase):
             "--require-level draft",
             "--require-level effect",
             "tests.test_windows_platform_runtime",
+            "tests.test_windows_capsules",
             "windows-native-partial",
             "windows-handle-acl-filesystem",
             "windows-lockfileex",
             "windows-handle-atomic-state",
             "secure_filesystem",
             "capsule_isolation",
+            "windows-appcontainer",
             "readiness --output $readinessPath",
             "native Windows restricted publication smoke failed",
+            "& $buildPython -m build",
+            "& $runtimePython -m pip install $wheel[0]",
+            '"$($wheel[0])[drafts]"',
+            "isolated wheel drafts-extra installation failed",
+            "& $sourcePython -m pip install $sdist[0]",
+            "Windows source-distribution console smoke failed",
+            "Run platform-independent hosted Windows gates",
+            "& $ruff check .",
+            "& $ruff format --check .",
+            "& $testPython -m unittest -v tests.test_windows_certification_workflow",
+            "scripts\\specs.py validate",
+            "scripts\\generate_sbom.py --check --verify-installed",
+            "scripts\\validate_release.py",
+            "LongPathsEnabled",
+            "Windows long-path policy is not enabled",
+            "Windows long-path environment creation failed",
+            "Windows wheel test path leaves insufficient tool-path headroom",
+            "nested path segment 005\\long06",
+            '"src\\master_agent.egg-info"',
+            "source checkout Ω with spaces",
+            "long segment 008",
+            "Windows source bootstrap path leaves insufficient tool-path headroom",
+            'Join-Path $sourceRoot ".venv\\Scripts\\master-agent.exe"',
+            "standard-user source bootstrap was not idempotent",
+            '$env:PYTHONUTF8 = "1"',
+            '$env:PYTHONIOENCODING = "utf-8"',
+            "Receive-Job -Job $job -ErrorAction Continue",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, job)
         self.assertNotIn("setup --", job)
+        self.assertNotIn("& $mypy", job)
+        self.assertNotIn("& $runtimePython -m pip install .", job)
+        self.assertLess(
+            job.index("& $Python $bootstrap"),
+            job.index('$env:PYTHONPATH = Join-Path $Workspace "src"'),
+        )
+
+    def test_release_metadata_pins_line_endings_and_local_artifact_exclusions(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        attributes = (root / ".gitattributes").read_text(encoding="utf-8")
+        manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
+        ignore = (root / ".gitignore").read_text(encoding="utf-8")
+
+        for required in (
+            "* text=auto eol=lf",
+            "*.bat text eol=crlf",
+            "*.cmd text eol=crlf",
+            "*.ps1 text eol=crlf",
+            "*.png binary",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, attributes)
+        for directory in (
+            ".master-agent",
+            ".venv",
+            ".venv-master-agent-*",
+            "build",
+            "dist",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+        ):
+            with self.subTest(directory=directory):
+                self.assertIn(f"prune {directory}", manifest)
+        self.assertIn(".venv-master-agent-*/", ignore)
 
     def test_supply_chain_rejects_a_denied_runtime_license(self) -> None:
         source_root = Path(__file__).resolve().parents[1]

@@ -46,6 +46,7 @@ _DEFAULT_DISCOVERY_SYSTEMS = frozenset(
         "sharepoint",
         "outlook",
         "teams",
+        "reddit",
     }
 )
 
@@ -296,6 +297,7 @@ def discover_integrations(
         try:
             scoped_config = IntegrationConfig(
                 connectors={configuration: unresolved},
+                network_profiles=config.network_profiles,
                 source_sha256=config.source_sha256,
             )
             captured = (

@@ -16,6 +16,7 @@ from master_agent.platform_runtime.windows.filesystem import (
     WindowsAccessAllowedAce,
     WindowsDacl,
     WindowsPathSecurityError,
+    canonicalize_windows_sid,
     parse_windows_ace_header,
     validate_windows_drive_path,
     windows_ace_sid_length,
@@ -269,24 +270,30 @@ class NativeWindowsApi:
     def current_token_is_administrator(self) -> bool:
         """Return whether the effective token has Administrators enabled."""
 
-        administrators = ctypes.c_void_p()
+        return self.current_token_is_member(BUILTIN_ADMINISTRATORS_SID)
+
+    def current_token_is_member(self, sid: str) -> bool:
+        """Return whether one canonical SID is enabled in the effective token."""
+
+        selected = canonicalize_windows_sid(sid)
+        principal = ctypes.c_void_p()
         if not self._advapi32.ConvertStringSidToSidW(
-            BUILTIN_ADMINISTRATORS_SID,
-            ctypes.byref(administrators),
+            selected,
+            ctypes.byref(principal),
         ):
             self._raise_last_error("ConvertStringSidToSidW")
         try:
             is_member = _BOOL()
             if not self._advapi32.CheckTokenMembership(
                 None,
-                administrators,
+                principal,
                 ctypes.byref(is_member),
             ):
                 self._raise_last_error("CheckTokenMembership")
             return bool(is_member.value)
         finally:
-            if administrators.value:
-                self._kernel32.LocalFree(administrators)
+            if principal.value:
+                self._kernel32.LocalFree(principal)
 
     def volume_information(self, root: str) -> NativeWindowsVolume:
         """Return drive type, ACL support, filesystem, and volume identity."""

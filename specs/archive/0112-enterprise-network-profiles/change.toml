@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0112-enterprise-network-profiles"
+title = "Add governed enterprise network profiles"
+status = "archived"
+github_issue = 112
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-NETWORK-PROFILE-001"
+destination = "security/MA-NETWORK-PROFILE-001.md"
+source = "current/MA-NETWORK-PROFILE-001.md"

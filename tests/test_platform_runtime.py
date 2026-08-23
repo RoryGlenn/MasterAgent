@@ -381,7 +381,9 @@ class PlatformRuntimeTests(unittest.TestCase):
             state = root / "advisory-state"
             with (
                 patch("master_agent.platform_runtime.factory.sys.platform", "win32"),
-                patch("master_agent.copilot_advisory.subprocess.Popen") as popen,
+                patch(
+                    "master_agent.copilot_advisory.get_trusted_git_backend"
+                ) as git_backend,
             ):
                 with self.assertRaisesRegex(
                     PlatformCapabilityUnavailable,
@@ -419,7 +421,7 @@ class PlatformRuntimeTests(unittest.TestCase):
                     "status": "fallback",
                 },
             )
-            popen.assert_not_called()
+            git_backend.assert_not_called()
             self.assertFalse(state.exists())
 
             requested: list[PlatformContract] = []
@@ -558,7 +560,9 @@ class PlatformRuntimeTests(unittest.TestCase):
                     "master_agent.copilot_advisory.require_platform_contract",
                     side_effect=unavailable_process,
                 ),
-                patch("master_agent.copilot_advisory.subprocess.Popen") as popen,
+                patch(
+                    "master_agent.copilot_advisory.get_trusted_git_backend"
+                ) as git_backend,
                 self.assertRaisesRegex(
                     PlatformCapabilityUnavailable,
                     "^simulated process supervision backend is unavailable$",
@@ -575,7 +579,7 @@ class PlatformRuntimeTests(unittest.TestCase):
                 ],
             )
             root.resolve.assert_not_called()
-            popen.assert_not_called()
+            git_backend.assert_not_called()
 
     def test_cli_stateful_routes_preflight_before_inputs_or_effects(self) -> None:
         import master_agent.cli as cli_module
@@ -2030,9 +2034,19 @@ class PlatformRuntimeTests(unittest.TestCase):
                     bubblewrap=str(explicit_bubblewrap),
                 )
                 production_isolated = isolated_worker.production_isolated
+                identity_keys = tuple(isolated_worker.identity_components)
 
         self.assertEqual(isolated_worker.backend, "linux-bubblewrap")
         self.assertTrue(production_isolated)
+        self.assertEqual(
+            identity_keys,
+            (
+                "backend",
+                "worker_sha256",
+                "interpreter_sha256",
+                "sandbox_sha256",
+            ),
+        )
         discovery.assert_not_called()
         self.assertEqual(isolated_worker._bubblewrap, explicit_bubblewrap.resolve())
 

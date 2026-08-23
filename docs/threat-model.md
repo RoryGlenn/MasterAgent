@@ -223,15 +223,24 @@ Controls:
   starts from a Windows-directory baseline instead of caller environment,
   stdout and stderr share one retention budget, and timeouts terminate the
   complete job;
+- Windows trusted Git accepts only a pinned Git for Windows executable and a
+  bounded retained local metadata tree, rejects reparse points, case
+  collisions, lock contention, linked-worktree redirection, and alternate
+  object databases, disables ambient configuration, credentials, hooks,
+  filters, helpers, prompts, and transports, and admits only complete fixed
+  read-only command forms through the Job Object supervisor;
 - help, version, and configuration-only readiness consume descriptive status
   only and cannot turn availability into authority;
 - a stateful operation requires its exact contract before protected state,
   credentials, connector construction, provider access, or effects;
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
-- Windows native filesystem, locking, atomic-state, credential-storage, process
-  supervision, and existing POSIX behavior receive separate regression
-  coverage, while the remaining Windows backend routes remain planned.
+- Windows native filesystem, locking, atomic-state, credential-storage,
+  process supervision, trusted Git, AppContainer isolation, and existing POSIX
+  behavior receive separate regression coverage. Hosted matrix and protected
+  x64 workflow controls are implemented, while live certification remains
+  separately planned until an enrolled clean standard-user runner supplies
+  evidence.
 
 ### Excessive permissions
 
@@ -427,6 +436,19 @@ Controls:
 - SharePoint download host suffix allowlist;
 - no Graph Authorization header on temporary download URLs;
 - IP literals, localhost, URL credentials, and fragments rejected.
+- provider requests select an immutable named direct or enterprise-network
+  profile; ambient proxy and bypass variables are ignored unless the reviewed
+  profile explicitly selects `HTTPS_PROXY`;
+- authenticated HTTP CONNECT accepts only a fixed credential-free proxy
+  authority, resolves its username/password through the credential broker, and
+  keeps `Proxy-Authorization` on CONNECT rather than provider requests;
+- tunneled requests still vet the provider hostname for public DNS, preserve
+  provider Server Name Indication and certificate-hostname validation against
+  captured CA bytes, and retain the same origin/path/redirect/response bounds;
+  and
+- execution bindings include the network-profile digest, proxy authority, and
+  enterprise-CA identity, so apply and verification reject route or trust
+  drift.
 
 ### Arbitrary code or shell execution
 
@@ -438,9 +460,12 @@ Controls:
 - no generic shell connector;
 - no routable local Git mutation or generic repository command surface;
 - raw CLI plugin execution remains disabled;
-- promoted pure capsules use an AST-restricted language in Linux bubblewrap
-  with no network, no ambient environment, no import/file/process authority,
-  and bounded resources; and
+- promoted pure capsules use an AST-restricted language in Linux bubblewrap or
+  a native Windows zero-capability AppContainer with no network, no ambient
+  environment, no undeclared host-file/process authority, and bounded
+  resources; Windows must return signed OS-level denial evidence for host-file,
+  IPv4, IPv6, localhost, named-pipe, parent-handle, ambient-secret, and child-
+  process probes; and
 - provider destinations, credentials, side effects, and capsule dependencies
   are rejected before connector construction in the demonstrated runtime;
 - each credential lease binds the exact plan fingerprint, action ID, normalized
@@ -503,8 +528,16 @@ Controls:
 - bind the exact source digest and declared publisher into the derived capsule
   policy identity, while treating the publisher as unverified until the normal
   independent publisher authority signs promotion;
+- load capsule signing identities only from an explicit owner-controlled TOML
+  ring whose secrets are environment-backed, whose enabled entries own one role
+  each, and whose required key IDs, case-folded subjects, environment references,
+  and resolved signing key values are distinct;
 - install only the signed quarantine state; catalog and routing construction
-  still require the final independently signed enabled state; and
+  still require the final independently signed enabled state;
+- authenticate the complete latest state chain, then apply governance and
+  policy before lexical intent routing; execute only an exact enabled binding
+  through the typed orchestrator and a worker environment that omits signing
+  secrets; and
 - use append-only deprecation or revocation to remove future routing without
   erasing promotion history.
 
@@ -645,10 +678,14 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- the native Windows filesystem/locking/atomic-state tranche is not full
-  runtime certification even with credential storage and process supervision:
-  operations still remain unavailable where Git, capsule isolation,
-  credential-broker, or certification contracts are absent. Expiration
+- native Windows implementation and hosted matrix evidence are not live x64
+  release certification: the skip-intolerant adversarial registry also keeps
+  managed-host organization ACL, endpoint-security, and application-control
+  cases explicitly blocked on #106, and enterprise-network cases on #112. The
+  protected workflow remains unproven until those cases and an enrolled clean
+  standard-user Windows 11 x64 runner complete it. Operations
+  also remain unavailable where another required runtime or credential-broker
+  contract is absent. Expiration
   quarantine intentionally retains orphaned bytes until an
   operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;

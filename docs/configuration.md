@@ -10,7 +10,8 @@ Each CLI configuration option resolves in this order:
 The current working directory is never an implicit configuration authority.
 
 Profile-aware commands resolve an explicit `--profile` first and otherwise use
-the dedicated private path under `~/.master-agent/MasterAgent/`. `setup` uses
+the dedicated private path under `~/.master-agent/MasterAgent/` on POSIX or
+`%LOCALAPPDATA%\MasterAgent\` on native Windows. `setup` uses
 the packaged safe profile when the selected installed path does not yet exist;
 an existing selected profile is validated in place. It never discovers a
 profile from the current directory.
@@ -54,8 +55,11 @@ fail closed. An immutable retained ancestor may permit unrelated child
 creation, but never child deletion, metadata, generic-write, ACL, owner, or
 replacement authority. The exact ancestor/target policy is approval-bound. The
 default trust policy admits only the effective user and fixed operating-system
-administration principals; organization-managed SID allowlists are not enabled
-until their separate trust-profile change is complete.
+administration principals. A private organization profile may instead select
+an organization-managed read-only configuration by binding its exact content
+digest and approved writer SIDs. That policy excludes implicit current-user
+trust while retaining the same local-volume, handle, reparse, DACL, and
+replacement checks.
 
 The packaged `local-default` profile is `employee`/`live`, keeps writes and
 communications off, and lists only anonymous public repository reads and
@@ -67,7 +71,9 @@ master-agent setup --non-interactive
 ```
 
 The default installed path is
-`~/.master-agent/MasterAgent/organization-profile.toml`. Its `state_root = "."`
+`~/.master-agent/MasterAgent/organization-profile.toml` on POSIX and
+`%LOCALAPPDATA%\MasterAgent\organization-profile.toml` on native Windows. Its
+`state_root = "."`
 resolves relative to that installed profile, so setup creates only the private
 product directory and its `runs/` child. It creates no plan, workspace, audit
 database, artifact, result, credential, provider connection, or approval. An
@@ -87,6 +93,7 @@ The schema is exact:
 | `communications_enabled` | separate profile-level send gate; still subordinate to exact approval and provider gates |
 | `capabilities` | unique bounded dotted names forming the installed capability allowlist |
 | `[configuration]` | optional reviewed paths keyed by the supported names below |
+| `[configuration_trust.NAME]` | optional exact organization-managed digest and platform writer policy for the matching configured name |
 
 `[configuration]` accepts only `approval_authorities`, `capabilities`,
 `communication_context`, `draft_package`, `governance`, `identities`,
@@ -116,6 +123,43 @@ policy = "/var/lib/master-agent/private-config/policy.toml"
 sources_of_truth = "/var/lib/master-agent/private-config/sources_of_truth.toml"
 approval_authorities = "/var/lib/master-agent/private-config/approval-authorities.toml"
 ```
+
+That default is the `user-private` trust class. For read-only company policy
+owned by deployment administrators, add a trust table under the same private
+organization profile. The managed file does not authorize itself: its table
+must name the matching `[configuration]` entry, declare
+`class = "organization-managed"`, bind the exact lowercase SHA-256, and list
+bounded writer identities for every platform where the profile is deployed:
+
+```toml
+[configuration]
+policy = "/opt/example-company/master-agent/policy.toml"
+
+[configuration_trust.policy]
+class = "organization-managed"
+sha256 = "2b6d7f0b1f8f8d39aa1bb614e1115f3b36f73156f84dcd4fa706a11b7e23b211"
+posix_uids = [0]
+posix_gids = [0]
+windows_sids = ["S-1-5-21-111111111-222222222-333333333-4100"]
+```
+
+On POSIX, the selected file and parent must be owned by a configured non-user
+UID. Owner write is permitted for that administrator; group write is permitted
+only for a configured GID when the effective process is not a member. Other
+write and any extended ACL fail because named POSIX ACL principals are not part
+of this bounded schema. On Windows, each retained ancestor and the file must be
+owned and writable only by the configured SIDs or fixed Windows administration
+principals; the effective user is deliberately excluded. A missing platform
+writer policy, link/reparse traversal, remote namespace, replacement, digest
+mismatch, effective-user write, or untrusted writer fails before parsing.
+The user-private class likewise rejects symbolic parent traversal and extended
+ACLs rather than treating owner/mode bits as complete write-authority evidence.
+
+Trust is not transferable between resource classes. Managed-configuration
+policy never authorizes credential files, executable environments, or writable
+effect state. Readiness reports only `user-private` with
+`owner-and-write-authority`, or `organization-managed` with
+`content-and-writer-bound`; it does not render digests or principal IDs.
 
 The profile contains paths and gates, never credential or signing-secret
 values. Employee mode rejects a missing or unlisted capability before it loads
@@ -188,6 +232,19 @@ complete plan-selected capsule and destination. The shipped production adapters
 are the native current-user Windows providers; other organization secret
 managers remain deployment integrations.
 
+Capsule lifecycle signing uses a separate explicit TOML authority ring; start
+from [`config/capsule-authorities.example`](../config/capsule-authorities.example).
+The file contains subjects, one role per authority, allowed environments, and
+environment variable names, never key values. Generation, validation, sandbox
+validation, review, publication, and revocation require different key IDs and
+different subjects. Their environment variable references and resolved signing
+key values must also be distinct; the loader rejects either form of key reuse
+before it constructs the trust ring. The publisher subject must match the
+reviewed capsule publisher exactly. Keep the copied file outside imported
+repositories, owner controlled, and non-writable by group or world. Populate
+its six referenced variables through an approved secret source only for the
+lifecycle operation that needs them.
+
 Authenticated GitHub Cloud capabilities use `MASTER_AGENT_GITHUB_TOKEN` as a
 bearer token. The separate `github.public_repository.list` capability is
 anonymous and never resolves or sends that token, even when it is present in
@@ -220,6 +277,64 @@ live` and live `run --apply` reject those flows even if configuration supplies
 a claimed identity label. Another provider-verified principal or trusted
 credential-broker attestation adapter is required before those flows can be
 used for applied execution.
+
+## Enterprise network profiles
+
+Provider networking is selected by a named, secret-free profile in
+`integrations.toml`. Omitting `network_profile` preserves direct networking.
+Direct mode ignores `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, including
+credential-bearing values inherited from a shell or desktop session.
+The built-in `direct` name is reserved for that exact profile and cannot be
+redefined as a proxy or custom-CA profile; use another reviewed name for every
+managed-network route.
+
+For a managed network with a fixed HTTP CONNECT proxy and Transport Layer
+Security (TLS) inspection, declare one organization-reviewed profile and select
+it from each connector that must use that route:
+
+```toml
+[network_profiles.corporate]
+mode = "proxy"
+proxy_url = "http://proxy.corp.example:8080"
+proxy_username_env = "MASTER_AGENT_PROXY_USERNAME"
+proxy_password_env = "MASTER_AGENT_PROXY_PASSWORD"
+ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
+
+[connectors.github]
+network_profile = "corporate"
+enabled = true
+deployment = "cloud"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+```
+
+The proxy URL must be a credential-free `http://` authority with an explicit
+port. HTTPS, SOCKS, URL user information, paths, query strings, fragments, and
+loopback proxies are rejected. Proxy credentials use the same restricted
+credential-file/native broker overlay as provider credentials and remain
+memory-only. They are sent only on CONNECT and are never written to the proxy
+URL, plan, execution binding, audit, exception, readiness report, or provider
+request.
+
+The profile-level CA variable is required when declared. MasterAgent captures
+its immutable bytes and SHA-256 before execution, then validates the original
+provider hostname and certificate chain through the tunnel. Do not also set a
+connector-level `ca_bundle_env`; one connector may have only one captured CA
+identity.
+
+An organization may deliberately select the workstation's `HTTPS_PROXY` value
+with `mode = "ambient_proxy"`. That is the only mode that reads this ambient
+variable. `HTTP_PROXY` and `NO_PROXY` are not consumed, and explicit proxy
+profiles ignore ambient bypass rules. This opt-in is intended for a trusted,
+organization-managed integrations file; it is not a per-action proxy override.
+
+Offline `readiness` output reports the profile name, mode, whether a proxy and
+enterprise CA are configured, and whether the required credential references
+are available. It also validates the selected proxy authority and captured CA
+configuration locally, so a nonempty but malformed ambient value is not marked
+network-ready. It opens no network connection. For protected real-network
+evidence, follow [Credentialed Live Connector Integration Tests](live-connector-integration-tests.md#managed-network-profile-evidence).
 
 ## License and SBOM policy
 
@@ -512,6 +627,32 @@ the persistent connector disabled, attests the user, evaluates
 master-agent github-repositories \
   --credentials-file /absolute/path/to/private-token.json
 ```
+
+## Reddit Cloud
+
+Reddit uses the fixed `https://oauth.reddit.com` API root and the fixed
+`https://www.reddit.com/api/v1/access_token` refresh endpoint. The checked-in
+`read` profile stores only `MASTER_AGENT_REDDIT_READ_CLIENT_ID`,
+`MASTER_AGENT_REDDIT_READ_CLIENT_SECRET`, and
+`MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN` variable names and requests exactly
+`identity`, `read`, `history`, and `privatemessages`. The runtime exchanges the
+refresh credential in memory and binds the immutable `/api/v1/me` user ID and
+provider-reported scopes before live execution. Missing scopes or scopes outside
+the configured profile fail closed.
+
+Reads are available when the read credential is supplied. Active effects require
+a separate OAuth grant and private `communication` profile using the
+`MASTER_AGENT_REDDIT_COMMUNICATION_*` names and exactly `identity`, `read`, and
+`submit`, plus the normal runtime communication gate and `posts_enabled` or
+`comments_enabled`. The read profile rejects mutation flags, while the
+communication profile rejects `edits_enabled` and `deletes_enabled`. All
+packaged effect flags are false. Each active Reddit mutation is
+exact-approval-bound, has zero automatic retries, and is followed by an
+independent provider read. The edit/delete adapters additionally enforce
+ownership and expected version in tests but remain catalog-disabled pending an
+atomic provider precondition. See
+[`reddit-connector.md`](reddit-connector.md)
+for credential shape, capabilities, and operational errors.
 
 ## Microsoft identity mode
 

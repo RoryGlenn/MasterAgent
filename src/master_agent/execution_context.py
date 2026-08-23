@@ -20,6 +20,7 @@ from master_agent.config import (
 from master_agent.config_sources import ConfigSource
 from master_agent.connectors.github import GitHubConnector
 from master_agent.connectors.microsoft import MicrosoftIdentityConnector
+from master_agent.connectors.reddit import RedditConnector
 from master_agent.directory_safety import PinnedDirectory
 from master_agent.errors import ConfigurationError
 from master_agent.http import HttpTransport
@@ -185,6 +186,9 @@ def capture_connector_executions(
                     ca_bundle_sha256=(
                         ca_bundle.sha256 if ca_bundle is not None else None
                     ),
+                    network_profile_name=target.network_profile_name,
+                    network_profile_sha256=target.network_profile_sha256,
+                    proxy_origin=target.proxy_url,
                 ),
             )
         )
@@ -200,7 +204,7 @@ def _verify_approved_connector_target(
 
     observed_origin = _origin(target.base_url, system=config.system)
     ca_bundle = target.ca_bundle
-    comparisons = (
+    comparisons = [
         ("deployment", str(config.deployment), approved.deployment),
         ("config identity", target.config_identity, approved.config_identity_sha256),
         ("base URL", target.base_url, approved.resolved_base_url),
@@ -215,7 +219,35 @@ def _verify_approved_connector_target(
             ca_bundle.sha256 if ca_bundle is not None else None,
             approved.ca_bundle_sha256,
         ),
+    ]
+    legacy_direct = (
+        approved.network_profile_name == "direct"
+        and approved.network_profile_sha256 is None
+        and approved.proxy_origin is None
     )
+    if legacy_direct:
+        comparisons.extend(
+            (
+                ("network profile", target.network_profile_name, "direct"),
+                ("proxy origin", target.proxy_url, None),
+            )
+        )
+    else:
+        comparisons.extend(
+            (
+                (
+                    "network profile",
+                    target.network_profile_name,
+                    approved.network_profile_name,
+                ),
+                (
+                    "network profile digest",
+                    target.network_profile_sha256,
+                    approved.network_profile_sha256,
+                ),
+                ("proxy origin", target.proxy_url, approved.proxy_origin),
+            )
+        )
     for detail, observed, expected in comparisons:
         if observed != expected:
             raise ConfigurationError(
@@ -338,6 +370,19 @@ def _credential_attestation(
         return CredentialAttestation(
             identity=microsoft_attested.identity,
             scopes=microsoft_attested.scopes,
+        )
+    if adapter is PrincipalAttestationAdapter.REDDIT_AUTHENTICATED_USER:
+        if resolved is None:  # pragma: no cover - capture invariant.
+            raise ConfigurationError(
+                "Reddit principal attestation requires credentials"
+            )
+        reddit_attested = RedditConnector(
+            resolved,
+            transport=transport,
+        ).attest_principal()
+        return CredentialAttestation(
+            identity=reddit_attested.identity,
+            scopes=reddit_attested.scopes,
         )
     if adapter is not None:  # pragma: no cover - adapter registry invariant.
         raise ConfigurationError(

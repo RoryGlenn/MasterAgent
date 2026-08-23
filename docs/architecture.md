@@ -138,8 +138,15 @@ Credential Manager entries and current-user DPAPI documents. Its
 `windows-job-object` process backend launches explicit executables suspended,
 assigns bounded CPU, memory, process-count, and kill-on-close limits before
 resuming, inherits only selected handles and a minimal environment, and shares
-one output budget across stdout and stderr. Trusted Git and capsule isolation
-retain bounded unavailable entries. A non-Windows host that
+one output budget across stdout and stderr. Its `windows-trusted-git` backend
+pins a validated Git for Windows executable and a bounded local repository
+metadata tree, rejects linked-worktree and alternate-object redirection, admits
+only complete fixed read-only command forms, disables ambient configuration and
+executable helpers, and launches through that Job Object boundary. Its
+`windows-appcontainer` capsule backend projects an exact read-only Python
+runtime into an ephemeral zero-capability profile, grants one private writable
+directory, inherits only the typed protocol pipes, and applies the Job Object
+quotas before resume. A non-Windows host that
 explicitly inspects Windows uses
 `windows-unavailable` without importing Win32 code. An unrecognized host uses
 `unsupported`.
@@ -181,9 +188,11 @@ ciphertext envelope through the same atomic backend and omits machine scope;
 Credential Manager stores one bounded UTF-8 value per declared name beneath a
 reviewed `MasterAgent/` namespace. Connector configuration binds the non-secret
 provider and target, while values stay in the trusted in-memory credential
-snapshot. The common platform, native Windows filesystem, Windows atomic-state,
-Windows credential, and Windows process routes are released; the other three
-Windows implementation and hosted-certification routes remain planned.
+snapshot. The common platform and native Windows filesystem, atomic-state,
+credential, process, Git, and capsule routes are released. Three-version hosted
+CI and the protected x64 workflow are implemented; hosted certification remains
+planned until the external clean standard-user runner produces successful
+evidence.
 
 ## Repository discovery topology
 
@@ -214,6 +223,11 @@ Implementation, test, and current-requirement links must agree with that exact
 owner. A route that intentionally references another route's shared
 configuration, authority, or release gate declares that owner as an exact
 dependency, so an unrelated but valid path cannot silently replace it.
+Manifest reads compare the path before opening, the open descriptor, and the
+path after reading. Windows uses the stable volume/file identity, size, and
+modification time for that comparison because its path and descriptor APIs
+project POSIX-style permission, link-count, and change-time fields differently;
+replacement and content mutation still fail closed.
 
 Generation opens the destination directory through no-follow descriptors,
 writes a private same-directory temporary file, and atomically replaces the
@@ -230,11 +244,12 @@ Each specialist receives only its parent, scoped role, tool allowlist,
 input/output contract, return path, and selected repository route. Specialists
 do not load sibling prompts or require peer-to-peer awareness. The parent alone
 knows the complete topology and independently revalidates specialist output.
-The common platform-runtime, Windows-filesystem, Windows atomic-state, Windows
-credential, and Windows process routes are released, while the other three
-Windows routes remain `planned`; a generated index cannot present
-those native backends or hosted certification as released until their own
-implementation changes advance the manifest under validation.
+The common platform-runtime and Windows filesystem, atomic-state, credential,
+process, Git, and capsule routes are released. The hosted matrix and protected
+x64 workflow are implemented, while hosted certification remains `planned`;
+a generated index cannot present that final certification as released until
+the enrolled clean standard-user runner supplies verified evidence and the
+manifest advances under validation.
 
 ## Principal components
 
@@ -323,10 +338,18 @@ identity that binds that digest and the declared publisher. The result is only
 an installed signed quarantine; it does not create a catalog definition or
 routing card.
 
+The installed CLI composes the complete supported operator lifecycle. It can
+promote an exact quarantine using distinct environment-backed role authorities,
+authenticate state, policy-filter an explicit set of enabled versions for
+intent routing, and execute the chosen pure capability only after binding it
+into a normal typed plan. Disable and revoke append terminal manifests; a new
+version repeats preview and promotion without overwriting prior evidence.
+
 The current worker admits only dependency-free pure read/local-generation
-capsules. It executes their AST-restricted program in Linux bubblewrap with no
-network, no ambient environment, read-only runtime mounts, an ephemeral work
-directory, and process/CPU/memory/time/input/output quotas. Complete signed
+capsules. It executes their AST-restricted program in Linux bubblewrap or a
+native Windows zero-capability AppContainer with no network, no ambient
+environment, a read-only runtime, an ephemeral work directory, and
+process/CPU/memory/time/input/output quotas. Complete signed
 manifest and artifact verification occurs before a connector is constructed.
 Provider destinations, credentials, or declared effects cause activation to
 fail closed because a production provider-capsule adapter is not bundled.

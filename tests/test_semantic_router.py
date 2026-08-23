@@ -13,6 +13,7 @@ from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.semantic_router import (
@@ -20,6 +21,7 @@ from scripts.semantic_router import (
     REQUIRED_PLATFORM_CAPABILITIES,
     ManifestError,
     SemanticManifest,
+    _same_file_state,
     collect_inventory,
     generate_index,
     load_manifest,
@@ -45,6 +47,37 @@ def _link_or_copy(source: str, destination: str) -> str:
 
 
 class SemanticRouterTests(unittest.TestCase):
+    def test_windows_file_state_uses_stable_identity_not_posix_projection(
+        self,
+    ) -> None:
+        common = {
+            "st_dev": 3,
+            "st_ino": 42,
+            "st_size": 128,
+            "st_mtime_ns": 1_700_000_000_000_000_000,
+        }
+        path_state = SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o444,
+            st_nlink=2,
+            st_ctime_ns=1_600_000_000_000_000_000,
+            **common,
+        )
+        descriptor_state = SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o666,
+            st_nlink=1,
+            st_ctime_ns=1_500_000_000_000_000_000,
+            **common,
+        )
+
+        with patch("scripts.semantic_router.os.name", "nt"):
+            self.assertTrue(_same_file_state(path_state, descriptor_state))
+        with patch("scripts.semantic_router.os.name", "posix"):
+            self.assertFalse(_same_file_state(path_state, descriptor_state))
+
+        descriptor_state.st_ino = 43
+        with patch("scripts.semantic_router.os.name", "nt"):
+            self.assertFalse(_same_file_state(path_state, descriptor_state))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -272,9 +305,26 @@ class SemanticRouterTests(unittest.TestCase):
             generate_index(self.root, manifest, check=False)
 
     def test_inventory_is_derived_without_git(self) -> None:
+        managed_environment = self.root / ".venv-master-agent-0123456789ab"
+        site_packages = managed_environment / "lib/python3.13/site-packages/example"
+        site_packages.mkdir(parents=True)
+        (site_packages / "installed.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (managed_environment / "pyvenv.cfg").write_text(
+            "home = /trusted/python\n", encoding="utf-8"
+        )
+        similarly_prefixed_source = (
+            self.root / ".venv-master-agent-components" / "tracked.py"
+        )
+        similarly_prefixed_source.parent.mkdir()
+        similarly_prefixed_source.write_text("VALUE = 1\n", encoding="utf-8")
+
         inventory = collect_inventory(self.root)
 
         self.assertIn("setup.py", inventory["production_modules"])
+        self.assertIn(
+            ".venv-master-agent-components/tracked.py",
+            inventory["production_modules"],
+        )
         self.assertIn(
             "examples/generate_demo_package.py", inventory["production_modules"]
         )
@@ -293,6 +343,14 @@ class SemanticRouterTests(unittest.TestCase):
         )
         self.assertFalse(
             any(path.startswith("specs/") for path in inventory["configurations"])
+        )
+        self.assertFalse(
+            any(
+                path.startswith(".venv-master-agent-0123456789ab/")
+                for paths in inventory.values()
+                if isinstance(paths, set)
+                for path in paths
+            )
         )
 
     def test_unmapped_production_module_fails(self) -> None:

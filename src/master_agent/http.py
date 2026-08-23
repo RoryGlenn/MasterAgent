@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import http.client
 import ipaddress
 import json
@@ -33,6 +34,11 @@ from master_agent.errors import (
     ConfigurationError,
     ConnectorError,
     ConnectorHttpError,
+    NetworkDnsError,
+    NetworkTimeoutError,
+    NetworkTlsError,
+    PolicyDeniedError,
+    ProxyAuthenticationError,
     RateLimitError,
     ResourceNotFoundError,
 )
@@ -67,6 +73,77 @@ class HttpResponse:
             raise ConnectorHttpError(
                 f"response from {_safe_url(self.url)} was not valid {encoding} text"
             ) from error
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectivityDiagnostic:
+    """Bounded, secret-free classification of one provider connectivity failure."""
+
+    category: str
+    guidance: str
+    retryable: bool = False
+
+    def to_dict(self) -> dict[str, str | bool]:
+        """Serialize only the stable diagnostic class and recovery guidance."""
+
+        return {
+            "category": self.category,
+            "guidance": self.guidance,
+            "retryable": self.retryable,
+        }
+
+
+def diagnose_connectivity_error(error: BaseException) -> ConnectivityDiagnostic:
+    """Classify failures without rendering provider or credential details."""
+
+    if isinstance(error, ProxyAuthenticationError):
+        return ConnectivityDiagnostic(
+            "proxy_authentication",
+            "verify the selected proxy credential mapping",
+        )
+    if isinstance(error, NetworkDnsError):
+        return ConnectivityDiagnostic(
+            "dns",
+            "verify managed DNS and the selected network profile",
+            retryable=True,
+        )
+    if isinstance(error, NetworkTlsError):
+        return ConnectivityDiagnostic(
+            "tls_ca",
+            "verify the selected enterprise CA bundle and provider TLS policy",
+        )
+    if isinstance(error, (NetworkTimeoutError, TimeoutError)):
+        return ConnectivityDiagnostic(
+            "timeout",
+            "verify managed network reachability and retry within the action budget",
+            retryable=True,
+        )
+    if isinstance(error, AuthenticationError):
+        return ConnectivityDiagnostic(
+            "provider_authentication",
+            "verify the selected provider credential",
+        )
+    if isinstance(error, AuthorizationError):
+        return ConnectivityDiagnostic(
+            "provider_scope",
+            "verify provider permissions and required scopes",
+        )
+    if isinstance(error, RateLimitError):
+        return ConnectivityDiagnostic(
+            "rate_limit",
+            "wait for the provider rate-limit window before retrying",
+            retryable=True,
+        )
+    if isinstance(error, (PolicyDeniedError, ConfigurationError)):
+        return ConnectivityDiagnostic(
+            "policy",
+            "verify organization policy and the selected network profile",
+        )
+    return ConnectivityDiagnostic(
+        "transport",
+        "verify managed network reachability and the fixed provider endpoint",
+        retryable=isinstance(error, ConnectorHttpError),
+    )
 
 
 @dataclass(slots=True)
@@ -266,19 +343,55 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def connect(self) -> None:
         """Resolve once, vet every candidate, and connect only by sockaddr."""
 
-        if self._tunnel_host is not None:
-            raise ConnectorHttpError("HTTP proxy tunneling is disabled")
-        raw_socket, approved_address = _connect_public_address(
-            self.host,
-            self.port,
-            timeout=self.timeout,
-            source_address=self.source_address,
-        )
+        tls_hostname = self.host
+        if self._tunnel_host is None:
+            raw_socket, approved_address = _connect_public_address(
+                self.host,
+                self.port,
+                timeout=self.timeout,
+                source_address=self.source_address,
+            )
+        else:
+            tls_hostname = self._tunnel_host
+            tunnel_port = getattr(self, "_tunnel_port", None) or 443
+            # The proxy performs its own resolution, but the client still vets
+            # the provider name immediately before CONNECT. A proxy can relay
+            # bytes; it cannot turn an approved origin into a private target.
+            _public_address_records(tls_hostname.rstrip("."), tunnel_port)
+            raw_socket, approved_address = _connect_proxy_address(
+                self.host,
+                self.port,
+                timeout=self.timeout,
+                source_address=self.source_address,
+            )
+            self.sock = raw_socket
+            try:
+                self._tunnel()  # type: ignore[attr-defined]
+            except TimeoutError:
+                raw_socket.close()
+                raise NetworkTimeoutError(
+                    "enterprise proxy CONNECT timed out"
+                ) from None
+            except OSError as error:
+                raw_socket.close()
+                if "407" in str(error):
+                    raise ProxyAuthenticationError(
+                        "enterprise proxy authentication failed"
+                    ) from None
+                raise ConnectorHttpError("enterprise proxy CONNECT failed") from None
         try:
             wrapped = self._context.wrap_socket(
                 raw_socket,
-                server_hostname=self.host,
+                server_hostname=tls_hostname,
             )
+        except TimeoutError:
+            raw_socket.close()
+            raise NetworkTimeoutError("provider TLS negotiation timed out") from None
+        except ssl.SSLError as error:
+            raw_socket.close()
+            raise NetworkTlsError(
+                "provider TLS identity or configured CA validation failed"
+            ) from error
         except Exception:
             raw_socket.close()
             raise
@@ -310,6 +423,30 @@ class _PinnedHTTPSHandler(HTTPSHandler):
         )
 
 
+class _ExplicitProxyHandler(ProxyHandler):
+    """Apply one governed proxy and keep its credentials on CONNECT only."""
+
+    def __init__(self, proxy_url: str, authorization: str | None) -> None:
+        super().__init__({"https": proxy_url})
+        parsed = urlparse(proxy_url)
+        self._proxy_authority = parsed.netloc
+        self._authorization = authorization
+
+    def proxy_open(self, req: Request, proxy: str, type: str) -> Any:
+        del proxy
+        if type != "https":
+            return None
+        if self._authorization is not None:
+            req.add_unredirected_header(
+                "Proxy-Authorization",
+                self._authorization,
+            )
+        # Do not call urllib's implementation: it consumes ambient NO_PROXY.
+        # The governed profile always controls whether this request is proxied.
+        req.set_proxy(self._proxy_authority, "http")
+        return None
+
+
 def _create_ssl_context(ca_bundle_data: bytes | None) -> ssl.SSLContext:
     """Create TLS trust from immutable captured data, never from a live path."""
 
@@ -325,6 +462,9 @@ class UrllibTransport:
         ca_bundle: Path | None = None,
         ca_bundle_data: bytes | None = None,
         allowed_base_url: str | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
     ) -> None:
         if ca_bundle is not None and ca_bundle_data is not None:
             raise ConfigurationError(
@@ -335,11 +475,39 @@ class UrllibTransport:
             if ca_bundle is not None
             else ca_bundle_data
         )
+        if (proxy_username is None) != (proxy_password is None):
+            raise ConfigurationError(
+                "proxy credentials require both username and password"
+            )
+        proxy_authorization: str | None = None
+        if proxy_username is not None and proxy_password is not None:
+            if (
+                not proxy_username
+                or not proxy_password
+                or len(proxy_username.encode()) > 65_536
+                or len(proxy_password.encode()) > 65_536
+                or any(
+                    character in proxy_username + proxy_password
+                    for character in "\r\n\x00"
+                )
+            ):
+                raise ConfigurationError("proxy credentials are invalid")
+            token = base64.b64encode(
+                f"{proxy_username}:{proxy_password}".encode()
+            ).decode("ascii")
+            proxy_authorization = f"Basic {token}"
+        if proxy_url is not None:
+            _validate_http_proxy_url(proxy_url)
         context = _create_ssl_context(captured_data)
+        proxy_handler: ProxyHandler = (
+            _ExplicitProxyHandler(proxy_url, proxy_authorization)
+            if proxy_url is not None
+            else ProxyHandler({})
+        )
         self._opener = build_opener(
             # Never inherit HTTP(S)_PROXY, macOS System Configuration proxies,
             # or credentials embedded in ambient proxy settings.
-            ProxyHandler({}),
+            proxy_handler,
             _PinnedHTTPSHandler(context=context),
             _SameOriginRedirectHandler(allowed_base_url=allowed_base_url),
         )
@@ -380,16 +548,24 @@ class UrllibTransport:
                 body=payload,
                 url=str(error.geturl()),
             )
-        except ConnectorHttpError:
+        except (ConnectorHttpError, ProxyAuthenticationError):
             raise
         except URLError as error:
+            if isinstance(error.reason, ssl.SSLError):
+                raise NetworkTlsError(
+                    "provider TLS identity or configured CA validation failed"
+                ) from error
+            if isinstance(error.reason, TimeoutError):
+                raise NetworkTimeoutError("network request timed out") from error
+            if isinstance(error.reason, socket.gaierror):
+                raise NetworkDnsError(
+                    f"network destination could not be resolved for {_safe_url(url)}"
+                ) from error
             raise ConnectorHttpError(
                 f"network request failed for {_safe_url(url)}"
             ) from error
         except TimeoutError as error:
-            raise ConnectorHttpError(
-                f"network request timed out for {_safe_url(url)}"
-            ) from error
+            raise NetworkTimeoutError("network request timed out") from error
 
 
 class SafeHttpClient:
@@ -427,6 +603,9 @@ class SafeHttpClient:
         retry_attempts: int = 2,
         ca_bundle: Path | None = None,
         ca_bundle_data: bytes | None = None,
+        proxy_url: str | None = None,
+        proxy_username: str | None = None,
+        proxy_password: str | None = None,
         allowed_methods: frozenset[str] = frozenset({"GET", "HEAD"}),
     ) -> None:
         self._base_url = base_url.rstrip("/") + "/"
@@ -458,6 +637,9 @@ class SafeHttpClient:
             ca_bundle=ca_bundle,
             ca_bundle_data=ca_bundle_data,
             allowed_base_url=self._base_url,
+            proxy_url=proxy_url,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
         )
         self._timeout_seconds = timeout_seconds
         self._max_response_bytes = max_response_bytes
@@ -709,6 +891,10 @@ def download_public_https(
     transport: HttpTransport | None = None,
     timeout_seconds: float = 20.0,
     max_response_bytes: int = 2 * 1024 * 1024,
+    ca_bundle_data: bytes | None = None,
+    proxy_url: str | None = None,
+    proxy_username: str | None = None,
+    proxy_password: str | None = None,
 ) -> HttpResponse:
     """Download a bounded HTTPS resource without authentication headers.
 
@@ -742,6 +928,10 @@ def download_public_https(
         timeout_seconds=timeout_seconds,
         max_response_bytes=max_response_bytes,
         retry_attempts=1,
+        ca_bundle_data=ca_bundle_data,
+        proxy_url=proxy_url,
+        proxy_username=proxy_username,
+        proxy_password=proxy_password,
     )
     return client.request_bytes("GET", url)
 
@@ -923,14 +1113,12 @@ def _public_address_records(
         records = tuple(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
     except OSError as error:
         target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
-        raise ConnectorHttpError(
+        raise NetworkDnsError(
             f"network destination could not be resolved for {target}"
         ) from error
     if not records:
         target = _safe_url(diagnostic_url or f"https://{hostname}:{port}")
-        raise ConnectorHttpError(
-            f"network destination could not be resolved for {target}"
-        )
+        raise NetworkDnsError(f"network destination could not be resolved for {target}")
     for record in records:
         try:
             address = ipaddress.ip_address(record[4][0])
@@ -966,12 +1154,103 @@ def _connect_public_address(
             candidate.connect(sockaddr)
             approved_address = ipaddress.ip_address(sockaddr[0])
             return candidate, approved_address
+        except TimeoutError as error:
+            candidate.close()
+            raise NetworkTimeoutError(
+                "network request timed out connecting to the provider"
+            ) from error
         except OSError as error:
             last_error = error
             candidate.close()
     raise ConnectorHttpError(
         "network request could not connect to a vetted public destination"
     ) from last_error
+
+
+def _validate_http_proxy_url(value: str) -> None:
+    """Validate a credential-free explicit HTTP proxy authority."""
+
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError("enterprise proxy endpoint is invalid") from error
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or port is None
+    ):
+        raise ConfigurationError(
+            "enterprise proxy must be a credential-free HTTP authority with an "
+            "explicit port"
+        )
+
+
+def _proxy_address_records(hostname: str, port: int) -> tuple[tuple[Any, ...], ...]:
+    """Resolve a governed proxy while rejecting loopback and unstable classes."""
+
+    try:
+        records = tuple(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+    except OSError as error:
+        raise NetworkDnsError("enterprise proxy could not be resolved") from error
+    if not records:
+        raise NetworkDnsError("enterprise proxy could not be resolved")
+    for record in records:
+        try:
+            address = ipaddress.ip_address(record[4][0])
+        except (IndexError, ValueError) as error:
+            raise ConnectorHttpError(
+                "enterprise proxy resolver returned an invalid address"
+            ) from error
+        if (
+            address.is_loopback
+            or address.is_link_local
+            or address.is_unspecified
+            or address.is_multicast
+        ):
+            raise ConnectorHttpError(
+                "enterprise proxy resolved to a prohibited address class"
+            )
+    return records
+
+
+def _connect_proxy_address(
+    hostname: str,
+    port: int,
+    *,
+    timeout: object,
+    source_address: tuple[str, int] | None,
+) -> tuple[socket.socket, ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Connect to one vetted configured proxy address without resolving again."""
+
+    records = _proxy_address_records(hostname.rstrip("."), port)
+    last_error: OSError | None = None
+    for family, socktype, protocol, _, sockaddr in records:
+        candidate = socket.socket(family, socktype, protocol)
+        try:
+            if timeout is None:
+                candidate.settimeout(None)
+            elif isinstance(timeout, (int, float)):
+                candidate.settimeout(float(timeout))
+            if source_address is not None:
+                candidate.bind(source_address)
+            candidate.connect(sockaddr)
+            return candidate, ipaddress.ip_address(sockaddr[0])
+        except TimeoutError as error:
+            candidate.close()
+            raise NetworkTimeoutError(
+                "enterprise proxy connection timed out"
+            ) from error
+        except OSError as error:
+            last_error = error
+            candidate.close()
+    raise ConnectorHttpError("enterprise proxy connection failed") from last_error
 
 
 def _looks_like_ip(hostname: str) -> bool:

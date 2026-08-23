@@ -1,5 +1,54 @@
 # Changelog
 
+- Add immutable enterprise network profiles for direct, fixed authenticated
+  HTTP CONNECT, and explicitly selected ambient-proxy routing. Proxy
+  credentials now resolve through the governed broker and remain CONNECT-only;
+  provider DNS, origin/path redirects, Server Name Indication, captured
+  enterprise-CA validation, request/response budgets, and execution bindings
+  remain enforced through the tunnel. Offline readiness reports the selected
+  network mode without secrets, and protected managed-network evidence is
+  documented as an opt-in default-branch integration gate.
+
+- Add explicit `user-private` and `organization-managed` configuration trust.
+  A private organization profile can bind exact managed bytes to bounded POSIX
+  UID/GID or Windows SID writer policies; effective-user or untrusted write,
+  replacement, links/reparse paths, and digest drift fail closed. Trust-class
+  reporting omits digests and principals, while credentials and writable state
+  remain separate. Bootstrap now replaces marker-only reuse with a versioned
+  source/dependency/version/runtime attestation, an isolated `-I -S`
+  interpreter check, and independent installed-file hashing; legacy, broken,
+  or changed environments are preserved and repaired side by side.
+
+- Add a machine-checked 52-invariant Windows adversarial registry with exact
+  hosted-safe and protected-certification test groups. Required test skips,
+  missing or renamed IDs, expected-reason mismatches, and unresolved managed-
+  workstation dependencies now fail the gate. Native AppContainer evidence
+  additionally probes named-pipe and parent-handle access; real Defender/CFA,
+  AppLocker/WDAC, and organization-trust managed-host evidence remains blocked
+  on #106, while enterprise-network evidence remains blocked on #112 rather
+  than being treated as optional.
+
+- Add a required Windows 11 ARM Python 3.12–3.14 pull-request matrix and a
+  protected Windows 11 x64 release-certification workflow. The x64 gate checks
+  the current protected default-branch SHA before checkout, rejects server,
+  non-x64, administrator, long-path-disabled, or production-credential-bearing
+  hosts, installs wheel and source distributions outside the checkout, and
+  runs the full native, specification, and release suite. Live x64
+  certification remains gated on a reviewed ephemeral standard-user runner;
+  workflow presence or a skipped job is not certification evidence.
+
+- Add native Windows bootstrap, packaging, and current-user paths. First run
+  uses `Scripts\python.exe` and `Scripts\master-agent.exe`, applies umask only
+  on POSIX, leaves unverified environments untouched in favor of a managed
+  side-by-side venv, and supports explicit local wheel/source archives plus
+  offline wheelhouses. Windows defaults use `%LOCALAPPDATA%\MasterAgent` rather
+  than the checkout. Bootstrap markers must be ordinary single-link files and
+  are published by atomic replacement, so linked markers cannot authorize an
+  environment or redirect marker writes. Hosted standard-user evidence now covers source and wheel
+  installs, console entry points, idempotency, spaces, Unicode, and long paths;
+  release validation excludes environment, state, credential, audit, cache,
+  and build artifacts.
+
 - Add native Windows atomic local-state and retention persistence. Protected
   state now uses stable handle locks, explicit private DACLs, bounded
   write/flush/readback, handle-relative replacement, an integrity-checked
@@ -43,8 +92,8 @@
   reports bubblewrap capsule isolation only when a trusted executable is
   selected and otherwise reports that contract unavailable, as does macOS.
   The Windows filesystem route is released; the Windows atomic-state route was
-  subsequently released above, while the other five native Windows
-  implementation/certification routes remain planned.
+  subsequently released above, while hosted Windows certification remains
+  planned until the protected runner produces successful evidence.
 
 - Harden credentialed connector evidence behind a manual-only, reviewed-
   default-branch workflow with separate protected read, effect, and GitHub
@@ -171,7 +220,8 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- an 82-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a 96-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a governed Reddit OAuth connector with purpose-separated read and communication credentials, provider-reported scope enforcement, bounded reads, local drafts, exact approved post/comment/reply operations, zero write retries, and catalog-quarantined non-atomic edit/delete adapters;
 - a bounded GitHub Cloud read connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run
   reads;

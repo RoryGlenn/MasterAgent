@@ -100,6 +100,7 @@ _IGNORED_DIRS = {
     "dist",
     "__pycache__",
 }
+_IGNORED_DIR_PREFIXES = (".venv-master-agent-",)
 _FIRST_RUN_DOCUMENT_REQUIREMENTS = {
     Path(".ai/MASTER_AGENT.md"): (
         "[`FIRST_RUN.md`](FIRST_RUN.md)",
@@ -360,7 +361,7 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     ),
     Path("docs/implementation-roadmap.md"): (
         "Complete on POSIX and native Windows",
-        "native Windows filesystem/ACL, locking, and atomic local-state tranche",
+        "native Windows filesystem/ACL, locking, atomic local-state",
     ),
     Path("docs/operations.md"): (
         "repeat the apply command under the same root",
@@ -381,7 +382,7 @@ _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS = {
     Path("docs/threat-model.md"): (
         "every discovered evidence-parent",
         "broad, path-based, or unvalidated recursive evidence deletion",
-        "native Windows filesystem/locking/atomic-state tranche is not full",
+        "native Windows implementation and hosted matrix evidence are not live x64",
         "bounded content-free",
     ),
 }
@@ -678,6 +679,8 @@ def validate_archive(path: Path) -> ValidationReport:
             "master_agent/capsule_worker.py",
             "master_agent/platform_runtime/posix/capsule_worker.py",
             "master_agent/platform_runtime/windows/atomic.py",
+            "master_agent/platform_runtime/windows/capsules.py",
+            "master_agent/platform_runtime/windows/capsule_worker.py",
             "master_agent/defaults/capabilities.toml",
             "master_agent/defaults/dependency-licenses.toml",
         )
@@ -708,6 +711,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/.github/workflows/confluence-sandbox.yml",
             "/.github/workflows/github-actions-live-integration.yml",
             "/.github/workflows/live-connector-integration.yml",
+            "/.github/workflows/windows-certification.yml",
             "/.env.example",
             "/LICENSE",
             "/setup.py",
@@ -720,6 +724,7 @@ def validate_archive(path: Path) -> ValidationReport:
             "/docs/capability-capsules.md",
             "/docs/semantic-index.md",
             "/docs/semantic-router-metrics.md",
+            "/docs/windows-certification.md",
             "/scripts/bootstrap_agent.py",
             "/scripts/generate_sbom.py",
             "/scripts/semantic_router.py",
@@ -728,6 +733,8 @@ def validate_archive(path: Path) -> ValidationReport:
             "/tests/test_capsule_broker_and_routing.py",
             "/tests/test_release_metadata.py",
             "/tests/test_windows_atomic_state.py",
+            "/tests/test_windows_capsules.py",
+            "/tests/test_windows_certification_workflow.py",
             "/tests/test_live_connector_workflow.py",
             "/tests/test_semantic_router.py",
             "/tests/test_advisory_integration.py",
@@ -736,11 +743,15 @@ def validate_archive(path: Path) -> ValidationReport:
             "/specs/current/security/MA-ADVISORY-001.md",
             "/specs/current/development/MA-ROUTER-001.md",
             "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CAPSULES-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CERTIFICATION-001.md",
             "/src/master_agent/__init__.py",
             "/src/master_agent/advisory.py",
             "/src/master_agent/capsule_worker.py",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
+            "/src/master_agent/platform_runtime/windows/capsules.py",
+            "/src/master_agent/platform_runtime/windows/capsule_worker.py",
         )
         source_members = tuple(PurePosixPath(name) for name in names)
         source_roots = {
@@ -1141,6 +1152,31 @@ def _validate_packaged_defaults(
             "all packaged read connectors are available and mutation gates are disabled"
         )
 
+    reddit = connectors.get("reddit", {})
+    expected_reddit_read_profile = {
+        "credential_profile": "read",
+        "client_id_env": "MASTER_AGENT_REDDIT_READ_CLIENT_ID",
+        "client_secret_env": "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET",
+        "refresh_token_env": "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN",
+        "scopes": ["identity", "read", "history", "privatemessages"],
+    }
+    mismatches = {
+        key: reddit.get(key)
+        for key, expected_value in expected_reddit_read_profile.items()
+        if reddit.get(key) != expected_value
+    }
+    if mismatches:
+        errors.append(
+            "packaged Reddit connector must use the purpose-separated read "
+            f"credential profile: {sorted(mismatches)}"
+        )
+    elif any(scope in reddit["scopes"] for scope in ("submit", "edit")):
+        errors.append("packaged Reddit read credential requests mutation scopes")
+    else:
+        checks.append(
+            "packaged Reddit connector uses a mutation-free read credential profile"
+        )
+
     recurring = tomllib.loads((defaults_dir / "recurring.toml").read_text())
     workflows = recurring.get("workflows", {})
     enabled = [name for name, item in workflows.items() if item.get("enabled")]
@@ -1157,10 +1193,10 @@ def _validate_capabilities(
 ) -> None:
     raw = tomllib.loads((root / "config/capabilities.toml").read_text())
     capabilities = raw.get("capabilities", {})
-    if len(capabilities) != 82:
-        errors.append(f"expected 82 v1 capabilities, found {len(capabilities)}")
+    if len(capabilities) != 96:
+        errors.append(f"expected 96 v1 capabilities, found {len(capabilities)}")
     else:
-        checks.append("capability catalog contains 82 typed capabilities")
+        checks.append("capability catalog contains 96 typed capabilities")
     merge = capabilities.get("bitbucket.pull_request.merge", {})
     if merge.get("enabled") is not False:
         errors.append("Bitbucket pull-request merge must remain disabled")
@@ -1900,7 +1936,10 @@ def _validate_file_hygiene(
         )
     for path in root.rglob("*"):
         if any(
-            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+            part in _IGNORED_DIRS
+            or part.endswith(".egg-info")
+            or part.startswith(_IGNORED_DIR_PREFIXES)
+            for part in path.parts
         ):
             continue
         if path.is_symlink():
@@ -1934,7 +1973,10 @@ def _validate_archive_member(name: str, errors: list[str]) -> None:
     if relative.is_absolute() or ".." in relative.parts:
         errors.append(f"unsafe path in release archive: {name}")
         return
-    if ".master-agent" in relative.parts:
+    if any(
+        part in _IGNORED_DIRS or part.startswith(_IGNORED_DIR_PREFIXES)
+        for part in relative.parts
+    ):
         errors.append(f"forbidden runtime directory in release archive: {name}")
     filename = relative.name
     suffix = Path(filename).suffix.lower()
@@ -1960,6 +2002,7 @@ def _validate_archive_runtime_mode(
     worker_suffixes = (
         "master_agent/capsule_worker.py",
         "master_agent/platform_runtime/posix/capsule_worker.py",
+        "master_agent/platform_runtime/windows/capsule_worker.py",
     )
     if not name.endswith(worker_suffixes):
         return
@@ -1983,7 +2026,10 @@ def _consume_stream(handle: BinaryIO) -> None:
 def _iter_files(root: Path, *, suffixes: set[str]) -> Iterable[Path]:
     for path in root.rglob("*"):
         if any(
-            part in _IGNORED_DIRS or part.endswith(".egg-info") for part in path.parts
+            part in _IGNORED_DIRS
+            or part.endswith(".egg-info")
+            or part.startswith(_IGNORED_DIR_PREFIXES)
+            for part in path.parts
         ):
             continue
         if path.is_file() and path.suffix.lower() in suffixes:

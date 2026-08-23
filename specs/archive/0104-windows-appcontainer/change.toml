@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0104-windows-appcontainer"
+title = "Native Windows AppContainer capability capsule isolation"
+status = "archived"
+github_issue = 104
+created = "2026-08-22"
+updated = "2026-08-22"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WINDOWS-CAPSULES-001"
+destination = "runtime/MA-WINDOWS-CAPSULES-001.md"
+source = "current/MA-WINDOWS-CAPSULES-001.md"

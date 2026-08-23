@@ -534,6 +534,7 @@ def _is_builtin_direct_read_connector(connector: ReadOnlyConnector) -> bool:
     )
     from master_agent.connectors.onenote import OneNoteReadConnector
     from master_agent.connectors.outlook import OutlookConnector
+    from master_agent.connectors.reddit import RedditConnector
     from master_agent.connectors.teams import TeamsConnector
 
     return type(connector) in {
@@ -544,6 +545,7 @@ def _is_builtin_direct_read_connector(connector: ReadOnlyConnector) -> bool:
         MicrosoftIdentityConnector,
         OneNoteReadConnector,
         OutlookConnector,
+        RedditConnector,
         SharePointConnector,
         TeamsConnector,
     }
@@ -671,6 +673,27 @@ def _validate_connector_endpoint(
     ):
         raise ConfigurationError(
             "resolved connector CA identity drifted from the direct read binding"
+        )
+    runtime_network_name = getattr(config, "network_profile_name", "direct")
+    runtime_network_sha256 = getattr(config, "network_profile_sha256", None)
+    runtime_proxy = getattr(config, "proxy_url", None)
+    legacy_direct = (
+        binding.network_profile_name == "direct"
+        and binding.network_profile_sha256 is None
+        and binding.proxy_origin is None
+    )
+    network_drifted = (
+        runtime_network_name != "direct" or runtime_proxy is not None
+        if legacy_direct
+        else (
+            runtime_network_name != binding.network_profile_name
+            or runtime_network_sha256 != binding.network_profile_sha256
+            or runtime_proxy != binding.proxy_origin
+        )
+    )
+    if network_drifted:
+        raise ConfigurationError(
+            "resolved connector network profile drifted from the direct read binding"
         )
 
 

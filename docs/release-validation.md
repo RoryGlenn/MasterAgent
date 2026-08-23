@@ -23,12 +23,46 @@ handling, and independent verification.
   examples are validated against the current source.
 - A hosted Windows 11 ARM isolated installed-package job imports
   `master_agent`, `master_agent.cli`, and `master_agent.readiness`; runs the
-  native retained-handle/ACL, `LockFileEx`, and atomic-state tests through a
-  fresh local standard-user account; asserts the workstation build and
-  non-administrator token without skipping; exercises `--help`, `--version`,
-  deployment `readiness`, restricted readiness output, and
-  `doctor --require-level install`; validates SQLite and retention lifecycles;
-  and proves unrelated unavailable contracts still fail closed.
+  native retained-handle/ACL, `LockFileEx`, atomic-state, credential, Job
+  Object, and trusted-Git tests through a fresh local standard-user account;
+  asserts the workstation build and non-administrator token without skipping;
+  exercises `--help`, `--version`, deployment `readiness`, restricted
+  readiness output, and `doctor --require-level install`; validates SQLite and
+  retention lifecycles; and proves unrelated unavailable contracts still fail
+  closed. The job builds the wheel without POSIX shell assumptions, installs
+  it at a spaced, Unicode, long local path, executes
+  `Scripts\master-agent.exe`, and runs the source bootstrap twice under a
+  fresh non-administrator account to prove source installation and
+  idempotency. Bootstrap regressions prove that legacy markers, changed
+  dependency policy, altered installed files, wrong package versions, links,
+  unsafe POSIX/Windows write authority, and malformed attestations are
+  preserved rather than executed, while a matching environment is hashed
+  before its isolated probe and then reused.
+- The hosted Windows 11 ARM job is a required Python 3.12, 3.13, and 3.14
+  matrix. A failure in any native Windows, artifact, behavioral-specification,
+  or release-validation step blocks merge.
+- Every hosted Windows job runs the exact hosted-safe subset of the 52-case
+  adversarial registry. Registry drift, an unresolved exact test ID, and any
+  failed, errored, missing, or skipped required hosted case block merge.
+
+### Protected Windows 11 x64 certification
+
+Hosted pull-request evidence is not the final x64 release gate. Before a
+release claims native Windows support, the exact default-branch commit must
+also pass [Windows 11 x64 release certification](windows-certification.md) on
+an environment-reviewed ephemeral self-hosted runner whose service account is
+not an administrator.
+
+The protected workflow validates the current protected default-branch SHA in a
+GitHub-hosted job before checkout. It has no pull-request trigger or repository
+secret references, dispatches only to the exact Windows/x64/custom labels,
+verifies Windows workstation build, architecture, privilege, long-path policy,
+and absent production credential names before checkout, then runs artifact and
+full native test/specification/release validation plus the hosted and
+certification-only adversarial groups. The adversarial runner rejects skips and
+dependency-blocked managed-workstation cases. Workflow presence, a skipped
+job, a queued job, a blocked registry entry, or ARM hosted CI alone is not x64
+certification evidence.
 
 ### Behavioral specifications
 
@@ -55,6 +89,12 @@ handling, and independent verification.
 - The strict organization profile, capability-scoped doctor report, employee
   and developer boundaries, private setup, one-command read/effect routing, and
   exact-profile approval resume are covered by positive and adversarial tests.
+- Organization-managed read-only configuration is bound by the private profile
+  to an exact digest and bounded platform writer allowlists. POSIX effective
+  user/group tests and Windows retained owner/DACL tests prove user exclusion,
+  approved support-principal admission, inherited-policy compatibility,
+  untrusted-writer rejection, replacement detection, and secret-free trust
+  reporting. Credentials and writable state retain separate trust paths.
 - The platform runtime reports exact `secure_filesystem`,
   `cross_process_locking`, `atomic_publication_recovery`,
   `process_supervision`, `trusted_git`, and `capsule_isolation` status with
@@ -71,11 +111,15 @@ handling, and independent verification.
   `windows-handle-atomic-state` available; proves protected exclusive
   create/write/replacement/removal, first-ledger staging, old/new recovery,
   directory durability, SQLite lifecycle, and post-publication identity/DACL
-  validation; and keeps process, Git, and capsule isolation unavailable.
+  validation; runs explicit executables through `windows-job-object`; pins Git
+  for Windows and repository metadata for bounded read-only inspection through
+  `windows-trusted-git`; launches pure capsules through
+  `windows-appcontainer`; and proves fixed host-file, ambient-secret, IPv4,
+  IPv6, localhost, and child-process denials as a non-administrator.
   Existing certified POSIX behavior remains covered.
 - Every packaged live connector, provider mutation gate, communication gate,
   and recurring workflow is disabled by default.
-- All 82 typed capabilities have governance coverage.
+- All 96 typed capabilities have governance coverage.
 - GitHub administration without provider concurrency, Jira mutations without
   atomic read-check-write support, local/remote Git mutation, and high-impact
   Bitbucket merge remain explicitly prohibited.
@@ -126,6 +170,8 @@ handling, and independent verification.
 - `scripts/semantic_router.py validate` rejects missing or duplicate ownership,
   unsafe or stale links, lifecycle contradictions, ambiguous routing fixtures,
   cross-owner references without an exact dependency, and topology drift.
+  Bounded manifest reads retain path/descriptor identity and content-metadata
+  checks on Windows without requiring incompatible POSIX metadata projections.
   `generate --check` rejects any byte difference in the compact generated
   `docs/semantic-index.md`; normal generation uses a descriptor-pinned atomic
   replacement rather than following repository links.
@@ -134,9 +180,11 @@ handling, and independent verification.
   changed paths, affected route contracts, and any unmapped path.
 - The topology is hub-and-spoke: the parent sees the complete registry;
   specialists see only their own profile and selected route. The common
-  platform-runtime, Windows-filesystem, and Windows atomic-state routes are
-  released; the other five native Windows routes remain distinctly planned
-  until separately implemented and certified.
+  platform-runtime, Windows filesystem, atomic-state, credentials, process,
+  Git, and capsule routes are released. The hosted matrix and protected x64
+  workflow are implemented, while the certification route remains distinctly
+  planned until a clean enrolled standard-user runner supplies successful
+  default-branch evidence.
 - The repository-scoped parent profile is user-invocable, policy-bound, and
   limited to the reviewed tools.
 - The first-prompt contract and force-multiplier default-to-action contract stay
@@ -189,6 +237,10 @@ handling, and independent verification.
   reviews, signs, enables, routes, executes, independently replays, audits, and
   receipts a synthetic missing pure capability through the normal
   orchestrator.
+- The installed CLI acceptance flow separately previews, exact-digest selects,
+  promotes, authenticates, policy-routes, executes, updates, disables, and
+  revokes a synthetic imported capability. Shared authority subjects or roles
+  and routing of a disabled version fail closed.
 - Hosted jobs install Linux bubblewrap and test the isolated worker boundary.
 - Unpromoted, tampered, dependency-confused, deprecated, revoked,
   path-escaped, secret/file/network/process-seeking, resource-exhausting,
@@ -228,8 +280,11 @@ handling, and independent verification.
   `.github/workflows/live-connector-integration.yml`—`.ai/DOCS_AGENT.md`, and
   the tests that validate them.
 - The wheel and source archive include the platform-runtime package and native
-  Windows filesystem/locking tests; the hosted job installs the package into an
-  isolated virtual environment, then exercises it outside the checkout.
+  Windows filesystem/locking tests; the hosted job installs the built wheel
+  into an isolated virtual environment, then exercises it outside the checkout.
+- `.gitattributes` fixes LF text, CRLF Windows script, and binary handling.
+  Source manifests and archive validation exclude virtual environments,
+  runtime state, credentials, audit databases, caches, `build/`, and `dist/`.
 
 ### Optional live sandbox validation
 

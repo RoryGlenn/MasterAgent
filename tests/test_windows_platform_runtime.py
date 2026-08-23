@@ -39,8 +39,10 @@ from master_agent.platform_runtime.windows import (
     TRUSTED_INSTALLER_SID,
     WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
     WINDOWS_ATOMIC_BACKEND_ID,
+    WINDOWS_CAPSULE_BACKEND_ID,
     WINDOWS_CREDENTIAL_STORAGE_BACKEND_ID,
     WINDOWS_DANGEROUS_WRITE_MASK,
+    WINDOWS_GIT_BACKEND_ID,
     WINDOWS_PROCESS_BACKEND_ID,
     WINDOWS_RUNTIME_BACKEND_ID,
     NativeWindowsFileSnapshot,
@@ -76,10 +78,12 @@ from master_agent.retention import (
     write_retained_text,
 )
 from master_agent.sqlite_safety import PinnedSQLiteDatabase, path_entry_exists
+from tests.windows_adversarial_evidence import adversarial_reasons
 
 ROOT = Path(__file__).resolve().parents[1]
 CURRENT_SID = "S-1-5-21-100-200-300-1001"
 OTHER_SID = "S-1-5-21-100-200-300-1002"
+UNTRUSTED_SID = "S-1-5-21-100-200-300-1003"
 
 _LOCK_CHILD_SCRIPT = """
 import os
@@ -141,12 +145,16 @@ class _FakeFilesystemApi:
         self.open_calls: list[tuple[str, bool, bool, bool]] = []
         self.closed: set[int] = set()
         self.delete_on_close: set[int] = set()
+        self.effective_token_sids: set[str] = {CURRENT_SID}
         self._next_handle = 100
         self._paths: dict[int, str] = {}
         self._positions: dict[int, int] = {}
 
     def current_user_sid(self) -> str:
         return CURRENT_SID
+
+    def current_token_is_member(self, sid: str) -> bool:
+        return sid in self.effective_token_sids
 
     def volume_information(self, root: str) -> NativeWindowsVolume:
         if root != "C:\\":
@@ -219,25 +227,28 @@ class _FakeFilesystemApi:
         path = self._require_handle(handle)
         generation = self.security_generation.get(path, 0)
         owner_sid = OTHER_SID if path in self.untrusted_paths else CURRENT_SID
-        aces: tuple[WindowsAccessAllowedAce, ...] = ()
-        if path in self.untrusted_paths or path in self.writable_untrusted_paths:
-            mask = 0x2 if path in self.untrusted_paths else 0x100
-            aces = (WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=mask),)
+        aces_list: list[WindowsAccessAllowedAce] = []
+        if path in self.untrusted_paths:
+            aces_list.append(WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x2))
+        if path in self.writable_untrusted_paths:
+            aces_list.append(
+                WindowsAccessAllowedAce(sid=UNTRUSTED_SID, access_mask=0x100)
+            )
         elif path in self.ancestor_child_create_paths:
-            aces = (
+            aces_list = [
                 WindowsAccessAllowedAce(
                     sid=OTHER_SID,
                     access_mask=WINDOWS_ANCESTOR_CHILD_CREATE_MASK,
-                ),
-            )
+                )
+            ]
         elif path in self.readable_untrusted_paths:
-            aces = (WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x120089),)
+            aces_list = [WindowsAccessAllowedAce(sid=OTHER_SID, access_mask=0x120089)]
         return NativeWindowsSecurity(
             owner_sid=owner_sid,
             dacl=WindowsDacl(
                 raw=f"acl:{path}:{generation}".encode(),
                 valid=True,
-                allow_aces=aces,
+                allow_aces=tuple(aces_list),
             ),
             dacl_protected=path in self.protected_paths,
         )
@@ -366,6 +377,11 @@ assert 'msvcrt' not in sys.modules
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @adversarial_reasons(
+        "remote_namespace_rejected",
+        "unsafe_path_component",
+        "unsafe_path_syntax",
+    )
     def test_drive_path_validation_is_strict_and_deterministic(self) -> None:
         selected = validate_windows_drive_path("c:/Users/Rory/state.db")
         self.assertEqual(selected.drive, "C")
@@ -595,6 +611,7 @@ assert 'msvcrt' not in sys.modules
             ).trusted
         )
 
+    @adversarial_reasons("cloud_attribute_rejected", "unsafe_file_attributes")
     def test_reparse_cloud_and_offline_attributes_are_rejected(self) -> None:
         self.assertTrue(windows_file_attributes_are_safe(0))
         for attribute in (
@@ -1125,6 +1142,16 @@ assert 'msvcrt' not in sys.modules
                 "master_agent.platform_runtime.windows.runtime."
                 "probe_windows_process_backend"
             ) as process_probe,
+            patch(
+                "master_agent.platform_runtime.windows.runtime."
+                "probe_windows_capsule_backend",
+                return_value=SimpleNamespace(backend_id=WINDOWS_CAPSULE_BACKEND_ID),
+            ) as capsule_probe,
+            patch(
+                "master_agent.platform_runtime.windows.runtime."
+                "probe_windows_git_backend",
+                return_value=SimpleNamespace(backend_id=WINDOWS_GIT_BACKEND_ID),
+            ) as git_probe,
         ):
             runtime = build_windows_runtime()
         filesystem_probe.assert_called_once_with()
@@ -1132,6 +1159,8 @@ assert 'msvcrt' not in sys.modules
         atomic_probe.assert_called_once()
         credential_probe.assert_called_once()
         process_probe.assert_called_once()
+        capsule_probe.assert_called_once()
+        git_probe.assert_called_once()
         self.assertEqual(runtime.status.backend, WINDOWS_RUNTIME_BACKEND_ID)
         self.assertTrue(runtime.supports(PlatformContract.SECURE_FILESYSTEM))
         self.assertTrue(runtime.supports(PlatformContract.CROSS_PROCESS_LOCKING))
@@ -1153,22 +1182,21 @@ assert 'msvcrt' not in sys.modules
         )
         self.assertTrue(process_status.available)
         self.assertEqual(process_status.backend, WINDOWS_PROCESS_BACKEND_ID)
-        for contract in (
-            PlatformContract.TRUSTED_GIT,
-            PlatformContract.CAPSULE_ISOLATION,
-        ):
-            status = runtime.status.contract_status(contract)
-            self.assertFalse(status.available)
-            self.assertEqual(status.backend, WINDOWS_RUNTIME_BACKEND_ID)
-            self.assertEqual(
-                status.reason,
-                f"native windows {contract} backend is not implemented",
-            )
+        git_status = runtime.status.contract_status(PlatformContract.TRUSTED_GIT)
+        self.assertTrue(git_status.available)
+        self.assertEqual(git_status.backend, WINDOWS_GIT_BACKEND_ID)
+        capsule_status = runtime.status.contract_status(
+            PlatformContract.CAPSULE_ISOLATION
+        )
+        self.assertTrue(capsule_status.available)
+        self.assertEqual(capsule_status.backend, WINDOWS_CAPSULE_BACKEND_ID)
+        self.assertIsNone(capsule_status.reason)
 
 
 class WindowsPinnedPathTests(unittest.TestCase):
     """Exercise handle-chain behavior through a deterministic native adapter."""
 
+    @adversarial_reasons("unsupported_filesystem")
     def test_pin_rejects_unsupported_volume_before_opening_handles(self) -> None:
         cases = (
             (
@@ -1254,6 +1282,7 @@ class WindowsPinnedPathTests(unittest.TestCase):
         )
         self.assertIn(("C:\\Secure", True, False, True), api.open_calls)
 
+    @adversarial_reasons("case_collision")
     def test_windows_ordinal_names_preserve_sharp_s_and_ss_as_distinct(self) -> None:
         api = _FakeFilesystemApi()
         api.directories[r"C:\Secure"] = (
@@ -1426,6 +1455,43 @@ class WindowsPinnedPathTests(unittest.TestCase):
                 r"C:\Secure\note.txt",
                 require_private=False,
             )
+
+    @adversarial_reasons(
+        "requires_approved_principal_profile",
+        "requires_organization_trust_profile",
+    )
+    def test_organization_managed_policy_excludes_user_and_admits_support_principals(
+        self,
+    ) -> None:
+        support_sid = OTHER_SID
+        api = _FakeFilesystemApi()
+        backend = WindowsSecureFilesystemBackend(_api=api)
+        managed = backend.for_organization_managed_configuration((support_sid,))
+        self.assertFalse(managed.trust_current_user)
+        self.assertEqual(managed.additional_trusted_sids, (support_sid,))
+        with self.assertRaisesRegex(ValueError, "effective user"):
+            backend.for_organization_managed_configuration((CURRENT_SID,))
+        api.effective_token_sids.add(support_sid)
+        with self.assertRaisesRegex(ValueError, "effective user token"):
+            backend.for_organization_managed_configuration((support_sid,))
+        api.effective_token_sids.remove(support_sid)
+
+        with self.assertRaisesRegex(
+            WindowsPathSecurityError,
+            "owner SID is not trusted",
+        ):
+            managed.pin_file(r"C:\Secure\note.txt", require_private=False)
+
+        api.untrusted_paths.update({"C:\\", r"C:\Secure", r"C:\Secure\note.txt"})
+        with managed.pin_file(r"C:\Secure\note.txt", require_private=False) as pinned:
+            self.assertEqual(pinned.identity.owner_sid, support_sid)
+
+        api.writable_untrusted_paths.add(r"C:\Secure\note.txt")
+        with self.assertRaisesRegex(
+            WindowsPathSecurityError,
+            "write-capable access to an untrusted SID",
+        ):
+            managed.pin_file(r"C:\Secure\note.txt", require_private=False)
 
     def test_expected_identity_mismatch_fails_closed(self) -> None:
         api = _FakeFilesystemApi()
@@ -1663,12 +1729,14 @@ class WindowsNativeStandardUserIntegrationTests(unittest.TestCase):
             "Windows native acceptance requires Windows 11 or later",
         )
 
+    @adversarial_reasons("administrator_token_rejected")
     def test_native_runner_token_is_not_an_administrator(self) -> None:
         self.assertFalse(
             NativeWindowsApi().current_token_is_administrator(),
             "Windows standard-user acceptance must not run as Administrators",
         )
 
+    @adversarial_reasons("identity_or_security_changed")
     def test_native_inherited_dacl_admits_then_rejects_live_broadening(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1704,6 +1772,7 @@ class WindowsNativeStandardUserIntegrationTests(unittest.TestCase):
             ):
                 backend.pin_file(target, require_private=False)
 
+    @adversarial_reasons("reparse_alias_rejected")
     def test_native_nonprivileged_junction_alias_is_rejected(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1913,6 +1982,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                     created.write_bytes(b"temporary")
                 self.assertFalse((root / "cleanup.bin").exists())
 
+    @adversarial_reasons("namespace_replacement_denied")
     def test_native_retains_ancestors_against_namespace_replacement(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -1928,6 +1998,30 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                     ancestor.rename(moved)
             ancestor.rename(moved)
             self.assertEqual((moved / "payload.bin").read_bytes(), b"retained")
+
+    @adversarial_reasons("expected_identity_mismatch")
+    def test_native_hardlink_substitution_changes_identity(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            target = root / "approved.bin"
+            replacement_source = root / "replacement.bin"
+            target.write_bytes(b"approved")
+            replacement_source.write_bytes(b"replacement")
+            backend = WindowsSecureFilesystemBackend()
+            with backend.pin_file(target, require_private=False) as pinned:
+                approved_identity = pinned.identity
+
+            target.unlink()
+            os.link(replacement_source, target)
+            with self.assertRaisesRegex(
+                WindowsPathSecurityError,
+                "expected identity",
+            ):
+                backend.pin_file(
+                    target,
+                    require_private=False,
+                    expected_identity=approved_identity,
+                )
 
     def test_native_rejects_case_alias_and_accepts_unicode(self) -> None:
         with TemporaryDirectory() as raw:
@@ -1992,6 +2086,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                     require_private=False,
                 )
 
+    @adversarial_reasons("lossless_extended_path")
     def test_native_extended_length_path_exceeds_legacy_limit(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -2069,6 +2164,7 @@ class WindowsNativeIntegrationTests(unittest.TestCase):
                 backend.release(descriptor)
                 os.close(descriptor)
 
+    @adversarial_reasons("lock_contention")
     def test_native_independent_process_exclusive_nonblocking_contends(self) -> None:
         with TemporaryDirectory() as raw:
             path = Path(raw) / "exclusive-contention.bin"

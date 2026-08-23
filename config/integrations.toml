@@ -3,7 +3,11 @@
 # remain independently gated. No credential values belong in this file. Every
 # *_env field names an environment variable injected at runtime.
 
+[network_profiles.direct]
+mode = "direct"
+
 [connectors.jira]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
@@ -22,6 +26,7 @@ writes_enabled = false
 write_enabled = false
 
 [connectors.confluence]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 base_url = "https://example.atlassian.net"
@@ -39,6 +44,7 @@ writes_enabled = false
 write_enabled = false
 
 [connectors.bitbucket]
+network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
 # Cloud API root. For Data Center, use the server/context root.
@@ -61,6 +67,7 @@ branch_prefix = "agent/"
 write_enabled = false
 
 [connectors.github]
+network_profile = "direct"
 enabled = true
 deployment = "cloud"
 base_url = "https://api.github.com"
@@ -78,7 +85,32 @@ admin_enabled = false
 # Legacy compatibility alias. Keep false unless a granular flag is reviewed.
 write_enabled = false
 
+[connectors.reddit]
+network_profile = "direct"
+enabled = true
+deployment = "cloud"
+base_url = "https://oauth.reddit.com"
+web_base_url = "https://www.reddit.com"
+auth_mode = "oauth_delegated"
+oauth_flow = "reddit_refresh_token"
+credential_profile = "read"
+client_id_env = "MASTER_AGENT_REDDIT_READ_CLIENT_ID"
+client_secret_env = "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET"
+refresh_token_env = "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN"
+scopes = ["identity", "read", "history", "privatemessages"]
+user_agent = "MasterAgent/1.0 (governed Reddit connector)"
+ca_bundle_env = "MASTER_AGENT_ENTERPRISE_CA_BUNDLE"
+timeout_seconds = 20
+max_pages = 10
+max_items = 100
+max_response_bytes = 10485760
+posts_enabled = false
+comments_enabled = false
+edits_enabled = false
+deletes_enabled = false
+
 [connectors.microsoft]
+network_profile = "direct"
 enabled = true
 deployment = "cloud"
 # Change this root for a supported Microsoft national cloud.

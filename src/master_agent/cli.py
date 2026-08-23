@@ -34,8 +34,32 @@ from master_agent.audit import AuditLog, implemented_audit_sink
 from master_agent.auth import AuthMode
 from master_agent.canonical import SourceOfTruthRegistry
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
-from master_agent.capability_import import inspect_agent_capabilities
-from master_agent.capsules import LicensePolicy
+from master_agent.capability_import import (
+    inspect_agent_capabilities,
+    quarantine_selected_ability,
+)
+from master_agent.capability_routing import (
+    CapabilityCard,
+    CapabilityRouter,
+    RoutingDecision,
+)
+from master_agent.capsule_authorities import load_capsule_authorities
+from master_agent.capsule_promotion import CapabilityPromotionService
+from master_agent.capsule_runtime import (
+    CapsuleValidator,
+    CapsuleWorker,
+    activate_capsule,
+    context_with_capsules,
+)
+from master_agent.capsules import (
+    CapsuleManifest,
+    CapsuleRole,
+    CapsuleState,
+    CapsuleStore,
+    CapsuleTrustStore,
+    LicensePolicy,
+    advance_manifest,
+)
 from master_agent.citations import find_citations
 from master_agent.compensation import build_compensation_plan
 from master_agent.config import (
@@ -108,6 +132,7 @@ from master_agent.models import (
     ChangePlan,
     ConnectorExecutionBinding,
     DataClassification,
+    ExecutionContext,
     ResourceRef,
     RiskLevel,
 )
@@ -129,6 +154,7 @@ from master_agent.operating import (
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.planners.static import build_weekly_status_plan
+from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
     LockMode,
     PlatformContract,
@@ -218,6 +244,7 @@ _CONNECT_CONFIGURATION_BY_SYSTEM = {
     "outlook": "microsoft",
     "teams": "microsoft",
     "onenote": "microsoft",
+    "reddit": "reddit",
 }
 _MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS = 8 * 1024
 
@@ -336,10 +363,74 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "plugins":
             return _plugins(output=args.output)
         if args.command == "capability-import":
-            return _capability_import_preview(
+            return _capability_import(
                 source_path=args.source,
                 capabilities_path=args.capabilities,
                 dependency_licenses_path=args.dependency_licenses,
+                ability_name=args.select,
+                expected_source_sha256=args.expected_source_sha256,
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                environment=args.environment,
+                worker_sha256=args.worker_sha256,
+                output=args.output,
+            )
+        if args.command == "capability-promote":
+            return _capability_promote(
+                capability_id=args.capability_id,
+                version=args.version,
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                dependency_licenses_path=args.dependency_licenses,
+                environment=args.environment,
+                output=args.output,
+            )
+        if args.command == "capability-status":
+            return _capability_status(
+                capability_id=args.capability_id,
+                version=args.version,
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                output=args.output,
+            )
+        if args.command == "capability-route":
+            return _capability_route(
+                intent=args.intent,
+                capsule_refs=tuple(args.capsule),
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                policy_path=args.policy,
+                governance_path=args.governance,
+                output=args.output,
+            )
+        if args.command == "capability-run":
+            return _capability_run(
+                intent=args.intent,
+                capsule_refs=tuple(args.capsule),
+                request_path=args.request,
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                policy_path=args.policy,
+                governance_path=args.governance,
+                capabilities_path=args.capabilities,
+                sources_of_truth_path=args.sources_of_truth,
+                database=args.database,
+                principal=args.principal,
+                agent_identity=args.agent_identity,
+                tenant_id=args.tenant_id,
+                output=args.output,
+            )
+        if args.command in {"capability-disable", "capability-revoke"}:
+            return _capability_transition(
+                capability_id=args.capability_id,
+                version=args.version,
+                capsule_store=args.capsule_store,
+                capsule_authorities=args.capsule_authorities,
+                target=(
+                    CapsuleState.DEPRECATED
+                    if args.command == "capability-disable"
+                    else CapsuleState.REVOKED
+                ),
                 output=args.output,
             )
         if args.command == "readiness":
@@ -798,7 +889,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     capability_import = subparsers.add_parser(
         "capability-import",
-        help="preview a declarative custom-agent export without executing it",
+        help="inspect or explicitly quarantine one custom-agent capability",
     )
     capability_import.add_argument("source", type=Path)
     capability_import.add_argument("--capabilities", type=Path, default=None)
@@ -808,7 +899,117 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="dependency license policy used for compatibility classification",
     )
+    capability_import.add_argument(
+        "--select",
+        help="explicitly select one safely importable ability for quarantine",
+    )
+    capability_import.add_argument(
+        "--expected-source-sha256",
+        help="exact source digest returned by the read-only inspection",
+    )
+    capability_import.add_argument("--capsule-store", type=Path)
+    capability_import.add_argument("--capsule-authorities", type=Path)
+    capability_import.add_argument(
+        "--environment",
+        choices=tuple(str(item) for item in EnvironmentKind),
+        default=str(EnvironmentKind.NON_PRODUCTION),
+    )
+    capability_import.add_argument(
+        "--worker-sha256",
+        help=("exact promotion-worker digest; defaults to the current isolated worker"),
+    )
     capability_import.add_argument("--output", type=Path)
+
+    capability_promote = subparsers.add_parser(
+        "capability-promote",
+        help="validate, independently sign, publish, and enable one quarantine",
+    )
+    capability_promote.add_argument("capability_id")
+    capability_promote.add_argument("version")
+    capability_promote.add_argument("--capsule-store", type=Path, required=True)
+    capability_promote.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_promote.add_argument("--dependency-licenses", type=Path)
+    capability_promote.add_argument(
+        "--environment",
+        choices=tuple(str(item) for item in EnvironmentKind),
+        default=str(EnvironmentKind.NON_PRODUCTION),
+    )
+    capability_promote.add_argument("--output", type=Path)
+
+    capability_status = subparsers.add_parser(
+        "capability-status",
+        help="verify and show one capsule's complete immutable state chain",
+    )
+    capability_status.add_argument("capability_id")
+    capability_status.add_argument("version")
+    capability_status.add_argument("--capsule-store", type=Path, required=True)
+    capability_status.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_status.add_argument("--output", type=Path)
+
+    capability_route = subparsers.add_parser(
+        "capability-route",
+        help="policy-filter an intent against explicitly selected enabled capsules",
+    )
+    capability_route.add_argument("intent")
+    capability_route.add_argument(
+        "--capsule",
+        action="append",
+        required=True,
+        metavar="CAPABILITY_ID@VERSION",
+    )
+    capability_route.add_argument("--capsule-store", type=Path, required=True)
+    capability_route.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_route.add_argument("--policy", type=Path)
+    capability_route.add_argument("--governance", type=Path)
+    capability_route.add_argument("--output", type=Path)
+
+    capability_run = subparsers.add_parser(
+        "capability-run",
+        help="route and execute one enabled pure capsule through normal governance",
+    )
+    capability_run.add_argument("intent")
+    capability_run.add_argument(
+        "--capsule",
+        action="append",
+        required=True,
+        metavar="CAPABILITY_ID@VERSION",
+    )
+    capability_run.add_argument("--request", type=Path, required=True)
+    capability_run.add_argument("--capsule-store", type=Path, required=True)
+    capability_run.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_run.add_argument("--policy", type=Path)
+    capability_run.add_argument("--governance", type=Path)
+    capability_run.add_argument("--capabilities", type=Path)
+    capability_run.add_argument("--sources-of-truth", type=Path)
+    capability_run.add_argument(
+        "--database",
+        type=Path,
+        default=Path(".master-agent/capsule-audit.sqlite3"),
+    )
+    capability_run.add_argument("--principal", default="local:operator")
+    capability_run.add_argument("--agent-identity", default="master-agent")
+    capability_run.add_argument("--tenant-id", default="local")
+    capability_run.add_argument("--output", type=Path)
+
+    capability_disable = subparsers.add_parser(
+        "capability-disable",
+        help="append signed deprecation so an enabled capsule stops routing",
+    )
+    capability_disable.add_argument("capability_id")
+    capability_disable.add_argument("version")
+    capability_disable.add_argument("--capsule-store", type=Path, required=True)
+    capability_disable.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_disable.add_argument("--output", type=Path)
+
+    capability_revoke = subparsers.add_parser(
+        "capability-revoke",
+        help="append signed revocation while retaining immutable history",
+    )
+    capability_revoke.add_argument("capability_id")
+    capability_revoke.add_argument("version")
+    capability_revoke.add_argument("--capsule-store", type=Path, required=True)
+    capability_revoke.add_argument("--capsule-authorities", type=Path, required=True)
+    capability_revoke.add_argument("--output", type=Path)
 
     readiness = subparsers.add_parser(
         "readiness",
@@ -2451,7 +2652,11 @@ def _resolve_operating_configuration(
 
     selected = profile.configuration_path(name)
     try:
-        return resolve_config_source(selected, default_filename)
+        return resolve_config_source(
+            selected,
+            default_filename,
+            organization_trust=profile.configuration_trust_policy(name),
+        )
     except ConfigurationError as error:
         category = (
             OperatingFailureCategory.MISSING_ORGANIZATION_SETUP
@@ -3942,6 +4147,7 @@ def _adapt_anonymous_direct_read_integrations(
     return (
         IntegrationConfig(
             connectors=connectors,
+            network_profiles=integrations.network_profiles,
             source_sha256=integrations.source_sha256,
         ),
         True,
@@ -3954,12 +4160,17 @@ def _anonymous_direct_read_environment(
     configurations: Iterable[str],
     environ: Mapping[str, str],
 ) -> dict[str, str]:
-    """Copy only endpoint and trust values needed by an anonymous connector."""
+    """Copy only endpoint, network-profile, and trust values for anonymous reads."""
 
     selected: dict[str, str] = {}
     for name in configurations:
         connector = integrations.connector(name)
-        for variable in (connector.base_url_env, connector.ca_bundle_env):
+        network_variables = connector.network_profile.required_environment_variables()
+        for variable in (
+            connector.base_url_env,
+            connector.ca_bundle_env,
+            *network_variables,
+        ):
             if variable is None:
                 continue
             value = environ.get(variable)
@@ -4029,14 +4240,20 @@ def _plugins(*, output: Path | None) -> int:
     return 0
 
 
-def _capability_import_preview(
+def _capability_import(
     *,
     source_path: Path,
     capabilities_path: Path | None,
     dependency_licenses_path: Path | None,
+    ability_name: str | None,
+    expected_source_sha256: str | None,
+    capsule_store: Path | None,
+    capsule_authorities: Path | None,
+    environment: str,
+    worker_sha256: str | None,
     output: Path | None,
 ) -> int:
-    """Inspect a foreign declarative export without loading or executing it."""
+    """Inspect an export or quarantine one explicit exact-digest selection."""
 
     source = snapshot_explicit_file(source_path)
     catalog = CapabilityCatalog.from_toml(
@@ -4053,7 +4270,560 @@ def _capability_import_preview(
         catalog=catalog,
         license_policy=license_policy,
     )
-    payload = preview.to_dict()
+    if ability_name is None:
+        if any(
+            value is not None
+            for value in (
+                expected_source_sha256,
+                capsule_store,
+                capsule_authorities,
+                worker_sha256,
+            )
+        ):
+            raise ValueError(
+                "selection options require --select; preview itself is read-only"
+            )
+        return _emit_capability_payload(preview.to_dict(), output=output)
+    if expected_source_sha256 is None:
+        raise ValueError("--expected-source-sha256 is required with --select")
+    if capsule_store is None or capsule_authorities is None:
+        raise ValueError(
+            "--capsule-store and --capsule-authorities are required with --select"
+        )
+    authorities, trust = load_capsule_authorities(
+        snapshot_explicit_file(capsule_authorities),
+        environ=os.environ,
+        required_roles=(CapsuleRole.GENERATOR,),
+    )
+    selected_worker_sha256 = worker_sha256 or CapsuleWorker().identity_sha256
+    imported = quarantine_selected_ability(
+        source_path,
+        expected_source_sha256=expected_source_sha256,
+        ability_name=ability_name,
+        catalog=catalog,
+        license_policy=license_policy,
+        store=CapsuleStore(capsule_store),
+        authority=authorities[CapsuleRole.GENERATOR],
+        trust=trust,
+        environment=environment,
+        worker_sha256=selected_worker_sha256,
+    )
+    payload = {
+        "schema": "master-agent/capability-lifecycle-result@1",
+        "operation": "quarantine",
+        "source_sha256": imported.source_sha256,
+        "ability_name": imported.ability_name,
+        "capability_id": imported.manifest.spec.capability_id,
+        "version": imported.manifest.spec.version,
+        "state": str(imported.manifest.state),
+        "manifest_sha256": imported.manifest.manifest_sha256,
+        "worker_sha256": imported.manifest.worker_sha256,
+        "routable": False,
+        "next": "capability-promote",
+    }
+    return _emit_capability_payload(payload, output=output)
+
+
+def _capability_promote(
+    *,
+    capability_id: str,
+    version: str,
+    capsule_store: Path,
+    capsule_authorities: Path,
+    dependency_licenses_path: Path | None,
+    environment: str,
+    output: Path | None,
+) -> int:
+    """Promote one exact latest quarantine through the signed lifecycle."""
+
+    authorities, trust = load_capsule_authorities(
+        snapshot_explicit_file(capsule_authorities),
+        environ=os.environ,
+    )
+    store = CapsuleStore(capsule_store)
+    current = _current_capsule_manifest(
+        store,
+        trust=trust,
+        capability_id=capability_id,
+        version=version,
+    )
+    bundle = store.load_bundle(capability_id, version)
+    worker = CapsuleWorker()
+    license_policy = LicensePolicy.from_toml(
+        resolve_config_source(
+            dependency_licenses_path,
+            "dependency-licenses.toml",
+        )
+    )
+    result = CapabilityPromotionService(
+        store=store,
+        trust=trust,
+        worker=worker,
+        validator=CapsuleValidator(worker=worker, license_policy=license_policy),
+        authorities=authorities,
+        environment=environment,
+    ).promote_installed(bundle, current)
+    payload = {
+        "schema": "master-agent/capability-lifecycle-result@1",
+        "operation": "promote",
+        "capability_id": capability_id,
+        "version": version,
+        "states": [str(item.state) for item in result.manifests],
+        "state": str(result.enabled.state),
+        "manifest_sha256": result.enabled.manifest_sha256,
+        "worker_sha256": result.enabled.worker_sha256,
+        "routable": True,
+        "next": "capability-route or capability-run",
+    }
+    return _emit_capability_payload(payload, output=output)
+
+
+def _capability_status(
+    *,
+    capability_id: str,
+    version: str,
+    capsule_store: Path,
+    capsule_authorities: Path,
+    output: Path | None,
+) -> int:
+    """Verify and report one immutable capsule state chain."""
+
+    _authorities, trust = load_capsule_authorities(
+        snapshot_explicit_file(capsule_authorities),
+        environ=os.environ,
+    )
+    manifests = CapsuleStore(capsule_store).manifests(
+        capability_id,
+        version,
+        trust=trust,
+    )
+    if not manifests:
+        raise ConfigurationError("capability capsule is not installed")
+    current = manifests[-1]
+    payload = {
+        "schema": "master-agent/capability-status@1",
+        "capability_id": capability_id,
+        "version": version,
+        "state": str(current.state),
+        "manifest_sha256": current.manifest_sha256,
+        "source_sha256": current.source_sha256,
+        "worker_sha256": current.worker_sha256,
+        "publisher": current.spec.publisher,
+        "reviewer": current.reviewer,
+        "routable": current.state is CapsuleState.ENABLED,
+        "history": [
+            {
+                "sequence": item.sequence,
+                "state": str(item.state),
+                "actor": item.actor,
+                "role": str(item.role),
+                "manifest_sha256": item.manifest_sha256,
+            }
+            for item in manifests
+        ],
+    }
+    return _emit_capability_payload(payload, output=output)
+
+
+def _capability_route(
+    *,
+    intent: str,
+    capsule_refs: tuple[str, ...],
+    capsule_store: Path,
+    capsule_authorities: Path,
+    policy_path: Path | None,
+    governance_path: Path | None,
+    output: Path | None,
+) -> int:
+    """Route an intent only across exact, policy-permitted enabled capsules."""
+
+    manifests, _trust = _enabled_capsule_manifests(
+        capsule_refs=capsule_refs,
+        capsule_store=capsule_store,
+        capsule_authorities=capsule_authorities,
+    )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(policy_path, "policy.toml"))
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
+    decision = _resolve_capsule_intent(
+        intent,
+        manifests=manifests,
+        policy=policy,
+        governance=governance,
+        maximum_candidates=3,
+    )
+    payload = {
+        "schema": "master-agent/capability-route@1",
+        "intent_sha256": decision.normalized_intent_sha256,
+        "binding_sha256": decision.binding_sha256,
+        "candidates": [item.to_dict() for item in decision.cards],
+    }
+    return _emit_capability_payload(payload, output=output)
+
+
+def _capability_run(
+    *,
+    intent: str,
+    capsule_refs: tuple[str, ...],
+    request_path: Path,
+    capsule_store: Path,
+    capsule_authorities: Path,
+    policy_path: Path | None,
+    governance_path: Path | None,
+    capabilities_path: Path | None,
+    sources_of_truth_path: Path | None,
+    database: Path,
+    principal: str,
+    agent_identity: str,
+    tenant_id: str,
+    output: Path | None,
+) -> int:
+    """Route and execute one enabled pure capsule through the orchestrator."""
+
+    require_persistent_state_platform()
+    request = _load_capability_request(request_path)
+    manifests, trust = _enabled_capsule_manifests(
+        capsule_refs=capsule_refs,
+        capsule_store=capsule_store,
+        capsule_authorities=capsule_authorities,
+    )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(policy_path, "policy.toml"))
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
+    decision = _resolve_capsule_intent(
+        intent,
+        manifests=manifests,
+        policy=policy,
+        governance=governance,
+        maximum_candidates=1,
+    )
+    card = decision.cards[0]
+    manifest = next(
+        item
+        for item in manifests
+        if item.spec.capability_id == card.capability_id
+        and item.spec.version == card.version
+        and item.manifest_sha256 == card.manifest_sha256
+    )
+    worker = CapsuleWorker()
+    base_catalog = CapabilityCatalog.from_toml(
+        resolve_config_source(capabilities_path, "capabilities.toml")
+    )
+    context = context_with_capsules(
+        ExecutionContext(hashlib.sha256(b"capsule-local-only").hexdigest()),
+        (manifest,),
+        authenticated_principal=principal,
+        agent_identity=agent_identity,
+        tenant_id=tenant_id,
+    )
+    binding = context.capsules[0]
+    activated = activate_capsule(
+        store=CapsuleStore(capsule_store),
+        trust=trust,
+        binding=binding,
+        worker=worker,
+        base_catalog=base_catalog,
+    )
+    registry = ConnectorRegistry()
+    registry.register(activated.connector)
+    request_sha256 = hashlib.sha256(
+        json.dumps(
+            request,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    action = AgentAction(
+        capability=manifest.spec.capability_id,
+        target=ResourceRef(
+            system=manifest.spec.system,
+            resource_type="capsule_request",
+            resource_id=request_sha256,
+        ),
+        parameters=request,
+        risk=manifest.spec.risk,
+        data_classification=manifest.spec.data_classification,
+        authority_source=AuthoritySource.DIRECT_USER,
+        requires_approval=False,
+        idempotency_key=(
+            f"capsule:{manifest.spec.capability_id}:{manifest.spec.version}:"
+            f"{manifest.manifest_sha256}:{decision.normalized_intent_sha256}:"
+            f"{request_sha256}"
+        ),
+        justification="The authenticated operator selected this routed capsule.",
+    )
+    plan = ChangePlan(
+        goal=intent,
+        actions=(action,),
+        created_by=principal,
+        execution_context=context,
+    )
+    audit = AuditLog(database)
+    try:
+        report = WorkflowOrchestrator(
+            policy=policy,
+            sources=SourceOfTruthRegistry.from_toml(
+                resolve_config_source(
+                    sources_of_truth_path,
+                    "sources_of_truth.toml",
+                )
+            ),
+            connectors=registry,
+            audit=audit,
+            capabilities=activated.catalog,
+            governance=governance,
+        ).run(plan, dry_run=False)
+    finally:
+        audit.close()
+    payload = report.to_dict()
+    if output is not None:
+        _write_json(output, payload)
+        print(f"wrote {output}")
+    _print_report(report, mode_label="capsule-apply")
+    for item in report.actions:
+        if item.result is not None:
+            rendered = render_terminal_text(
+                json.dumps(item.result.after, ensure_ascii=True, sort_keys=True),
+                max_characters=_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS,
+            )
+            print(f"  result: {rendered}")
+    return 0 if report.successful else 2
+
+
+def _capability_transition(
+    *,
+    capability_id: str,
+    version: str,
+    capsule_store: Path,
+    capsule_authorities: Path,
+    target: CapsuleState,
+    output: Path | None,
+) -> int:
+    """Append a signed deprecation or revocation without deleting history."""
+
+    authorities, trust = load_capsule_authorities(
+        snapshot_explicit_file(capsule_authorities),
+        environ=os.environ,
+    )
+    store = CapsuleStore(capsule_store)
+    current = _current_capsule_manifest(
+        store,
+        trust=trust,
+        capability_id=capability_id,
+        version=version,
+    )
+    role = (
+        CapsuleRole.PUBLISHER
+        if target is CapsuleState.DEPRECATED
+        else CapsuleRole.REVOKER
+    )
+    transitioned = advance_manifest(
+        current,
+        target,
+        authority=authorities[role],
+        trust=trust,
+    )
+    store.append_manifest(transitioned, trust=trust)
+    payload = {
+        "schema": "master-agent/capability-lifecycle-result@1",
+        "operation": "disable" if target is CapsuleState.DEPRECATED else "revoke",
+        "capability_id": capability_id,
+        "version": version,
+        "previous_state": str(current.state),
+        "state": str(transitioned.state),
+        "manifest_sha256": transitioned.manifest_sha256,
+        "routable": False,
+        "history_retained": True,
+    }
+    return _emit_capability_payload(payload, output=output)
+
+
+def _enabled_capsule_manifests(
+    *,
+    capsule_refs: tuple[str, ...],
+    capsule_store: Path,
+    capsule_authorities: Path,
+) -> tuple[tuple[CapsuleManifest, ...], CapsuleTrustStore]:
+    """Load explicitly named latest enabled manifests and their trust store."""
+
+    _authorities, trust = load_capsule_authorities(
+        snapshot_explicit_file(capsule_authorities),
+        environ=os.environ,
+    )
+    store = CapsuleStore(capsule_store)
+    parsed = tuple(_parse_capsule_ref(item) for item in capsule_refs)
+    if len(parsed) != len(set(parsed)):
+        raise ValueError("--capsule references must be unique")
+    manifests = tuple(
+        _current_capsule_manifest(
+            store,
+            trust=trust,
+            capability_id=capability_id,
+            version=version,
+        )
+        for capability_id, version in parsed
+    )
+    disabled = tuple(
+        f"{item.spec.capability_id}@{item.spec.version}:{item.state}"
+        for item in manifests
+        if item.state is not CapsuleState.ENABLED
+    )
+    if disabled:
+        raise ConfigurationError(
+            "routing requires latest enabled capsules: " + ", ".join(disabled)
+        )
+    return manifests, trust
+
+
+def _resolve_capsule_intent(
+    intent: str,
+    *,
+    manifests: tuple[CapsuleManifest, ...],
+    policy: PolicyEngine,
+    governance: GovernanceProfile,
+    maximum_candidates: int,
+) -> RoutingDecision:
+    """Apply normal governance and policy before lexical capsule routing."""
+
+    mismatched = tuple(
+        f"{item.spec.capability_id}@{item.spec.version}:{item.environment}"
+        for item in manifests
+        if item.environment != str(governance.environment)
+    )
+    if mismatched:
+        raise ConfigurationError(
+            "capsule environment must match runtime governance "
+            f"{governance.environment}: " + ", ".join(mismatched)
+        )
+
+    def policy_allows(card: CapabilityCard) -> bool:
+        manifest = next(
+            item
+            for item in manifests
+            if item.spec.capability_id == card.capability_id
+            and item.spec.version == card.version
+            and item.manifest_sha256 == card.manifest_sha256
+        )
+        action = AgentAction(
+            capability=card.capability_id,
+            target=ResourceRef(
+                system=manifest.spec.system,
+                resource_type="capsule_request",
+                resource_id="routing-preview",
+            ),
+            parameters={},
+            risk=card.risk,
+            data_classification=card.data_classification,
+            authority_source=AuthoritySource.DIRECT_USER,
+            requires_approval=False,
+            idempotency_key=f"capsule-routing:{card.manifest_sha256}",
+            justification="Evaluate a promoted capsule for intent routing.",
+        )
+        context = context_with_capsules(
+            ExecutionContext(hashlib.sha256(b"capsule-routing").hexdigest()),
+            (manifest,),
+        )
+        plan = ChangePlan(
+            goal=intent,
+            actions=(action,),
+            created_by="capability-router",
+            execution_context=context,
+        )
+        governed, _reason = governance.validate_action(action)
+        if not governed:
+            return False
+        decision = policy.evaluate(
+            plan,
+            action,
+            minimum_distinct_approvers=governance.minimum_approvers(action.capability),
+        )
+        return decision.permitted and not decision.approval_required
+
+    return CapabilityRouter().resolve(
+        intent,
+        tuple(CapabilityCard.from_manifest(item) for item in manifests),
+        policy_allows=policy_allows,
+        maximum_candidates=maximum_candidates,
+    )
+
+
+def _current_capsule_manifest(
+    store: CapsuleStore,
+    *,
+    trust: CapsuleTrustStore,
+    capability_id: str,
+    version: str,
+) -> CapsuleManifest:
+    """Return one authenticated latest manifest or fail closed."""
+
+    manifests = store.manifests(
+        capability_id,
+        version,
+        trust=trust,
+    )
+    if not manifests:
+        raise ConfigurationError("capability capsule is not installed")
+    return manifests[-1]
+
+
+def _parse_capsule_ref(value: str) -> tuple[str, str]:
+    """Parse one explicit capability/version selector."""
+
+    capability_id, separator, version = value.rpartition("@")
+    if not separator or not capability_id or not version:
+        raise ValueError("--capsule must be CAPABILITY_ID@VERSION")
+    return capability_id, version
+
+
+def _load_capability_request(path: Path) -> dict[str, object]:
+    """Load one bounded owner-controlled JSON request with unique object keys."""
+
+    source = snapshot_explicit_file(path)
+    with source.open("rb") as handle:
+        payload = handle.read(1024 * 1024 + 1)
+    if len(payload) > 1024 * 1024:
+        raise ValidationError("capability request exceeds the 1 MiB limit")
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_unique_capability_request_object,
+            parse_constant=_reject_capability_request_constant,
+        )
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValidationError("capability request is not bounded valid JSON") from error
+    if not isinstance(value, dict):
+        raise ValidationError("capability request must be a JSON object")
+    return value
+
+
+def _unique_capability_request_object(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _reject_capability_request_constant(value: str) -> object:
+    raise ValueError(f"unsupported JSON constant: {value}")
+
+
+def _emit_capability_payload(
+    payload: Mapping[str, object], *, output: Path | None
+) -> int:
+    """Render one lifecycle result and optionally persist restricted JSON."""
+
     if output is not None:
         _write_json(output, payload)
         print(f"wrote {output}")
@@ -4389,15 +5159,14 @@ def _new_demo_workspace() -> Path:
     """Create the private, unpredictable root used by the safe demonstration."""
 
     require_persistent_state_platform()
-    runtime_root = Path.home() / ".master-agent"
-    product_root = runtime_root / "MasterAgent"
+    product_root = current_user_product_root()
     atomic = get_atomic_publication_recovery_backend()
     if atomic.backend_id == "windows-handle-atomic-state":
         atomic.ensure_private_directory(product_root)
         return atomic.ensure_private_directory(
             product_root / f"demo-{secrets.token_hex(16)}"
         )
-    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    product_root.parent.mkdir(mode=0o700, exist_ok=True)
     product_root.mkdir(mode=0o700, exist_ok=True)
     with PinnedDirectory.open(product_root) as pinned_root:
         workspace = Path(
@@ -4949,6 +5718,7 @@ def _connect(
         connectors[name] = replace(unresolved, enabled=True, extra=extra)
     effective = IntegrationConfig(
         connectors=connectors,
+        network_profiles=integrations.network_profiles,
         source_sha256=integrations.source_sha256,
     )
 
@@ -5023,7 +5793,11 @@ def _connect(
             )
         connectors = dict(effective.connectors)
         connectors["microsoft"] = microsoft
-        effective = IntegrationConfig(connectors=connectors)
+        effective = IntegrationConfig(
+            connectors=connectors,
+            network_profiles=effective.network_profiles,
+            source_sha256=effective.source_sha256,
+        )
 
     records = discover_integrations(
         effective,
@@ -5234,6 +6008,7 @@ def _with_connector_url_overrides(
             )
     return IntegrationConfig(
         connectors=connectors,
+        network_profiles=integrations.network_profiles,
         source_sha256=integrations.source_sha256,
     )
 
@@ -5711,6 +6486,9 @@ def _standalone_connector_binding(
         ca_bundle_sha256=(
             target.ca_bundle.sha256 if target.ca_bundle is not None else None
         ),
+        network_profile_name=target.network_profile_name,
+        network_profile_sha256=target.network_profile_sha256,
+        proxy_origin=target.proxy_url,
     )
 
 

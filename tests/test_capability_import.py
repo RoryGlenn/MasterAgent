@@ -11,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from master_agent.capabilities import CapabilityCatalog, CapabilityDefinition
 from master_agent.capability_import import (
@@ -21,6 +22,7 @@ from master_agent.capability_import import (
     quarantine_selected_ability,
 )
 from master_agent.capability_routing import CapabilityCard
+from master_agent.capsule_authorities import load_capsule_authorities
 from master_agent.capsule_promotion import CapabilityPromotionService
 from master_agent.capsule_runtime import CapsuleValidation
 from master_agent.capsules import (
@@ -38,9 +40,14 @@ from master_agent.capsules import (
     CapsuleStore,
     CapsuleTrustStore,
     LicensePolicy,
+    advance_manifest,
 )
 from master_agent.cli import main
-from master_agent.config_sources import ConfigSnapshot, snapshot_explicit_file
+from master_agent.config_sources import (
+    ConfigSnapshot,
+    resolve_config_source,
+    snapshot_explicit_file,
+)
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.governance import EnvironmentKind
 from master_agent.models import RiskLevel
@@ -233,7 +240,7 @@ class CapabilityImportTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ConfigurationError,
-                "quarantine environment differs",
+                "installed environment differs",
             ):
                 service.promote_quarantined(imported.bundle, imported.manifest)
             self.assertEqual(
@@ -259,6 +266,121 @@ class CapabilityImportTests(unittest.TestCase):
                 authorities=authorities,
                 environment="test",
             )
+
+    def test_promotion_preflights_authorities_and_resumes_partial_chain(
+        self,
+    ) -> None:
+        authorities, trust = _authorities(
+            environments=frozenset({str(EnvironmentKind.NON_PRODUCTION)})
+        )
+        worker = _StaticWorker()
+        validator = _StaticValidator()
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            imported = _imported_quarantine(
+                root,
+                authorities=authorities,
+                trust=trust,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+                worker_sha256=worker.identity_sha256,
+            )
+            store = CapsuleStore(root / "capsules")
+            invalid_authorities = dict(authorities)
+            sandbox_authority = authorities[CapsuleRole.SANDBOX_VALIDATOR]
+            invalid_authorities[CapsuleRole.SANDBOX_VALIDATOR] = CapsuleAuthority(
+                key_id=sandbox_authority.key_id,
+                subject=sandbox_authority.subject,
+                roles=sandbox_authority.roles,
+                environments=frozenset({str(EnvironmentKind.DEVELOPMENT)}),
+                secret=sandbox_authority.secret,
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "sandbox_validator is not valid in non_production",
+            ):
+                CapabilityPromotionService(
+                    store=store,
+                    trust=trust,
+                    worker=worker,
+                    validator=validator,
+                    authorities=invalid_authorities,
+                    environment=str(EnvironmentKind.NON_PRODUCTION),
+                )
+            drifted_trust_authorities = dict(trust.authorities)
+            drifted_trust_authorities[sandbox_authority.key_id] = CapsuleAuthority(
+                key_id=sandbox_authority.key_id,
+                subject=sandbox_authority.subject,
+                roles=sandbox_authority.roles,
+                environments=sandbox_authority.environments,
+                secret=b"different-sandbox-trust-secret-value",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "sandbox_validator is not bound to the trust store",
+            ):
+                CapabilityPromotionService(
+                    store=store,
+                    trust=CapsuleTrustStore(drifted_trust_authorities),
+                    worker=worker,
+                    validator=validator,
+                    authorities=authorities,
+                    environment=str(EnvironmentKind.NON_PRODUCTION),
+                )
+            self.assertEqual(
+                len(
+                    store.manifests(
+                        imported.manifest.spec.capability_id,
+                        imported.manifest.spec.version,
+                        trust=trust,
+                    )
+                ),
+                1,
+            )
+
+            evidence = validator.validate(imported.bundle)
+            tested = advance_manifest(
+                imported.manifest,
+                CapsuleState.TESTED,
+                authority=authorities[CapsuleRole.VALIDATOR],
+                trust=trust,
+                validation_result_sha256=evidence.validation_sha256,
+            )
+            store.append_manifest(tested, trust=trust)
+            drifted_service = CapabilityPromotionService(
+                store=store,
+                trust=trust,
+                worker=worker,
+                validator=_StaticValidator(evidence_status="changed"),
+                authorities=authorities,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "validation evidence differs from the installed chain",
+            ):
+                drifted_service.promote_installed(imported.bundle, tested)
+            service = CapabilityPromotionService(
+                store=store,
+                trust=trust,
+                worker=worker,
+                validator=validator,
+                authorities=authorities,
+                environment=str(EnvironmentKind.NON_PRODUCTION),
+            )
+            resumed = service.promote_installed(imported.bundle, tested)
+            self.assertEqual(
+                tuple(item.state for item in resumed.manifests),
+                (
+                    CapsuleState.QUARANTINED,
+                    CapsuleState.TESTED,
+                    CapsuleState.SANDBOX_VALIDATED,
+                    CapsuleState.REVIEWED,
+                    CapsuleState.PUBLISHED,
+                    CapsuleState.ENABLED,
+                ),
+            )
+            repeated = service.promote_installed(imported.bundle, resumed.enabled)
+            self.assertEqual(repeated.manifests, resumed.manifests)
 
     def test_promotion_rejects_worker_and_evidence_identity_drift(self) -> None:
         authorities, trust = _authorities(
@@ -286,7 +408,7 @@ class CapabilityImportTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ConfigurationError,
-                "quarantine worker differs",
+                "installed worker differs",
             ):
                 service.promote_quarantined(imported.bundle, imported.manifest)
             self.assertEqual(
@@ -513,6 +635,340 @@ class CapabilityImportTests(unittest.TestCase):
         self.assertNotIn("def run", stdout.getvalue())
         self.assertIn("preview only", payload["activation"])
 
+    def test_cli_completes_selection_promotion_routing_execution_and_revocation(
+        self,
+    ) -> None:
+        worker = _CliWorker()
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            source = _write_source(root, _package([_ability("greeting")]))
+            authorities = _write_authority_config(root)
+            request = root / "request.json"
+            request.write_text(json.dumps({"name": "Ada"}), encoding="utf-8")
+            request.chmod(0o600)
+            preview_path = root / "preview.json"
+            run_path = root / "run.json"
+            arguments = (
+                "--capsule-store",
+                str(root / "capsules"),
+                "--capsule-authorities",
+                str(authorities),
+            )
+            with patch.dict(os.environ, _authority_environment(), clear=False):
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(source),
+                            "--output",
+                            str(preview_path),
+                        ]
+                    ),
+                    0,
+                )
+                source_sha256 = str(
+                    json.loads(preview_path.read_text(encoding="utf-8"))["agent"][
+                        "source_sha256"
+                    ]
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(source),
+                            "--select",
+                            "greeting",
+                            "--expected-source-sha256",
+                            source_sha256,
+                            "--worker-sha256",
+                            worker.identity_sha256,
+                            "--environment",
+                            str(EnvironmentKind.DEVELOPMENT),
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                with (
+                    patch("master_agent.cli.CapsuleWorker", return_value=worker),
+                    patch(
+                        "master_agent.cli.CapsuleValidator",
+                        return_value=_StaticValidator(),
+                    ),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-promote",
+                                "foreign.greeting.generate",
+                                "1.0.0",
+                                "--environment",
+                                str(EnvironmentKind.DEVELOPMENT),
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-route",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                    production_governance = _write_governance_config(
+                        root,
+                        EnvironmentKind.PRODUCTION,
+                    )
+                    mismatch_error = StringIO()
+                    with redirect_stderr(mismatch_error):
+                        self.assertEqual(
+                            main(
+                                [
+                                    "capability-run",
+                                    "please generate greeting",
+                                    "--capsule",
+                                    "foreign.greeting.generate@1.0.0",
+                                    "--request",
+                                    str(request),
+                                    "--database",
+                                    str(root / "mismatched-audit.sqlite3"),
+                                    "--governance",
+                                    str(production_governance),
+                                    *arguments,
+                                ]
+                            ),
+                            1,
+                        )
+                    self.assertIn(
+                        "capsule environment must match runtime governance",
+                        mismatch_error.getvalue(),
+                    )
+                    self.assertFalse((root / "mismatched-audit.sqlite3").exists())
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-run",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                "--request",
+                                str(request),
+                                "--database",
+                                str(root / "audit.sqlite3"),
+                                "--output",
+                                str(run_path),
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                report = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertTrue(report["successful"])
+                self.assertEqual(
+                    report["actions"][0]["result"]["after"],
+                    {"message": "Hello, Ada"},
+                )
+                updated_source = _write_source(
+                    root,
+                    _package(
+                        [_ability("greeting", version="2.0.0")],
+                        agent_version="2.0.0",
+                    ),
+                    name="agent-capabilities-v2.json",
+                )
+                updated_preview = root / "preview-v2.json"
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(updated_source),
+                            "--output",
+                            str(updated_preview),
+                        ]
+                    ),
+                    0,
+                )
+                updated_digest = str(
+                    json.loads(updated_preview.read_text(encoding="utf-8"))["agent"][
+                        "source_sha256"
+                    ]
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-import",
+                            str(updated_source),
+                            "--select",
+                            "greeting",
+                            "--expected-source-sha256",
+                            updated_digest,
+                            "--worker-sha256",
+                            worker.identity_sha256,
+                            "--environment",
+                            str(EnvironmentKind.DEVELOPMENT),
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                loaded_authorities, loaded_trust = load_capsule_authorities(
+                    snapshot_explicit_file(authorities),
+                    environ=os.environ,
+                )
+                store = CapsuleStore(root / "capsules")
+                quarantined = store.manifests(
+                    "foreign.greeting.generate",
+                    "2.0.0",
+                    trust=loaded_trust,
+                )[-1]
+                bundle = store.load_bundle("foreign.greeting.generate", "2.0.0")
+                evidence = _StaticValidator().validate(bundle)
+                tested = advance_manifest(
+                    quarantined,
+                    CapsuleState.TESTED,
+                    authority=loaded_authorities[CapsuleRole.VALIDATOR],
+                    trust=loaded_trust,
+                    validation_result_sha256=evidence.validation_sha256,
+                )
+                store.append_manifest(tested, trust=loaded_trust)
+                with (
+                    patch("master_agent.cli.CapsuleWorker", return_value=worker),
+                    patch(
+                        "master_agent.cli.CapsuleValidator",
+                        return_value=_StaticValidator(),
+                    ),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-promote",
+                                "foreign.greeting.generate",
+                                "2.0.0",
+                                "--environment",
+                                str(EnvironmentKind.DEVELOPMENT),
+                                *arguments,
+                            ]
+                        ),
+                        0,
+                    )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-disable",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(
+                        main(
+                            [
+                                "capability-route",
+                                "please generate greeting",
+                                "--capsule",
+                                "foreign.greeting.generate@1.0.0",
+                                *arguments,
+                            ]
+                        ),
+                        1,
+                    )
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-revoke",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                status = root / "status.json"
+                self.assertEqual(
+                    main(
+                        [
+                            "capability-status",
+                            "foreign.greeting.generate",
+                            "1.0.0",
+                            "--output",
+                            str(status),
+                            *arguments,
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(
+                    json.loads(status.read_text(encoding="utf-8"))["state"],
+                    "revoked",
+                )
+
+    def test_capsule_authority_config_rejects_shared_identities_roles_and_keys(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            config = _write_authority_config(root)
+            original = config.read_text(encoding="utf-8")
+            environment = _authority_environment()
+            config.write_text(
+                original.replace(
+                    'subject = "validator"',
+                    'subject = "import-generator"',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError, "subjects must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+            config.write_text(
+                original.replace(
+                    'roles = ["generator"]',
+                    'roles = ["generator", "reviewer"]',
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ConfigurationError, "exactly one role"):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+            config.write_text(
+                original.replace("TEST_CAPSULE_KEY_1", "TEST_CAPSULE_KEY_0"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError, "secret references must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+            config.write_text(original, encoding="utf-8")
+            reused_value_environment = dict(environment)
+            reused_value_environment["TEST_CAPSULE_KEY_1"] = environment[
+                "TEST_CAPSULE_KEY_0"
+            ]
+            with self.assertRaisesRegex(
+                ConfigurationError, "secret values must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=reused_value_environment,
+                )
+
 
 def _catalog_definition(name: str) -> CapabilityDefinition:
     return CapabilityDefinition(
@@ -648,6 +1104,22 @@ def _write_source(
     return path
 
 
+def _write_governance_config(
+    root: Path,
+    environment: EnvironmentKind,
+) -> Path:
+    source = resolve_config_source(None, "governance.toml")
+    payload = source.payload.replace(
+        b'environment = "development"',
+        f'environment = "{environment}"'.encode("ascii"),
+        1,
+    )
+    path = root / f"governance-{environment}.toml"
+    path.write_bytes(payload)
+    path.chmod(0o600)
+    return path
+
+
 def _imported_quarantine(
     root: Path,
     *,
@@ -712,6 +1184,44 @@ def _authorities(
     )
 
 
+def _write_authority_config(root: Path) -> Path:
+    path = root / "capsule-authorities.toml"
+    subjects = {
+        "generator": "import-generator",
+        "validator": "validator",
+        "sandbox_validator": "sandbox-validator",
+        "reviewer": "reviewer",
+        "publisher": "foreign.publisher",
+        "revoker": "security",
+    }
+    sections = []
+    for index, (role, subject) in enumerate(subjects.items()):
+        sections.append(
+            "\n".join(
+                (
+                    f"[authorities.test-{index}]",
+                    f'subject = "{subject}"',
+                    f'roles = ["{role}"]',
+                    'environments = ["development", "non_production"]',
+                    f'secret_env = "TEST_CAPSULE_KEY_{index}"',
+                    "enabled = true",
+                )
+            )
+        )
+    path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return path
+
+
+def _authority_environment() -> dict[str, str]:
+    return {
+        f"TEST_CAPSULE_KEY_{index}": hashlib.sha256(
+            f"cli-authority:{index}".encode()
+        ).hexdigest()
+        for index in range(6)
+    }
+
+
 def _jsonable(value: object) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -727,6 +1237,26 @@ class _StaticWorker:
     identity_sha256 = "b" * 64
 
 
+class _CliWorker(_StaticWorker):
+    backend = "test-subprocess"
+    production_isolated = False
+
+    @property
+    def identity_components(self) -> Mapping[str, str]:
+        return {"backend": self.backend}
+
+    def denial_probes(self) -> list[dict[str, str]]:
+        return []
+
+    def execute(
+        self,
+        bundle: CapsuleBundle,
+        request: Mapping[str, Any],
+    ) -> dict[str, object]:
+        del bundle
+        return {"message": "Hello, " + str(request.get("name", "")).strip()}
+
+
 class _StaticValidator:
     def __init__(
         self,
@@ -734,10 +1264,12 @@ class _StaticValidator:
         worker_sha256: str = _StaticWorker.identity_sha256,
         evidence_worker_sha256: str | None = None,
         drifted_evidence: str | None = None,
+        evidence_status: str = "passed",
     ) -> None:
         self.worker_sha256 = worker_sha256
         self._evidence_worker_sha256 = evidence_worker_sha256 or worker_sha256
         self._drifted_evidence = drifted_evidence
+        self._evidence_status = evidence_status
 
     def validate(self, bundle: CapsuleBundle) -> CapsuleValidation:
         validation_worker = self.worker_sha256
@@ -751,13 +1283,13 @@ class _StaticValidator:
                 "schema": "test/capsule-validation@1",
                 "artifact_sha256": bundle.artifact_sha256,
                 "worker_sha256": validation_worker,
-                "status": "passed",
+                "status": self._evidence_status,
             },
             sandbox={
                 "schema": "test/capsule-sandbox@1",
                 "artifact_sha256": bundle.artifact_sha256,
                 "worker_sha256": sandbox_worker,
-                "status": "passed",
+                "status": self._evidence_status,
             },
         )
 

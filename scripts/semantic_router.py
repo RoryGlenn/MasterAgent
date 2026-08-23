@@ -96,6 +96,8 @@ REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
         "windows.atomic_state_retention",
         "windows.credentials",
         "windows.process_supervision",
+        "windows.git_isolation",
+        "windows.capsule_isolation",
     }
 )
 REQUIRED_AGENT_PROFILES: Final = {
@@ -129,6 +131,7 @@ _IGNORED_DIRECTORY_NAMES: Final = {
     "build",
     "dist",
 }
+_IGNORED_MANAGED_VENV = re.compile(r"^\.venv-master-agent-[0-9a-f]{12}$")
 
 
 class ManifestError(ValueError):
@@ -468,6 +471,20 @@ def _read_bounded_regular_file_state(
 def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
     """Return whether two observations describe one unchanged regular file."""
 
+    if os.name == "nt":
+        # Path-based Windows stat uses Win32 metadata while descriptor-based
+        # fstat uses the C runtime projection. Permission bits, link count, and
+        # creation-time fields can therefore differ for the same open file.
+        # File identity plus content-bearing metadata remains stable and is the
+        # boundary needed to detect replacement or mutation during this read.
+        return (
+            stat.S_ISREG(left.st_mode)
+            and stat.S_ISREG(right.st_mode)
+            and left.st_dev == right.st_dev
+            and left.st_ino == right.st_ino
+            and left.st_size == right.st_size
+            and left.st_mtime_ns == right.st_mtime_ns
+        )
     return (
         stat.S_ISREG(right.st_mode)
         and left.st_dev == right.st_dev
@@ -872,7 +889,10 @@ def _bounded_file_inventory(
             relative = path.relative_to(root)
             if relative.parts and relative.parts[0] in excluded_first_parts:
                 continue
-            if entry.name in _IGNORED_DIRECTORY_NAMES:
+            if (
+                entry.name in _IGNORED_DIRECTORY_NAMES
+                or _IGNORED_MANAGED_VENV.fullmatch(entry.name) is not None
+            ):
                 continue
             if entry.is_symlink():
                 if entry.name.endswith(suffix):
@@ -1337,6 +1357,13 @@ def _validate_route_contracts(root: Path, manifest: SemanticManifest) -> list[st
         ),
         "windows.credentials": (
             "src/master_agent/platform_runtime/windows/credentials.py"
+        ),
+        "windows.process_supervision": (
+            "src/master_agent/platform_runtime/windows/process.py"
+        ),
+        "windows.git_isolation": "src/master_agent/platform_runtime/windows/git.py",
+        "windows.capsule_isolation": (
+            "src/master_agent/platform_runtime/windows/capsules.py"
         ),
     }
     shipped_owner_ids: list[str] = []

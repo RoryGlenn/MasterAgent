@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0105-native-windows-bootstrap"
+title = "Native Windows bootstrap packaging and paths"
+status = "archived"
+github_issue = 105
+created = "2026-08-22"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WINDOWS-INSTALL-001"
+destination = "runtime/MA-WINDOWS-INSTALL-001.md"
+source = "current/MA-WINDOWS-INSTALL-001.md"
