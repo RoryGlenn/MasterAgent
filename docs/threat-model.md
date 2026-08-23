@@ -236,9 +236,11 @@ Controls:
 - unavailable selection raises one typed bounded error and never retries
   through a POSIX shim, another platform, or a weaker fallback; and
 - Windows native filesystem, locking, atomic-state, credential-storage,
-  process supervision, trusted Git, and existing POSIX behavior receive
-  separate regression coverage, while capsule isolation and hosted
-  certification remain separately planned.
+  process supervision, trusted Git, AppContainer isolation, and existing POSIX
+  behavior receive separate regression coverage. Hosted matrix and protected
+  x64 workflow controls are implemented, while live certification remains
+  separately planned until an enrolled clean standard-user runner supplies
+  evidence.
 
 ### Excessive permissions
 
@@ -654,10 +656,11 @@ Controls:
 - the bundled pure capsule worker is intentionally too small for many useful
   provider capabilities; production brokerage and external audit adapters are
   deployment work, not demonstrated guarantees;
-- the native Windows filesystem/locking/atomic-state tranche is not full
-  runtime certification even with credential storage and process supervision:
-  operations still remain unavailable where Git, capsule isolation,
-  credential-broker, or certification contracts are absent. Expiration
+- native Windows implementation and hosted matrix evidence are not live x64
+  release certification: the protected workflow remains unproven until an
+  enrolled clean standard-user Windows 11 x64 runner completes it. Operations
+  also remain unavailable where another required runtime or credential-broker
+  contract is absent. Expiration
   quarantine intentionally retains orphaned bytes until an
   operator reviews and removes them;
 - a reviewed connector or plugin may still contain defects;

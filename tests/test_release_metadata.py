@@ -74,20 +74,24 @@ class ReleaseMetadataTests(unittest.TestCase):
             "/.ai/semantic-router.toml",
             "/.github/workflows/github-actions-live-integration.yml",
             "/.github/workflows/live-connector-integration.yml",
+            "/.github/workflows/windows-certification.yml",
             "/docs/semantic-index.md",
             "/docs/semantic-router-metrics.md",
+            "/docs/windows-certification.md",
             "/scripts/semantic_router.py",
             "/tests/test_semantic_router.py",
             "/tests/test_live_connector_workflow.py",
             "/specs/current/development/MA-ROUTER-001.md",
             "/specs/current/runtime/MA-WINDOWS-ATOMIC-STATE-001.md",
             "/specs/current/runtime/MA-WINDOWS-CAPSULES-001.md",
+            "/specs/current/runtime/MA-WINDOWS-CERTIFICATION-001.md",
             "/src/master_agent/platform_runtime/posix/capsule_worker.py",
             "/src/master_agent/platform_runtime/windows/atomic.py",
             "/src/master_agent/platform_runtime/windows/capsules.py",
             "/src/master_agent/platform_runtime/windows/capsule_worker.py",
             "/tests/test_windows_atomic_state.py",
             "/tests/test_windows_capsules.py",
+            "/tests/test_windows_certification_workflow.py",
         ):
             with self.subTest(suffix=suffix):
                 self.assertIn(
@@ -333,6 +337,8 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         for required in (
             "runs-on: windows-11-arm",
+            'python-version: ["3.12", "3.13", "3.14"]',
+            "python-version: ${{ matrix.python-version }}",
             "architecture: arm64",
             "New-LocalUser",
             "Add-LocalGroupMember -SID $usersSid -Member $user",
@@ -358,20 +364,36 @@ class ReleaseMetadataTests(unittest.TestCase):
             "native Windows restricted publication smoke failed",
             "& $buildPython -m build",
             "& $runtimePython -m pip install $wheel[0]",
+            '"$($wheel[0])[drafts]"',
+            "isolated wheel drafts-extra installation failed",
+            "& $sourcePython -m pip install $sdist[0]",
+            "Windows source-distribution console smoke failed",
+            "Run platform-independent hosted Windows gates",
+            "& $ruff check .",
+            "& $ruff format --check .",
+            "& $testPython -m unittest -v tests.test_windows_certification_workflow",
+            "scripts\\specs.py validate",
+            "scripts\\generate_sbom.py --check --verify-installed",
+            "scripts\\validate_release.py",
             "LongPathsEnabled",
             "Windows long-path policy is not enabled",
             "Windows long-path environment creation failed",
             "Windows wheel test path leaves insufficient tool-path headroom",
+            "nested path segment 005\\long06",
             '"src\\master_agent.egg-info"',
             "source checkout Ω with spaces",
             "long segment 008",
             "Windows source bootstrap path leaves insufficient tool-path headroom",
             'Join-Path $sourceRoot ".venv\\Scripts\\master-agent.exe"',
             "standard-user source bootstrap was not idempotent",
+            '$env:PYTHONUTF8 = "1"',
+            '$env:PYTHONIOENCODING = "utf-8"',
+            "Receive-Job -Job $job -ErrorAction Continue",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, job)
         self.assertNotIn("setup --", job)
+        self.assertNotIn("& $mypy", job)
         self.assertNotIn("& $runtimePython -m pip install .", job)
         self.assertLess(
             job.index("& $Python $bootstrap"),

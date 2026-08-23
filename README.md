@@ -73,7 +73,7 @@ unsafe surfaces remain deliberately non-routable.
 | Environment and governance | Capability ownership, deployment readiness, safe discovery, OAuth profiles, and secret-free diagnostics implemented |
 | Credentialed provider evidence | Manual-only, default-branch, privilege-separated workflow and static safety contract implemented; live evidence still requires organization credentials, consent, fixtures, dedicated targets, and an approved run |
 | Progressive user workflow | Employee and trusted developer modes, organization profiles, capability-scoped doctor results, and one-command governed execution implemented |
-| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, atomic local-state recovery, current-user credentials, Job Object supervision, trusted Git, and AppContainer pure-capsule isolation; full hosted certification remains planned |
+| Platform runtime | Deterministic backend identity and fail-closed selection implemented; native Windows uses retained-handle filesystem/ACL validation, `LockFileEx`, atomic local-state recovery, current-user credentials, Job Object supervision, trusted Git, and AppContainer pure-capsule isolation; three-version hosted CI and a protected x64 certification workflow are implemented, while live x64 certification remains gated on an enrolled clean standard-user runner |
 | Governed runtime | Immutable plans, approvals, policy, source-of-truth validation, idempotency, verification, compensation, audit, and prompt-injection controls implemented |
 | Read-only context | Jira, Confluence, Bitbucket, GitHub, Microsoft identity, Outlook, Teams, SharePoint/OneDrive, OneNote, citations, and retention implemented |
 | Draft-only output | Jira and Confluence proposals, Outlook and Teams drafts, PowerPoint, repository patches, and integrity manifests implemented |
@@ -683,6 +683,7 @@ creating another runtime planner or authorization layer. See
 - [Deployment runbook](docs/deployment-runbook.md)
 - [Operations guide](docs/operations.md)
 - [Release validation](docs/release-validation.md)
+- [Windows 11 x64 release certification](docs/windows-certification.md)
 
 ## Explicitly prohibited in v1
 

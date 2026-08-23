@@ -1,5 +1,14 @@
 # Changelog
 
+- Add a required Windows 11 ARM Python 3.12–3.14 pull-request matrix and a
+  protected Windows 11 x64 release-certification workflow. The x64 gate checks
+  the current protected default-branch SHA before checkout, rejects server,
+  non-x64, administrator, long-path-disabled, or production-credential-bearing
+  hosts, installs wheel and source distributions outside the checkout, and
+  runs the full native, specification, and release suite. Live x64
+  certification remains gated on a reviewed ephemeral standard-user runner;
+  workflow presence or a skipped job is not certification evidence.
+
 - Add native Windows bootstrap, packaging, and current-user paths. First run
   uses `Scripts\python.exe` and `Scripts\master-agent.exe`, applies umask only
   on POSIX, leaves unverified environments untouched in favor of a managed
@@ -55,8 +64,8 @@
   reports bubblewrap capsule isolation only when a trusted executable is
   selected and otherwise reports that contract unavailable, as does macOS.
   The Windows filesystem route is released; the Windows atomic-state route was
-  subsequently released above, while the other five native Windows
-  implementation/certification routes remain planned.
+  subsequently released above, while hosted Windows certification remains
+  planned until the protected runner produces successful evidence.
 
 - Harden credentialed connector evidence behind a manual-only, reviewed-
   default-branch workflow with separate protected read, effect, and GitHub
