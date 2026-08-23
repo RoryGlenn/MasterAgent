@@ -286,6 +286,21 @@ class SystemsGovernanceGateTests(unittest.TestCase):
         self.assertTrue(review.reassessment_required)
         self.assertIn("observer_assessment_mismatch", review.reason_codes)
 
+    def test_outcome_evidence_rejects_a_string_metric_status(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "metric status is invalid"):
+            SystemsOutcomeEvidence(
+                assessment_fingerprint="a" * 64,
+                decision_fingerprint="b" * 64,
+                success_metric_sha256="c" * 64,
+                metric_status="confirmed_moved",  # type: ignore[arg-type]
+                unintended_effects_detected=False,
+                observed_complexity_score=0,
+                removal_candidate_count=0,
+                stop_condition_checked=True,
+                stop_condition_triggered=False,
+                reason_codes=("metric_observed",),
+            )
+
     def test_added_complexity_requires_justification_and_removal_plan(self) -> None:
         assessment = _systems_assessment(
             low_risk=False,

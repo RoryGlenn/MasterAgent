@@ -673,6 +673,8 @@ class SystemsOutcomeEvidence:
                 raise ValidationError(
                     f"systems outcome evidence {name} must be a SHA-256 digest"
                 )
+        if not isinstance(self.metric_status, SystemsMetricStatus):
+            raise ValidationError("systems outcome evidence metric status is invalid")
         if self.metric_status not in {
             SystemsMetricStatus.CONFIRMED_MOVED,
             SystemsMetricStatus.CONFIRMED_UNCHANGED,
