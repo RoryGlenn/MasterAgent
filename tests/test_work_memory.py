@@ -189,6 +189,7 @@ class WorkMemoryTests(unittest.TestCase):
                     "hvb." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
                     "hvr." + "CAESIJabcdefghijklmnopqrstuvwxyz012345",
                     "sntrys_" + "abcdefghijklmnopqrstuvwxyz012345",
+                    "ops_" + "eyJabcdefghijklmnopqrstuvwxyz012345",
                     "dapi" + "0123456789abcdef0123456789abcdef",
                     "pypi-abcdefghijklmnopqrstuvwxyz0123456789",
                     "rk_live_" + "1234567890abcdefghijklmnop",

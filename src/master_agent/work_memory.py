@@ -123,7 +123,7 @@ _SENSITIVE_TEXT_PATTERN = re.compile(
     r"|\b(?:glpat|glptt|glrt|glcbt|glimt|glsoat|glagent|gloas|gldt)-"
     r"[A-Za-z0-9_-]{16,}\b"
     r"|\b(?:hf_|lin_api_|gsk_|dop_v1_|doo_v1_|dor_v1_|shpat_|shpca_|"
-    r"shppa_|shpss_|sntrys_|PMAK-)[A-Za-z0-9_-]{16,}\b"
+    r"shppa_|shpss_|sntrys_|ops_|PMAK-)[A-Za-z0-9_-]{16,}\b"
     r"|\bdapi[A-Fa-f0-9]{24,}\b"
     r"|\bpypi-[A-Za-z0-9_-]{20,}\b"
     r"|\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b"
