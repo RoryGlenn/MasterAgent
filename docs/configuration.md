@@ -196,11 +196,13 @@ from [`config/capsule-authorities.example`](../config/capsule-authorities.exampl
 The file contains subjects, one role per authority, allowed environments, and
 environment variable names, never key values. Generation, validation, sandbox
 validation, review, publication, and revocation require different key IDs and
-different subjects. The publisher subject must match the reviewed capsule
-publisher exactly. Keep the copied file outside imported repositories, owner
-controlled, and non-writable by group or world. Populate its six referenced
-variables through an approved secret source only for the lifecycle operation
-that needs them.
+different subjects. Their environment variable references and resolved signing
+key values must also be distinct; the loader rejects either form of key reuse
+before it constructs the trust ring. The publisher subject must match the
+reviewed capsule publisher exactly. Keep the copied file outside imported
+repositories, owner controlled, and non-writable by group or world. Populate
+its six referenced variables through an approved secret source only for the
+lifecycle operation that needs them.
 
 Authenticated GitHub Cloud capabilities use `MASTER_AGENT_GITHUB_TOKEN` as a
 bearer token. The separate `github.public_repository.list` capability is

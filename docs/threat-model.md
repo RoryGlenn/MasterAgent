@@ -516,7 +516,8 @@ Controls:
   independent publisher authority signs promotion;
 - load capsule signing identities only from an explicit owner-controlled TOML
   ring whose secrets are environment-backed, whose enabled entries own one role
-  each, and whose required keys and case-folded subjects are distinct;
+  each, and whose required key IDs, case-folded subjects, environment references,
+  and resolved signing key values are distinct;
 - install only the signed quarantine state; catalog and routing construction
   still require the final independently signed enabled state;
 - authenticate the complete latest state chain, then apply governance and

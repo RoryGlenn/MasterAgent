@@ -47,6 +47,7 @@ def load_capsule_authorities(
         raise ConfigurationError("at least one capsule authority role is required")
     environment = environ if environ is not None else os.environ
     by_role: dict[CapsuleRole, CapsuleAuthority] = {}
+    secret_names: dict[CapsuleRole, str] = {}
     for raw_key_id, item in table.items():
         key_id = str(raw_key_id)
         if not isinstance(item, Mapping):
@@ -97,6 +98,7 @@ def load_capsule_authorities(
             raise ConfigurationError(
                 f"capsule authority secret is unavailable: {secret_name}"
             )
+        secret_names[role] = secret_name
         by_role[role] = CapsuleAuthority(
             key_id=key_id,
             subject=subject,
@@ -114,6 +116,14 @@ def load_capsule_authorities(
         raise ConfigurationError("capsule authority keys must be distinct by role")
     if len({item.subject.casefold() for item in authorities}) != len(authorities):
         raise ConfigurationError("capsule authority subjects must be distinct by role")
+    if len(set(secret_names.values())) != len(authorities):
+        raise ConfigurationError(
+            "capsule authority secret references must be distinct by role"
+        )
+    if len({item.secret for item in authorities}) != len(authorities):
+        raise ConfigurationError(
+            "capsule authority secret values must be distinct by role"
+        )
     trust = CapsuleTrustStore({item.key_id: item for item in authorities})
     return by_role, trust
 

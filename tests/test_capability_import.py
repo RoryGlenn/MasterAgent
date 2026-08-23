@@ -734,7 +734,9 @@ class CapabilityImportTests(unittest.TestCase):
                     "revoked",
                 )
 
-    def test_capsule_authority_config_rejects_shared_subjects_and_roles(self) -> None:
+    def test_capsule_authority_config_rejects_shared_identities_roles_and_keys(
+        self,
+    ) -> None:
         with private_temporary_directory() as directory:
             root = Path(directory)
             config = _write_authority_config(root)
@@ -765,6 +767,29 @@ class CapabilityImportTests(unittest.TestCase):
                 load_capsule_authorities(
                     snapshot_explicit_file(config),
                     environ=environment,
+                )
+            config.write_text(
+                original.replace("TEST_CAPSULE_KEY_1", "TEST_CAPSULE_KEY_0"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError, "secret references must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=environment,
+                )
+            config.write_text(original, encoding="utf-8")
+            reused_value_environment = dict(environment)
+            reused_value_environment["TEST_CAPSULE_KEY_1"] = environment[
+                "TEST_CAPSULE_KEY_0"
+            ]
+            with self.assertRaisesRegex(
+                ConfigurationError, "secret values must be distinct"
+            ):
+                load_capsule_authorities(
+                    snapshot_explicit_file(config),
+                    environ=reused_value_environment,
                 )
 
 
