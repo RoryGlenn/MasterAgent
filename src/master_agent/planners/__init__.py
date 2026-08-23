@@ -23,6 +23,7 @@ from master_agent.planners.base import (
     bind_systems_governance,
     build_systems_post_execution_review,
     enforce_systems_governance,
+    strategy_coherence_execution_authenticated,
 )
 from master_agent.planners.static import build_weekly_status_plan
 
@@ -50,4 +51,5 @@ __all__ = [
     "build_systems_post_execution_review",
     "build_weekly_status_plan",
     "enforce_systems_governance",
+    "strategy_coherence_execution_authenticated",
 ]

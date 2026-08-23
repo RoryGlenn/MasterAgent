@@ -405,29 +405,56 @@ def enforce_systems_governance(
         raise ValidationError(
             "systems governance denied plan: " + "; ".join(expected.reasons)
         )
-    authenticated_whole_plan_review = policy is not None and (
-        _has_authenticated_whole_plan_review(
-            policy=policy,
-            plan=plan,
-            approvals=tuple(approvals),
-        )
+    approvals_tuple = tuple(approvals)
+    trusted_strategy_coherence = strategy_coherence_execution_authenticated(
+        plan,
+        policy=policy,
+        approvals=approvals_tuple,
     )
     if (
         expected.route is SystemsGateRoute.GATED
         and require_trusted_coherence
-        and not plan._has_trusted_strategy_coherence_admission()
-        and not authenticated_whole_plan_review
+        and not trusted_strategy_coherence
     ):
         raise ValidationError(
             "gated plan requires trusted strategy coherence provenance or an "
             "authenticated whole-plan review"
         )
-    if expected.requires_human_review and (not authenticated_whole_plan_review):
+    if expected.requires_human_review and (
+        policy is None
+        or not _has_authenticated_whole_plan_review(
+            policy=policy,
+            plan=plan,
+            approvals=approvals_tuple,
+        )
+    ):
         raise ValidationError(
             "systems governance requires authenticated human review: "
             + "; ".join(expected.reasons)
         )
     return bound_decision
+
+
+def strategy_coherence_execution_authenticated(
+    plan: ChangePlan,
+    *,
+    policy: PolicyEngine | None = None,
+    approvals: Iterable[Approval] = (),
+) -> bool:
+    """Return whether the exact plan has trusted coherence provenance."""
+
+    decision = plan.systems_decision
+    if decision is None:
+        return False
+    if decision.route is SystemsGateRoute.FAST_PATH:
+        return True
+    if plan._has_trusted_strategy_coherence_admission():
+        return True
+    return policy is not None and _has_authenticated_whole_plan_review(
+        policy=policy,
+        plan=plan,
+        approvals=tuple(approvals),
+    )
 
 
 def _has_authenticated_whole_plan_review(
@@ -701,4 +728,5 @@ __all__ = [
     "bind_systems_governance",
     "build_systems_post_execution_review",
     "enforce_systems_governance",
+    "strategy_coherence_execution_authenticated",
 ]
