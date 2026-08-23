@@ -391,6 +391,9 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")
 
         expected_scopes = {
+            "reddit.post.create": ("identity", "read", "submit"),
+            "reddit.comment.create": ("identity", "read", "submit"),
+            "reddit.comment.reply": ("identity", "read", "submit"),
             "outlook.email.send": ("Mail.ReadWrite", "Mail.Send"),
             "teams.chat.message.send": ("Chat.Read", "ChatMessage.Send"),
             "teams.channel.message.send": (
@@ -408,6 +411,36 @@ class CapabilityCatalogConsistencyTests(unittest.TestCase):
                     catalog.definitions[capability].required_scopes,
                     scopes,
                 )
+
+    def test_packaged_reddit_profile_has_no_mutation_authority(self) -> None:
+        reddit = IntegrationConfig.from_toml(
+            ROOT / "config/integrations.toml"
+        ).connector("reddit")
+
+        self.assertEqual(reddit.extra["credential_profile"], "read")
+        self.assertEqual(
+            reddit.extra["scopes"],
+            ["identity", "read", "history", "privatemessages"],
+        )
+        self.assertEqual(
+            reddit.credential_environment_variables(),
+            (
+                "MASTER_AGENT_REDDIT_READ_CLIENT_ID",
+                "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET",
+                "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN",
+            ),
+        )
+        self.assertFalse(
+            any(
+                reddit.extra[key]
+                for key in (
+                    "posts_enabled",
+                    "comments_enabled",
+                    "edits_enabled",
+                    "deletes_enabled",
+                )
+            )
+        )
 
     def test_local_git_mutations_are_disabled_in_catalog(self) -> None:
         catalog = CapabilityCatalog.from_toml(ROOT / "config/capabilities.toml")

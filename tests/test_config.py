@@ -260,7 +260,7 @@ auth_mode = "none"
         config = IntegrationConfig.from_toml(root / "config/integrations.toml")
         self.assertEqual(
             set(config.connectors),
-            {"jira", "confluence", "bitbucket", "github", "microsoft"},
+            {"jira", "confluence", "bitbucket", "github", "microsoft", "reddit"},
         )
         self.assertTrue(config.connector("jira").enabled)
         self.assertEqual(config.connector("jira").auth_mode, AuthMode.BASIC)

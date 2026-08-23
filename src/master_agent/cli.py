@@ -244,6 +244,7 @@ _CONNECT_CONFIGURATION_BY_SYSTEM = {
     "outlook": "microsoft",
     "teams": "microsoft",
     "onenote": "microsoft",
+    "reddit": "reddit",
 }
 _MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS = 8 * 1024
 

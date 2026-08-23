@@ -13,6 +13,8 @@ from master_agent.connectors.microsoft import (
     SharePointConnector,
 )
 from master_agent.connectors.mock import MockConnector
+from master_agent.connectors.reddit import RedditConnector
+from master_agent.connectors.reddit_write import RedditWriteConnector
 
 __all__ = [
     "BitbucketConnector",
@@ -23,5 +25,7 @@ __all__ = [
     "JiraConnector",
     "MicrosoftIdentityConnector",
     "MockConnector",
+    "RedditConnector",
+    "RedditWriteConnector",
     "SharePointConnector",
 ]

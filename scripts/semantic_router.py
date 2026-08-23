@@ -131,6 +131,7 @@ _IGNORED_DIRECTORY_NAMES: Final = {
     "build",
     "dist",
 }
+_IGNORED_MANAGED_VENV = re.compile(r"^\.venv-master-agent-[0-9a-f]{12}$")
 
 
 class ManifestError(ValueError):
@@ -888,7 +889,10 @@ def _bounded_file_inventory(
             relative = path.relative_to(root)
             if relative.parts and relative.parts[0] in excluded_first_parts:
                 continue
-            if entry.name in _IGNORED_DIRECTORY_NAMES:
+            if (
+                entry.name in _IGNORED_DIRECTORY_NAMES
+                or _IGNORED_MANAGED_VENV.fullmatch(entry.name) is not None
+            ):
                 continue
             if entry.is_symlink():
                 if entry.name.endswith(suffix):

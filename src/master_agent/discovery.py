@@ -46,6 +46,7 @@ _DEFAULT_DISCOVERY_SYSTEMS = frozenset(
         "sharepoint",
         "outlook",
         "teams",
+        "reddit",
     }
 )
 

@@ -220,7 +220,8 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- an 82-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a 96-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a governed Reddit OAuth connector with purpose-separated read and communication credentials, provider-reported scope enforcement, bounded reads, local drafts, exact approved post/comment/reply operations, zero write retries, and catalog-quarantined non-atomic edit/delete adapters;
 - a bounded GitHub Cloud read connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run
   reads;

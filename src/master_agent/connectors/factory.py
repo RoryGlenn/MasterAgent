@@ -24,6 +24,7 @@ from master_agent.connectors.drafts import (
     JiraDraftConnector,
     OutlookDraftConnector,
     PowerPointDraftConnector,
+    RedditDraftConnector,
     RepositoryDraftConnector,
     TeamsDraftConnector,
 )
@@ -41,6 +42,8 @@ from master_agent.connectors.microsoft import (
 )
 from master_agent.connectors.onenote import OneNoteReadConnector
 from master_agent.connectors.outlook import OutlookConnector
+from master_agent.connectors.reddit import RedditConnector
+from master_agent.connectors.reddit_write import RedditWriteConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
 from master_agent.directory_safety import PinnedDirectory, pin_directory
@@ -65,6 +68,7 @@ _READ_SYSTEMS = frozenset(
         "outlook",
         "teams",
         "onenote",
+        "reddit",
     }
 )
 
@@ -78,11 +82,13 @@ _BUILTIN_CONNECTOR_TYPES = (
     OutlookConnector,
     TeamsConnector,
     OneNoteReadConnector,
+    RedditConnector,
     JiraWriteConnector,
     ConfluenceWriteConnector,
     BitbucketWriteConnector,
     GitHubWriteConnector,
     GitHubAdminConnector,
+    RedditWriteConnector,
     SharePointWriteConnector,
     OutlookSendConnector,
     TeamsSendConnector,
@@ -92,6 +98,7 @@ _BUILTIN_CONNECTOR_TYPES = (
     TeamsDraftConnector,
     PowerPointDraftConnector,
     RepositoryDraftConnector,
+    RedditDraftConnector,
     IdentityMapConnector,
 )
 
@@ -127,6 +134,7 @@ def configured_builtin_capabilities(
         TeamsDraftConnector,
         PowerPointDraftConnector,
         RepositoryDraftConnector,
+        RedditDraftConnector,
     )
     capabilities = {
         capability
@@ -178,6 +186,20 @@ def configured_builtin_capabilities(
                     capabilities.update(GitHubWriteConnector._CAPABILITIES)
                 if _feature_enabled(connector, "admin_enabled"):
                     capabilities.update(GitHubAdminConnector._CAPABILITIES)
+        elif name == "reddit":
+            capabilities.update(RedditConnector._CAPABILITIES)
+            if include_communications:
+                if _feature_enabled(connector, "posts_enabled"):
+                    capabilities.add("reddit.post.create")
+                if _feature_enabled(connector, "comments_enabled"):
+                    capabilities.update(
+                        {"reddit.comment.create", "reddit.comment.reply"}
+                    )
+            if include_writes:
+                if _feature_enabled(connector, "edits_enabled"):
+                    capabilities.add("reddit.content.edit")
+                if _feature_enabled(connector, "deletes_enabled"):
+                    capabilities.add("reddit.content.delete")
         elif name == "microsoft":
             capabilities.update(MicrosoftIdentityConnector._CAPABILITIES)
             capabilities.update(SharePointConnector._CAPABILITIES)
@@ -309,7 +331,14 @@ def build_live_connectors(
             unresolved.system, selected
         ):
             continue
-        if name not in {"jira", "confluence", "bitbucket", "github", "microsoft"}:
+        if name not in {
+            "jira",
+            "confluence",
+            "bitbucket",
+            "github",
+            "microsoft",
+            "reddit",
+        }:
             continue
         resolved = resolved_configs[unresolved.system]
 
@@ -361,6 +390,18 @@ def build_live_connectors(
                 and _feature_enabled(unresolved, "admin_enabled")
             ):
                 connectors.append(GitHubAdminConnector(resolved, transport=transport))
+            continue
+
+        if name == "reddit" and "reddit" in selected:
+            connectors.append(RedditConnector(resolved, transport=transport))
+            effects = RedditWriteConnector(
+                resolved,
+                transport=transport,
+                include_writes=include_writes,
+                include_communications=include_communications,
+            )
+            if effects.capabilities:
+                connectors.append(effects)
             continue
 
         if name != "microsoft":
@@ -475,6 +516,9 @@ def register_draft_connectors(
                 root, artifact_budget=budget, output_limits=output_limits
             ),
             RepositoryDraftConnector(
+                root, artifact_budget=budget, output_limits=output_limits
+            ),
+            RedditDraftConnector(
                 root, artifact_budget=budget, output_limits=output_limits
             ),
         ):

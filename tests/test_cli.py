@@ -1263,6 +1263,87 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         )
         self.assertNotIn(token, stdout.getvalue())
 
+    def test_connect_reddit_refreshes_and_attests_without_exposing_credentials(
+        self,
+    ) -> None:
+        access_token = "reddit-access-token-canary"
+        client_secret = "reddit-client-secret-canary"
+        refresh_token = "reddit-refresh-token-canary"
+        transport = ScriptedTransport()
+        transport.add_json(
+            "POST",
+            "/api/v1/access_token",
+            {
+                "access_token": access_token,
+                "token_type": "bearer",
+                "expires_in": 3600,
+                "scope": "identity read history privatemessages",
+            },
+            host="www.reddit.com",
+        )
+        transport.add_json(
+            "GET",
+            "/api/v1/me",
+            {"id": "stableredditid", "name": "reviewed-user"},
+            host="oauth.reddit.com",
+        )
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            credentials = root / "reddit-credentials.json"
+            original = json.dumps(
+                {
+                    "schema": "master-agent/credential-store@1",
+                    "credentials": {
+                        "MASTER_AGENT_REDDIT_READ_CLIENT_ID": "reddit-client-id",
+                        "MASTER_AGENT_REDDIT_READ_CLIENT_SECRET": client_secret,
+                        "MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN": refresh_token,
+                    },
+                }
+            )
+            credentials.write_text(original, encoding="utf-8")
+            credentials.chmod(0o600)
+            output = root / "connection.json"
+            stdout = StringIO()
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                redirect_stdout(stdout),
+            ):
+                status = _connect(
+                    integrations_path=None,
+                    governance_path=None,
+                    credentials_file=credentials,
+                    systems={"reddit"},
+                    output=output,
+                    transport=transport,
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(credentials.read_text(encoding="utf-8"), original)
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+        rendered = stdout.getvalue()
+        self.assertEqual(status, 0)
+        self.assertFalse(payload["persistent_configuration_changed"])
+        self.assertEqual(payload["records"][0]["status"], "reachable")
+        self.assertTrue(payload["records"][0]["probe"]["reachable"])
+        self.assertEqual(
+            payload["records"][0]["probe"]["schema"],
+            "master-agent/provider-probe@1",
+        )
+        self.assertIn("connected: reddit", rendered)
+        self.assertEqual(len(transport.requests), 3)
+        self.assertEqual(
+            [request.method for request in transport.requests],
+            ["POST", "GET", "GET"],
+        )
+        self.assertEqual(
+            transport.requests[-1].headers["Authorization"],
+            f"Bearer {access_token}",
+        )
+        for secret in (access_token, client_secret, refresh_token):
+            self.assertNotIn(secret, rendered)
+
     def test_connect_infers_friendly_jira_credentials_without_persisting_config(
         self,
     ) -> None:

@@ -37,7 +37,7 @@ class PhaseCompletionCliTests(unittest.TestCase):
                 for item in payload["checks"]
                 if item["name"].startswith("connector:")
             ]
-            self.assertEqual(len(connector_checks), 5)
+            self.assertEqual(len(connector_checks), 6)
             self.assertTrue(all(item["passed"] for item in connector_checks))
             self.assertTrue(
                 all(not item["credential_ready"] for item in connector_checks)

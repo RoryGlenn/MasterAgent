@@ -628,6 +628,32 @@ master-agent github-repositories \
   --credentials-file /absolute/path/to/private-token.json
 ```
 
+## Reddit Cloud
+
+Reddit uses the fixed `https://oauth.reddit.com` API root and the fixed
+`https://www.reddit.com/api/v1/access_token` refresh endpoint. The checked-in
+`read` profile stores only `MASTER_AGENT_REDDIT_READ_CLIENT_ID`,
+`MASTER_AGENT_REDDIT_READ_CLIENT_SECRET`, and
+`MASTER_AGENT_REDDIT_READ_REFRESH_TOKEN` variable names and requests exactly
+`identity`, `read`, `history`, and `privatemessages`. The runtime exchanges the
+refresh credential in memory and binds the immutable `/api/v1/me` user ID and
+provider-reported scopes before live execution. Missing scopes or scopes outside
+the configured profile fail closed.
+
+Reads are available when the read credential is supplied. Active effects require
+a separate OAuth grant and private `communication` profile using the
+`MASTER_AGENT_REDDIT_COMMUNICATION_*` names and exactly `identity`, `read`, and
+`submit`, plus the normal runtime communication gate and `posts_enabled` or
+`comments_enabled`. The read profile rejects mutation flags, while the
+communication profile rejects `edits_enabled` and `deletes_enabled`. All
+packaged effect flags are false. Each active Reddit mutation is
+exact-approval-bound, has zero automatic retries, and is followed by an
+independent provider read. The edit/delete adapters additionally enforce
+ownership and expected version in tests but remain catalog-disabled pending an
+atomic provider precondition. See
+[`reddit-connector.md`](reddit-connector.md)
+for credential shape, capabilities, and operational errors.
+
 ## Microsoft identity mode
 
 - `delegated` represents the signed-in user and is required by this runtime for OneNote reads and normal Teams sends.

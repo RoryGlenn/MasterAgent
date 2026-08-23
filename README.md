@@ -88,18 +88,19 @@ unsafe surfaces remain deliberately non-routable.
 
 ## Capability surface
 
-The catalog contains **82 typed capabilities**:
+The catalog contains **96 typed capabilities**:
 
-- 46 read-only capabilities;
-- 10 local-generation capabilities;
+- 52 read-only capabilities;
+- 13 local-generation capabilities;
 - 20 reversible-write definitions;
-- 4 external-communication capabilities;
-- 2 high-impact capability definitions, both disabled.
+- 8 external-communication capabilities;
+- 3 high-impact capability definitions, all disabled.
 
 | Domain | Read | Draft/local generation | Approved effects |
 |---|---|---|---|
 | Jira | issue search/read and server info | issue/comment/transition proposals | narrow version-aware mutations; unsupported atomic operations remain disabled |
 | Confluence | page search/read | page create/update proposals | version-aware Cloud/Data Center page operations and bounded Cloud space creation |
+| Reddit | purpose-scoped search, content, rules, history, inbox | post/comment/reply Markdown | separate communication credential for exact approved post/comment/reply; edit/delete quarantined pending provider CAS |
 | Bitbucket | public workspace repositories, authenticated repositories, pull requests, changes, and CI status | branch plans and source patches | pull-request creation; merge and local-Git publication disabled |
 | GitHub | public/authenticated repositories, repository metadata, pull requests, and checks | — | issue and pull-request creation; unsafe administration disabled |
 | Outlook | folders, messages, and allowlisted text attachments | `.eml` draft | exact-content send after provider-draft verification |
@@ -670,6 +671,7 @@ creating another runtime planner or authorization layer. See
 ### Providers and phase contracts
 
 - [GitHub connector quickstart](docs/github-connector-quickstart.md)
+- [Reddit connector](docs/reddit-connector.md)
 - [Confluence Cloud sandbox tests](docs/confluence-sandbox-tests.md)
 - [Live connector contracts](docs/live-connectors.md)
 - [Credentialed live connector integration tests](docs/live-connector-integration-tests.md)

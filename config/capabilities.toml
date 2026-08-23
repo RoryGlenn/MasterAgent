@@ -196,6 +196,131 @@ reversible = true
 requires_expected_version = true
 description = "Disabled because GitHub does not document a provider-side compare-and-swap precondition for repository settings updates."
 
+[capabilities."reddit.search"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["identity", "read"]
+target_resource_types = ["search"]
+parameter_schema = { query = "string", subreddit = "string?", sort = "string?", time = "string?", limit = "integer?" }
+
+[capabilities."reddit.content.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["identity", "read"]
+target_resource_types = ["post", "comment"]
+parameter_schema = { reference = "string?", fullname = "string?", kind = "string?" }
+
+[capabilities."reddit.subreddit.rules.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["identity", "read"]
+target_resource_types = ["subreddit"]
+parameter_schema = { subreddit = "string" }
+
+[capabilities."reddit.user.submitted.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["history", "identity", "read"]
+target_resource_types = ["user"]
+parameter_schema = { username = "string?", limit = "integer?" }
+
+[capabilities."reddit.user.comments.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["history", "identity", "read"]
+target_resource_types = ["user"]
+parameter_schema = { username = "string?", limit = "integer?" }
+
+[capabilities."reddit.inbox.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+required_scopes = ["identity", "privatemessages"]
+target_resource_types = ["inbox"]
+parameter_schema = { limit = "integer?" }
+
+[capabilities."reddit.post.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+max_input_bytes = 1048576
+max_output_bytes = 1048576
+target_resource_types = ["post"]
+parameter_schema = { subreddit = "string", title = "string", body = "string", output_name = "string?" }
+description = "Render a local Reddit post proposal without publishing."
+
+[capabilities."reddit.comment.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+max_input_bytes = 1048576
+max_output_bytes = 1048576
+target_resource_types = ["comment"]
+parameter_schema = { parent_fullname = "string", body = "string", output_name = "string?" }
+description = "Render a local Reddit comment proposal without publishing."
+
+[capabilities."reddit.comment.reply.draft"]
+enabled = true
+authentication = "local"
+risk = "local_generation"
+max_input_bytes = 1048576
+max_output_bytes = 1048576
+target_resource_types = ["comment"]
+parameter_schema = { parent_fullname = "string", body = "string", output_name = "string?" }
+description = "Render a local Reddit reply proposal without publishing."
+
+[capabilities."reddit.post.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "external_communication"
+required_scopes = ["identity", "read", "submit"]
+target_resource_types = ["post"]
+parameter_schema = { subreddit = "string", title = "string", kind = "string?", body = "string?", url = "string?" }
+description = "Publish and verify one exactly approved Reddit post."
+
+[capabilities."reddit.comment.create"]
+enabled = true
+authentication = "configured_connector"
+risk = "external_communication"
+required_scopes = ["identity", "read", "submit"]
+target_resource_types = ["comment"]
+parameter_schema = { parent_fullname = "string", body = "string" }
+description = "Publish and verify one exactly approved Reddit comment."
+
+[capabilities."reddit.comment.reply"]
+enabled = true
+authentication = "configured_connector"
+risk = "external_communication"
+required_scopes = ["identity", "read", "submit"]
+target_resource_types = ["comment"]
+parameter_schema = { parent_fullname = "string", body = "string" }
+description = "Publish and verify one exactly approved Reddit reply."
+
+[capabilities."reddit.content.edit"]
+enabled = false
+authentication = "configured_connector"
+risk = "external_communication"
+required_scopes = ["edit", "identity", "read"]
+requires_expected_version = true
+target_resource_types = ["post", "comment"]
+parameter_schema = { body = "string" }
+description = "Edit authenticated-user Reddit content after an exact version check."
+
+[capabilities."reddit.content.delete"]
+enabled = false
+authentication = "configured_connector"
+risk = "high_impact"
+required_scopes = ["edit", "identity", "read"]
+requires_expected_version = true
+target_resource_types = ["post", "comment"]
+parameter_schema = {}
+description = "Delete authenticated-user Reddit content after exact approval and an ownership/version check."
+
 [capabilities."identity.identifier.resolve"]
 enabled = true
 authentication = "local"
@@ -726,6 +851,36 @@ metadata = ["system", "identity", "retention", "source_urls"]
 schema = "master-agent/outlook-messages@1"
 resources = { messages = "object_list" }
 metadata = ["system", "identity", "folder_id", "returned", "retention", "source_urls"]
+
+[read_result_contracts."reddit.search"]
+schema = "master-agent/reddit-search@1"
+resources = { items = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."reddit.content.read"]
+schema = "master-agent/reddit-content@1"
+resources = { items = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."reddit.subreddit.rules.read"]
+schema = "master-agent/reddit-subreddit-rules@1"
+resources = { rules = "object_list" }
+metadata = ["system", "subreddit", "returned", "source_urls"]
+
+[read_result_contracts."reddit.user.submitted.read"]
+schema = "master-agent/reddit-user-submitted@1"
+resources = { items = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."reddit.user.comments.read"]
+schema = "master-agent/reddit-user-comments@1"
+resources = { items = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
+
+[read_result_contracts."reddit.inbox.read"]
+schema = "master-agent/reddit-inbox@1"
+resources = { items = "object_list" }
+metadata = ["system", "deployment", "returned", "source_urls"]
 
 [read_result_contracts."sharepoint.drive.children"]
 schema = "master-agent/sharepoint-drive-items@1"
