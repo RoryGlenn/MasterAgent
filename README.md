@@ -22,6 +22,33 @@ approved action, or claim success without an independent check.
 
 **Version 1.0.0 — governed enterprise-agent runtime**
 
+## Why MasterAgent exists
+
+MasterAgent is built for restricted corporate environments where a third-party
+Model Context Protocol (MCP) server may be unavailable, unreliable behind the
+managed network, or prohibited until the organization reviews and approves it.
+A workflow that depends on downloading such a server is therefore not a
+dependable employee workflow in those environments.
+
+The project instead ships and maintains first-party native connectors for its
+supported providers. Those connectors are part of the governed runtime: they
+use typed capabilities, fixed provider boundaries, selected credentials,
+independent verification, and the same approval and audit rules as every other
+action. Built-in provider workflows do not require a third-party MCP server.
+
+MCP is optional, not the foundation. A specific MCP adapter may be added later
+only when the organization approves it, it works reliably in the intended
+environment, and it can satisfy the same connector contract. MasterAgent does
+not dynamically trust arbitrary discovered tools or silently retry a failed
+action through another implementation.
+
+The goal is not to reproduce every provider API. It is to make a small set of
+important employee workflows work reliably on managed workstations through
+code the organization can inspect, test, support, and repair. See
+[Native-first enterprise purpose](docs/native-first-enterprise.md) for the
+complete product boundary and the distinction between current behavior and
+planned certification work.
+
 [Quickstart](docs/quickstart.md) · [Use cases](docs/use-cases.md) ·
 [How it works](#how-it-works) · [Documentation](docs/index.md) ·
 [Configuration](docs/configuration.md) · [Troubleshooting](docs/troubleshooting.md)
@@ -405,6 +432,7 @@ discoverable.
 ### Start and operate
 
 - [Quickstart](docs/quickstart.md)
+- [Native-first enterprise purpose](docs/native-first-enterprise.md)
 - [Use cases](docs/use-cases.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [CLI reference](docs/cli-reference.md)
