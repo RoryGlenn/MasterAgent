@@ -65,7 +65,8 @@ Selection is deliberately separate from preview. Copy
 [`config/capsule-authorities.example`](../config/capsule-authorities.example)
 to an operator-controlled location, set mode `0600`, and populate its six
 referenced environment variables from an approved secret source. Each enabled
-entry owns exactly one role. Keys and case-insensitive subjects must be distinct;
+entry owns exactly one role. Key IDs, secret references, resolved secret values,
+and case-insensitive subjects must be distinct;
 the reviewed publisher subject must exactly match the imported capsule's
 declared publisher. The imported program never receives those environment
 variables: the worker starts with a fixed, sanitized environment.
@@ -77,6 +78,7 @@ master-agent capability-import \
   /trusted/imports/agent-capabilities.json \
   --select greeting \
   --expected-source-sha256 <preview-source-sha256> \
+  --environment development \
   --capsule-store /trusted/master-agent/capsules \
   --capsule-authorities /trusted/master-agent/capsule-authorities.toml
 ```
@@ -96,14 +98,17 @@ publication, and enablement:
 ```bash
 master-agent capability-promote \
   foreign.greeting.generate 1.0.0 \
+  --environment development \
   --capsule-store /trusted/master-agent/capsules \
   --capsule-authorities /trusted/master-agent/capsule-authorities.toml
 ```
 
 The command validates the installed immutable bundle before each distinct
-role-signed transition. Only the final `enabled` manifest can create a typed
-catalog definition or routing card. Inspect the authenticated chain at any
-time:
+role-signed transition. It preflights every authority for the selected
+environment and exact trust-store binding, then safely resumes an authenticated
+partial chain after an interruption; already-recorded evidence must match the
+fresh validation. Only the final `enabled` manifest can create a typed catalog
+definition or routing card. Inspect the authenticated chain at any time:
 
 ```bash
 master-agent capability-status \
@@ -122,9 +127,13 @@ master-agent capability-route "generate a greeting" \
 ```
 
 Routing authenticates each complete chain, requires its latest state to be
-`enabled`, applies organization governance and runtime policy, and only then
-matches the bounded intent hints. To execute, save an owner-only JSON request
-whose fields match the capsule input schema, then run:
+`enabled`, requires the manifest environment to exactly match the selected
+governance profile environment, applies organization governance and runtime
+policy, and only then matches the bounded intent hints. The quarantine and
+promotion examples use `development`, matching the packaged default governance
+profile; pass an explicit matching `--governance` file for another environment.
+To execute, save an owner-only JSON request whose fields match the capsule input
+schema, then run:
 
 ```bash
 master-agent capability-run "generate a greeting" \

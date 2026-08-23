@@ -17,6 +17,10 @@ governance and runtime policy, and only then performs lexical intent matching.
 Execution binds the chosen manifest into `ExecutionContext`, activates its
 typed catalog definition and connector, and runs a one-action `ChangePlan`
 through `WorkflowOrchestrator` with normal audit and deterministic readback.
+The router and runner use one immutable governance snapshot and reject any
+signed capsule environment mismatch before activation. Promotion preflights all
+role environments and resumes only an authenticated partial chain whose stored
+evidence matches a fresh isolated validation.
 
 ## Affected components
 

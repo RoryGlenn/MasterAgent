@@ -36,6 +36,12 @@ candidate, and execution MUST bind that manifest into a typed `ChangePlan` and
 use the normal catalog, governance, policy, connector registry, audit log,
 isolated worker, verification, and `WorkflowOrchestrator` path.
 
+Promotion MUST preflight all later role authorities before its first append and
+MUST safely resume an authenticated partial promotion chain after interruption,
+revalidating retained evidence before continuing. Routing and execution MUST
+reject a capsule whose signed environment differs from the selected runtime
+governance environment before foreign behavior or audit mutation occurs.
+
 Imported authority, credentials, approvals, identity, trust, background access,
 and recursion MUST NOT transfer. Updates MUST use a new immutable version and a
 freshly previewed digest, then repeat the complete lifecycle without overwriting

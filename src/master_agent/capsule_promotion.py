@@ -82,6 +82,15 @@ class CapabilityPromotionService:
         for role, authority in authorities.items():
             if role not in authority.roles:
                 raise ConfigurationError("capsule promotion authority role drifted")
+            if str(selected_environment) not in authority.environments:
+                raise ConfigurationError(
+                    "capsule promotion authority "
+                    f"{role} is not valid in {selected_environment}"
+                )
+            if trust.authorities.get(authority.key_id) != authority:
+                raise ConfigurationError(
+                    f"capsule promotion authority {role} is not bound to the trust store"
+                )
         worker_sha256 = worker.identity_sha256
         if validator.worker_sha256 != worker_sha256:
             raise ConfigurationError(
@@ -129,53 +138,72 @@ class CapabilityPromotionService:
             now=now,
         )
         self._store.install(bundle, quarantined, trust=self._trust)
-        return self.promote_quarantined(bundle, quarantined, now=now)
+        return self.promote_installed(bundle, quarantined, now=now)
 
     def promote_quarantined(
         self,
         bundle: CapsuleBundle,
-        quarantined: CapsuleManifest,
+        current: CapsuleManifest,
         *,
         now: datetime | None = None,
     ) -> PromotionResult:
-        """Promote an exact already-installed quarantine through every gate."""
+        """Promote or resume an installed capsule; retained for API compatibility."""
 
-        if quarantined.state is not CapsuleState.QUARANTINED:
+        return self.promote_installed(bundle, current, now=now)
+
+    def promote_installed(
+        self,
+        bundle: CapsuleBundle,
+        current: CapsuleManifest,
+        *,
+        now: datetime | None = None,
+    ) -> PromotionResult:
+        """Promote or safely resume an authenticated installed capsule chain."""
+
+        promotable_states = {
+            CapsuleState.QUARANTINED,
+            CapsuleState.TESTED,
+            CapsuleState.SANDBOX_VALIDATED,
+            CapsuleState.REVIEWED,
+            CapsuleState.PUBLISHED,
+            CapsuleState.ENABLED,
+        }
+        if current.state not in promotable_states:
             raise ConfigurationError(
-                "existing capsule promotion must start from quarantine"
+                "existing capsule promotion cannot resume from its current state"
             )
         quarantine_environment = _environment_kind(
-            quarantined.environment,
-            context="capsule quarantine environment",
+            current.environment,
+            context="capsule installed environment",
         )
         if quarantine_environment is not self._environment:
             raise ConfigurationError(
-                "capsule quarantine environment differs from the promotion service"
+                "capsule installed environment differs from the promotion service"
             )
-        if quarantined.worker_sha256 != self._worker_sha256:
+        if current.worker_sha256 != self._worker_sha256:
             raise ConfigurationError(
-                "capsule quarantine worker differs from the promotion worker"
+                "capsule installed worker differs from the promotion worker"
             )
         if self._authorities[CapsuleRole.PUBLISHER].subject != bundle.spec.publisher:
             raise ConfigurationError(
                 "capsule publisher identity differs from its authority"
             )
         installed = self._store.load_bundle(
-            quarantined.spec.capability_id,
-            quarantined.spec.version,
+            current.spec.capability_id,
+            current.spec.version,
         )
         if installed != bundle:
             raise ConfigurationError(
                 "installed quarantined capsule differs from the selected bundle"
             )
         chain = self._store.manifests(
-            quarantined.spec.capability_id,
-            quarantined.spec.version,
+            current.spec.capability_id,
+            current.spec.version,
             trust=self._trust,
         )
-        if not chain or chain[-1] != quarantined:
+        if not chain or chain[-1] != current:
             raise ConfigurationError(
-                "selected quarantine is not the latest installed capsule state"
+                "selected manifest is not the latest installed capsule state"
             )
         evidence = self._validator.validate(bundle)
         _require_worker_evidence(
@@ -188,59 +216,73 @@ class CapabilityPromotionService:
             expected_sha256=self._worker_sha256,
             context="capsule sandbox evidence",
         )
-        tested = advance_manifest(
-            quarantined,
-            CapsuleState.TESTED,
-            authority=self._authorities[CapsuleRole.VALIDATOR],
-            trust=self._trust,
-            validation_result_sha256=evidence.validation_sha256,
-            now=now,
-        )
-        self._store.append_manifest(tested, trust=self._trust)
-        sandboxed = advance_manifest(
-            tested,
-            CapsuleState.SANDBOX_VALIDATED,
-            authority=self._authorities[CapsuleRole.SANDBOX_VALIDATOR],
-            trust=self._trust,
-            sandbox_validation_sha256=evidence.sandbox_sha256,
-            now=now,
-        )
-        self._store.append_manifest(sandboxed, trust=self._trust)
-        reviewer = self._authorities[CapsuleRole.REVIEWER]
-        reviewed = advance_manifest(
-            sandboxed,
-            CapsuleState.REVIEWED,
-            authority=reviewer,
-            trust=self._trust,
-            reviewer=reviewer.subject,
-            now=now,
-        )
-        self._store.append_manifest(reviewed, trust=self._trust)
-        published = advance_manifest(
-            reviewed,
-            CapsuleState.PUBLISHED,
-            authority=self._authorities[CapsuleRole.PUBLISHER],
-            trust=self._trust,
-            now=now,
-        )
-        self._store.append_manifest(published, trust=self._trust)
-        enabled = advance_manifest(
-            published,
-            CapsuleState.ENABLED,
-            authority=self._authorities[CapsuleRole.PUBLISHER],
-            trust=self._trust,
-            now=now,
-        )
-        self._store.append_manifest(enabled, trust=self._trust)
+        states = tuple(item.state for item in chain)
+        if CapsuleState.TESTED in states and (
+            current.validation_result_sha256 != evidence.validation_sha256
+        ):
+            raise ConfigurationError(
+                "capsule validation evidence differs from the installed chain"
+            )
+        if CapsuleState.SANDBOX_VALIDATED in states and (
+            current.sandbox_validation_sha256 != evidence.sandbox_sha256
+        ):
+            raise ConfigurationError(
+                "capsule sandbox evidence differs from the installed chain"
+            )
+
+        promoted = list(chain)
+        while current.state is not CapsuleState.ENABLED:
+            if current.state is CapsuleState.QUARANTINED:
+                next_manifest = advance_manifest(
+                    current,
+                    CapsuleState.TESTED,
+                    authority=self._authorities[CapsuleRole.VALIDATOR],
+                    trust=self._trust,
+                    validation_result_sha256=evidence.validation_sha256,
+                    now=now,
+                )
+            elif current.state is CapsuleState.TESTED:
+                next_manifest = advance_manifest(
+                    current,
+                    CapsuleState.SANDBOX_VALIDATED,
+                    authority=self._authorities[CapsuleRole.SANDBOX_VALIDATOR],
+                    trust=self._trust,
+                    sandbox_validation_sha256=evidence.sandbox_sha256,
+                    now=now,
+                )
+            elif current.state is CapsuleState.SANDBOX_VALIDATED:
+                reviewer = self._authorities[CapsuleRole.REVIEWER]
+                next_manifest = advance_manifest(
+                    current,
+                    CapsuleState.REVIEWED,
+                    authority=reviewer,
+                    trust=self._trust,
+                    reviewer=reviewer.subject,
+                    now=now,
+                )
+            elif current.state is CapsuleState.REVIEWED:
+                next_manifest = advance_manifest(
+                    current,
+                    CapsuleState.PUBLISHED,
+                    authority=self._authorities[CapsuleRole.PUBLISHER],
+                    trust=self._trust,
+                    now=now,
+                )
+            elif current.state is CapsuleState.PUBLISHED:
+                next_manifest = advance_manifest(
+                    current,
+                    CapsuleState.ENABLED,
+                    authority=self._authorities[CapsuleRole.PUBLISHER],
+                    trust=self._trust,
+                    now=now,
+                )
+            else:  # pragma: no cover - guarded by promotable_states.
+                raise RuntimeError("unhandled capsule promotion state")
+            self._store.append_manifest(next_manifest, trust=self._trust)
+            promoted.append(next_manifest)
+            current = next_manifest
         return PromotionResult(
-            manifests=(
-                quarantined,
-                tested,
-                sandboxed,
-                reviewed,
-                published,
-                enabled,
-            ),
+            manifests=tuple(promoted),
             validation=evidence,
         )
 

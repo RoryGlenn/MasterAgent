@@ -4336,10 +4336,6 @@ def _capability_promote(
         capability_id=capability_id,
         version=version,
     )
-    if current.state is not CapsuleState.QUARANTINED:
-        raise ConfigurationError(
-            "capability promotion requires the latest state to be quarantined"
-        )
     bundle = store.load_bundle(capability_id, version)
     worker = CapsuleWorker()
     license_policy = LicensePolicy.from_toml(
@@ -4355,7 +4351,7 @@ def _capability_promote(
         validator=CapsuleValidator(worker=worker, license_policy=license_policy),
         authorities=authorities,
         environment=environment,
-    ).promote_quarantined(bundle, current)
+    ).promote_installed(bundle, current)
     payload = {
         "schema": "master-agent/capability-lifecycle-result@1",
         "operation": "promote",
@@ -4435,11 +4431,17 @@ def _capability_route(
         capsule_store=capsule_store,
         capsule_authorities=capsule_authorities,
     )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(policy_path, "policy.toml"))
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
     decision = _resolve_capsule_intent(
         intent,
         manifests=manifests,
-        policy_path=policy_path,
-        governance_path=governance_path,
+        policy=policy,
+        governance=governance,
         maximum_candidates=3,
     )
     payload = {
@@ -4477,11 +4479,17 @@ def _capability_run(
         capsule_store=capsule_store,
         capsule_authorities=capsule_authorities,
     )
+    policy = PolicyEngine(
+        PolicyConfig.from_toml(resolve_config_source(policy_path, "policy.toml"))
+    )
+    governance = GovernanceProfile.from_toml(
+        resolve_config_source(governance_path, "governance.toml")
+    )
     decision = _resolve_capsule_intent(
         intent,
         manifests=manifests,
-        policy_path=policy_path,
-        governance_path=governance_path,
+        policy=policy,
+        governance=governance,
         maximum_candidates=1,
     )
     card = decision.cards[0]
@@ -4550,11 +4558,7 @@ def _capability_run(
     audit = AuditLog(database)
     try:
         report = WorkflowOrchestrator(
-            policy=PolicyEngine(
-                PolicyConfig.from_toml(
-                    resolve_config_source(policy_path, "policy.toml")
-                )
-            ),
+            policy=policy,
             sources=SourceOfTruthRegistry.from_toml(
                 resolve_config_source(
                     sources_of_truth_path,
@@ -4564,9 +4568,7 @@ def _capability_run(
             connectors=registry,
             audit=audit,
             capabilities=activated.catalog,
-            governance=GovernanceProfile.from_toml(
-                resolve_config_source(governance_path, "governance.toml")
-            ),
+            governance=governance,
         ).run(plan, dry_run=False)
     finally:
         audit.close()
@@ -4674,18 +4676,22 @@ def _resolve_capsule_intent(
     intent: str,
     *,
     manifests: tuple[CapsuleManifest, ...],
-    policy_path: Path | None,
-    governance_path: Path | None,
+    policy: PolicyEngine,
+    governance: GovernanceProfile,
     maximum_candidates: int,
 ) -> RoutingDecision:
     """Apply normal governance and policy before lexical capsule routing."""
 
-    policy = PolicyEngine(
-        PolicyConfig.from_toml(resolve_config_source(policy_path, "policy.toml"))
+    mismatched = tuple(
+        f"{item.spec.capability_id}@{item.spec.version}:{item.environment}"
+        for item in manifests
+        if item.environment != str(governance.environment)
     )
-    governance = GovernanceProfile.from_toml(
-        resolve_config_source(governance_path, "governance.toml")
-    )
+    if mismatched:
+        raise ConfigurationError(
+            "capsule environment must match runtime governance "
+            f"{governance.environment}: " + ", ".join(mismatched)
+        )
 
     def policy_allows(card: CapabilityCard) -> bool:
         manifest = next(

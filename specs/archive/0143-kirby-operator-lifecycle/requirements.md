@@ -18,6 +18,11 @@ role and secrets MUST come from explicit environment-backed operator
 configuration. Unsupported ability classes and production promotion without
 live production controls MUST remain fail closed.
 
+Promotion MUST preflight every role for the selected environment and resume an
+authenticated partial chain without replacing prior evidence. Routing and
+execution MUST reject capsule/governance environment mismatches before foreign
+behavior or audit mutation.
+
 ## REMOVED
 
 None.
