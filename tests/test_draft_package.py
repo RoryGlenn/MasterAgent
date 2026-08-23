@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -41,7 +42,7 @@ class DraftPackageTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(os.path.realpath(directory))
             registry = ConnectorRegistry()
             for connector in (
                 JiraDraftConnector(root),
@@ -110,7 +111,7 @@ class DraftPackageTests(unittest.TestCase):
             },
         )
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(os.path.realpath(directory))
             connector = RepositoryDraftConnector(root)
             connector.execute(crlf)
             connector.execute(lf)
