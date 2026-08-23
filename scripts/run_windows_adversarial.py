@@ -9,7 +9,7 @@ import sys
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -280,8 +280,24 @@ def _flatten_suite(suite: unittest.TestSuite) -> tuple[unittest.TestCase, ...]:
 class _RecordingResult(unittest.TextTestResult):
     """Record exact started IDs so a loader omission cannot look successful."""
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        stream: object,
+        descriptions: bool,
+        verbosity: int,
+        *,
+        durations: int | None = None,
+    ) -> None:
+        typed_stream = cast(Any, stream)
+        if sys.version_info >= (3, 13):
+            super().__init__(
+                typed_stream,
+                descriptions,
+                verbosity,
+                durations=durations,
+            )
+        else:
+            super().__init__(typed_stream, descriptions, verbosity)
         self.started_ids: set[str] = set()
 
     def startTest(self, test: unittest.TestCase) -> None:
