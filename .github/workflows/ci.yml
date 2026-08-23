@@ -273,12 +273,14 @@ jobs:
                   "source checkout Ω with spaces\" +
                   "long segment 001\long segment 002\long segment 003\" +
                   "long segment 004\long segment 005\long segment 006\" +
-                  "long segment 007\long segment 008\long segment 009\" +
-                  "long segment 010"
+                  "long segment 007\long segment 008"
                 )
                 New-Item -ItemType Directory -Path $sourceRoot -Force | Out-Null
                 if ($sourceRoot.Length -lt 190) {
                   throw "Windows source bootstrap path is not long enough"
+                }
+                if ($sourceRoot.Length -gt 210) {
+                  throw "Windows source bootstrap path leaves insufficient tool-path headroom"
                 }
                 Get-ChildItem -LiteralPath $Workspace -Force |
                   Where-Object { $_.Name -notin @(".git", ".venv") } |
