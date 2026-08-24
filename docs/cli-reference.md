@@ -27,11 +27,11 @@ checks; this does not relax publication rules for other output paths.
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |
 | `sample-plan` | Write a synthetic weekly-status plan | Writes only the selected local JSON output |
 | `inspect` | Validate and display a plan and fingerprint | Read-only local inspection |
-| `bind-context` | Bind reviewed config, paths, connector identities, and gates into a plan | Writes the bound plan; live GitHub binding performs `GET /user`, while other supported identities are derived without provider mutation |
+| `bind-context` | Bind reviewed config, paths, connector implementation/principal identities, and gates into a plan | Selects the trusted `native` implementation before credentials; writes the bound plan; GitHub and delegated Microsoft principals use fixed read-only provider attestation, while other supported principals are flow-enforced without mutation |
 | `approve` | Sign selected action IDs for an exact plan fingerprint | Writes a local approval artifact; performs no provider request |
 | `inspect-approval-request` | Review the exact actions, runtime context, and fingerprint in a private approval request | Read-only local inspection; requires a mode-`0600` request beneath a private directory |
 | `approve-request` | Sign every pending action in an inspected approval request | Creates one mode-`0600` approval artifact; performs no provider request and never overwrites an existing file |
-| `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector, target, credential, path, or gate arguments |
+| `resume-approval` | Retry the captured bound run with one or more authenticated approvals | Can perform the exact provider effects in the original plan; accepts no replacement connector implementation, target, credential, path, or gate arguments |
 | `run` | Evaluate a plan or execute an approved, manifest-bound plan | No provider side effect without `--apply`; live apply is governed by every catalog, policy, approval, connector, and runtime gate |
 | `plugins` | Inventory connector entry-point metadata without importing plugin code | Optional local JSON output; never executes plugin code |
 | `capability-import` | Inspect a custom-agent export, or select one exact-digest compatible ability into quarantine | Preview is read-only; `--select` writes only a signed quarantined capsule and never executes or routes it |
@@ -174,13 +174,15 @@ explicit installed profile; without it, the normal current-user profile is
 used. The command succeeds even when setup is missing or readiness is false,
 because those gaps are the diagnostic result. The bundle contains a unique
 support ID, UTC creation time, MasterAgent and Python versions, allowlisted
-doctor fields, and canonical byte counts and SHA-256 digests for its `doctor`
-and `runtime` sections. It removes `profile_source` and redacts absolute path
-text as a whole. Raw parser messages are replaced by fixed guidance for their
-failure category. It does not read token-file contents, construct connectors,
-contact a provider, collect logs or environment values, or send the bundle
-anywhere. Use a fresh filename in an already private directory, inspect the
-JSON, and share it only through the organization's approved helpdesk channel.
+doctor fields, bounded selected `{system, implementation}` pairs, and canonical
+byte counts and SHA-256 digests for its `doctor` and `runtime` sections. The
+only admitted implementation label is `native`. It removes `profile_source`
+and redacts absolute path text as a whole. Raw parser messages are replaced by
+fixed guidance for their failure category. It does not read token-file
+contents, construct connectors, contact a provider, collect logs or environment
+values, or send the bundle anywhere. Use a fresh filename in an already private
+directory, inspect the JSON, and share it only through the organization's
+approved helpdesk channel.
 
 `master-agent execute PLAN` loads an unbound typed plan, checks every action
 against the profile allowlist, and selects the existing runtime by risk:
@@ -201,8 +203,9 @@ master-agent execute \
 ```
 
 Resume revalidates the profile, request, plan, configuration snapshots,
-provider selection, credential mapping, paths, gates, and approval. It does not
-accept replacements for those captured inputs. Existing `readiness`, `run
+provider and connector-implementation selection, credential mapping, paths,
+gates, and approval. It does not accept replacements for those captured inputs.
+Existing `readiness`, `run
 --direct-read`, `bind-context`, `inspect`, `run --apply`, and
 `resume-approval` commands remain the exact low-level interface for automation
 and debugging.
@@ -240,10 +243,12 @@ user request that is limited to one built-in provider and typed read-only
 actions. It always builds a live `ReadOnlyConnector`, even though ordinary
 `run` defaults to mock mode. Before credentials, connector construction, or a
 provider request, it validates the catalog, governance, policy,
-source-of-truth rules, plan origin, and direct-read shape. It then attests the
-selected connector identity and scope, retains one transport budget across the
-read and independent verification, revalidates the immutable provider-data
-binding, and renders a schema-bound, policy-sanitized, terminal-safe result.
+source-of-truth rules, plan origin, and direct-read shape, then selects the
+trusted `native` implementation. It then attests the selected connector
+principal and scope, retains one transport budget across the read and
+independent verification, revalidates the immutable provider-data binding, and
+renders a schema-bound, policy-sanitized, terminal-safe result. See
+[Connector implementation selection](configuration.md#connector-implementation-selection).
 
 The route accepts an explicit integrations path, credential file or mapping,
 and supported connector URL override for its one selected provider. It never

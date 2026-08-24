@@ -1102,6 +1102,10 @@ class OperatingReadinessTests(unittest.TestCase):
             )
             self.assertTrue(report.install_ready)
             self.assertTrue(report.read_ready)
+            self.assertEqual(
+                report.connector_implementations,
+                (("github", "native"),),
+            )
             self.assertNotIn(
                 OperatingFailureCategory.MISSING_USER_AUTHENTICATION,
                 {
@@ -1110,6 +1114,29 @@ class OperatingReadinessTests(unittest.TestCase):
                     for issue in capability_readiness.issues
                 },
             )
+
+    def test_disabled_connector_is_not_reported_as_selected_implementation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            capability = "github.public_repository.list"
+            integrations = _integrations(auth_mode=AuthMode.NONE)
+            report = assess_operating_readiness(
+                profile=_profile(root, capabilities=(capability,)),
+                catalog=_catalog(_definition(capability, authentication="anonymous")),
+                integrations=IntegrationConfig(
+                    {
+                        "github": replace(
+                            integrations.connector("github"),
+                            enabled=False,
+                        )
+                    }
+                ),
+                environ={},
+            )
+
+        self.assertEqual(report.connector_implementations, ())
 
     def test_anonymous_readiness_never_queries_credential_environment(self) -> None:
         class CredentialTrap(Mapping[str, str]):
@@ -1571,6 +1598,9 @@ class OperatingSupportBundleTests(unittest.TestCase):
             },
             "enterprise_blocker": "organization controls are incomplete",
             "capabilities": [],
+            "connector_implementations": [
+                {"system": "github", "implementation": "native"}
+            ],
             "issues": [
                 {
                     "category": "runtime_defect",
@@ -1597,6 +1627,10 @@ class OperatingSupportBundleTests(unittest.TestCase):
         self.assertEqual(bundle["schema"], OPERATING_SUPPORT_BUNDLE_SCHEMA)
         self.assertNotIn("profile_source", bundle["doctor"])
         self.assertNotIn("future_secret", bundle["doctor"])
+        self.assertEqual(
+            bundle["doctor"]["connector_implementations"],
+            [{"system": "github", "implementation": "native"}],
+        )
         rendered = json.dumps(bundle, sort_keys=True)
         self.assertNotIn("alice", rendered.casefold())
         self.assertNotIn("configuration-controlled-value", rendered)
@@ -1685,6 +1719,53 @@ class OperatingSupportBundleTests(unittest.TestCase):
                     master_agent_version="1.0.0",
                     python_version="3.13.7",
                 )
+
+    def test_bundle_rejects_arbitrary_implementation_metadata(self) -> None:
+        doctor = {
+            "schema": "master-agent/operating-readiness@1",
+            "levels": {},
+            "connector_implementations": [
+                {
+                    "system": "github",
+                    "implementation": "provider-secret-canary",
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ConfigurationError, "implementation is unsupported"
+        ):
+            build_operating_support_bundle(
+                doctor,
+                support_id="12345678-1234-4234-9234-123456789abc",
+                created_at="2026-08-23T12:00:00Z",
+                master_agent_version="1.0.0",
+                python_version="3.13.7",
+            )
+
+    def test_bundle_maps_arbitrary_connector_system_metadata(self) -> None:
+        system_canary = "patient_record_secret_canary"
+        doctor = {
+            "schema": "master-agent/operating-readiness@1",
+            "levels": {},
+            "connector_implementations": [
+                {"system": system_canary, "implementation": "native"}
+            ],
+        }
+
+        bundle = build_operating_support_bundle(
+            doctor,
+            support_id="12345678-1234-4234-9234-123456789abc",
+            created_at="2026-08-23T12:00:00Z",
+            master_agent_version="1.0.0",
+            python_version="3.13.7",
+        )
+
+        self.assertEqual(
+            bundle["doctor"]["connector_implementations"],
+            [{"system": "other", "implementation": "native"}],
+        )
+        self.assertNotIn(system_canary, json.dumps(bundle, sort_keys=True))
 
 
 def _profile_payload(

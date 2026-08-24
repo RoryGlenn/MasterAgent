@@ -73,6 +73,7 @@ class _ReadConnector(ReadOnlyConnector):
         super().__init__(system="provider", capabilities=frozenset({_CAPABILITY}))
         self._config = SimpleNamespace(
             auth=SimpleNamespace(mode="bearer"),
+            implementation="native",
             config_identity=_CONFIG_IDENTITY,
             base_url=_BASE_URL,
             max_pages=max_pages,
@@ -240,9 +241,9 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertEqual(len(implementations), 1)
         self.assertEqual(
             implementations[0]["implementation"],
-            "unbound_pending_170",
+            "native",
         )
-        self.assertIs(implementations[0]["bound"], False)
+        self.assertIs(implementations[0]["bound"], True)
         transport.assert_drained()
 
     def test_accepts_fingerprint_bound_outcome_observation_after_reads(self) -> None:

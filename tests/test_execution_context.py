@@ -6,6 +6,7 @@ import io
 import json
 import os
 import unittest
+from collections.abc import Iterator, Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import master_agent.cli as cli_module
 import master_agent.execution_context as execution_context_module
 from master_agent.cli import main
-from master_agent.config import IntegrationConfig
+from master_agent.config import ConnectorConfig, IntegrationConfig
 from master_agent.config_sources import (
     ConfigSnapshot,
     ConfigSource,
@@ -27,6 +28,7 @@ from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.execution_context import (
     build_execution_context,
     build_runtime_execution_binding,
+    capture_connector_executions,
     enforce_execution_context,
 )
 from master_agent.models import (
@@ -45,9 +47,129 @@ from master_agent.registry import ConnectorRegistry
 from tests.fakes import ExpectedRequest, QueueTransport
 from tests.helpers import govern_test_plan, private_temporary_directory
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class ExecutionContextTests(unittest.TestCase):
     """Verify approvals cover runtime destinations and trust roots."""
+
+    def test_connector_implementation_is_required_by_execution_context_v2(
+        self,
+    ) -> None:
+        binding = ConnectorExecutionBinding(
+            system="github",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://api.github.com",
+            resolved_origin="https://api.github.com",
+        )
+        context = ExecutionContext(
+            integrations_sha256="b" * 64,
+            connectors=(binding,),
+        )
+        payload = context.to_dict()
+
+        self.assertEqual(payload["schema"], "master-agent/execution-context@2")
+        self.assertEqual(payload["connectors"][0]["implementation"], "native")
+
+        missing = binding.to_dict()
+        missing.pop("implementation")
+        with self.assertRaisesRegex(ValidationError, "implementation is required"):
+            ConnectorExecutionBinding.from_dict(missing)
+
+        legacy = context.to_dict()
+        legacy["schema"] = "master-agent/execution-context@1"
+        with self.assertRaisesRegex(ValidationError, "unsupported execution context"):
+            ExecutionContext.from_dict(legacy)
+
+        substituted = context.to_dict()
+        substituted["connectors"][0]["implementation"] = "mcp-secret-canary"
+        with self.assertRaisesRegex(ValidationError, "implementation is unsupported"):
+            ExecutionContext.from_dict(substituted)
+
+    def test_approval_fingerprint_covers_connector_implementation(self) -> None:
+        binding = ConnectorExecutionBinding(
+            system="github",
+            deployment="cloud",
+            config_identity_sha256="a" * 64,
+            resolved_base_url="https://api.github.com",
+            resolved_origin="https://api.github.com",
+        )
+        context = ExecutionContext(
+            integrations_sha256="b" * 64,
+            connectors=(binding,),
+        )
+        plan = replace(_plan(), execution_context=context)
+        issued_at = datetime(2026, 1, 1, tzinfo=UTC)
+        approval = Approval(
+            plan_fingerprint=plan.fingerprint,
+            approved_action_ids=(plan.actions[0].action_id,),
+            approved_by="alice@example.test",
+            issuer="master-agent.test",
+            tenant="test-tenant",
+            roles=("change-approver",),
+            issued_at=issued_at,
+            expires_at=issued_at + timedelta(hours=1),
+            key_id="test-key",
+            signature="test-signature",
+        )
+
+        self.assertTrue(approval.covers(plan, plan.actions[0], issued_at))
+        approved_fingerprint = plan.fingerprint
+        object.__setattr__(binding, "implementation", "mcp")
+
+        self.assertNotEqual(plan.fingerprint, approved_fingerprint)
+        self.assertFalse(approval.covers(plan, plan.actions[0], issued_at))
+
+    def test_approved_implementation_drift_fails_before_credentials(self) -> None:
+        class CredentialTrap(Mapping[str, str]):
+            accessed = False
+
+            def __getitem__(self, key: str) -> str:
+                self.accessed = True
+                raise AssertionError(f"credential mapping accessed for {key}")
+
+            def __iter__(self) -> Iterator[str]:
+                self.accessed = True
+                raise AssertionError("credential mapping iterated")
+
+            def __len__(self) -> int:
+                self.accessed = True
+                raise AssertionError("credential mapping measured")
+
+        integrations = IntegrationConfig.from_toml(ROOT / "config/integrations.toml")
+        captured = capture_connector_executions(
+            integrations,
+            environ={},
+            systems={"github"},
+            require_trusted_principal=False,
+            include_resolved_credentials=False,
+        )
+        approved = ExecutionContext(
+            integrations_sha256=integrations.source_sha256 or "",
+            connectors=tuple(item.binding for item in captured),
+        )
+        object.__setattr__(approved.connectors[0], "implementation", "mcp")
+        trap = CredentialTrap()
+
+        with (
+            patch.object(ConnectorConfig, "resolve") as resolve,
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "connector implementation identity",
+            ),
+        ):
+            capture_connector_executions(
+                integrations,
+                environ=trap,
+                systems={"github"},
+                require_trusted_principal=False,
+                include_resolved_credentials=False,
+                approved_execution_context=approved,
+            )
+
+        self.assertFalse(trap.accessed)
+        resolve.assert_not_called()
 
     def test_connector_binding_round_trips_network_profile_and_proxy_identity(
         self,

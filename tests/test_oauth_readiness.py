@@ -239,6 +239,7 @@ network_profile = "corporate"
             check for check in report.checks if check["name"] == "connector:github"
         )
         self.assertEqual(connector_check["network_profile"], "corporate")
+        self.assertEqual(connector_check["implementation"], "native")
         self.assertEqual(connector_check["network_mode"], "proxy")
         self.assertTrue(connector_check["proxy_configured"])
         self.assertTrue(connector_check["network_ready"])

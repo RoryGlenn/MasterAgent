@@ -57,7 +57,7 @@ from master_agent.models import (
 )
 from master_agent.orchestrator import WorkflowOrchestrator
 from master_agent.performance import (
-    PENDING_CONNECTOR_IMPLEMENTATION,
+    NATIVE_CONNECTOR_IMPLEMENTATION,
     PERFORMANCE_BENCHMARK_SCHEMA,
     PERFORMANCE_SCHEMA,
     DeterministicClock,
@@ -357,8 +357,8 @@ def run_case(
         "stage_order": [str(stage) for stage in PerformanceStage],
         "counter_order": [str(counter) for counter in PerformanceCounter],
         "connector_implementation": {
-            "implementation": PENDING_CONNECTOR_IMPLEMENTATION,
-            "bound": False,
+            "implementation": NATIVE_CONNECTOR_IMPLEMENTATION,
+            "bound": True,
         },
         "iterations": [snapshot.to_dict() for snapshot in snapshots],
         "aggregate": {
@@ -891,10 +891,10 @@ def _budget_result(
                 "approval_interactions_zero": int(counters["approval_interactions"])
                 == 0,
                 "verified_outcomes_exactly_6": int(outcomes["verified"]) == 6,
-                "implementations_unbound_pending_170": all(
+                "implementations_native_and_bound": all(
                     isinstance(item, Mapping)
-                    and item.get("implementation") == PENDING_CONNECTOR_IMPLEMENTATION
-                    and item.get("bound") is False
+                    and item.get("implementation") == NATIVE_CONNECTOR_IMPLEMENTATION
+                    and item.get("bound") is True
                     for item in dimensions["connector_implementations"]
                 ),
             }

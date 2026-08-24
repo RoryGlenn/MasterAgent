@@ -15,6 +15,7 @@ from master_agent.connectors.factory import build_live_registry
 from master_agent.execution_context import capture_connector_executions
 from master_agent.http import SafeHttpClient
 from master_agent.performance import (
+    NATIVE_CONNECTOR_IMPLEMENTATION,
     PENDING_CONNECTOR_IMPLEMENTATION,
     PERFORMANCE_SCHEMA,
     ConnectorImplementationDimension,
@@ -100,7 +101,8 @@ class PerformanceSchemaTests(unittest.TestCase):
             risk_tiers=(canaries[1],),
             systems=(canaries[2],),
         )
-        recorder.record_connector_implementation(canaries[3])
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            recorder.record_connector_implementation(canaries[3], canaries[0])
         serialized = recorder.snapshot().serialize()
 
         for canary in canaries:
@@ -119,7 +121,10 @@ class PerformanceSchemaTests(unittest.TestCase):
 
     def test_snapshot_freezes_sequences_and_rejects_custom_stage_objects(self) -> None:
         recorder = PerformanceRecorder()
-        recorder.record_connector_implementation("jira")
+        recorder.record_connector_implementation(
+            "jira",
+            NATIVE_CONNECTOR_IMPLEMENTATION,
+        )
         original = recorder.snapshot()
         mutable_stages = list(original.stages)
         mutable_implementations = list(original.connector_implementations)
@@ -230,6 +235,59 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
         self.assertEqual(
             snapshot.provider_activity["github"],
             {activity: 0 for activity in snapshot.provider_activity["github"]},
+        )
+
+    def test_native_facets_count_as_one_initialized_implementation(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.microsoft]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://graph.microsoft.com/v1.0"
+auth_mode = "none"
+identity_mode = "delegated"
+onenote_read_enabled = true
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+            systems = {
+                "microsoft",
+                "sharepoint",
+                "outlook",
+                "teams",
+                "onenote",
+            }
+            with performance_run() as recorder:
+                captured = capture_connector_executions(
+                    config,
+                    environ={},
+                    systems=systems,
+                    require_trusted_principal=False,
+                )
+                registry = build_live_registry(
+                    config,
+                    environ={},
+                    systems=systems,
+                    captured_executions=captured,
+                )
+                snapshot = recorder.snapshot()
+
+        self.assertEqual(
+            {system for system in systems if registry.connectors(system)},
+            systems,
+        )
+        self.assertEqual(
+            snapshot.counters[PerformanceCounter.CONNECTOR_INITIALIZATIONS],
+            1,
+        )
+        self.assertEqual(
+            [item.to_dict() for item in snapshot.connector_implementations],
+            [{"system": "microsoft", "implementation": "native", "bound": True}],
         )
 
     def test_snapshot_round_trip_rejects_derived_field_forgery(self) -> None:
@@ -429,7 +487,7 @@ class DeterministicBenchmarkTests(unittest.TestCase):
             5.0,
         )
 
-    def test_t1_exact_counts_and_pending_170_identity(self) -> None:
+    def test_t1_exact_counts_and_native_identity(self) -> None:
         payload = run_case(PerformanceCase.T1_EWIR_001, iterations=20)
         counters = payload["aggregate"]["counters"]
         self.assertEqual(counters["connector_initializations"], 3)
@@ -451,12 +509,37 @@ class DeterministicBenchmarkTests(unittest.TestCase):
                 item
                 == {
                     "system": item["system"],
-                    "implementation": PENDING_CONNECTOR_IMPLEMENTATION,
-                    "bound": False,
+                    "implementation": NATIVE_CONNECTOR_IMPLEMENTATION,
+                    "bound": True,
                 }
                 for item in implementations
             )
         )
+
+    def test_historical_pending_170_dimension_remains_readable(self) -> None:
+        payload = PerformanceRecorder().snapshot().to_dict()
+        dimensions = payload["dimensions"]
+        counters = payload["counters"]
+        assert isinstance(dimensions, dict)
+        assert isinstance(counters, dict)
+        dimensions["systems"] = ["jira"]
+        dimensions["connector_implementations"] = [
+            {
+                "system": "jira",
+                "implementation": PENDING_CONNECTOR_IMPLEMENTATION,
+                "bound": False,
+            }
+        ]
+        counters["selected_systems"] = 1
+        counters["selected_connector_implementations"] = 1
+
+        restored = PerformanceSnapshot.from_dict(payload)
+
+        self.assertEqual(
+            restored.connector_implementations[0].implementation,
+            PENDING_CONNECTOR_IMPLEMENTATION,
+        )
+        self.assertFalse(restored.connector_implementations[0].bound)
 
     def test_unselected_provider_activity_is_explicitly_zero(self) -> None:
         payload = run_case(PerformanceCase.T1_EWIR_001, iterations=20)

@@ -5,7 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from master_agent.auth import AuthMode
-from master_agent.config import ConnectorConfig, DeploymentType, IntegrationConfig
+from master_agent.config import (
+    ConnectorConfig,
+    ConnectorImplementation,
+    DeploymentType,
+    IntegrationConfig,
+)
 from master_agent.discovery import DiscoveryStatus, discover_integrations
 
 
@@ -78,6 +83,10 @@ auth_mode = "none"
             )
             parsed = IntegrationConfig.from_toml(path)
             self.assertEqual(parsed.connector("jira").system, "jira")
+            self.assertIs(
+                parsed.connector("jira").implementation,
+                ConnectorImplementation.NATIVE,
+            )
 
 
 class DiscoveryTests(unittest.TestCase):

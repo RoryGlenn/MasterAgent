@@ -6,6 +6,7 @@ import json
 import tempfile
 import textwrap
 import unittest
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,7 @@ from master_agent.connectors.drafts import (
 )
 from master_agent.connectors.factory import (
     build_live_connectors,
+    build_live_registry,
     configured_builtin_capabilities,
     installed_builtin_capabilities,
 )
@@ -48,7 +50,7 @@ from master_agent.connectors.onenote import OneNoteReadConnector, OneNoteWriteCo
 from master_agent.connectors.outlook import OutlookConnector
 from master_agent.connectors.sharepoint_write import SharePointWriteConnector
 from master_agent.connectors.teams import TeamsConnector
-from master_agent.errors import ConfigurationError
+from master_agent.errors import ConfigurationError, ConnectorError
 from master_agent.execution_context import capture_connector_executions
 from master_agent.models import ChangePlan, ExecutionContext
 from master_agent.oauth import AccessToken, write_token_file
@@ -59,6 +61,98 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ConnectorFactoryTests(unittest.TestCase):
     """Verify the CLI flag, provider gate, and capability gate all apply."""
+
+    def test_native_constructor_failure_does_not_fall_back_or_register(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://fixture.atlassian.net"
+auth_mode = "none"
+
+[connectors.github]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://api.github.com"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+
+            with (
+                patch(
+                    "master_agent.connectors.factory.JiraConnector",
+                    side_effect=ConnectorError("native constructor failed"),
+                ) as native,
+                patch("master_agent.connectors.factory.GitHubConnector") as alternate,
+                patch("master_agent.registry.ConnectorRegistry.register") as register,
+                self.assertRaisesRegex(ConnectorError, "native constructor failed"),
+            ):
+                build_live_registry(config, environ={}, systems={"jira"})
+
+        native.assert_called_once()
+        alternate.assert_not_called()
+        register.assert_not_called()
+
+    def test_supplied_capture_cannot_substitute_implementation(self) -> None:
+        class CredentialTrap(Mapping[str, str]):
+            accessed = False
+
+            def __getitem__(self, key: str) -> str:
+                self.accessed = True
+                raise AssertionError(f"credential mapping accessed for {key}")
+
+            def __iter__(self) -> Iterator[str]:
+                self.accessed = True
+                raise AssertionError("credential mapping iterated")
+
+            def __len__(self) -> int:
+                self.accessed = True
+                raise AssertionError("credential mapping measured")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://api.github.com"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            config = IntegrationConfig.from_toml(path)
+            captured = capture_connector_executions(
+                config,
+                environ={},
+                systems={"github"},
+            )
+            object.__setattr__(captured[0].binding, "implementation", "mcp")
+            trap = CredentialTrap()
+
+            with (
+                patch("master_agent.connectors.factory.GitHubConnector") as native,
+                self.assertRaisesRegex(ConfigurationError, "bound implementation"),
+            ):
+                build_live_connectors(
+                    config,
+                    environ=trap,
+                    systems={"github"},
+                    captured_executions=captured,
+                )
+
+        self.assertFalse(trap.accessed)
+        native.assert_not_called()
 
     def test_state_free_capability_inventory_matches_high_level_factory_gates(
         self,

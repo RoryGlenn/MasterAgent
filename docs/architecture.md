@@ -132,8 +132,8 @@ Deterministic CI cases validate attribution and provisional budgets but are
 explicitly baseline-ineligible. Managed-workstation and live-provider claims
 remain a separate certification boundary. See the
 [governance-performance evidence guide](governance-performance.md) for the
-schema, benchmark commands, privacy boundary, and issue #170 implementation
-placeholder.
+schema, benchmark commands, privacy boundary, and exact native connector
+implementation dimensions.
 `EvidenceBackedSystemsAssessor` and
 `EvidenceBackedStrategyCoherenceReviewer` are the concrete boundaries for
 explicitly supplied evidence; they reject substituted inputs instead of
@@ -542,6 +542,21 @@ are denied for exact governed targets.
 ### Connector registry
 
 Connectors register a system name and explicit capability set. Multiple connectors may serve one system only when their capability sets do not overlap. This allows, for example, live Outlook reads and local Outlook draft generation to coexist safely.
+
+After capability and provider-system selection, the runtime reads exactly one
+connector implementation identity from the trusted integrations snapshot. The
+initial and only supported identity is `native`; it participates in the
+connector configuration digest, execution-context schema, plan fingerprint,
+and approval fingerprint. Apply and resume compare it before credential
+resolution, principal attestation, provider access, connector construction, or
+registry registration. Execution contexts from before this binding existed
+must be rebound and reapproved.
+
+One native provider implementation may expose several non-overlapping,
+capability-specific connector objects. The factory still records and
+initializes that provider configuration once. A construction or execution
+failure follows the existing typed failure path; it never retries through or
+falls back to a different implementation.
 
 Authentication is selected by the typed capability contract, not by a blanket
 provider default. The runtime uses the least-authorized registered route that

@@ -58,6 +58,12 @@ class DeploymentType(StrEnum):
     DATA_CENTER = "data_center"
 
 
+class ConnectorImplementation(StrEnum):
+    """Reviewed connector implementations selectable by trusted config."""
+
+    NATIVE = "native"
+
+
 class PrincipalAttestationAdapter(StrEnum):
     """Implemented provider-backed credential identity adapters."""
 
@@ -228,6 +234,7 @@ class ConnectorConfig:
     auth_mode: AuthMode
     username_env: str | None
     secret_env: str | None
+    implementation: ConnectorImplementation = ConnectorImplementation.NATIVE
     web_base_url: str | None = None
     ca_bundle_env: str | None = None
     network_profile: NetworkProfile = field(
@@ -242,6 +249,10 @@ class ConnectorConfig:
     def __post_init__(self) -> None:
         if not self.system.strip():
             raise ConfigurationError("connector system must not be empty")
+        if not isinstance(self.implementation, ConnectorImplementation):
+            raise ConfigurationError(
+                f"connector {self.system} implementation is unsupported"
+            )
         if self.timeout_seconds <= 0:
             raise ConfigurationError("timeout_seconds must be positive")
         if self.max_pages <= 0:
@@ -318,6 +329,7 @@ class ConnectorConfig:
             "system": self.system,
             "enabled": self.enabled,
             "deployment": str(self.deployment),
+            "implementation": str(self.implementation),
             "base_url": self.base_url,
             "base_url_env": self.base_url_env,
             "auth_mode": str(self.auth_mode),
@@ -533,6 +545,7 @@ class ConnectorConfig:
         base_url, ca_bundle = self.resolve_execution_target(source)
         return ResolvedExecutionTarget(
             system=self.system,
+            implementation=self.implementation,
             config_identity=self.identity,
             base_url=base_url,
             ca_bundle=(capture_ca_bundle(ca_bundle) if ca_bundle is not None else None),
@@ -780,6 +793,7 @@ class ConnectorConfig:
 
         return ResolvedConnectorConfig(
             system=self.system,
+            implementation=self.implementation,
             deployment=self.deployment,
             base_url=base_url,
             web_base_url=(self.web_base_url or base_url).rstrip("/"),
@@ -811,6 +825,7 @@ class ResolvedExecutionTarget:
     """One captured connector destination before credentials are resolved."""
 
     system: str
+    implementation: ConnectorImplementation
     config_identity: str
     base_url: str
     ca_bundle: CaBundleSnapshot | None = None
@@ -842,8 +857,13 @@ class ResolvedConnectorConfig:
     proxy_password: str | None = field(default=None, repr=False)
     extra: Mapping[str, Any] = field(default_factory=dict)
     config_identity: str | None = None
+    implementation: ConnectorImplementation = ConnectorImplementation.NATIVE
 
     def __post_init__(self) -> None:
+        if not isinstance(self.implementation, ConnectorImplementation):
+            raise ConfigurationError(
+                f"resolved connector {self.system} implementation is unsupported"
+            )
         if self.ca_bundle is not None and self.ca_bundle_data is None:
             snapshot = capture_ca_bundle(self.ca_bundle)
             object.__setattr__(self, "ca_bundle", snapshot.path)
@@ -984,6 +1004,7 @@ class IntegrationConfig:
 _KNOWN_CONNECTOR_KEYS = {
     "enabled",
     "deployment",
+    "implementation",
     "base_url",
     "base_url_env",
     "web_base_url",
@@ -1050,6 +1071,14 @@ def _parse_connector(
         raise ConfigurationError(
             f"invalid deployment or auth mode for connector {system}"
         ) from error
+    try:
+        implementation = ConnectorImplementation(
+            str(raw.get("implementation", ConnectorImplementation.NATIVE))
+        )
+    except ValueError as error:
+        raise ConfigurationError(
+            f"connector {system} implementation is unsupported"
+        ) from error
 
     connector = ConnectorConfig(
         system=system,
@@ -1060,6 +1089,7 @@ def _parse_connector(
         auth_mode=auth_mode,
         username_env=_optional_string(raw.get("username_env")),
         secret_env=_optional_string(raw.get("secret_env")),
+        implementation=implementation,
         web_base_url=_optional_string(raw.get("web_base_url")),
         ca_bundle_env=_optional_string(raw.get("ca_bundle_env")),
         network_profile=network_profile,

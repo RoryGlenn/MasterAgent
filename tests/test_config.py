@@ -11,6 +11,7 @@ from master_agent.auth import AuthMode, ResolvedAuth
 from master_agent.config import (
     ConnectorConfig,
     ConnectorCredentialProvider,
+    ConnectorImplementation,
     DeploymentType,
     IntegrationConfig,
     NetworkMode,
@@ -24,6 +25,53 @@ from tests.helpers import private_temporary_directory
 
 class IntegrationConfigTests(unittest.TestCase):
     """Verify secret references, validation, and resolution."""
+
+    def test_connector_implementation_defaults_to_explicit_native_identity(
+        self,
+    ) -> None:
+        connector = ConnectorConfig(
+            system="github",
+            enabled=True,
+            deployment=DeploymentType.CLOUD,
+            base_url="https://api.github.com",
+            base_url_env=None,
+            auth_mode=AuthMode.NONE,
+            username_env=None,
+            secret_env=None,
+        )
+
+        target = connector.capture_execution_target({})
+        resolved = connector.resolve({}, execution_target=target)
+
+        self.assertIs(connector.implementation, ConnectorImplementation.NATIVE)
+        self.assertIs(target.implementation, ConnectorImplementation.NATIVE)
+        self.assertIs(resolved.implementation, ConnectorImplementation.NATIVE)
+
+    def test_unsupported_connector_implementation_fails_without_echoing_value(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            path = Path(directory) / "integrations.toml"
+            path.write_text(
+                """
+[connectors.github]
+enabled = true
+deployment = "cloud"
+implementation = "MCP-SECRET-CANARY"
+base_url = "https://api.github.com"
+auth_mode = "none"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "connector github implementation is unsupported",
+            ) as raised:
+                IntegrationConfig.from_toml(path)
+
+        self.assertNotIn("MCP-SECRET-CANARY", str(raised.exception))
 
     def test_named_proxy_profile_is_identity_bound_and_resolves_brokered_secrets(
         self,

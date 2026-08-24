@@ -15,6 +15,18 @@ All HTTP connectors use a constrained client that enforces:
 - query-free and secret-free errors;
 - no credential forwarding to temporary SharePoint download URLs.
 
+## Implementation identity
+
+Every live provider route selects its implementation from trusted
+`integrations.toml` after capability/system routing and before credentials or
+construction. The initial and only supported identity is `native`, including
+when one provider configuration exposes several capability-specific connector
+objects. That identity is configuration-, execution-context-, plan-, and
+approval-bound. Unsupported, missing legacy, or drifted identities fail closed;
+a native construction or execution failure never falls back to another
+implementation. See [Connector registry](architecture.md#connector-registry)
+and [Connector implementation selection](configuration.md#connector-implementation-selection).
+
 ## Read connectors
 
 Read results are normalized into stable schemas, marked as untrusted content,

@@ -66,6 +66,7 @@ class _DirectReadGitHubConnector(ReadOnlyConnector):
         self._config = SimpleNamespace(
             auth=SimpleNamespace(mode="bearer"),
             config_identity="a" * 64,
+            implementation="native",
             base_url="https://api.github.com",
             max_pages=4,
             max_response_bytes=4096,
@@ -612,6 +613,44 @@ secret_env = "MASTER_AGENT_JIRA_TOKEN"
                 )
             self.assertEqual(status, 2, stderr.getvalue())
             self.assertIn("missing_environment", stdout.getvalue())
+
+    def test_unsupported_connector_implementation_precedes_credentials(self) -> None:
+        implementation_canary = "mcp-implementation-secret-canary"
+        with private_temporary_directory() as directory:
+            config = Path(directory) / "integrations.toml"
+            config.write_text(
+                f"""
+[connectors.github]
+enabled = true
+deployment = "cloud"
+implementation = "{implementation_canary}"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            stderr = StringIO()
+            with (
+                patch("master_agent.cli._load_credential_store") as load,
+                redirect_stdout(StringIO()),
+                redirect_stderr(stderr),
+            ):
+                status = main(
+                    [
+                        "discover",
+                        "--integrations",
+                        str(config),
+                        "--systems",
+                        "github",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn("implementation is unsupported", stderr.getvalue())
+        self.assertNotIn(implementation_canary, stderr.getvalue())
+        load.assert_not_called()
 
     def test_readiness_accepts_implemented_github_principal_adapter(self) -> None:
         with private_temporary_directory() as directory:
@@ -1197,6 +1236,69 @@ secret_env = "MASTER_AGENT_GITHUB_TOKEN"
 
         self.assertEqual(github_transport.requests, [])
         self.assertEqual(bitbucket_transport.requests, [])
+
+    def test_repository_shortcuts_preflight_implementation_before_credentials(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            credentials = Path(directory) / "github.json"
+            credentials.write_text(
+                json.dumps({"github": "opaque-token"}),
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            with (
+                patch(
+                    "master_agent.cli.preflight_connector_implementations",
+                    side_effect=ConfigurationError(
+                        "connector implementation preflight blocked"
+                    ),
+                ) as preflight,
+                patch(
+                    "master_agent.cli.CredentialStoreSnapshot.load_github_compatible"
+                ) as load_credentials,
+                self.assertRaisesRegex(
+                    ConfigurationError,
+                    "implementation preflight blocked",
+                ),
+            ):
+                _github_repositories(
+                    credentials_file=credentials,
+                    limit=10,
+                    visibility="all",
+                    output=None,
+                )
+
+            selected = preflight.call_args.args[0]
+            self.assertTrue(selected.connector("github").enabled)
+            self.assertEqual(preflight.call_args.kwargs["systems"], {"github"})
+            load_credentials.assert_not_called()
+
+        with (
+            patch(
+                "master_agent.cli.preflight_connector_implementations",
+                side_effect=ConfigurationError(
+                    "connector implementation preflight blocked"
+                ),
+            ) as preflight,
+            patch(
+                "master_agent.cli.ConnectorConfig.capture_execution_target"
+            ) as capture_target,
+            self.assertRaisesRegex(
+                ConfigurationError,
+                "implementation preflight blocked",
+            ),
+        ):
+            _bitbucket_repositories(
+                workspace="public-workspace",
+                limit=10,
+                output=None,
+            )
+
+        selected = preflight.call_args.args[0]
+        self.assertTrue(selected.connector("bitbucket").enabled)
+        self.assertEqual(preflight.call_args.kwargs["systems"], {"bitbucket"})
+        capture_target.assert_not_called()
 
     def test_github_repositories_reports_missing_credential_without_network(
         self,

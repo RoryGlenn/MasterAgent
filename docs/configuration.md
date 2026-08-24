@@ -29,7 +29,7 @@ send, and recurring-schedule gates remain disabled.
 | `capabilities.toml` | public typed capability surface and exact read-result contracts |
 | `governance.toml` | organization owners, environments, classifications, approval tiers, and model-context egress policy |
 | `policy.toml` | risk defaults and hard prohibitions |
-| `integrations.toml` | endpoints, environment-variable references, provider gates |
+| `integrations.toml` | connector implementation identities, endpoints, environment-variable references, and provider gates |
 | `oauth.toml` | token acquisition profiles and requested scopes |
 | `sources_of_truth.toml` | canonical resources and projection direction |
 | `identities.toml` | names, aliases, and provider IDs |
@@ -278,6 +278,35 @@ a claimed identity label. Another provider-verified principal or trusted
 credential-broker attestation adapter is required before those flows can be
 used for applied execution.
 
+## Connector implementation selection
+
+Trusted `integrations.toml` configuration owns connector implementation
+selection. The initial and only supported value is `native`; omission preserves
+that compatibility default:
+
+```toml
+[connectors.github]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://api.github.com"
+auth_mode = "bearer"
+secret_env = "MASTER_AGENT_GITHUB_TOKEN"
+```
+
+Unsupported values fail closed without echoing the value and before credential
+resolution, principal attestation, provider access, or connector construction.
+Prompts, project files, retrieved content, action parameters, provider output,
+and command-line runtime choices cannot select an implementation. The selected
+identity is part of the connector configuration digest, versioned execution
+context, plan fingerprint, and approval. A historical bound plan without the
+identity must be rebound and reapproved; a changed identity cannot be resumed.
+
+Offline readiness, doctor, and support output expose only bounded
+`{system, implementation}` metadata. They never construct a connector or
+include endpoints, credentials, principals, provider content, or arbitrary
+implementation labels.
+
 ## Enterprise network profiles
 
 Provider networking is selected by a named, secret-free profile in
@@ -365,8 +394,9 @@ validates but then rejects nonempty third-party runtime dependency closures.
 canonical workspace and artifact roots, configured Bitbucket publication roots,
 the audit database, optional result path and evidence type, and SHA-256 digests
 of policy, source-of-truth, capability, governance, identity, retention, and
-approval-authority snapshots. A missing legacy binding or any mismatch is
-rejected before connector construction.
+approval-authority snapshots. For each selected live provider it also covers
+the exact connector implementation identity. A missing legacy binding or any
+mismatch is rejected before credentials or connector construction.
 
 If policy or governance requires human approval, `bind-context` requires an
 explicit `--approval-authorities` path. The snapshot digest becomes part of the

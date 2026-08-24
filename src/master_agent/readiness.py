@@ -255,6 +255,7 @@ def assess_readiness(
                 "name": f"connector:{name}",
                 "passed": not connector_errors,
                 "deployment": str(connector.deployment),
+                "implementation": str(connector.implementation),
                 "credential_ready": not missing_environment,
                 "network_ready": not missing_network_environment and not network_errors,
                 "network_profile": connector.network_profile.name,
@@ -379,6 +380,11 @@ def assess_readiness(
                     model_context.model_tenancy if model_context is not None else None
                 ),
                 "connector_configuration": configuration,
+                "connector_implementation": (
+                    str(selected_connector.implementation)
+                    if selected_connector is not None
+                    else None
+                ),
                 "credential_ready": not missing_environment,
                 "connector_ready": connector_usable,
                 "ephemeral_allowed": bool(ephemeral_allowed),

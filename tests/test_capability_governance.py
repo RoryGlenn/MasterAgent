@@ -165,6 +165,7 @@ class CapabilityGovernanceTests(unittest.TestCase):
         connector._config = SimpleNamespace(  # type: ignore[attr-defined]
             auth=SimpleNamespace(mode="oauth_delegated"),
             config_identity="a" * 64,
+            implementation="native",
             base_url="https://graph.microsoft.com/v1.0",
             ca_bundle=None,
             ca_bundle_sha256=None,
@@ -267,6 +268,7 @@ class CapabilityGovernanceTests(unittest.TestCase):
         connector._config = SimpleNamespace(  # type: ignore[attr-defined]
             auth=SimpleNamespace(mode="bearer"),
             config_identity="a" * 64,
+            implementation="native",
             base_url="https://api.github.com",
             ca_bundle=None,
             ca_bundle_sha256=None,

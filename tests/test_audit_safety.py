@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -103,6 +104,7 @@ class AuditSafetyTests(unittest.TestCase):
 
     def test_free_form_connector_error_is_digested_not_persisted(self) -> None:
         secret_text = "TOP-SECRET-PROVIDER-ERROR-BODY"
+        system_canary = "patient_record_secret_canary"
 
         class ExplodingConnector:
             system = "jira"
@@ -147,6 +149,13 @@ class AuditSafetyTests(unittest.TestCase):
                         authentication_mode="bearer",
                         credential_identity="jira:user:42",
                     ),
+                    ConnectorExecutionBinding(
+                        system=system_canary,
+                        deployment="cloud",
+                        config_identity_sha256="c" * 64,
+                        resolved_base_url="https://example.test/api",
+                        resolved_origin="https://example.test",
+                    ),
                 ),
             ),
         )
@@ -157,6 +166,7 @@ class AuditSafetyTests(unittest.TestCase):
             connector = ExplodingConnector()
             connector._config = SimpleNamespace(  # type: ignore[attr-defined]
                 auth=SimpleNamespace(mode="bearer"),
+                implementation="native",
                 config_identity="a" * 64,
                 base_url="https://jira.example.test/rest/api/3",
                 ca_bundle=None,
@@ -186,9 +196,28 @@ class AuditSafetyTests(unittest.TestCase):
                 "provider read failed after egress authorization",
                 report.actions[0].message,
             )
+            with closing(sqlite3.connect(database)) as connection:
+                row = connection.execute(
+                    "SELECT payload_json FROM audit_events "
+                    "WHERE event_type = 'plan_started'"
+                ).fetchone()
+            assert row is not None
+            started = json.loads(str(row[0]))
+            self.assertEqual(
+                started["connector_implementations"],
+                [
+                    {"system": "jira", "implementation": "native"},
+                    {"system": "other", "implementation": "native"},
+                ],
+            )
+            rendered_started = json.dumps(started, sort_keys=True)
+            self.assertNotIn(system_canary, rendered_started)
+            self.assertNotIn("https://jira.example.test", rendered_started)
+            self.assertNotIn("jira:user:42", rendered_started)
             raw_database = database.read_bytes()
 
         self.assertNotIn(secret_text.encode("utf-8"), raw_database)
+        self.assertNotIn(system_canary.encode("utf-8"), raw_database)
         self.assertIn(b"message_digest", raw_database)
 
     def test_verification_does_not_create_or_accept_an_empty_database(self) -> None:

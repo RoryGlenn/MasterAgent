@@ -100,6 +100,52 @@ class CapturedRuntimePath:
         self.close()
 
 
+def preflight_connector_implementations(
+    integrations: IntegrationConfig,
+    *,
+    systems: set[str] | None = None,
+    approved_execution_context: ExecutionContext | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Select exact implementations before credentials or connector construction."""
+
+    selected_configurations = tuple(
+        sorted(
+            (
+                config.system,
+                str(config.implementation),
+            )
+            for config in integrations.connectors.values()
+            if config.enabled and _connector_is_selected(config.system, systems)
+        )
+    )
+    if approved_execution_context is not None:
+        if (
+            not integrations.source_sha256
+            or integrations.source_sha256
+            != approved_execution_context.integrations_sha256
+        ):
+            raise ConfigurationError(
+                "captured integrations bundle differs from the approved "
+                "execution context"
+            )
+        approved = tuple(
+            sorted(
+                (item.system, item.implementation)
+                for item in approved_execution_context.connectors
+            )
+        )
+        if selected_configurations != approved:
+            raise ConfigurationError(
+                "applied execution context differs from the approved plan: "
+                "connector implementation identity"
+            )
+    performance = current_performance_recorder()
+    if performance is not None:
+        for system, implementation in selected_configurations:
+            performance.record_connector_implementation(system, implementation)
+    return selected_configurations
+
+
 def capture_connector_executions(
     integrations: IntegrationConfig,
     *,
@@ -112,6 +158,11 @@ def capture_connector_executions(
 ) -> tuple[CapturedConnectorExecution, ...]:
     """Capture selected enabled destinations and trusted principals."""
 
+    preflight_connector_implementations(
+        integrations,
+        systems=systems,
+        approved_execution_context=approved_execution_context,
+    )
     source = dict(environ if environ is not None else os.environ)
     approved_connectors: dict[str, ConnectorExecutionBinding] | None = None
     if approved_execution_context is not None:
@@ -198,6 +249,7 @@ def capture_connector_executions(
                 binding=ConnectorExecutionBinding(
                     system=config.system,
                     deployment=str(config.deployment),
+                    implementation=str(target.implementation),
                     config_identity_sha256=target.config_identity,
                     resolved_base_url=target.base_url,
                     resolved_origin=_origin(target.base_url, system=config.system),
@@ -229,6 +281,7 @@ def _verify_approved_connector_target(
     observed_origin = _origin(target.base_url, system=config.system)
     ca_bundle = target.ca_bundle
     comparisons = [
+        ("implementation", str(target.implementation), approved.implementation),
         ("deployment", str(config.deployment), approved.deployment),
         ("config identity", target.config_identity, approved.config_identity_sha256),
         ("base URL", target.base_url, approved.resolved_base_url),
@@ -630,6 +683,14 @@ def enforce_execution_context(plan: ChangePlan, observed: ExecutionContext) -> N
         changed: list[str] = []
         if approved.integrations_sha256 != observed.integrations_sha256:
             changed.append("integrations bundle")
+        approved_implementations = tuple(
+            (item.system, item.implementation) for item in approved.connectors
+        )
+        observed_implementations = tuple(
+            (item.system, item.implementation) for item in observed.connectors
+        )
+        if approved_implementations != observed_implementations:
+            changed.append("connector implementation identity")
         if approved.connectors != observed.connectors:
             changed.append("connector origin or CA identity")
         if approved.plugins != observed.plugins:

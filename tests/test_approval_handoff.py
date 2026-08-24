@@ -207,6 +207,75 @@ class ApprovalHandoffTests(unittest.TestCase):
             result = json.loads(paths.result.read_text(encoding="utf-8"))
             self.assertTrue(result["successful"])
 
+    def test_resume_rejects_changed_connector_implementation_fingerprint(
+        self,
+    ) -> None:
+        with private_temporary_directory() as directory:
+            paths = _workspace(Path(directory))
+            integrations = paths.root / "integrations.toml"
+            integrations.write_text(
+                """
+[connectors.confluence]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://tenant.atlassian.net"
+auth_mode = "none"
+write_enabled = true
+writes_enabled = true
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            _bind(
+                paths,
+                connector_mode="live",
+                integrations_path=integrations,
+            )
+            status, stdout, stderr = _run_bound(
+                paths,
+                connector_mode="live",
+                integrations_path=integrations,
+            )
+            self.assertEqual(status, 2, stderr)
+            request_path = _request_path(stdout)
+            request = load_approval_request(request_path)
+            changed_plan = _load_plan(paths.bound)
+            binding = next(
+                item
+                for item in changed_plan.execution_context.connectors
+                if item.system == "confluence"
+            )
+            self.assertEqual(binding.implementation, "native")
+            self.assertEqual(changed_plan.fingerprint, request.plan_fingerprint)
+            object.__setattr__(binding, "implementation", "mcp")
+            self.assertNotEqual(changed_plan.fingerprint, request.plan_fingerprint)
+
+            resume_stderr = StringIO()
+            with (
+                patch("master_agent.cli._load_plan", return_value=changed_plan),
+                patch("master_agent.cli._run") as run,
+                redirect_stdout(StringIO()),
+                redirect_stderr(resume_stderr),
+            ):
+                resume_status = main(
+                    [
+                        "resume-approval",
+                        str(request_path),
+                        "--expected-fingerprint",
+                        request.fingerprint,
+                        "--approval",
+                        str(paths.approvals / "unused.json"),
+                    ]
+                )
+
+            self.assertEqual(resume_status, 1)
+            self.assertIn(
+                "approval request plan fingerprint changed",
+                resume_stderr.getvalue(),
+            )
+            run.assert_not_called()
+
     def test_partial_dual_approval_is_carried_into_the_next_request(self) -> None:
         with private_temporary_directory() as directory:
             paths = _workspace(Path(directory), dual=True)
@@ -476,10 +545,12 @@ def _runtime_arguments(
     *,
     include_authorities: bool = True,
     include_result: bool = False,
+    connector_mode: str = "mock",
+    integrations_path: Path | None = None,
 ) -> list[str]:
     arguments = [
         "--connector-mode",
-        "mock",
+        connector_mode,
         "--database",
         str(paths.state / "audit.sqlite3"),
         "--draft-output-dir",
@@ -492,10 +563,18 @@ def _runtime_arguments(
         arguments.extend(["--result-json", str(paths.result)])
     if paths.governance.exists():
         arguments.extend(["--governance", str(paths.governance)])
+    if integrations_path is not None:
+        arguments.extend(["--integrations", str(integrations_path)])
     return arguments
 
 
-def _bind(paths: _Paths, *, include_result: bool = False) -> None:
+def _bind(
+    paths: _Paths,
+    *,
+    include_result: bool = False,
+    connector_mode: str = "mock",
+    integrations_path: Path | None = None,
+) -> None:
     stdout = StringIO()
     stderr = StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -503,7 +582,12 @@ def _bind(paths: _Paths, *, include_result: bool = False) -> None:
             [
                 "bind-context",
                 str(paths.plan),
-                *_runtime_arguments(paths, include_result=include_result),
+                *_runtime_arguments(
+                    paths,
+                    include_result=include_result,
+                    connector_mode=connector_mode,
+                    integrations_path=integrations_path,
+                ),
                 "--output",
                 str(paths.bound),
             ]
@@ -516,6 +600,8 @@ def _run_bound(
     paths: _Paths,
     *,
     include_result: bool = False,
+    connector_mode: str = "mock",
+    integrations_path: Path | None = None,
 ) -> tuple[int, str, str]:
     stdout = StringIO()
     stderr = StringIO()
@@ -525,7 +611,12 @@ def _run_bound(
                 "run",
                 str(paths.bound),
                 "--apply",
-                *_runtime_arguments(paths, include_result=include_result),
+                *_runtime_arguments(
+                    paths,
+                    include_result=include_result,
+                    connector_mode=connector_mode,
+                    integrations_path=integrations_path,
+                ),
             ]
         )
     return status, stdout.getvalue(), stderr.getvalue()

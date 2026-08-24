@@ -39,6 +39,7 @@ from master_agent.config_sources import (
 )
 from master_agent.errors import ConfigurationError, ValidationError
 from master_agent.models import ChangePlan, RiskLevel
+from master_agent.performance import bounded_system
 from master_agent.platform_paths import current_user_product_root
 from master_agent.platform_runtime import (
     PlatformContract,
@@ -81,6 +82,7 @@ _SUPPORT_DOCTOR_FIELDS = (
     "configuration_trust",
     "enterprise_blocker",
     "capabilities",
+    "connector_implementations",
     "issues",
 )
 _SUPPORT_ISSUE_MESSAGES = {
@@ -652,6 +654,7 @@ class OperatingReadinessReport:
     profile_source: Path
     capabilities: tuple[CapabilityReadiness, ...]
     platform_runtime: PlatformRuntimeStatus
+    connector_implementations: tuple[tuple[str, str], ...] = ()
     configuration_trust: tuple[tuple[str, str], ...] = ()
     enterprise_blocker: str = (
         "enterprise readiness requires the organization trust controls tracked by #113"
@@ -735,6 +738,10 @@ class OperatingReadinessReport:
             },
             "enterprise_blocker": self.enterprise_blocker,
             "capabilities": [item.to_dict() for item in self.capabilities],
+            "connector_implementations": [
+                {"system": system, "implementation": implementation}
+                for system, implementation in self.connector_implementations
+            ],
         }
 
     def to_json(self) -> str:
@@ -801,8 +808,13 @@ def build_operating_support_bundle(
     selected_doctor = {
         field: _redact_support_value(doctor_payload[field])
         for field in _SUPPORT_DOCTOR_FIELDS
-        if field in doctor_payload
+        if field in doctor_payload and field != "connector_implementations"
     }
+    selected_doctor["connector_implementations"] = (
+        _project_support_connector_implementations(
+            doctor_payload.get("connector_implementations", [])
+        )
+    )
     runtime = {
         "master_agent_version": master_agent_version,
         "python_version": python_version,
@@ -1283,6 +1295,12 @@ def assess_operating_readiness(
         profile_source=profile.source_path,
         capabilities=tuple(readiness),
         platform_runtime=selected_platform_status,
+        connector_implementations=_operating_connector_implementations(
+            profile=profile,
+            catalog=catalog,
+            integrations=integrations,
+            capabilities=requested,
+        ),
         configuration_trust=profile.configuration_trust_summary(),
     )
 
@@ -1804,6 +1822,32 @@ def _connector_system(system: str) -> str:
     return system
 
 
+def _operating_connector_implementations(
+    *,
+    profile: OrganizationProfile,
+    catalog: CapabilityCatalog,
+    integrations: IntegrationConfig | None,
+    capabilities: Sequence[str],
+) -> tuple[tuple[str, str], ...]:
+    """Return exact live implementations selected by profile capabilities."""
+
+    if profile.connector_mode is not ConnectorMode.LIVE or integrations is None:
+        return ()
+    selected: set[tuple[str, str]] = set()
+    for capability in capabilities:
+        definition = catalog.definitions.get(capability)
+        if (
+            definition is None
+            or definition.authentication in _LOCAL_AUTHENTICATION_CONTRACTS
+        ):
+            continue
+        system = _connector_system(definition.target_system)
+        connector = integrations.connectors.get(system)
+        if connector is not None and connector.enabled:
+            selected.add((bounded_system(system), str(connector.implementation)))
+    return tuple(sorted(selected))
+
+
 def _bounded_json(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
         payload,
@@ -1847,6 +1891,36 @@ def _redact_support_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_redact_support_value(item) for item in value]
     raise ConfigurationError("support bundle doctor value is not JSON-compatible")
+
+
+def _project_support_connector_implementations(value: Any) -> list[dict[str, str]]:
+    """Admit only fixed implementation metadata into support artifacts."""
+
+    if not isinstance(value, (list, tuple)) or len(value) > 64:
+        raise ConfigurationError(
+            "support bundle connector implementations are malformed"
+        )
+    selected: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"system", "implementation"}:
+            raise ConfigurationError(
+                "support bundle connector implementation is malformed"
+            )
+        system = item.get("system")
+        implementation = item.get("implementation")
+        if not isinstance(system, str) or implementation != "native":
+            raise ConfigurationError(
+                "support bundle connector implementation is unsupported"
+            )
+        selected.append((bounded_system(system), implementation))
+    if len(selected) != len(set(selected)):
+        raise ConfigurationError(
+            "support bundle connector implementations are duplicated"
+        )
+    return [
+        {"system": system, "implementation": implementation}
+        for system, implementation in sorted(selected)
+    ]
 
 
 def _redact_support_issue(value: Mapping[Any, Any]) -> dict[str, str]:
