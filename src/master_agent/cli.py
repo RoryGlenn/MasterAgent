@@ -161,6 +161,15 @@ from master_agent.operating import (
     require_operating_plan,
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
+from master_agent.performance import (
+    PerformanceSnapshot,
+    PerformanceStage,
+    current_performance_recorder,
+    performance_entrypoint,
+    performance_snapshot_from_error,
+    performance_stage,
+    performance_stage_call,
+)
 from master_agent.planners.base import (
     bind_fast_path_governance,
     bind_static_intervention_governance,
@@ -682,6 +691,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
         )
         print(f"error: {category}: {message}", file=sys.stderr)
+        _print_failure_performance(error)
         return 2
     except (
         KeyError,
@@ -702,6 +712,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
             )
             print(f"error: {category}: {error_message}", file=sys.stderr)
+            _print_failure_performance(error)
             return 2
         error_type = render_terminal_text(type(error).__name__, max_characters=80)
         error_message = render_terminal_text(
@@ -709,7 +720,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_characters=MAX_TERMINAL_FIELD_CHARACTERS,
         )
         print(f"error: {error_type}: {error_message}", file=sys.stderr)
+        _print_failure_performance(error)
         return 1
+
+
+def _print_failure_performance(error: BaseException) -> None:
+    """Emit only the bounded snapshot attached by a failed governed command."""
+
+    snapshot: PerformanceSnapshot | None = performance_snapshot_from_error(error)
+    if snapshot is not None:
+        print(f"performance: {snapshot.serialize()}", file=sys.stderr)
 
 
 def _preflight_cli_persistent_output(args: argparse.Namespace) -> None:
@@ -3478,6 +3498,7 @@ def _approve_request(
     return 0
 
 
+@performance_entrypoint
 def _resume_approval(
     *,
     request_path: Path,
@@ -3488,13 +3509,14 @@ def _resume_approval(
 ) -> int:
     """Retry the exact captured invocation with supplied approval artifacts."""
 
-    require_persistent_state_platform()
-    request = load_approval_request(request_path)
-    if expected_fingerprint != request.fingerprint:
-        raise ValueError(
-            "approval request fingerprint does not match --expected-fingerprint; "
-            "inspect the current request before resuming"
-        )
+    with performance_stage(PerformanceStage.APPROVAL):
+        require_persistent_state_platform()
+        request = load_approval_request(request_path)
+        if expected_fingerprint != request.fingerprint:
+            raise ValueError(
+                "approval request fingerprint does not match --expected-fingerprint; "
+                "inspect the current request before resuming"
+            )
     if request.run.recurring_occurrence is not None:
         if high_level:
             raise ValidationError(
@@ -3517,13 +3539,14 @@ def _resume_approval(
             expected_fingerprint=occurrence.fingerprint,
             approval_request=request,
         )
-    plan = (
-        _load_operating_plan(Path(request.run.plan_path))
-        if high_level
-        else _load_plan(Path(request.run.plan_path))
-    )
-    request.validate_plan(plan)
-    invocation = request.run.with_approvals(approval_paths)
+    with performance_stage(PerformanceStage.APPROVAL):
+        plan = (
+            _load_operating_plan(Path(request.run.plan_path))
+            if high_level
+            else _load_plan(Path(request.run.plan_path))
+        )
+        request.validate_plan(plan)
+        invocation = request.run.with_approvals(approval_paths)
     return _run(
         plan_path=Path(invocation.plan_path),
         apply=True,
@@ -3559,6 +3582,7 @@ def _resume_approval(
     )
 
 
+@performance_entrypoint
 def _run(
     *,
     plan_path: Path,
@@ -3652,12 +3676,22 @@ def _run(
         raise ValueError("--credential-map requires --apply and --credentials-file")
     if not apply and connector_urls:
         raise ValueError("--connector-url requires --apply")
-    plan = (
-        loaded_plan
-        if loaded_plan is not None
-        else (_load_operating_plan(plan_path) if high_level else _load_plan(plan_path))
-    )
-    _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    with performance_stage(PerformanceStage.REQUEST_PARSE_ROUTE):
+        plan = (
+            loaded_plan
+            if loaded_plan is not None
+            else (
+                _load_operating_plan(plan_path) if high_level else _load_plan(plan_path)
+            )
+        )
+        _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    performance = current_performance_recorder()
+    if performance is not None:
+        performance.record_dimensions(
+            capabilities=(action.capability for action in plan.actions),
+            risk_tiers=(action.risk for action in plan.actions),
+            systems=(action.target.system for action in plan.actions),
+        )
     organization_profile_source: ConfigSnapshot | None = None
     if organization_profile_path is not None:
         profile, organization_profile_source = _require_organization_selection(
@@ -3690,7 +3724,8 @@ def _run(
                 draft_output_dir=draft_output_dir,
             )
     approval_loader = _load_operating_approval if high_level else _load_approval
-    approvals = tuple(approval_loader(path) for path in approval_paths)
+    with performance_stage(PerformanceStage.APPROVAL):
+        approvals = tuple(approval_loader(path) for path in approval_paths)
     if approvals and approval_authorities is None:
         raise ValueError(
             "--approval-authorities is required when approval artifacts are supplied"
@@ -3745,10 +3780,12 @@ def _run(
                 )
             finally:
                 ephemeral_audit.close()
-        _print_report(report)
+        report, _report_payload, report_lines = _finalize_cli_run_report(report)
+        _print_report(report, rendered_lines=report_lines)
         return 0 if report.successful else 2
 
     with ExitStack() as runtime_resources:
+        operational_resources = runtime_resources.enter_context(ExitStack())
         integrations_source = _execution_integrations_source(
             plan=plan,
             catalog=capability_catalog,
@@ -3822,7 +3859,17 @@ def _run(
             approved_bindings=approved_path_bindings,
         )
         for captured in captured_paths:
-            runtime_resources.callback(captured.close)
+            operational_resources.callback(captured.close)
+        captured_connector_executions = (
+            capture_connector_executions(
+                integration_config,
+                environ=execution_environ,
+                systems=live_systems,
+                approved_execution_context=approved_context,
+            )
+            if connector_mode == "live"
+            else ()
+        )
         observed_context = build_execution_context(
             integration_config,
             environ=execution_environ,
@@ -3844,6 +3891,7 @@ def _run(
             ),
             include_connectors=connector_mode == "live",
             approved_execution_context=approved_context,
+            captured_executions=captured_connector_executions,
         )
         enforce_execution_context(
             plan,
@@ -3937,6 +3985,7 @@ def _run(
                 artifact_root=draft_output_dir,
                 artifact_directory=artifact_directory,
                 approved_execution_context=plan.execution_context,
+                captured_executions=captured_connector_executions,
             )
             register_draft_connectors(
                 connectors,
@@ -3948,7 +3997,7 @@ def _run(
                 connectors.register(IdentityMapConnector(identities))
         for connector in connectors.connectors():
             if isinstance(connector, ClosableConnector):
-                runtime_resources.callback(connector.close)
+                operational_resources.callback(connector.close)
 
         # Re-capture every path-backed policy input and non-secret environment
         # identity after connector construction. Connector clients use the
@@ -4024,60 +4073,68 @@ def _run(
             for item in report.actions
             if item.state is ActionState.APPROVAL_REQUIRED
         )
-        if result_json is not None and not pending_approvals:
-            if result_reservation is None:  # pragma: no cover - branch invariant.
-                raise ConfigurationError("applied result path was not reserved")
-            evidence, sidecar = result_reservation.commit(report.to_dict())
         approval_request_path: Path | None = None
         approval_request: ApprovalRequest | None = None
         if pending_approvals:
-            if approval_authorities is None:
-                raise ConfigurationError(
-                    "approval is required, but the plan has no resumable approval "
-                    "authority binding; rebind with --approval-authorities"
+            with performance_stage(PerformanceStage.APPROVAL):
+                if approval_authorities is None:
+                    raise ConfigurationError(
+                        "approval is required, but the plan has no resumable approval "
+                        "authority binding; rebind with --approval-authorities"
+                    )
+                invocation = ApprovalRunInvocation.capture(
+                    plan_path=plan_path,
+                    approval_paths=approval_paths,
+                    approval_authorities=approval_authorities,
+                    database=database,
+                    connector_mode=connector_mode,
+                    integrations=integrations_path,
+                    result_json=result_json,
+                    retention=retention_path,
+                    evidence_type=evidence_type,
+                    identities=identities_path,
+                    include_writes=include_writes,
+                    include_communications=include_communications,
+                    workspace_root=workspace_root,
+                    draft_output_dir=draft_output_dir,
+                    capabilities=capabilities_path,
+                    governance=governance_path,
+                    policy=policy_path,
+                    sources_of_truth=sources_of_truth_path,
+                    plugin_names=plugin_names,
+                    plugin_lock=plugin_lock_path,
+                    credentials_file=credentials_file,
+                    credential_mappings=credential_mappings,
+                    connector_urls=connector_urls,
+                    organization_profile=organization_profile_path,
+                    recurring_occurrence=recurring_occurrence_path,
+                    recurring_fingerprint=recurring_fingerprint,
+                    recurring_claim_generation=recurring_claim_generation,
+                    recurring_config=recurring_config_path,
                 )
-            invocation = ApprovalRunInvocation.capture(
-                plan_path=plan_path,
-                approval_paths=approval_paths,
-                approval_authorities=approval_authorities,
-                database=database,
-                connector_mode=connector_mode,
-                integrations=integrations_path,
-                result_json=result_json,
-                retention=retention_path,
-                evidence_type=evidence_type,
-                identities=identities_path,
-                include_writes=include_writes,
-                include_communications=include_communications,
-                workspace_root=workspace_root,
-                draft_output_dir=draft_output_dir,
-                capabilities=capabilities_path,
-                governance=governance_path,
-                policy=policy_path,
-                sources_of_truth=sources_of_truth_path,
-                plugin_names=plugin_names,
-                plugin_lock=plugin_lock_path,
-                credentials_file=credentials_file,
-                credential_mappings=credential_mappings,
-                connector_urls=connector_urls,
-                organization_profile=organization_profile_path,
-                recurring_occurrence=recurring_occurrence_path,
-                recurring_fingerprint=recurring_fingerprint,
-                recurring_claim_generation=recurring_claim_generation,
-                recurring_config=recurring_config_path,
-            )
-            approval_request = ApprovalRequest.build(
-                plan=plan,
-                run=invocation,
-                pending=pending_approvals,
-            )
-            approval_request_path = publish_approval_request(
-                artifact_directory,
-                approval_request,
-            )
+                approval_request = ApprovalRequest.build(
+                    plan=plan,
+                    run=invocation,
+                    pending=pending_approvals,
+                )
+                approval_request_path = publish_approval_request(
+                    artifact_directory,
+                    approval_request,
+                )
+        # Connector-owned and captured-path resources are operational work.
+        # Result-emission pins remain live for the intentionally excluded
+        # performance-bearing evidence write below.
+        operational_resources.close()
         if report_observer is not None:
             report_observer(report, approval_request)
-        _print_report(report)
+        report, report_payload, report_lines = _finalize_cli_run_report(report)
+        if result_json is not None and not pending_approvals:
+            if result_reservation is None:  # pragma: no cover - branch invariant.
+                raise ConfigurationError("applied result path was not reserved")
+            # Emitting the finalized evidence is intentionally outside its own
+            # measured interval; otherwise the payload would be self-referential.
+            evidence, sidecar = result_reservation.commit(report_payload)
+        _print_report(report, rendered_lines=report_lines)
         if result_json is not None and not pending_approvals:
             print(f"full result written to {evidence}")
             print(f"retention sidecar written to {sidecar}")
@@ -4254,8 +4311,9 @@ def _run_direct_read(
         plugin_names=plugin_names,
         plugin_lock_path=plugin_lock_path,
     )
-    plan = loaded_plan if loaded_plan is not None else _load_plan(plan_path)
-    _require_plan_fingerprint(plan, expected_plan_fingerprint)
+    with performance_stage(PerformanceStage.REQUEST_PARSE_ROUTE):
+        plan = loaded_plan if loaded_plan is not None else _load_plan(plan_path)
+        _require_plan_fingerprint(plan, expected_plan_fingerprint)
     if organization_profile_path is not None:
         profile = _load_active_organization_profile(organization_profile_path)
         _require_organization_selection(
@@ -4303,13 +4361,14 @@ def _run_direct_read(
 
     # No credentials, principal-attestation calls, or connector construction
     # occur before this shape and policy preflight succeeds.
-    provider = preflight_direct_read_plan(
-        plan=plan,
-        catalog=catalog,
-        governance=governance,
-        policy=policy,
-        sources=sources,
-    )
+    with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+        provider = preflight_direct_read_plan(
+            plan=plan,
+            catalog=catalog,
+            governance=governance,
+            policy=policy,
+            sources=sources,
+        )
     if provider not in _CONNECT_CONFIGURATION_BY_SYSTEM:
         raise ConfigurationError(
             "direct read sessions require one built-in typed provider: " + provider
@@ -4408,7 +4467,8 @@ def _run_direct_read(
             execution_binding=bindings[0],
         ).execute(plan)
 
-    _print_direct_read_report(report)
+    report, report_lines = _finalize_cli_direct_read_report(report)
+    _print_lines(report_lines)
     return 0 if report.successful else 2
 
 
@@ -5204,6 +5264,7 @@ def _load_plugin_lock(
     )
 
 
+@performance_stage_call(PerformanceStage.CREDENTIAL_RESOLUTION)
 def _load_credential_store(
     path: Path | None,
     *,
@@ -5226,6 +5287,10 @@ def _load_credential_store(
         if systems is not None
         else set(integrations.connectors)
     )
+    performance = current_performance_recorder()
+    if performance is not None and systems is not None:
+        for system in sorted(configurations):
+            performance.record_credential_resolution(system)
     if path is None:
         if connector_mode != "live":
             return None
@@ -5282,6 +5347,7 @@ def _load_credential_store(
     )
 
 
+@performance_stage_call(PerformanceStage.CREDENTIAL_RESOLUTION)
 def _credential_environment(
     store: CredentialStoreSnapshot | None,
     environ: Mapping[str, str],
@@ -5892,6 +5958,7 @@ def _recurring_cancel(
     return 0 if status is OccurrenceStatus.CANCELLED else 2
 
 
+@performance_entrypoint
 def _recurring_apply(
     *,
     artifact_path: Path,
@@ -5929,28 +5996,31 @@ def _recurring_apply(
         allow_approval_resume=resume,
     )
     now = datetime.now(UTC)
-    if approval_request is None:
-        generation, token = store.reserve_occurrence(
-            artifact_fingerprint=occurrence.fingerprint,
-            started_at=now,
-        )
-    else:
-        approval_request.validate_plan(occurrence.plan)
-        request_run = approval_request.run
-        if (
-            request_run.recurring_occurrence
-            != str(artifact_path.expanduser().resolve(strict=False))
-            or request_run.recurring_fingerprint != occurrence.fingerprint
-            or request_run.recurring_claim_generation is None
-        ):
-            store.close()
-            raise ConfigurationError("approval request recurring occurrence changed")
-        generation, token = store.resume_approval_blocked_occurrence(
-            artifact_fingerprint=occurrence.fingerprint,
-            prior_generation=request_run.recurring_claim_generation,
-            request_fingerprint=approval_request.fingerprint,
-            started_at=now,
-        )
+    with performance_stage(PerformanceStage.AUDIT_RETENTION):
+        if approval_request is None:
+            generation, token = store.reserve_occurrence(
+                artifact_fingerprint=occurrence.fingerprint,
+                started_at=now,
+            )
+        else:
+            approval_request.validate_plan(occurrence.plan)
+            request_run = approval_request.run
+            if (
+                request_run.recurring_occurrence
+                != str(artifact_path.expanduser().resolve(strict=False))
+                or request_run.recurring_fingerprint != occurrence.fingerprint
+                or request_run.recurring_claim_generation is None
+            ):
+                store.close()
+                raise ConfigurationError(
+                    "approval request recurring occurrence changed"
+                )
+            generation, token = store.resume_approval_blocked_occurrence(
+                artifact_fingerprint=occurrence.fingerprint,
+                prior_generation=request_run.recurring_claim_generation,
+                request_fingerprint=approval_request.fingerprint,
+                started_at=now,
+            )
 
     stop_heartbeat = Event()
     heartbeat_errors: list[BaseException] = []
@@ -6030,13 +6100,15 @@ def _recurring_apply(
                 raise ConfigurationError(
                     "recurring approval-blocked run did not publish an exact request"
                 )
-            store.block_occurrence_for_approval(
-                artifact_fingerprint=occurrence.fingerprint,
-                claim_generation=generation,
-                claim_token=token,
-                request_fingerprint=request.fingerprint,
-            )
+            with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                store.block_occurrence_for_approval(
+                    artifact_fingerprint=occurrence.fingerprint,
+                    claim_generation=generation,
+                    claim_token=token,
+                    request_fingerprint=request.fingerprint,
+                )
             transitioned = True
+            store.close()
             return
         fresh = RecurringConfig.from_toml(
             resolve_config_source(recurring_path, "recurring.toml")
@@ -6057,12 +6129,13 @@ def _recurring_apply(
                     "weekly-operating-review.toml",
                 )
             )
-            render_weekly_operating_review(
-                report,
-                settings,
-                output_root=Path(occurrence.roots["artifact"]),
-                execution_key=occurrence.execution_key,
-            )
+            with performance_stage(PerformanceStage.RENDER):
+                render_weekly_operating_review(
+                    report,
+                    settings,
+                    output_root=Path(occurrence.roots["artifact"]),
+                    execution_key=occurrence.execution_key,
+                )
             local_output_started = True
         status = (
             OccurrenceStatus.SUCCEEDED
@@ -6073,13 +6146,15 @@ def _recurring_apply(
             or local_output_started
             else OccurrenceStatus.FAILED_PRE_EFFECT
         )
-        store.finalize_occurrence(
-            artifact_fingerprint=occurrence.fingerprint,
-            claim_generation=generation,
-            claim_token=token,
-            status=status,
-        )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            store.finalize_occurrence(
+                artifact_fingerprint=occurrence.fingerprint,
+                claim_generation=generation,
+                claim_token=token,
+                status=status,
+            )
         transitioned = True
+        store.close()
 
     try:
         status = _run(
@@ -6136,12 +6211,13 @@ def _recurring_apply(
                 else OccurrenceStatus.FAILED_PRE_EFFECT
             )
             try:
-                store.finalize_occurrence(
-                    artifact_fingerprint=occurrence.fingerprint,
-                    claim_generation=generation,
-                    claim_token=token,
-                    status=terminal,
-                )
+                with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                    store.finalize_occurrence(
+                        artifact_fingerprint=occurrence.fingerprint,
+                        claim_generation=generation,
+                        claim_token=token,
+                        status=terminal,
+                    )
             except ConfigurationError:
                 pass
         raise
@@ -8301,20 +8377,83 @@ def _write_json(
     write_restricted_json(path, payload)
 
 
-def _print_report(report: RunReport, *, mode_label: str | None = None) -> None:
-    print(f"run ID: {report.run_id}")
-    print(f"plan fingerprint: {report.plan_fingerprint}")
-    print(f"mode: {mode_label or ('dry-run' if report.dry_run else 'apply')}")
+def _finalize_cli_run_report(
+    report: RunReport,
+) -> tuple[RunReport, dict[str, object], tuple[str, ...]]:
+    """Finalize one CLI-owned measurement before emitting its own evidence."""
+
+    performance = current_performance_recorder()
+    if performance is None:
+        return report, report.to_dict(), _render_report_lines(report)
+    with performance.span(PerformanceStage.RENDER):
+        payload = report.to_dict()
+        lines = _render_report_lines(report)
+    performance.finish_total()
+    snapshot = performance.snapshot()
+    finalized = replace(report, performance=snapshot)
+    payload["performance"] = snapshot.to_dict()
+    return finalized, payload, lines
+
+
+def _finalize_cli_direct_read_report(
+    report: DirectReadReport,
+) -> tuple[DirectReadReport, tuple[str, ...]]:
+    """Finalize a stateless CLI report after connector-resource cleanup."""
+
+    performance = current_performance_recorder()
+    if performance is None:
+        return report, _render_direct_read_report_lines(report)
+    with performance.span(PerformanceStage.RENDER):
+        lines = _render_direct_read_report_lines(report)
+    performance.finish_total()
+    return replace(report, performance=performance.snapshot()), lines
+
+
+def _render_report_lines(
+    report: RunReport,
+    *,
+    mode_label: str | None = None,
+) -> tuple[str, ...]:
+    """Prepare the exact bounded terminal lines for one governed report."""
+
+    lines = [
+        f"run ID: {report.run_id}",
+        f"plan fingerprint: {report.plan_fingerprint}",
+        f"mode: {mode_label or ('dry-run' if report.dry_run else 'apply')}",
+    ]
     for item in report.actions:
         state = _terminal_field(item.state, max_characters=80)
         capability = _terminal_field(item.capability, max_characters=240)
         message = _terminal_field(item.message)
-        print(f"{state:<20} {item.action_id!s:<36} {capability} — {message}")
-    print(f"successful: {report.successful}")
+        lines.append(f"{state:<20} {item.action_id!s:<36} {capability} — {message}")
+    lines.append(f"successful: {report.successful}")
+    return tuple(lines)
 
 
-def _print_direct_read_report(report: DirectReadReport) -> None:
-    """Render verified direct-read data without durable result publication.
+def _print_lines(lines: Iterable[str]) -> None:
+    """Emit already prepared terminal lines without re-rendering content."""
+
+    for line in lines:
+        print(line)
+
+
+def _print_report(
+    report: RunReport,
+    *,
+    mode_label: str | None = None,
+    rendered_lines: Iterable[str] | None = None,
+) -> None:
+    """Emit a report, reusing pre-rendered lines when measurement is finalized."""
+
+    _print_lines(
+        rendered_lines
+        if rendered_lines is not None
+        else _render_report_lines(report, mode_label=mode_label)
+    )
+
+
+def _render_direct_read_report_lines(report: DirectReadReport) -> tuple[str, ...]:
+    """Prepare verified direct-read data without durable result publication.
 
     Provider content is untrusted.  JSON escaping and terminal rendering keep
     control characters inert, while the per-action cap prevents a direct read
@@ -8322,13 +8461,15 @@ def _print_direct_read_report(report: DirectReadReport) -> None:
     the complete result only in process memory until this rendering finishes.
     """
 
-    print("mode: direct-read")
-    print(f"provider: {_terminal_field(report.provider, max_characters=80)}")
-    print(f"plan fingerprint: {report.plan_fingerprint}")
+    lines = [
+        "mode: direct-read",
+        f"provider: {_terminal_field(report.provider, max_characters=80)}",
+        f"plan fingerprint: {report.plan_fingerprint}",
+    ]
     for action in report.actions:
         capability = _terminal_field(action.capability, max_characters=240)
         message = _terminal_field(action.message)
-        print(f"verified {action.action_id!s:<36} {capability} — {message}")
+        lines.append(f"verified {action.action_id!s:<36} {capability} — {message}")
         payload = json.dumps(
             action.payload.to_dict(),
             ensure_ascii=True,
@@ -8339,13 +8480,20 @@ def _print_direct_read_report(report: DirectReadReport) -> None:
             payload,
             max_characters=_MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS,
         )
-        print(f"  result: {rendered}")
-    print(
+        lines.append(f"  result: {rendered}")
+    lines.append(
         "systems review: "
         f"metric={report.systems_review.metric_status}, "
         f"reassessment_required={report.systems_review.reassessment_required}"
     )
-    print(f"successful: {report.successful}")
+    lines.append(f"successful: {report.successful}")
+    return tuple(lines)
+
+
+def _print_direct_read_report(report: DirectReadReport) -> None:
+    """Render one direct-read report through the bounded terminal helper."""
+
+    _print_lines(_render_direct_read_report_lines(report))
 
 
 def _parse_systems(value: str | None) -> set[str] | None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -45,6 +45,17 @@ from master_agent.models import (
     ExecutionResult,
     RiskLevel,
     SystemsPostExecutionReview,
+)
+from master_agent.performance import (
+    PerformanceCounter,
+    PerformanceOutcome,
+    PerformanceSnapshot,
+    PerformanceStage,
+    TransportPhase,
+    current_performance_recorder,
+    ensure_performance_run,
+    performance_stage,
+    performance_transport_phase,
 )
 from master_agent.planners.base import (
     SystemsOutcomeObserver,
@@ -136,6 +147,7 @@ class RunReport:
     dry_run: bool
     actions: tuple[ActionReport, ...]
     systems_review: SystemsPostExecutionReview | None = None
+    performance: PerformanceSnapshot | None = None
 
     @property
     def successful(self) -> bool:
@@ -171,6 +183,8 @@ class RunReport:
         }
         if self.systems_review is not None:
             payload["systems_review"] = self.systems_review.to_dict()
+        if self.performance is not None:
+            payload["performance"] = self.performance.to_dict()
         return payload
 
     @classmethod
@@ -190,6 +204,11 @@ class RunReport:
             raise StructuredDataTypeError(
                 "run report systems_review must be an object or null"
             )
+        raw_performance = data.get("performance")
+        if raw_performance is not None and not isinstance(raw_performance, Mapping):
+            raise StructuredDataTypeError(
+                "run report performance must be an object or null"
+            )
         return cls(
             run_id=UUID(str(data["run_id"])),
             plan_id=UUID(str(data["plan_id"])),
@@ -199,6 +218,11 @@ class RunReport:
             systems_review=(
                 SystemsPostExecutionReview.from_dict(raw_review)
                 if isinstance(raw_review, Mapping)
+                else None
+            ),
+            performance=(
+                PerformanceSnapshot.from_dict(raw_performance)
+                if isinstance(raw_performance, Mapping)
                 else None
             ),
         )
@@ -244,6 +268,34 @@ class WorkflowOrchestrator:
         approvals: Iterable[Approval] = (),
         dry_run: bool = True,
     ) -> RunReport:
+        """Evaluate and optionally execute a plan with bounded evidence."""
+
+        owns_performance_run = current_performance_recorder() is None
+        with ensure_performance_run() as performance:
+            with performance.span(PerformanceStage.SELECTION):
+                performance.record_dimensions(
+                    capabilities=(action.capability for action in plan.actions),
+                    risk_tiers=(action.risk for action in plan.actions),
+                    systems=(action.target.system for action in plan.actions),
+                )
+            report = self._run_internal(
+                plan,
+                approvals=approvals,
+                dry_run=dry_run,
+            )
+            _record_run_performance_outcomes(report)
+            if not owns_performance_run:
+                return replace(report, performance=performance.snapshot())
+            performance.finish_total()
+            return replace(report, performance=performance.snapshot())
+
+    def _run_internal(
+        self,
+        plan: ChangePlan,
+        *,
+        approvals: Iterable[Approval] = (),
+        dry_run: bool = True,
+    ) -> RunReport:
         """Evaluate and optionally execute a plan.
 
         Parameters
@@ -264,21 +316,23 @@ class WorkflowOrchestrator:
         # Never execute caller-owned objects. The validated snapshot preserves
         # only process-local admission created by a trusted planning binder;
         # serialized inputs cannot supply that provenance.
-        plan = plan.execution_snapshot()
+        with performance_stage(PerformanceStage.REQUEST_PARSE_ROUTE):
+            plan = plan.execution_snapshot()
         approvals_tuple = tuple(approvals)
-        systems_decision = enforce_systems_governance(
-            plan,
-            policy=self._policy,
-            approvals=approvals_tuple,
-            require_trusted_coherence=False,
-        )
-        coherence_approval_required = not dry_run and not (
-            strategy_coherence_execution_authenticated(
+        with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+            systems_decision = enforce_systems_governance(
                 plan,
                 policy=self._policy,
                 approvals=approvals_tuple,
+                require_trusted_coherence=False,
             )
-        )
+            coherence_approval_required = not dry_run and not (
+                strategy_coherence_execution_authenticated(
+                    plan,
+                    policy=self._policy,
+                    approvals=approvals_tuple,
+                )
+            )
         systems_assessment = plan.systems_assessment
         if systems_assessment is None:  # pragma: no cover - enforced above.
             raise ValidationError("plan is missing a systems governance assessment")
@@ -289,35 +343,39 @@ class WorkflowOrchestrator:
         ordered = _topological_order(plan.actions)
         abort_remaining = False
 
-        self._audit.record(
-            run_id=run_id,
-            plan_id=plan.plan_id,
-            action_id=None,
-            event_type="plan_started",
-            payload={
-                "goal_digest": hashlib.sha256(plan.goal.encode("utf-8")).hexdigest(),
-                "goal_length": len(plan.goal),
-                "fingerprint": plan.fingerprint,
-                "dry_run": dry_run,
-                "workflow_id": plan.workflow_id,
-                "workflow_fingerprint": plan.workflow_fingerprint,
-                "compensate_on_failure": plan.compensate_on_failure,
-                "systems_assessment_fingerprint": systems_assessment.fingerprint,
-                "systems_decision_fingerprint": systems_decision.fingerprint,
-                "systems_route": systems_decision.route,
-                "systems_complexity_score": systems_decision.complexity_score,
-                **(
-                    {
-                        "capsule_bindings": [
-                            item.to_dict() for item in plan.execution_context.capsules
-                        ]
-                    }
-                    if plan.execution_context is not None
-                    and plan.execution_context.capsules
-                    else {}
-                ),
-            },
-        )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            self._audit.record(
+                run_id=run_id,
+                plan_id=plan.plan_id,
+                action_id=None,
+                event_type="plan_started",
+                payload={
+                    "goal_digest": hashlib.sha256(
+                        plan.goal.encode("utf-8")
+                    ).hexdigest(),
+                    "goal_length": len(plan.goal),
+                    "fingerprint": plan.fingerprint,
+                    "dry_run": dry_run,
+                    "workflow_id": plan.workflow_id,
+                    "workflow_fingerprint": plan.workflow_fingerprint,
+                    "compensate_on_failure": plan.compensate_on_failure,
+                    "systems_assessment_fingerprint": systems_assessment.fingerprint,
+                    "systems_decision_fingerprint": systems_decision.fingerprint,
+                    "systems_route": systems_decision.route,
+                    "systems_complexity_score": systems_decision.complexity_score,
+                    **(
+                        {
+                            "capsule_bindings": [
+                                item.to_dict()
+                                for item in plan.execution_context.capsules
+                            ]
+                        }
+                        if plan.execution_context is not None
+                        and plan.execution_context.capsules
+                        else {}
+                    ),
+                },
+            )
 
         for action in ordered:
             if abort_remaining:
@@ -332,7 +390,8 @@ class WorkflowOrchestrator:
                 self._record_action(run_id, plan, action, report)
                 continue
 
-            catalog_ok, catalog_reason = self._validate_capability(action)
+            with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+                catalog_ok, catalog_reason = self._validate_capability(action)
             if not catalog_ok:
                 report = ActionReport(
                     action_id=action.action_id,
@@ -353,7 +412,12 @@ class WorkflowOrchestrator:
                 continue
 
             if coherence_approval_required:
-                source_ok, source_reason = self._sources.validate(plan, action)
+                with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+                    source_ok, source_reason = self._sources.validate(plan, action)
+                performance = current_performance_recorder()
+                if source_ok and performance is not None:
+                    performance.increment(PerformanceCounter.GOVERNANCE_INTERACTIONS)
+                    performance.increment(PerformanceCounter.APPROVAL_INTERACTIONS)
                 report = ActionReport(
                     action_id=action.action_id,
                     capability=action.capability,
@@ -393,7 +457,8 @@ class WorkflowOrchestrator:
                 self._record_action(run_id, plan, action, report)
                 continue
 
-            source_ok, source_reason = self._sources.validate(plan, action)
+            with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+                source_ok, source_reason = self._sources.validate(plan, action)
             if not source_ok:
                 report = ActionReport(
                     action_id=action.action_id,
@@ -413,13 +478,14 @@ class WorkflowOrchestrator:
                 )
                 continue
 
-            minimum_approvers = self._minimum_approvers(action)
-            decision = self._policy.evaluate(
-                plan=plan,
-                action=action,
-                approvals=approvals_tuple,
-                minimum_distinct_approvers=minimum_approvers,
-            )
+            with performance_stage(PerformanceStage.POLICY_EVALUATION):
+                minimum_approvers = self._minimum_approvers(action)
+                decision = self._policy.evaluate(
+                    plan=plan,
+                    action=action,
+                    approvals=approvals_tuple,
+                    minimum_distinct_approvers=minimum_approvers,
+                )
             if not decision.permitted:
                 state = (
                     ActionState.APPROVAL_REQUIRED
@@ -432,6 +498,9 @@ class WorkflowOrchestrator:
                     state=state,
                     message=decision.reason,
                 )
+                performance = current_performance_recorder()
+                if decision.approval_required and performance is not None:
+                    performance.increment(PerformanceCounter.APPROVAL_INTERACTIONS)
                 reports.append(report)
                 state_by_id[action.action_id] = report.state
                 self._record_action(run_id, plan, action, report)
@@ -462,15 +531,23 @@ class WorkflowOrchestrator:
             http_budget: HttpActionBudget | None = None
             egress: ProviderDataEgressBinding | None = None
             try:
-                connector = self._connectors.resolve(
-                    action.target.system,
-                    action.capability,
-                )
-                execution_ok, execution_reason = self._validate_execution_contract(
-                    plan,
-                    action,
-                    connector,
-                )
+                with performance_stage(PerformanceStage.SELECTION):
+                    connector = self._connectors.resolve(
+                        action.target.system,
+                        action.capability,
+                    )
+                    performance = current_performance_recorder()
+                    if (
+                        performance is not None
+                        and self._selects_provider_implementation(action)
+                    ):
+                        performance.record_connector_implementation(connector.system)
+                with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+                    execution_ok, execution_reason = self._validate_execution_contract(
+                        plan,
+                        action,
+                        connector,
+                    )
                 if not execution_ok:
                     report = ActionReport(
                         action_id=action.action_id,
@@ -490,11 +567,12 @@ class WorkflowOrchestrator:
                     )
                     continue
                 try:
-                    egress = self._provider_data_egress_binding(
-                        plan,
-                        action,
-                        connector,
-                    )
+                    with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+                        egress = self._provider_data_egress_binding(
+                            plan,
+                            action,
+                            connector,
+                        )
                 except ConfigurationError as error:
                     report = ActionReport(
                         action_id=action.action_id,
@@ -514,24 +592,29 @@ class WorkflowOrchestrator:
                     )
                     continue
                 if egress is not None:
-                    self._audit.record(
-                        run_id=run_id,
-                        plan_id=plan.plan_id,
-                        action_id=action.action_id,
-                        event_type="provider_data_egress_authorized",
-                        payload={
-                            "egress": egress.to_dict(),
-                            "egress_fingerprint": egress.fingerprint,
-                        },
-                    )
+                    with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                        self._audit.record(
+                            run_id=run_id,
+                            plan_id=plan.plan_id,
+                            action_id=action.action_id,
+                            event_type="provider_data_egress_authorized",
+                            payload={
+                                "egress": egress.to_dict(),
+                                "egress_fingerprint": egress.fingerprint,
+                            },
+                        )
                 http_budget = connector_http_action_budget(connector)
                 if _uses_idempotency(action):
-                    claim = self._audit.claim_action(
-                        idempotency_key=action.idempotency_key,
-                        action_fingerprint=action.effect_fingerprint,
-                        plan_id=plan.plan_id,
-                        action_id=action.action_id,
-                    )
+                    with (
+                        performance_stage(PerformanceStage.IDEMPOTENCY_RECONCILIATION),
+                        performance_stage(PerformanceStage.AUDIT_RETENTION),
+                    ):
+                        claim = self._audit.claim_action(
+                            idempotency_key=action.idempotency_key,
+                            action_fingerprint=action.effect_fingerprint,
+                            plan_id=plan.plan_id,
+                            action_id=action.action_id,
+                        )
                     if claim.state is IdempotencyClaimState.COMPLETED:
                         if not isinstance(connector, IdempotencyVerifyingConnector):
                             report = ActionReport(
@@ -555,7 +638,22 @@ class WorkflowOrchestrator:
                             )
                             continue
                         try:
-                            with activate_http_action_budget(http_budget):
+                            with performance_stage(
+                                PerformanceStage.IDEMPOTENCY_RECONCILIATION
+                            ):
+                                performance = current_performance_recorder()
+                                if performance is not None:
+                                    performance.record_verification_call(
+                                        action.target.system
+                                    )
+                            with (
+                                performance_stage(PerformanceStage.VERIFICATION),
+                                performance_transport_phase(
+                                    TransportPhase.RECONCILIATION,
+                                    action.target.system,
+                                ),
+                                activate_http_action_budget(http_budget),
+                            ):
                                 reuse_verification = connector.verify_completed(
                                     action,
                                     claim.result or {},
@@ -673,18 +771,38 @@ class WorkflowOrchestrator:
                             connector, IdempotencyVerifyingConnector
                         ):
                             try:
-                                with activate_http_action_budget(http_budget):
+                                with performance_stage(
+                                    PerformanceStage.IDEMPOTENCY_RECONCILIATION
+                                ):
+                                    performance = current_performance_recorder()
+                                    if performance is not None:
+                                        performance.record_verification_call(
+                                            action.target.system
+                                        )
+                                with (
+                                    performance_stage(PerformanceStage.VERIFICATION),
+                                    performance_transport_phase(
+                                        TransportPhase.RECONCILIATION,
+                                        action.target.system,
+                                    ),
+                                    activate_http_action_budget(http_budget),
+                                ):
                                     reconciliation = connector.verify_completed(
                                         action,
                                         reconciliation_record,
                                     )
                                 if reconciliation.verified:
-                                    self._audit.resolve_indeterminate_action(
-                                        idempotency_key=action.idempotency_key,
-                                        action_fingerprint=action.effect_fingerprint,
-                                        expected_outcome=claim.result or {},
-                                        completed_result=reconciliation_record,
-                                    )
+                                    with performance_stage(
+                                        PerformanceStage.AUDIT_RETENTION
+                                    ):
+                                        self._audit.resolve_indeterminate_action(
+                                            idempotency_key=action.idempotency_key,
+                                            action_fingerprint=(
+                                                action.effect_fingerprint
+                                            ),
+                                            expected_outcome=claim.result or {},
+                                            completed_result=reconciliation_record,
+                                        )
                                     report = ActionReport(
                                         action_id=action.action_id,
                                         capability=action.capability,
@@ -752,23 +870,31 @@ class WorkflowOrchestrator:
                     # provider dispatch. Losing the occurrence lease after this
                     # point is an indeterminate effect, never an automatic retry.
                     self._pre_effect_guard(action)
-                with activate_http_action_budget(http_budget):
+                with (
+                    performance_stage(PerformanceStage.PROVIDER_EXECUTION),
+                    performance_transport_phase(
+                        TransportPhase.EXECUTION,
+                        action.target.system,
+                    ),
+                    activate_http_action_budget(http_budget),
+                ):
                     result = connector.execute(action)
                     if not isinstance(result, ExecutionResult):
                         raise ConnectorError(
                             "connector returned an invalid execution result"
                         )
                     if _uses_idempotency(action):
-                        self._audit.record(
-                            run_id=run_id,
-                            plan_id=plan.plan_id,
-                            action_id=action.action_id,
-                            event_type="side_effect_may_have_occurred",
-                            payload={
-                                "capability": action.capability,
-                                "result": result_audit_summary(result),
-                            },
-                        )
+                        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                            self._audit.record(
+                                run_id=run_id,
+                                plan_id=plan.plan_id,
+                                action_id=action.action_id,
+                                event_type="side_effect_may_have_occurred",
+                                payload={
+                                    "capability": action.capability,
+                                    "result": result_audit_summary(result),
+                                },
+                            )
                     # Keep the runtime's exact post-execute snapshot private.
                     # Verification receives a separate copy so a connector
                     # cannot rewrite evidence that may need reconciliation or
@@ -785,6 +911,17 @@ class WorkflowOrchestrator:
                             )
                         )
                     _validate_execution_result(action, result)
+                performance = current_performance_recorder()
+                if performance is not None:
+                    performance.record_verification_call(action.target.system)
+                with (
+                    performance_stage(PerformanceStage.VERIFICATION),
+                    performance_transport_phase(
+                        TransportPhase.VERIFICATION,
+                        action.target.system,
+                    ),
+                    activate_http_action_budget(http_budget),
+                ):
                     verification = connector.verify(
                         action,
                         _copy_execution_result(result),
@@ -839,7 +976,8 @@ class WorkflowOrchestrator:
                                     "provider-data egress binding changed before "
                                     "result return"
                                 )
-                            result = sanitize_provider_result(result, egress)
+                            with performance_stage(PerformanceStage.SANITIZATION):
+                                result = sanitize_provider_result(result, egress)
                         except ConfigurationError as error:
                             recheck_error = error
                     report = ActionReport(
@@ -861,12 +999,13 @@ class WorkflowOrchestrator:
                         egress=egress,
                     )
                     if _uses_idempotency(action):
-                        self._audit.complete_action(
-                            idempotency_key=action.idempotency_key,
-                            action_fingerprint=action.effect_fingerprint,
-                            claim_token=claim_token or "",
-                            result=_idempotency_record(connector, action, result),
-                        )
+                        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                            self._audit.complete_action(
+                                idempotency_key=action.idempotency_key,
+                                action_fingerprint=action.effect_fingerprint,
+                                claim_token=claim_token or "",
+                                result=_idempotency_record(connector, action, result),
+                            )
             except VersionConflictError as error:
                 failure_persisted = result is None and claim_token is None
                 if result is None and claim_token is not None:
@@ -1019,26 +1158,30 @@ class WorkflowOrchestrator:
                     dry_run=dry_run,
                 )
 
-        systems_review = build_systems_post_execution_review(
-            assessment=systems_assessment,
-            decision=systems_decision,
-            states=(item.state for item in reports),
-            dry_run=dry_run,
-            observer=self._systems_outcome_observer,
-        )
-        self._audit.record(
-            run_id=run_id,
-            plan_id=plan.plan_id,
-            action_id=None,
-            event_type="plan_finished",
-            payload={
-                "states": {str(report.action_id): report.state for report in reports},
-                "compensated": any(
-                    report.state is ActionState.COMPENSATED for report in reports
-                ),
-                "systems_review": systems_review.to_dict(),
-            },
-        )
+        with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+            systems_review = build_systems_post_execution_review(
+                assessment=systems_assessment,
+                decision=systems_decision,
+                states=(item.state for item in reports),
+                dry_run=dry_run,
+                observer=self._systems_outcome_observer,
+            )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            self._audit.record(
+                run_id=run_id,
+                plan_id=plan.plan_id,
+                action_id=None,
+                event_type="plan_finished",
+                payload={
+                    "states": {
+                        str(report.action_id): report.state for report in reports
+                    },
+                    "compensated": any(
+                        report.state is ActionState.COMPENSATED for report in reports
+                    ),
+                    "systems_review": systems_review.to_dict(),
+                },
+            )
 
         return RunReport(
             run_id=run_id,
@@ -1078,6 +1221,14 @@ class WorkflowOrchestrator:
                 if not allowed:
                     return False, reason
         return True, "capability passed catalog and governance checks"
+
+    def _selects_provider_implementation(self, action: AgentAction) -> bool:
+        """Return whether issue #170 owns this action's connector identity."""
+
+        if self._capabilities is None:
+            return action.risk is not RiskLevel.LOCAL_GENERATION
+        definition = self._capabilities.definition(action.capability)
+        return definition.authentication not in {"local", "local_git"}
 
     def _validate_execution_contract(
         self,
@@ -1211,13 +1362,14 @@ class WorkflowOrchestrator:
         if dry_run or not plan.compensate_on_failure or not executed:
             return False
 
-        self._audit.record(
-            run_id=run_id,
-            plan_id=plan.plan_id,
-            action_id=None,
-            event_type="compensation_started",
-            payload={"action_count": len(executed)},
-        )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            self._audit.record(
+                run_id=run_id,
+                plan_id=plan.plan_id,
+                action_id=None,
+                event_type="compensation_started",
+                payload={"action_count": len(executed)},
+            )
         for item in reversed(executed):
             action = item.action
             connector = item.connector
@@ -1289,7 +1441,17 @@ class WorkflowOrchestrator:
                 continue
 
             try:
-                with activate_http_action_budget(item.http_budget):
+                performance = current_performance_recorder()
+                if performance is not None:
+                    performance.record_verification_call(action.target.system)
+                with (
+                    performance_stage(PerformanceStage.COMPENSATION),
+                    performance_transport_phase(
+                        TransportPhase.COMPENSATION,
+                        action.target.system,
+                    ),
+                    activate_http_action_budget(item.http_budget),
+                ):
                     postcondition = connector.verify(
                         action,
                         _copy_execution_result(item.result),
@@ -1303,6 +1465,8 @@ class WorkflowOrchestrator:
                         action,
                         _copy_execution_result(item.result),
                     )
+                    if performance is not None:
+                        performance.record_verification_call(action.target.system)
                     verification = connector.verify_compensation(
                         action,
                         _copy_execution_result(item.result),
@@ -1320,10 +1484,11 @@ class WorkflowOrchestrator:
                     result=item.result,
                     compensation=compensation,
                 )
-                self._audit.clear_completed(
-                    action.idempotency_key,
-                    action_fingerprint=action.effect_fingerprint,
-                )
+                with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                    self._audit.clear_completed(
+                        action.idempotency_key,
+                        action_fingerprint=action.effect_fingerprint,
+                    )
             except (
                 ConnectorError,
                 KeyError,
@@ -1347,18 +1512,19 @@ class WorkflowOrchestrator:
                 reports[item.report_index],
             )
 
-        self._audit.record(
-            run_id=run_id,
-            plan_id=plan.plan_id,
-            action_id=None,
-            event_type="compensation_finished",
-            payload={
-                "states": {
-                    str(item.action.action_id): reports[item.report_index].state
-                    for item in executed
-                }
-            },
-        )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            self._audit.record(
+                run_id=run_id,
+                plan_id=plan.plan_id,
+                action_id=None,
+                event_type="compensation_finished",
+                payload={
+                    "states": {
+                        str(item.action.action_id): reports[item.report_index].state
+                        for item in executed
+                    }
+                },
+            )
         executed.clear()
         return True
 
@@ -1404,13 +1570,14 @@ class WorkflowOrchestrator:
             payload["compensation"] = result_audit_summary(report.compensation)
         if extra:
             payload.update(extra)
-        self._audit.record(
-            run_id=run_id,
-            plan_id=plan.plan_id,
-            action_id=action.action_id,
-            event_type="action_state",
-            payload=payload,
-        )
+        with performance_stage(PerformanceStage.AUDIT_RETENTION):
+            self._audit.record(
+                run_id=run_id,
+                plan_id=plan.plan_id,
+                action_id=action.action_id,
+                event_type="action_state",
+                payload=payload,
+            )
 
     def _persist_idempotency_outcome(
         self,
@@ -1439,22 +1606,23 @@ class WorkflowOrchestrator:
         if result is not None:
             outcome["result"] = _idempotency_record(connector, action, result)
         try:
-            if state is IdempotencyClaimState.FAILED:
-                self._audit.fail_action(
-                    idempotency_key=action.idempotency_key,
-                    action_fingerprint=action.effect_fingerprint,
-                    claim_token=claim_token,
-                    outcome=outcome,
-                )
-            elif state is IdempotencyClaimState.INDETERMINATE:
-                self._audit.mark_action_indeterminate(
-                    idempotency_key=action.idempotency_key,
-                    action_fingerprint=action.effect_fingerprint,
-                    claim_token=claim_token,
-                    outcome=outcome,
-                )
-            else:  # pragma: no cover - internal invariant.
-                raise ValueError("unsupported idempotency outcome state")
+            with performance_stage(PerformanceStage.AUDIT_RETENTION):
+                if state is IdempotencyClaimState.FAILED:
+                    self._audit.fail_action(
+                        idempotency_key=action.idempotency_key,
+                        action_fingerprint=action.effect_fingerprint,
+                        claim_token=claim_token,
+                        outcome=outcome,
+                    )
+                elif state is IdempotencyClaimState.INDETERMINATE:
+                    self._audit.mark_action_indeterminate(
+                        idempotency_key=action.idempotency_key,
+                        action_fingerprint=action.effect_fingerprint,
+                        claim_token=claim_token,
+                        outcome=outcome,
+                    )
+                else:  # pragma: no cover - internal invariant.
+                    raise ValueError("unsupported idempotency outcome state")
         except (OSError, RuntimeError, sqlite3.Error, ConfigurationError):
             return False
         return True
@@ -1589,6 +1757,45 @@ def _uses_idempotency(action: AgentAction) -> bool:
     """
 
     return action.risk not in {RiskLevel.READ_ONLY, RiskLevel.LOCAL_GENERATION}
+
+
+def _record_run_performance_outcomes(report: RunReport) -> None:
+    """Map action reports to the fixed content-free outcome vocabulary."""
+
+    performance = current_performance_recorder()
+    if performance is None:
+        return
+    successful = False
+    unsuccessful = False
+    for action in report.actions:
+        if action.state in {ActionState.VERIFIED, ActionState.REUSED}:
+            performance.record_outcome(PerformanceOutcome.VERIFIED)
+            successful = True
+        elif action.state is ActionState.COMPENSATED:
+            performance.record_outcome(PerformanceOutcome.COMPENSATED)
+            successful = True
+        elif action.state in {
+            ActionState.INDETERMINATE,
+            ActionState.COMPENSATION_FAILED,
+        } or (action.state is ActionState.FAILED and action.result is not None):
+            performance.record_outcome(PerformanceOutcome.INDETERMINATE)
+            unsuccessful = True
+        elif (
+            action.state
+            in {
+                ActionState.APPROVAL_REQUIRED,
+                ActionState.CONFLICTED,
+                ActionState.FAILED,
+                ActionState.PROHIBITED,
+            }
+            and action.result is None
+        ):
+            performance.record_outcome(PerformanceOutcome.FAILED_PRE_EFFECT)
+            unsuccessful = True
+        elif action.state not in {ActionState.PLANNED, ActionState.SKIPPED}:
+            unsuccessful = True
+    if successful and unsuccessful:
+        performance.record_outcome(PerformanceOutcome.PARTIAL)
 
 
 def _strict_bool(value: object, name: str) -> bool:

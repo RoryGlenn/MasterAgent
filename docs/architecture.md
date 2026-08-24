@@ -118,6 +118,22 @@ type-confused, mismatched, stale, or altered review evidence fails closed.
 
 This makes strategy reviewable without making strategy authoritative or
 pretending deterministic code can prove natural-language meaning.
+
+### Bounded performance evidence
+
+Governed runs and direct-read sessions can return one content-free performance
+snapshot alongside their normal result. A fresh context-local recorder starts
+before credential resolution and connector construction, uses monotonic wall
+and CPU clocks, attributes provider transport by execution phase, and resets on
+every exit. The fixed schema has no generic labels and cannot retain request,
+provider, credential, path, identity, exception, or timestamp content.
+
+Deterministic CI cases validate attribution and provisional budgets but are
+explicitly baseline-ineligible. Managed-workstation and live-provider claims
+remain a separate certification boundary. See the
+[governance-performance evidence guide](governance-performance.md) for the
+schema, benchmark commands, privacy boundary, and issue #170 implementation
+placeholder.
 `EvidenceBackedSystemsAssessor` and
 `EvidenceBackedStrategyCoherenceReviewer` are the concrete boundaries for
 explicitly supplied evidence; they reject substituted inputs instead of

@@ -63,6 +63,23 @@ class OrchestratorTests(unittest.TestCase):
             assert report.systems_review is not None
             self.assertTrue(report.systems_review.reassessment_required)
             self.assertFalse(report.systems_review.stop_condition_checked)
+            self.assertIsNotNone(report.performance)
+            assert report.performance is not None
+            self.assertGreater(
+                report.performance.summary()["total_wall_seconds"],
+                0.0,
+            )
+            self.assertTrue(report.performance.connector_implementations)
+            self.assertTrue(
+                all(
+                    item.implementation == "unbound_pending_170" and item.bound is False
+                    for item in report.performance.connector_implementations
+                )
+            )
+            self.assertEqual(
+                {item.system for item in report.performance.connector_implementations},
+                {"bitbucket", "confluence", "jira"},
+            )
 
     def test_fingerprint_bound_observer_closes_the_applied_run_loop(self) -> None:
         class Provider:
@@ -100,6 +117,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(report.systems_review.reassessment_required)
         restored = RunReport.from_dict(report.to_dict())
         self.assertEqual(restored.systems_review, report.systems_review)
+        self.assertEqual(restored.performance, report.performance)
 
     def test_recurring_reads_and_local_generation_run_fresh(self) -> None:
         with TemporaryDirectory() as directory:

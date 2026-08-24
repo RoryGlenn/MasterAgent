@@ -267,6 +267,10 @@ count; #164 instrumentation, #170 implementation identity, #94 protected
 fixtures, and #172 managed-workstation runs provide the evidence before any
 workflow is presented as certified.
 
+The content-free schema, deterministic regression command, and the boundary
+between baseline-ineligible CI evidence and #172 managed evidence are described
+in the [governance-performance evidence guide](governance-performance.md).
+
 A target organization must still:
 
 1. choose Cloud or Data Center endpoints;

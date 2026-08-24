@@ -62,6 +62,9 @@ These are current-state documents.
   citation, retention, and write contracts.
 - [Systems governance for developers](systems-governance.md) — connect a plan
   to a systems diagnosis, strategy, and measurable outcome.
+- [Governance-performance evidence](governance-performance.md) — interpret the
+  bounded runtime schema, deterministic regression benchmark, privacy boundary,
+  and managed-baseline eligibility.
 - [Threat model](threat-model.md) — protected assets, threats, controls,
   residual risks, and explicit prohibitions.
 - [Implementation roadmap and completion status](implementation-roadmap.md) —

@@ -270,6 +270,22 @@ update is outside the initial pilot.
 - Content-free metrics and stable test-case identifiers may be retained for the
   #172 pilot.
 
+## Deterministic performance regression evidence
+
+The #164 deterministic harness exercises this exact `T1-EWIR-001` shape for 20
+stable iterations. It checks the provisional p50, p95, local-governance,
+provider-call, interaction, and selected-provider budgets while keeping the
+connector implementation identity at `unbound_pending_170` until #170 supplies
+a trusted binding. It also proves that unselected systems perform no
+provider-specific credential, construction, attestation, transport, or
+verification work.
+
+This evidence is baseline-ineligible: it does not certify native connector
+identity, live-provider latency, Windows behavior, corporate networking, or a
+managed workstation. Use the command and interpretation rules in the
+[governance-performance evidence guide](governance-performance.md). #172 owns
+the live managed-workstation baseline.
+
 ## Completion and partial-success semantics
 
 A **complete success** requires every configured source to return verified data
@@ -345,7 +361,7 @@ are recalibrated only from #164/#172 evidence:
 | p95 end-to-end latency | 60 seconds or less |
 | Local governance overhead | Less than 5% of total wall-clock time under the representative workload |
 | Connector initializations | Exactly 3 |
-| Selected connector implementations | Exactly 3, all `native` |
+| Selected connector implementations | Exactly 3; #164 records `unbound_pending_170`, and #170 must bind the managed-pilot identity |
 | User interactions caused by governance | 0 |
 
 The latency limits are initial user-experience targets, not provider guarantees.

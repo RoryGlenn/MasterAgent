@@ -35,6 +35,13 @@ from master_agent.models import (
     RuntimePathExecutionBinding,
 )
 from master_agent.oauth import StaticTokenProvider
+from master_agent.performance import (
+    PerformanceStage,
+    TransportPhase,
+    current_performance_recorder,
+    performance_stage,
+    performance_transport_phase,
+)
 from master_agent.platform_runtime import (
     PlatformContract,
     PlatformObjectIdentity,
@@ -133,11 +140,18 @@ def capture_connector_executions(
     for config in integrations.connectors.values():
         if not config.enabled or not _connector_is_selected(config.system, systems):
             continue
-        target = config.capture_execution_target(source)
+        with performance_stage(PerformanceStage.SELECTION):
+            target = config.capture_execution_target(source)
+        performance = current_performance_recorder()
         if approved_connectors is not None:
             _verify_approved_connector_target(
                 config,
                 target,
+                approved_connectors[config.system],
+            )
+            _verify_approved_connector_credential_identity(
+                config,
+                source,
                 approved_connectors[config.system],
             )
         ca_bundle = target.ca_bundle
@@ -145,27 +159,37 @@ def capture_connector_executions(
             require_trusted_principal
             and config.principal_attestation_adapter is not None
         )
-        resolved = (
-            config.resolve(
-                source,
-                auth_transport=principal_transport,
-                execution_target=target,
-            )
-            if needs_resolved
-            else None
-        )
-        if require_trusted_principal and resolved is not None:
-            resolved = _pin_resolved_authentication(resolved)
-        attestation = (
-            _credential_attestation(
-                config,
-                resolved=resolved,
-                environ=source,
-                transport=principal_transport,
-            )
-            if require_trusted_principal
-            else CredentialAttestation(identity=None)
-        )
+        if needs_resolved:
+            if performance is not None:
+                performance.record_credential_resolution(config.system)
+            with performance_stage(PerformanceStage.CREDENTIAL_RESOLUTION):
+                resolved = config.resolve(
+                    source,
+                    auth_transport=principal_transport,
+                    execution_target=target,
+                )
+        else:
+            resolved = None
+        if require_trusted_principal:
+            if performance is not None:
+                performance.record_principal_attestation(config.system)
+            with (
+                performance_stage(PerformanceStage.PRINCIPAL_ATTESTATION),
+                performance_transport_phase(
+                    TransportPhase.PRINCIPAL_ATTESTATION,
+                    config.system,
+                ),
+            ):
+                if resolved is not None:
+                    resolved = _pin_resolved_authentication(resolved)
+                attestation = _credential_attestation(
+                    config,
+                    resolved=resolved,
+                    environ=source,
+                    transport=principal_transport,
+                )
+        else:
+            attestation = CredentialAttestation(identity=None)
         captured.append(
             CapturedConnectorExecution(
                 config=config,
@@ -258,6 +282,25 @@ def _verify_approved_connector_target(
             )
 
 
+def _verify_approved_connector_credential_identity(
+    config: ConnectorConfig,
+    environ: Mapping[str, str],
+    approved: ConnectorExecutionBinding,
+) -> None:
+    """Reject flow-enforced principal drift before secret or provider access."""
+
+    if config.principal_attestation_adapter is not None:
+        return
+    observed = config.credential_identity(environ)
+    if observed != approved.credential_identity:
+        raise ConfigurationError(
+            "applied execution context differs from the approved plan: "
+            "connector origin or CA identity; "
+            f"captured connector {config.system} credential identity differs from "
+            "the approved execution context"
+        )
+
+
 def build_execution_context(
     integrations: IntegrationConfig,
     *,
@@ -269,6 +312,7 @@ def build_execution_context(
     principal_transport: HttpTransport | None = None,
     capsule_bindings: Sequence[CapabilityCapsuleExecutionBinding] = (),
     approved_execution_context: ExecutionContext | None = None,
+    captured_executions: Sequence[CapturedConnectorExecution] | None = None,
 ) -> ExecutionContext:
     """Resolve a secret-free snapshot suitable for plan approval binding."""
 
@@ -276,18 +320,22 @@ def build_execution_context(
         raise ConfigurationError(
             "applied execution context requires a hashed integrations bundle"
         )
-    connector_bindings = (
-        tuple(
-            item.binding
-            for item in capture_connector_executions(
-                integrations,
-                environ=environ,
-                systems=systems,
-                principal_transport=principal_transport,
-                include_resolved_credentials=False,
-                approved_execution_context=approved_execution_context,
-            )
+    selected_executions = (
+        tuple(captured_executions)
+        if captured_executions is not None
+        else capture_connector_executions(
+            integrations,
+            environ=environ,
+            systems=systems,
+            principal_transport=principal_transport,
+            include_resolved_credentials=False,
+            approved_execution_context=approved_execution_context,
         )
+        if include_connectors
+        else ()
+    )
+    connector_bindings = (
+        tuple(item.binding for item in selected_executions)
         if include_connectors
         else ()
     )

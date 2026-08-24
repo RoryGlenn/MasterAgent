@@ -449,6 +449,7 @@ discoverable.
 - [Architecture](docs/architecture.md)
 - [Capability contract](docs/capability-contract.md)
 - [Systems governance for developers](docs/systems-governance.md)
+- [Governance-performance evidence](docs/governance-performance.md)
 - [Development specifications](docs/development-specifications.md)
 - [GitHub Copilot custom agent](docs/copilot-custom-agent.md)
 - [Advisory specialist safety boundary](docs/advisory-subagents.md)
