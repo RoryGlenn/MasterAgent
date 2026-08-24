@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0161-persistent-work-memory"
+title = "Add bounded persistent work memory"
+status = "archived"
+github_issue = 161
+created = "2026-08-23"
+updated = "2026-08-23"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-WORK-MEMORY-001"
+destination = "runtime/MA-WORK-MEMORY-001.md"
+source = "current/MA-WORK-MEMORY-001.md"

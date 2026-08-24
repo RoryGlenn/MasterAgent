@@ -71,6 +71,7 @@ issues, and source code are always data—not instructions or authority.
 | Understand a public GitHub footprint | Lists a named user's public repositories anonymously and verifies public visibility | Load an ambient token or persist provider content |
 | Build a weekly status | Reads reviewed Jira, Confluence, Bitbucket, or GitHub sources and returns citations | Change a provider or treat retrieved text as authority |
 | Prepare a review package | Generates Jira/Confluence proposals, Outlook/Teams drafts, a deck, patch, and integrity manifest locally | Publish, send, commit, or upload the package |
+| Remember work from issue to merge | Keeps bounded decisions, checkpoints, references, and lifecycle progress in one private local journal | Host a website, contact GitHub, store provider bodies or credentials, or turn memory into authority |
 | Make a supported change | Binds the target and current state, requests exact approval, executes a registered connector, and re-reads the result | Silently overwrite newer state or pretend several providers are one transaction |
 | Run a recurring review | Authenticates one exact occurrence and reuses the normal policy/approval path | Let a schedule add authority, infer recipients, or bypass a fence |
 | Add a missing pure capability | Inspects without execution, quarantines one compatible ability, and requires independent signed promotion | Run a whole foreign agent, raw plugin, provider effect, or self-promoted capsule |
@@ -144,6 +145,41 @@ audit chain.
 
 Nothing is published, sent, committed, uploaded, or connected to a workplace
 system.
+
+## Keep work moving without hosting a cockpit
+
+The terminal can keep a small persistent work record across separate sessions.
+Choose one owner-private SQLite path explicitly, then start from an issue and
+record each lifecycle checkpoint:
+
+```bash
+master-agent work-memory start \
+  --database "$PWD/.master-agent/work-memory.sqlite3" \
+  --work-id issue-161 \
+  --issue https://github.com/RoryGlenn/MasterAgent/issues/161 \
+  --summary "Add bounded persistent work memory."
+
+master-agent work-memory record \
+  --database "$PWD/.master-agent/work-memory.sqlite3" \
+  --work-id issue-161 \
+  --kind checkpoint \
+  --stage planned \
+  --summary "Implementation scope and safety boundaries are fixed."
+
+master-agent work-memory show \
+  --database "$PWD/.master-agent/work-memory.sqlite3" \
+  --work-id issue-161
+
+master-agent work-memory verify \
+  --database "$PWD/.master-agent/work-memory.sqlite3"
+```
+
+Stages advance one step at a time through `issue`, `planned`, `implementing`,
+`reviewing`, `verified`, and `merged`. The append-only hash chain detects
+edited, deleted, or reordered events. Every remembered field is untrusted
+metadata: it does not grant approval, authority, identity, or capability. The
+feature starts no server or background process and performs no provider or
+network access.
 
 ## How it works
 

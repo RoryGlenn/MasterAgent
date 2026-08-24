@@ -550,6 +550,53 @@ class WindowsAtomicStateTests(unittest.TestCase):
 
         self.assertEqual(api.public_bytes(r"C:\Secure\state.json"), b"peer")
 
+    def test_restricted_json_reservation_holds_actual_native_name(self) -> None:
+        api, backend = _backend()
+
+        def pinned_root(
+            *_args: object,
+            **_kwargs: object,
+        ) -> directory_safety.PinnedDirectory:
+            return directory_safety._WindowsPinnedDirectory(
+                backend.filesystem.pin_directory(
+                    r"C:\Secure",
+                    require_private=True,
+                ),
+                require_private=True,
+            )
+
+        with (
+            patch.object(approval_handoff, "require_persistent_state_platform"),
+            patch.object(
+                approval_handoff,
+                "get_atomic_publication_recovery_backend",
+                return_value=backend,
+            ),
+            patch.object(
+                directory_safety.PinnedDirectory,
+                "open",
+                side_effect=pinned_root,
+            ),
+            approval_handoff.RestrictedJSONReservation(
+                Path("C:/Secure/result.json")
+            ) as reservation,
+        ):
+            self.assertEqual(api.public_bytes(r"C:\Secure\result.json"), b"")
+            with (
+                backend.filesystem.pin_directory(
+                    r"C:\Secure",
+                    require_private=True,
+                ) as parent,
+                self.assertRaises(FileExistsError),
+            ):
+                parent.create_private_file("result.json", max_bytes=32)
+            reservation.commit({"safe": True})
+
+        self.assertEqual(
+            api.public_bytes(r"C:\Secure\result.json"),
+            b'{\n  "safe": true\n}\n',
+        )
+
     def test_concurrent_writers_serialize_on_the_native_handle(self) -> None:
         _api, backend = _backend()
         path = Path("C:/Secure/state.json")
