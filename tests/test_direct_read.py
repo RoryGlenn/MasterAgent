@@ -24,7 +24,7 @@ from master_agent.governance import (
     GovernanceProfile,
     GovernanceRule,
 )
-from master_agent.http import SafeHttpClient
+from master_agent.http import HttpTransport, SafeHttpClient
 from master_agent.models import (
     ActionState,
     AgentAction,
@@ -41,6 +41,10 @@ from master_agent.models import (
     SystemsMetricStatus,
     SystemsOutcomeEvidence,
     VerificationResult,
+)
+from master_agent.performance import (
+    PerformanceOutcome,
+    performance_snapshot_from_error,
 )
 from master_agent.planners.base import (
     EvidenceBackedSystemsOutcomeObserver,
@@ -65,7 +69,7 @@ _BASE_URL = "https://provider.example.test/v1"
 class _ReadConnector(ReadOnlyConnector):
     """Small typed connector whose reads exercise the HTTP lifecycle budget."""
 
-    def __init__(self, transport: QueueTransport, *, max_pages: int = 4) -> None:
+    def __init__(self, transport: HttpTransport, *, max_pages: int = 4) -> None:
         super().__init__(system="provider", capabilities=frozenset({_CAPABILITY}))
         self._config = SimpleNamespace(
             auth=SimpleNamespace(mode="bearer"),
@@ -105,6 +109,13 @@ class _FailingReadConnector(_ReadConnector):
     def _fetch(self, action: AgentAction) -> RetrievedPayload:
         del action
         raise ConnectorError(f"provider returned {self._canary}")
+
+
+class _FailingTransport:
+    """Transport that fails after SafeHttpClient counts the dispatch attempt."""
+
+    def request(self, **_: object) -> object:
+        raise ConnectorError("provider transport secret canary")
 
 
 class _MalformedReferenceConnector(_ReadConnector):
@@ -211,6 +222,27 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertFalse(report.systems_review.stop_condition_checked)
         self.assertTrue(report.systems_review.reassessment_required)
         self.assertIn("systems_review", report.to_dict())
+        self.assertIsNotNone(report.performance)
+        assert report.performance is not None
+        performance = report.performance.to_dict()
+        stages = {item["stage"]: item for item in performance["stages"]}
+        self.assertGreaterEqual(stages["request_parse_route"]["occurrences"], 1)
+        self.assertEqual(stages["end_to_end_total"]["occurrences"], 1)
+        self.assertEqual(
+            performance["transport_calls_by_phase"]["execution"],
+            2,
+        )
+        self.assertEqual(
+            performance["transport_calls_by_phase"]["verification"],
+            2,
+        )
+        implementations = performance["dimensions"]["connector_implementations"]
+        self.assertEqual(len(implementations), 1)
+        self.assertEqual(
+            implementations[0]["implementation"],
+            "unbound_pending_170",
+        )
+        self.assertIs(implementations[0]["bound"], False)
         transport.assert_drained()
 
     def test_accepts_fingerprint_bound_outcome_observation_after_reads(self) -> None:
@@ -478,6 +510,25 @@ class DirectReadSessionTests(unittest.TestCase):
         self.assertIsNone(raised.exception.__context__)
         self.assertNotIn(canary, str(raised.exception))
         self.assertNotIn(canary, repr(raised.exception))
+        snapshot = performance_snapshot_from_error(raised.exception)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.outcomes[PerformanceOutcome.FAILED_PRE_EFFECT], 1)
+        self.assertNotIn(canary, snapshot.serialize())
+
+    def test_failed_read_transport_is_counted_but_remains_pre_effect(self) -> None:
+        with self.assertRaisesRegex(
+            ConnectorError,
+            "provider read failed after egress authorization",
+        ) as raised:
+            self._session(_FailingTransport()).execute(_plan(_action("one")))
+
+        snapshot = performance_snapshot_from_error(raised.exception)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.to_dict()["counters"]["provider_transport_calls"], 1)
+        self.assertEqual(snapshot.outcomes[PerformanceOutcome.FAILED_PRE_EFFECT], 1)
+        self.assertEqual(snapshot.outcomes[PerformanceOutcome.INDETERMINATE], 0)
 
     def test_malformed_provider_reference_is_content_free_at_direct_boundary(
         self,
@@ -540,7 +591,7 @@ class DirectReadSessionTests(unittest.TestCase):
 
     def _session(
         self,
-        transport: QueueTransport,
+        transport: HttpTransport,
         *,
         catalog: CapabilityCatalog | None = None,
         governance: GovernanceProfile | None = None,

@@ -42,6 +42,11 @@ from master_agent.errors import (
     RateLimitError,
     ResourceNotFoundError,
 )
+from master_agent.performance import (
+    observable_network_wait,
+    record_retry_status,
+    record_transport_attempt,
+)
 from master_agent.trust_store import capture_ca_bundle, create_ssl_context
 
 
@@ -794,14 +799,16 @@ class SafeHttpClient:
                 request_max_bytes = min(effective_max_bytes, remaining)
             else:
                 request_max_bytes = effective_max_bytes
-            response = self._transport.request(
-                method=normalized_method,
-                url=url,
-                headers=request_headers,
-                body=request_body,
-                timeout_seconds=self._timeout_seconds,
-                max_response_bytes=request_max_bytes,
-            )
+            record_transport_attempt()
+            with observable_network_wait():
+                response = self._transport.request(
+                    method=normalized_method,
+                    url=url,
+                    headers=request_headers,
+                    body=request_body,
+                    timeout_seconds=self._timeout_seconds,
+                    max_response_bytes=request_max_bytes,
+                )
             try:
                 response_origin = _origin(urlparse(response.url))
             except (ConfigurationError, ValueError):
@@ -831,6 +838,7 @@ class SafeHttpClient:
                 and (normalized_method in {"GET", "HEAD"} or safe_to_retry)
             )
             if can_retry:
+                record_retry_status(response.status)
                 time.sleep(_retry_delay_seconds(response, attempt))
                 continue
             raise _http_error(response)

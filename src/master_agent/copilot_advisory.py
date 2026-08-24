@@ -34,6 +34,10 @@ from master_agent.advisory import (
     AgentProfile,
     load_agent_inventory_from_texts,
 )
+from master_agent.performance import (
+    PerformanceCounter,
+    current_performance_recorder,
+)
 from master_agent.platform_runtime import (
     PlatformContract,
     TrustedGitError,
@@ -1955,6 +1959,9 @@ class CopilotSdkAdvisoryWorker:
                 on_permission_request=_permission_handler(),
                 streaming=False,
             )
+            performance = current_performance_recorder()
+            if performance is not None:
+                performance.increment(PerformanceCounter.MODEL_ADVISORY_CALLS)
             response = await session.send_and_wait(
                 _task_prompt(envelope, binding, scope)
             )

@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0164-governance-performance-instrumentation"
+title = "Instrument governed runtime performance"
+status = "archived"
+github_issue = 164
+created = "2026-08-24"
+updated = "2026-08-24"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-PERFORMANCE-001"
+destination = "runtime/MA-PERFORMANCE-001.md"
+source = "current/MA-PERFORMANCE-001.md"

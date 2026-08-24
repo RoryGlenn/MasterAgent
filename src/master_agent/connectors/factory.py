@@ -54,6 +54,11 @@ from master_agent.execution_context import (
 )
 from master_agent.http import HttpTransport
 from master_agent.models import ConnectorExecutionBinding, ExecutionContext
+from master_agent.performance import (
+    PerformanceStage,
+    current_performance_recorder,
+    performance_stage,
+)
 from master_agent.platform_runtime import require_persistent_state_platform
 from master_agent.registry import ConnectorRegistry
 
@@ -467,21 +472,38 @@ def build_live_registry(
 ) -> ConnectorRegistry:
     """Build a registry containing explicitly scoped live connectors."""
 
+    selected_executions = captured_executions
+    if selected_executions is None:
+        selected = (
+            set(_READ_SYSTEMS) | {"repository"} if systems is None else set(systems)
+        )
+        selected_executions = capture_connector_executions(
+            config,
+            environ=environ,
+            systems=selected,
+            require_trusted_principal=approved_execution_context is not None,
+            principal_transport=transport,
+            approved_execution_context=approved_execution_context,
+        )
     registry = ConnectorRegistry()
-    for connector in build_live_connectors(
-        config,
-        environ=environ,
-        transport=transport,
-        systems=systems,
-        include_writes=include_writes,
-        include_communications=include_communications,
-        workspace_root=workspace_root,
-        artifact_root=artifact_root,
-        artifact_directory=artifact_directory,
-        approved_execution_context=approved_execution_context,
-        captured_executions=captured_executions,
-    ):
-        registry.register(connector)
+    with performance_stage(PerformanceStage.CONNECTOR_INITIALIZATION):
+        for connector in build_live_connectors(
+            config,
+            environ=environ,
+            transport=transport,
+            systems=systems,
+            include_writes=include_writes,
+            include_communications=include_communications,
+            workspace_root=workspace_root,
+            artifact_root=artifact_root,
+            artifact_directory=artifact_directory,
+            approved_execution_context=approved_execution_context,
+            captured_executions=selected_executions,
+        ):
+            performance = current_performance_recorder()
+            if performance is not None:
+                performance.record_connector_initialization(connector.system)
+            registry.register(connector)
     return registry
 
 
@@ -499,30 +521,31 @@ def register_draft_connectors(
     budget = artifact_budget or ArtifactBudget()
     output_limits = catalog.local_generation_output_limits() if catalog else None
     try:
-        for connector in (
-            JiraDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            ConfluenceDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            OutlookDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            TeamsDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            PowerPointDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            RepositoryDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-            RedditDraftConnector(
-                root, artifact_budget=budget, output_limits=output_limits
-            ),
-        ):
-            registry.register(connector)
+        with performance_stage(PerformanceStage.CONNECTOR_INITIALIZATION):
+            for connector in (
+                JiraDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                ConfluenceDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                OutlookDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                TeamsDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                PowerPointDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                RepositoryDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+                RedditDraftConnector(
+                    root, artifact_budget=budget, output_limits=output_limits
+                ),
+            ):
+                registry.register(connector)
     finally:
         root.close()
     return registry

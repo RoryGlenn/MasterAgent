@@ -9,7 +9,7 @@ through an existing typed ``ReadOnlyConnector``.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -41,6 +41,16 @@ from master_agent.models import (
     SystemsPostExecutionReview,
     VerificationResult,
     freeze_json_mapping,
+)
+from master_agent.performance import (
+    PerformanceOutcome,
+    PerformanceSnapshot,
+    PerformanceStage,
+    TransportPhase,
+    current_performance_recorder,
+    ensure_performance_run,
+    performance_stage,
+    performance_transport_phase,
 )
 from master_agent.planners.base import (
     SystemsOutcomeObserver,
@@ -176,6 +186,7 @@ class DirectReadReport:
     actions: tuple[DirectReadActionReport, ...]
     systems_review: SystemsPostExecutionReview
     schema: str = "master-agent/direct-read-report@1"
+    performance: PerformanceSnapshot | None = None
 
     def __post_init__(self) -> None:
         """Validate that the report has one provider and verified actions."""
@@ -207,7 +218,7 @@ class DirectReadReport:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible report without writing it anywhere."""
 
-        return {
+        payload: dict[str, Any] = {
             "schema": self.schema,
             "plan_id": str(self.plan_id),
             "plan_fingerprint": self.plan_fingerprint,
@@ -216,6 +227,9 @@ class DirectReadReport:
             "actions": [action.to_dict() for action in self.actions],
             "systems_review": self.systems_review.to_dict(),
         }
+        if self.performance is not None:
+            payload["performance"] = self.performance.to_dict()
+        return payload
 
 
 class DirectReadSession:
@@ -272,6 +286,30 @@ class DirectReadSession:
         self._systems_outcome_observer = systems_outcome_observer
 
     def execute(self, plan: ChangePlan) -> DirectReadReport:
+        """Execute one direct read with a fresh or active bounded recorder."""
+
+        owns_performance_run = current_performance_recorder() is None
+        with ensure_performance_run() as performance:
+            with performance.span(PerformanceStage.REQUEST_PARSE_ROUTE):
+                plan = plan.execution_snapshot()
+            with performance.span(PerformanceStage.SELECTION):
+                performance.record_dimensions(
+                    capabilities=(action.capability for action in plan.actions),
+                    risk_tiers=(action.risk for action in plan.actions),
+                    systems=(action.target.system for action in plan.actions),
+                )
+                performance.record_connector_implementation(self._connector.system)
+            report = self._execute_internal(plan)
+            performance.record_outcome(
+                PerformanceOutcome.VERIFIED,
+                len(report.actions),
+            )
+            if not owns_performance_run:
+                return replace(report, performance=performance.snapshot())
+            performance.finish_total()
+            return replace(report, performance=performance.snapshot())
+
+    def _execute_internal(self, plan: ChangePlan) -> DirectReadReport:
         """Preflight and execute a direct provider-read plan in memory.
 
         All actions are validated before the first provider request.  Each
@@ -280,17 +318,18 @@ class DirectReadSession:
         returning unverified provider content.
         """
 
-        provider = preflight_direct_read_plan(
-            plan=plan,
-            catalog=self._catalog,
-            governance=self._governance,
-            policy=self._policy,
-            sources=self._sources,
-        )
-        self._validate_connector_shape(plan, provider)
-        egress_bindings = tuple(
-            self._validate_execution_contract(action) for action in plan.actions
-        )
+        with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+            provider = preflight_direct_read_plan(
+                plan=plan,
+                catalog=self._catalog,
+                governance=self._governance,
+                policy=self._policy,
+                sources=self._sources,
+            )
+            self._validate_connector_shape(plan, provider)
+            egress_bindings = tuple(
+                self._validate_execution_contract(action) for action in plan.actions
+            )
 
         reports = tuple(
             self._execute_action(action, egress)
@@ -304,18 +343,20 @@ class DirectReadSession:
             raise ConfigurationError(
                 "direct read systems governance binding is invalid"
             )
-        return DirectReadReport(
-            plan_id=plan.plan_id,
-            plan_fingerprint=plan.fingerprint,
-            provider=self._connector.system,
-            actions=reports,
-            systems_review=build_systems_post_execution_review(
+        with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
+            systems_review = build_systems_post_execution_review(
                 assessment=assessment,
                 decision=decision,
                 states=(item.state for item in reports),
                 dry_run=False,
                 observer=self._systems_outcome_observer,
-            ),
+            )
+        return DirectReadReport(
+            plan_id=plan.plan_id,
+            plan_fingerprint=plan.fingerprint,
+            provider=self._connector.system,
+            actions=reports,
+            systems_review=systems_review,
         )
 
     def run(self, plan: ChangePlan) -> DirectReadReport:
@@ -387,10 +428,30 @@ class DirectReadSession:
         verification: VerificationResult | None = None
         provider_failed = False
         try:
-            with activate_http_action_budget(budget):
+            with (
+                performance_stage(PerformanceStage.PROVIDER_EXECUTION),
+                performance_transport_phase(
+                    TransportPhase.EXECUTION,
+                    action.target.system,
+                ),
+                activate_http_action_budget(budget),
+            ):
                 result = self._connector.execute(action)
                 _validate_read_result(action, result)
                 snapshot = _copy_execution_result(result)
+            if snapshot is None:  # pragma: no cover - assignment invariant.
+                raise ConnectorError("direct read execution produced no snapshot")
+            performance = current_performance_recorder()
+            if performance is not None:
+                performance.record_verification_call(action.target.system)
+            with (
+                performance_stage(PerformanceStage.VERIFICATION),
+                performance_transport_phase(
+                    TransportPhase.VERIFICATION,
+                    action.target.system,
+                ),
+                activate_http_action_budget(budget),
+            ):
                 verification = self._connector.verify(
                     action,
                     _copy_execution_result(snapshot),
@@ -426,11 +487,12 @@ class DirectReadSession:
         sanitized_verification: Mapping[str, Any] | None = None
         sanitization_failed = False
         try:
-            sanitized = sanitize_provider_result(snapshot, egress)
-            sanitized_verification = verification_metadata(
-                verification.observed,
-                egress,
-            )
+            with performance_stage(PerformanceStage.SANITIZATION):
+                sanitized = sanitize_provider_result(snapshot, egress)
+                sanitized_verification = verification_metadata(
+                    verification.observed,
+                    egress,
+                )
         except (
             KeyError,
             MasterAgentError,
