@@ -2018,6 +2018,8 @@ def _validate_engineering_review_integrations(
         _raise_engineering_review_scope_mismatch("Bitbucket deployment")
     if settings.build_status_limit > bitbucket.max_items:
         _raise_engineering_review_scope_mismatch("build-status limit")
+    if settings.include_diffstat and settings.diffstat_limit > bitbucket.max_items:
+        _raise_engineering_review_scope_mismatch("diffstat limit")
     bitbucket_origins = _connector_origins(bitbucket)
     if (
         bitbucket.deployment is DeploymentType.CLOUD

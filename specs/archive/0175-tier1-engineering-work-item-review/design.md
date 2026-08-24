@@ -57,10 +57,13 @@ including only configured `customfield_<digits>` acceptance and relation fields.
 Description and acceptance content accept bounded plain text or bounded ADF.
 Issue links expose only link/type/direction and linked issue identity. A bounded
 remote-link read and configured relation fields are parsed locally; only HTTPS,
-credential-free URLs matching the action-bound provider origin, repository,
-pull request, or page IDs become structured relations. Candidate titles and
-prose never select a target. Verification repeats the exact issue and remote-link
-reads and compares normalized evidence.
+credential-free URLs matching the action-bound provider origin and an exact
+provider resource path become structured relations. Their observed owner,
+repository, space, pull-request ID, and page ID are retained even when they
+conflict with configured scope; the renderer compares the full identities and
+marks conflicts ambiguous without changing the immutable target. Candidate
+titles and prose never select a target. Verification repeats the exact issue and
+remote-link reads and compares normalized evidence.
 
 ## Bitbucket build identity
 
@@ -71,6 +74,12 @@ verification repeats both reads, so PR-head or build-state drift is
 indeterminate rather than a false success. The PR-head route fails on a provider
 page or item limit instead of silently truncating evidence; legacy callers that
 do not supply an explicit limit retain their bounded provider-order behavior.
+
+The optional standalone diffstat action carries an explicit change limit. It
+reads the exact pull request, captures both source and destination commits, and
+uses a commit-pinned provider range rather than a moving pull-request diff URL.
+The renderer quarantines diffstat evidence when either commit or the pull-request
+identity differs from the independently verified pull-request evidence.
 
 ## Outcome model
 

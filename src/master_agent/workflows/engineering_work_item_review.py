@@ -44,6 +44,7 @@ _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 _PAGE_ID_PATTERN = re.compile(r"[1-9][0-9]{0,39}")
 _MAX_CONFLUENCE_PAGES = 3
 _MAX_BUILD_STATUSES = 100
+_MAX_DIFFSTAT_CHANGES = 100
 _JIRA_REVIEW_FIELDS = (
     "id",
     "key",
@@ -98,6 +99,7 @@ class EngineeringWorkItemReviewSettings:
     bitbucket_repository: str
     bitbucket_pull_request_id: str
     build_status_limit: int
+    diffstat_limit: int
     include_diffstat: bool
     confluence_origin: str
     confluence_space_id: str
@@ -148,6 +150,13 @@ class EngineeringWorkItemReviewSettings:
         ):
             raise ConfigurationError(
                 "engineering review build_status_limit must be between 1 and 100"
+            )
+        if (
+            isinstance(self.diffstat_limit, bool)
+            or not 1 <= self.diffstat_limit <= _MAX_DIFFSTAT_CHANGES
+        ):
+            raise ConfigurationError(
+                "engineering review diffstat_limit must be between 1 and 100"
             )
         if not isinstance(self.include_diffstat, bool):
             raise ConfigurationError(
@@ -206,6 +215,7 @@ class EngineeringWorkItemReviewSettings:
                 "repository",
                 "pull_request_id",
                 "build_status_limit",
+                "diffstat_limit",
                 "include_diffstat",
             },
             "[bitbucket]",
@@ -251,6 +261,12 @@ class EngineeringWorkItemReviewSettings:
                 "build_status_limit",
                 default=50,
                 maximum=_MAX_BUILD_STATUSES,
+            ),
+            diffstat_limit=_bounded_int(
+                bitbucket,
+                "diffstat_limit",
+                default=50,
+                maximum=_MAX_DIFFSTAT_CHANGES,
             ),
             include_diffstat=_strict_bool(
                 bitbucket,
@@ -577,7 +593,7 @@ def _workflow_actions(
                     "pull_request",
                     settings.bitbucket_pull_request_id,
                 ),
-                parameters=coordinates,
+                parameters={**coordinates, "limit": settings.diffstat_limit},
                 idempotency_key=(
                     f"{WORKFLOW_ID}:diffstat:{settings.bitbucket_owner}/"
                     f"{settings.bitbucket_repository}:"
@@ -853,6 +869,8 @@ def _failure_records(
         "bitbucket_pull_request_identity": "bitbucket.pull_request.read",
         "bitbucket_build_pull_request_identity": "bitbucket.build_status.read",
         "pull_request_build_head": "bitbucket.build_status.read",
+        "bitbucket_diffstat_pull_request_identity": "bitbucket.pull_request.diffstat",
+        "pull_request_diffstat_commits": "bitbucket.pull_request.diffstat",
         "confluence_page_identity": "confluence.page.read",
     }
     for stale in stale_evidence:
@@ -872,13 +890,15 @@ def _failure_records(
         )
         if action is None:  # pragma: no cover - plan validation binds every kind.
             continue
-        binding = (
-            "exact pull-request head"
-            if kind == "pull_request_build_head"
-            else "exact pull-request identity"
-            if kind == "bitbucket_build_pull_request_identity"
-            else "exact configured target identity"
-        )
+        if kind in {"pull_request_build_head", "pull_request_diffstat_commits"}:
+            binding = "exact pull-request head"
+        elif kind in {
+            "bitbucket_build_pull_request_identity",
+            "bitbucket_diffstat_pull_request_identity",
+        }:
+            binding = "exact pull-request identity"
+        else:
+            binding = "exact configured target identity"
         records.append(
             {
                 "capability": action.capability,
@@ -945,40 +965,70 @@ def _relation_ambiguities(
     relations = issue.get("external_relations") if isinstance(issue, Mapping) else None
     if not isinstance(relations, list):
         return []
-    bitbucket_ids = sorted(
+    bitbucket_relations = sorted(
         {
-            str(item.get("pull_request_id"))
+            (
+                str(item.get("owner_or_project") or ""),
+                str(item.get("repository") or ""),
+                str(item.get("pull_request_id") or ""),
+            )
             for item in relations
-            if isinstance(item, Mapping)
-            and item.get("provider") == "bitbucket"
-            and item.get("pull_request_id") is not None
+            if isinstance(item, Mapping) and item.get("provider") == "bitbucket"
         }
     )
-    page_ids = sorted(
+    confluence_relations = sorted(
         {
-            str(item.get("page_id"))
+            (
+                str(item.get("space") or ""),
+                str(item.get("page_id") or ""),
+            )
             for item in relations
-            if isinstance(item, Mapping)
-            and item.get("provider") == "confluence"
-            and item.get("page_id") is not None
+            if isinstance(item, Mapping) and item.get("provider") == "confluence"
         }
     )
     ambiguities: list[dict[str, Any]] = []
-    if bitbucket_ids and bitbucket_ids != [settings.bitbucket_pull_request_id]:
+    configured_bitbucket = (
+        settings.bitbucket_owner,
+        settings.bitbucket_repository,
+        settings.bitbucket_pull_request_id,
+    )
+    if bitbucket_relations and any(
+        observed != configured_bitbucket for observed in bitbucket_relations
+    ):
         ambiguities.append(
             {
                 "kind": "bitbucket_relation",
-                "configured": settings.bitbucket_pull_request_id,
-                "observed": bitbucket_ids,
+                "configured": {
+                    "owner_or_project": configured_bitbucket[0],
+                    "repository": configured_bitbucket[1],
+                    "pull_request_id": configured_bitbucket[2],
+                },
+                "observed": [
+                    {
+                        "owner_or_project": owner,
+                        "repository": repository,
+                        "pull_request_id": pull_request_id,
+                    }
+                    for owner, repository, pull_request_id in bitbucket_relations
+                ],
             }
         )
-    configured_pages = sorted(settings.confluence_page_ids)
-    if page_ids and any(page_id not in configured_pages for page_id in page_ids):
+    configured_pages = set(settings.confluence_page_ids)
+    if confluence_relations and any(
+        space != settings.confluence_space_key or page_id not in configured_pages
+        for space, page_id in confluence_relations
+    ):
         ambiguities.append(
             {
                 "kind": "confluence_relation",
-                "configured": configured_pages,
-                "observed": page_ids,
+                "configured": {
+                    "space": settings.confluence_space_key,
+                    "page_ids": sorted(configured_pages),
+                },
+                "observed": [
+                    {"space": space, "page_id": page_id}
+                    for space, page_id in confluence_relations
+                ],
             }
         )
     return ambiguities
@@ -1022,6 +1072,7 @@ def _evidence_staleness(
         else None
     )
     build = _payload_for(verified, "bitbucket.build_status.read")
+    diffstat = _payload_for(verified, "bitbucket.pull_request.diffstat")
     pull_request_identity_matches = (
         pull_request_payload is not None
         and pull_request is not None
@@ -1034,16 +1085,44 @@ def _evidence_staleness(
     )
     if build is not None and not build_pull_request_identity_matches:
         stale.append({"kind": "bitbucket_build_pull_request_identity"})
+    diffstat_pull_request_identity_matches = diffstat is not None and (
+        str(diffstat.get("pull_request_id") or "") == settings.bitbucket_pull_request_id
+    )
+    if diffstat is not None and not diffstat_pull_request_identity_matches:
+        stale.append({"kind": "bitbucket_diffstat_pull_request_identity"})
     if (
         pull_request_identity_matches
         and build_pull_request_identity_matches
         and pull_request is not None
         and build is not None
     ):
-        pull_request_commit = str(pull_request.get("source_commit") or "").strip()
-        build_commit = str(build.get("commit") or "").strip()
-        if not pull_request_commit or pull_request_commit != build_commit:
+        pull_request_commit = _exact_string(pull_request.get("source_commit"))
+        build_commit = _exact_string(build.get("commit"))
+        if (
+            pull_request_commit is None
+            or build_commit is None
+            or pull_request_commit != build_commit
+        ):
             stale.append({"kind": "pull_request_build_head"})
+    if diffstat_pull_request_identity_matches and diffstat is not None:
+        if not pull_request_identity_matches or pull_request is None:
+            stale.append({"kind": "pull_request_diffstat_commits"})
+        else:
+            pull_request_source = _exact_string(pull_request.get("source_commit"))
+            pull_request_destination = _exact_string(
+                pull_request.get("destination_commit")
+            )
+            diffstat_source = _exact_string(diffstat.get("source_commit"))
+            diffstat_destination = _exact_string(diffstat.get("destination_commit"))
+            if (
+                pull_request_source is None
+                or pull_request_destination is None
+                or diffstat_source is None
+                or diffstat_destination is None
+                or pull_request_source != diffstat_source
+                or pull_request_destination != diffstat_destination
+            ):
+                stale.append({"kind": "pull_request_diffstat_commits"})
     for action_report, payload in verified:
         if action_report.capability != "confluence.page.read":
             continue
@@ -1091,6 +1170,11 @@ def _reportable_verified_payloads(
         if action.capability == "bitbucket.build_status.read" and stale_kinds & {
             "bitbucket_build_pull_request_identity",
             "pull_request_build_head",
+        }:
+            continue
+        if action.capability == "bitbucket.pull_request.diffstat" and stale_kinds & {
+            "bitbucket_diffstat_pull_request_identity",
+            "pull_request_diffstat_commits",
         }:
             continue
         if (
@@ -1205,6 +1289,18 @@ def _findings(
         elif kind == "bitbucket_build_pull_request_identity":
             summary = (
                 "Build evidence was quarantined because its pull-request identity "
+                "did not match the exact configured target."
+            )
+            citation_ids = ()
+        elif kind == "pull_request_diffstat_commits":
+            summary = (
+                "Diffstat evidence failed the workflow's exact pull-request commit "
+                "binding and was quarantined."
+            )
+            citation_ids = ()
+        elif kind == "bitbucket_diffstat_pull_request_identity":
+            summary = (
+                "Diffstat evidence was quarantined because its pull-request identity "
                 "did not match the exact configured target."
             )
             citation_ids = ()
@@ -1583,6 +1679,13 @@ def _jira_issue_key(plan: ChangePlan) -> str:
 
 def _mapping(value: object) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def _exact_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    rendered = value.strip()
+    return rendered or None
 
 
 def _artifact_record(filename: str, payload: bytes) -> dict[str, Any]:

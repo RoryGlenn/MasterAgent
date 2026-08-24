@@ -389,10 +389,42 @@ class BitbucketConnector(ReadOnlyConnector):
 
     def _read_diffstat(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
-        changes, reference = self._diffstat_for_pull_request(
+        limit = integer_parameter(
+            action.parameters,
+            "limit",
+            default=self._config.max_items,
+            maximum=self._config.max_items,
+        )
+        _raw, pull_request, pull_request_reference = self._fetch_pull_request(
             owner=owner,
             repository=repository,
             pull_request_id=action.target.resource_id,
+        )
+        enforce_expected_version(
+            action,
+            pull_request.get("version") or pull_request.get("updated_at"),
+        )
+        source_commit_value = pull_request.get("source_commit")
+        destination_commit_value = pull_request.get("destination_commit")
+        if (
+            not isinstance(source_commit_value, str)
+            or not source_commit_value.strip()
+            or not isinstance(destination_commit_value, str)
+            or not destination_commit_value.strip()
+        ):
+            raise ConnectorError(
+                "Bitbucket pull request has no exact source and destination commits "
+                "for diffstat"
+            )
+        source_commit = source_commit_value.strip()
+        destination_commit = destination_commit_value.strip()
+        changes, reference = self._diffstat_for_commits(
+            owner=owner,
+            repository=repository,
+            pull_request_id=action.target.resource_id,
+            source_commit=source_commit,
+            destination_commit=destination_commit,
+            limit=limit,
         )
         return RetrievedPayload(
             data={
@@ -400,10 +432,20 @@ class BitbucketConnector(ReadOnlyConnector):
                 "system": "bitbucket",
                 "deployment": self._config.deployment,
                 "pull_request_id": action.target.resource_id,
+                "source_commit": source_commit,
+                "destination_commit": destination_commit,
                 "returned": len(changes),
                 "changes": changes,
                 "summary": _summarize_changes(changes),
-                "source_urls": [reference],
+                "source_urls": list(
+                    dict.fromkeys(
+                        [
+                            pull_request_reference,
+                            *pull_request.get("source_urls", []),
+                            reference,
+                        ]
+                    )
+                ),
             },
             connector_reference=reference,
         )
@@ -813,6 +855,97 @@ class BitbucketConnector(ReadOnlyConnector):
                 )
         return changes[: self._config.max_items], reference
 
+    def _diffstat_for_commits(
+        self,
+        *,
+        owner: str,
+        repository: str,
+        pull_request_id: str,
+        source_commit: str,
+        destination_commit: str,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Read an exact commit-pinned diffstat for one pull request."""
+
+        if self._config.deployment is DeploymentType.CLOUD:
+            revision = quote_segment(f"{source_commit}..{destination_commit}")
+            path = (
+                f"repositories/{quote_segment(owner)}/{quote_segment(repository)}"
+                f"/diffstat/{revision}"
+            )
+        else:
+            path = (
+                f"{self._pull_request_path(owner, repository, pull_request_id)}/changes"
+            )
+        expected_path = urlsplit(self._client.resolve_url(path)).path
+        changes: list[dict[str, Any]] = []
+        next_url: str | None = None
+        reference = ""
+        for _ in range(self._config.max_pages):
+            remaining = limit - len(changes)
+            if remaining <= 0:
+                if next_url:
+                    raise ConnectorError(
+                        "Bitbucket diffstat exceeds the exact requested limit"
+                    )
+                break
+            if next_url:
+                data, response = self._client.request_json("GET", next_url)
+            else:
+                query = (
+                    {"pagelen": min(remaining, 50), "topic": "true"}
+                    if self._config.deployment is DeploymentType.CLOUD
+                    else {
+                        "changeScope": "RANGE",
+                        "sinceId": destination_commit,
+                        "untilId": source_commit,
+                        "withComments": "false",
+                        "limit": remaining,
+                    }
+                )
+                data, response = self._client.request_json("GET", path, query=query)
+            reference = response.url
+            if not isinstance(data, Mapping):
+                raise ConnectorError("Bitbucket diffstat response must be an object")
+            page = data.get("values", [])
+            if not isinstance(page, list) or not all(
+                isinstance(item, Mapping) for item in page
+            ):
+                raise ConnectorError("Bitbucket diffstat values must be an object list")
+            if len(page) > remaining:
+                raise ConnectorError(
+                    "Bitbucket diffstat exceeds the exact requested limit"
+                )
+            mapped = [self._normalize_change(item) for item in page]
+            changes.extend(mapped)
+            if self._config.deployment is DeploymentType.CLOUD:
+                next_value = data.get("next")
+                if next_value:
+                    next_url = self._client.resolve_url(str(next_value))
+                    if urlsplit(next_url).path != expected_path:
+                        raise ConnectorError(
+                            "Bitbucket diffstat pagination left the exact commit range"
+                        )
+                else:
+                    next_url = None
+                if next_url and not mapped:
+                    raise ConnectorError(
+                        "Bitbucket diffstat returned an empty nonterminal page"
+                    )
+                if next_url and len(changes) >= limit:
+                    raise ConnectorError(
+                        "Bitbucket diffstat exceeds the exact requested limit"
+                    )
+                if not next_url:
+                    break
+            else:
+                if data.get("isLastPage") is not True:
+                    raise ConnectorError(
+                        "Bitbucket diffstat exceeds the exact requested limit"
+                    )
+                break
+        return changes, reference
+
     def _pull_request_path(
         self,
         owner: str,
@@ -904,6 +1037,7 @@ class BitbucketConnector(ReadOnlyConnector):
             "source_branch": _branch_name(source),
             "destination_branch": _branch_name(destination),
             "source_commit": _commit_hash(source),
+            "destination_commit": _commit_hash(destination),
             "reviewers": [
                 _person_name(item) for item in reviewers if isinstance(item, Mapping)
             ],
@@ -956,6 +1090,7 @@ class BitbucketConnector(ReadOnlyConnector):
             "source_branch": _display_ref(from_ref),
             "destination_branch": _display_ref(to_ref),
             "source_commit": from_ref.get("latestCommit"),
+            "destination_commit": to_ref.get("latestCommit"),
             "reviewers": [
                 _person_name(item.get("user"))
                 for item in reviewers

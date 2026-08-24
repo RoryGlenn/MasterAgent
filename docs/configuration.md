@@ -205,6 +205,7 @@ workspace = "approved-workspace"
 repository = "approved-repository"
 pull_request_id = "7"
 build_status_limit = 50
+diffstat_limit = 50
 include_diffstat = true
 
 [confluence]
@@ -219,8 +220,10 @@ Cloud requires `workspace` and forbids `project`; Data Center requires
 positive-integer strings, page IDs are unique, and at most three pages are
 allowed. `data_classification` cannot be `unknown`. The Bitbucket deployment
 and origins must match the selected native connector configuration, and
-`build_status_limit` must not exceed that connector's `max_items`. Any mismatch
-fails before run allocation, credential resolution, or provider access.
+`build_status_limit` and an enabled `diffstat_limit` must not exceed that
+connector's `max_items`. Diffstat reads are bound to the pull request's exact
+source and destination commits. Any mismatch fails before run allocation,
+credential resolution, or provider access.
 
 The Jira connector may project acceptance criteria and exact provider relations
 from reviewed custom fields. At most 16 unique, non-overlapping

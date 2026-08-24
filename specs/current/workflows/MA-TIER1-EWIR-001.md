@@ -32,17 +32,22 @@ links, and configured relation fields. Returned issue identity MUST exactly
 match the requested key. Only HTTPS, credential-free URLs on the action-bound
 Bitbucket or Confluence origins and exact repository/pull-request/page patterns
 MAY become structured external relations. Titles and prose MUST NOT become
-target selectors. Independent verification MUST repeat the same exact reads.
+target selectors. Same-origin relations that name a different owner, repository,
+space, pull request, or page MUST be retained as conflict evidence rather than
+discarded. Independent verification MUST repeat the same exact reads.
 
 The immutable plan MUST read and independently verify the Jira review context,
 configured Bitbucket repository, pull request, pull-request head and build
-statuses, optional diffstat, and every configured Confluence page. A changed
-Jira result, PR head, build state, repository identity, or Confluence version
-MUST fail that evidence closed. Jira relation evidence MAY confirm or conflict
-with exact trusted targets but MUST NOT dynamically broaden the first protected
-pilot plan. Zero or multiple materially different targets MUST be reported as
-ambiguous when relation evidence is present rather than silently selected.
-Missing relation evidence MUST NOT broaden the immutable configured scope.
+statuses, optional diffstat, and every configured Confluence page. Optional
+diffstat MUST carry an explicit item bound, read an exact source/destination
+commit range, and match the independently verified pull request. A changed Jira
+result, PR source or destination commit, build state, repository identity, or
+Confluence version MUST fail that evidence closed. Jira relation evidence MAY
+confirm or conflict with exact trusted targets but MUST NOT dynamically broaden
+the first protected pilot plan. Zero or multiple materially different targets
+MUST be reported as ambiguous when relation evidence is present rather than
+silently selected. Missing relation evidence MUST NOT broaden the immutable
+configured scope.
 
 The workflow MUST create exactly `engineering-work-item-review.json`,
 `engineering-work-item-review.md`, and `manifest.json` beneath its

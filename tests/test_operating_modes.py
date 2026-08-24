@@ -1354,6 +1354,7 @@ workspace = "acme"
 repository = "widget"
 pull_request_id = "7"
 build_status_limit = 50
+diffstat_limit = 50
 include_diffstat = false
 
 [confluence]
@@ -1517,6 +1518,26 @@ max_items = 1
             )
 
         allocate.assert_not_called()
+
+        diffstat_settings = replace(
+            settings,
+            build_status_limit=1,
+            diffstat_limit=50,
+            include_diffstat=True,
+        )
+        with (
+            patch("master_agent.cli.allocate_operating_run") as diffstat_allocate,
+            self.assertRaisesRegex(
+                cli_module.OperatingValidationError,
+                "diffstat limit",
+            ),
+        ):
+            cli_module._validate_engineering_review_integrations(
+                diffstat_settings,
+                integrations,
+            )
+
+        diffstat_allocate.assert_not_called()
 
     def test_local_generation_allocates_one_private_governed_run(self) -> None:
         with TemporaryDirectory() as raw:

@@ -76,6 +76,7 @@ class EngineeringWorkItemReviewPlanTests(unittest.TestCase):
             plan.actions[-1].parameters,
             {"space_id": "space-1", "space_key": "ENG"},
         )
+        self.assertEqual(plan.actions[4].parameters["limit"], 50)
         validate_engineering_work_item_review_plan(plan, settings)
 
     def test_malformed_or_overbroad_scope_fails(self) -> None:
@@ -154,6 +155,181 @@ class EngineeringWorkItemReviewRendererTests(unittest.TestCase):
                 payload = (artifact_root / item["filename"]).read_bytes()
                 self.assertEqual(item["bytes"], len(payload))
                 self.assertEqual(item["sha256"], hashlib.sha256(payload).hexdigest())
+
+    def test_matching_commit_pinned_diffstat_is_complete(self) -> None:
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            settings, plan, artifact_root = _bound_plan(
+                root,
+                include_diffstat=True,
+            )
+            report = _report(plan, settings)
+            with PinnedDirectory.open(artifact_root) as pinned:
+                artifacts = render_engineering_work_item_review(
+                    report,
+                    plan,
+                    settings,
+                    output_root=pinned,
+                )
+
+            self.assertIs(artifacts.outcome, EngineeringReviewOutcome.COMPLETE)
+            review = json.loads(artifacts.review_json.read_text(encoding="utf-8"))
+            diffstat = review["evidence"]["bitbucket_diffstat"]
+            self.assertEqual(diffstat["source_commit"], "abc123")
+            self.assertEqual(diffstat["destination_commit"], "def456")
+            self.assertIn(
+                "pull_request_diffstat",
+                {citation["resource_type"] for citation in review["citations"]},
+            )
+
+    def test_foreign_or_missing_diffstat_identity_is_quarantined(self) -> None:
+        cases = {
+            "foreign pull request": ("pull_request_id", "8"),
+            "foreign source": ("source_commit", "other-source"),
+            "foreign destination": ("destination_commit", "other-destination"),
+            "missing source": ("source_commit", ""),
+        }
+        for name, (field, value) in cases.items():
+            with self.subTest(name=name), private_temporary_directory() as directory:
+                canary = f"SECRET-DIFFSTAT-{name}"
+
+                def mutate_diffstat(
+                    action: AgentAction,
+                    payload: dict[str, object],
+                    field: str = field,
+                    value: str = value,
+                    canary: str = canary,
+                ) -> None:
+                    if action.capability != "bitbucket.pull_request.diffstat":
+                        return
+                    payload[field] = value
+                    payload["changes"] = [{"new_path": canary}]
+
+                root = Path(directory)
+                settings, plan, artifact_root = _bound_plan(
+                    root,
+                    include_diffstat=True,
+                )
+                report = _report(plan, settings, payload_mutator=mutate_diffstat)
+                with PinnedDirectory.open(artifact_root) as pinned:
+                    artifacts = render_engineering_work_item_review(
+                        report,
+                        plan,
+                        settings,
+                        output_root=pinned,
+                    )
+
+                combined = artifacts.review_json.read_text(
+                    encoding="utf-8"
+                ) + artifacts.review_markdown.read_text(encoding="utf-8")
+                self.assertNotIn(canary, combined)
+                self.assertIs(artifacts.outcome, EngineeringReviewOutcome.STALE)
+                review = json.loads(artifacts.review_json.read_text(encoding="utf-8"))
+                self.assertIsNone(review["evidence"]["bitbucket_diffstat"])
+                self.assertNotIn(
+                    "pull_request_diffstat",
+                    {citation["resource_type"] for citation in review["citations"]},
+                )
+                self.assertIn(
+                    {
+                        "capability": "bitbucket.pull_request.diffstat",
+                        "state": "quarantined",
+                    },
+                    [
+                        {
+                            "capability": failure["capability"],
+                            "state": failure["state"],
+                        }
+                        for failure in review["failures"]
+                    ],
+                )
+
+    def test_non_string_commit_identities_are_stale_and_quarantined(self) -> None:
+        build_canary = "SECRET-NUMERIC-BUILD-CANARY"
+        diffstat_canary = "SECRET-NUMERIC-DIFFSTAT-CANARY"
+
+        def numeric_commits(
+            action: AgentAction,
+            payload: dict[str, object],
+        ) -> None:
+            if action.capability == "bitbucket.pull_request.read":
+                pull_request = payload["pull_request"]
+                assert isinstance(pull_request, dict)
+                pull_request["source_commit"] = 123
+                pull_request["destination_commit"] = 456
+            elif action.capability == "bitbucket.build_status.read":
+                payload["commit"] = 123
+                payload["statuses"] = [{"key": build_canary, "state": "SUCCESSFUL"}]
+            elif action.capability == "bitbucket.pull_request.diffstat":
+                payload["source_commit"] = 123
+                payload["destination_commit"] = 456
+                payload["changes"] = [{"new_path": diffstat_canary}]
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            settings, plan, artifact_root = _bound_plan(
+                root,
+                include_diffstat=True,
+            )
+            report = _report(plan, settings, payload_mutator=numeric_commits)
+            with PinnedDirectory.open(artifact_root) as pinned:
+                artifacts = render_engineering_work_item_review(
+                    report,
+                    plan,
+                    settings,
+                    output_root=pinned,
+                )
+
+            combined = artifacts.review_json.read_text(
+                encoding="utf-8"
+            ) + artifacts.review_markdown.read_text(encoding="utf-8")
+            self.assertNotIn(build_canary, combined)
+            self.assertNotIn(diffstat_canary, combined)
+            self.assertIs(artifacts.outcome, EngineeringReviewOutcome.STALE)
+            review = json.loads(artifacts.review_json.read_text(encoding="utf-8"))
+            self.assertFalse(review["complete"])
+            self.assertIsNone(review["evidence"]["bitbucket_build_status"])
+            self.assertIsNone(review["evidence"]["bitbucket_diffstat"])
+            self.assertCountEqual(
+                [item["kind"] for item in review["stale_evidence"]],
+                ["pull_request_build_head", "pull_request_diffstat_commits"],
+            )
+
+    def test_diffstat_is_quarantined_without_exact_pull_request_evidence(self) -> None:
+        def foreign_pull_request(
+            action: AgentAction,
+            payload: dict[str, object],
+        ) -> None:
+            if action.capability == "bitbucket.pull_request.read":
+                pull_request = payload["pull_request"]
+                assert isinstance(pull_request, dict)
+                pull_request["id"] = 8
+            elif action.capability == "bitbucket.pull_request.diffstat":
+                payload["changes"] = [{"new_path": "SECRET-UNBOUND-DIFFSTAT"}]
+
+        with private_temporary_directory() as directory:
+            root = Path(directory)
+            settings, plan, artifact_root = _bound_plan(
+                root,
+                include_diffstat=True,
+            )
+            report = _report(plan, settings, payload_mutator=foreign_pull_request)
+            with PinnedDirectory.open(artifact_root) as pinned:
+                artifacts = render_engineering_work_item_review(
+                    report,
+                    plan,
+                    settings,
+                    output_root=pinned,
+                )
+
+            combined = artifacts.review_json.read_text(
+                encoding="utf-8"
+            ) + artifacts.review_markdown.read_text(encoding="utf-8")
+            self.assertNotIn("SECRET-UNBOUND-DIFFSTAT", combined)
+            self.assertIs(artifacts.outcome, EngineeringReviewOutcome.STALE)
+            review = json.loads(artifacts.review_json.read_text(encoding="utf-8"))
+            self.assertIsNone(review["evidence"]["bitbucket_pull_request"])
+            self.assertIsNone(review["evidence"]["bitbucket_diffstat"])
 
     def test_report_binding_rejects_untrusted_success_shapes(self) -> None:
         with private_temporary_directory() as directory:
@@ -294,6 +470,10 @@ class EngineeringWorkItemReviewRendererTests(unittest.TestCase):
                 _set_conflicting_relation,
                 EngineeringReviewOutcome.AMBIGUOUS,
             ),
+            "confluence relation conflict": (
+                _set_conflicting_confluence_relation,
+                EngineeringReviewOutcome.AMBIGUOUS,
+            ),
         }
         for name, (mutator, expected) in cases.items():
             with self.subTest(name=name), private_temporary_directory() as directory:
@@ -310,6 +490,15 @@ class EngineeringWorkItemReviewRendererTests(unittest.TestCase):
                 self.assertIs(artifacts.outcome, expected)
                 review = json.loads(artifacts.review_json.read_text(encoding="utf-8"))
                 self.assertFalse(review["complete"])
+                if name == "relation conflict":
+                    self.assertIn(
+                        {
+                            "owner_or_project": "acme",
+                            "repository": "foreign",
+                            "pull_request_id": "7",
+                        },
+                        review["ambiguities"][0]["observed"],
+                    )
 
     def test_foreign_target_payloads_are_quarantined_from_artifacts(self) -> None:
         def foreign_jira(action: AgentAction, payload: dict[str, object]) -> None:
@@ -637,6 +826,7 @@ workspace = "acme"
 repository = "widget"
 pull_request_id = "7"
 build_status_limit = 50
+diffstat_limit = 50
 include_diffstat = {str(include_diffstat).lower()}
 
 [confluence]
@@ -654,8 +844,12 @@ def _bound_plan(
     root: Path,
     *,
     page_ids: tuple[str, ...] = ("11",),
+    include_diffstat: bool = False,
 ) -> tuple[EngineeringWorkItemReviewSettings, ChangePlan, Path]:
-    settings = _settings(page_ids=page_ids)
+    settings = _settings(
+        page_ids=page_ids,
+        include_diffstat=include_diffstat,
+    )
     plan = build_engineering_work_item_review_plan("ENG-123", settings)
     state_root = root / "state"
     artifact_root = root / "artifacts"
@@ -772,11 +966,14 @@ def _payload(
                     {
                         "provider": "bitbucket",
                         "resource_type": "pull_request",
+                        "owner_or_project": "acme",
+                        "repository": "widget",
                         "pull_request_id": "7",
                     },
                     {
                         "provider": "confluence",
                         "resource_type": "page",
+                        "space": "ENG",
                         "page_id": "11",
                     },
                 ],
@@ -822,6 +1019,7 @@ def _payload(
                 "source_branch": "feature/eng-123",
                 "destination_branch": "main",
                 "source_commit": "abc123",
+                "destination_commit": "def456",
             },
             "citations": [citation],
             "source_urls": ["https://bitbucket.example/acme/widget/pull-requests/7"],
@@ -842,6 +1040,8 @@ def _payload(
             "schema": "master-agent/bitbucket-diffstat@1",
             **common,
             "pull_request_id": "7",
+            "source_commit": "abc123",
+            "destination_commit": "def456",
             "returned": 1,
             "changes": [{"new_path": "src/review.py", "lines_added": 10}],
             "summary": {"files": 1, "lines_added": 10, "lines_removed": 0},
@@ -907,7 +1107,22 @@ def _set_conflicting_relation(
     assert isinstance(issue, dict)
     relations = issue["external_relations"]
     assert isinstance(relations, list)
-    relations[0]["pull_request_id"] = "8"
+    conflicting = dict(relations[0])
+    conflicting["repository"] = "foreign"
+    relations.append(conflicting)
+
+
+def _set_conflicting_confluence_relation(
+    action: AgentAction,
+    payload: dict[str, object],
+) -> None:
+    if action.capability != "jira.issue.review_context.read":
+        return
+    issue = payload["issue"]
+    assert isinstance(issue, dict)
+    relations = issue["external_relations"]
+    assert isinstance(relations, list)
+    relations[1]["space"] = "OTHER"
 
 
 def _citation_for(review: dict[str, object], resource_type: str) -> dict[str, object]:

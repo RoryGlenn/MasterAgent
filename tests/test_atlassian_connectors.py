@@ -171,11 +171,26 @@ class JiraConnectorTests(unittest.TestCase):
                     },
                 },
                 {
+                    "id": "remote-pr-conflict",
+                    "object": {
+                        "url": "https://bitbucket.org/acme/foreign/pull-requests/7"
+                    },
+                },
+                {
                     "id": "remote-page",
                     "object": {
                         "url": (
                             "https://acme.atlassian.net/wiki/spaces/ENG/"
                             "pages/11/Requirement"
+                        )
+                    },
+                },
+                {
+                    "id": "remote-page-conflict",
+                    "object": {
+                        "url": (
+                            "https://acme.atlassian.net/wiki/spaces/OTHER/"
+                            "pages/11/Conflicting-requirement"
                         )
                     },
                 },
@@ -236,10 +251,20 @@ class JiraConnectorTests(unittest.TestCase):
         )
         self.assertCountEqual(
             [
-                (item["provider"], item.get("pull_request_id") or item.get("page_id"))
+                (
+                    item["provider"],
+                    item.get("repository") or item.get("space"),
+                    item.get("pull_request_id") or item.get("page_id"),
+                )
                 for item in normalized["external_relations"]
             ],
-            [("bitbucket", "8"), ("bitbucket", "7"), ("confluence", "11")],
+            [
+                ("bitbucket", "widget", "8"),
+                ("bitbucket", "widget", "7"),
+                ("bitbucket", "foreign", "7"),
+                ("confluence", "ENG", "11"),
+                ("confluence", "OTHER", "11"),
+            ],
         )
         self.assertNotIn("attacker.example", str(result.after))
         self.assertEqual(len(transport.requests), 4)
@@ -1126,6 +1151,352 @@ class BitbucketConnectorTests(unittest.TestCase):
         paths = [urlparse(item.url).path for item in transport.requests]
         self.assertIn("/rest/build-status/latest/commits/abc123", paths)
 
+    def test_cloud_diffstat_is_commit_pinned_and_independently_verified(
+        self,
+    ) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7",
+            _cloud_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/diffstat/abc123..def456",
+            {
+                "values": [
+                    {
+                        "status": "modified",
+                        "old": {"path": "old.py"},
+                        "new": {"path": "new.py"},
+                        "lines_added": 2,
+                        "lines_removed": 1,
+                    }
+                ],
+                "next": None,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "bitbucket.pull_request.diffstat",
+            system="bitbucket",
+            resource_type="pull_request",
+            resource_id="7",
+            parameters={"workspace": "acme", "repository": "widget", "limit": 5},
+        )
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertTrue(verification.verified)
+        self.assertEqual(result.after["source_commit"], "abc123")
+        self.assertEqual(result.after["destination_commit"], "def456")
+        self.assertEqual(result.after["returned"], 1)
+        self.assertEqual(len(transport.requests), 4)
+        diff_query = parse_qs(urlparse(transport.requests[1].url).query)
+        self.assertEqual(diff_query, {"pagelen": ["5"], "topic": ["true"]})
+
+    def test_data_center_diffstat_uses_exact_commit_range(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9",
+            _dc_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9/changes",
+            {
+                "values": [
+                    {
+                        "type": "MODIFY",
+                        "path": {"toString": "new.py"},
+                        "srcPath": {"toString": "old.py"},
+                    }
+                ],
+                "isLastPage": True,
+                "limit": 1,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                deployment=DeploymentType.DATA_CENTER,
+                base_url="https://bitbucket.internal.test",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "bitbucket.pull_request.diffstat",
+            system="bitbucket",
+            resource_type="pull_request",
+            resource_id="9",
+            parameters={"project": "CORE", "repository": "widget", "limit": 5},
+        )
+
+        result = connector.execute(action)
+
+        self.assertEqual(result.after["source_commit"], "abc123")
+        self.assertEqual(result.after["destination_commit"], "def456")
+        query = parse_qs(urlparse(transport.requests[1].url).query)
+        self.assertEqual(
+            query,
+            {
+                "changeScope": ["RANGE"],
+                "limit": ["5"],
+                "sinceId": ["def456"],
+                "untilId": ["abc123"],
+                "withComments": ["false"],
+            },
+        )
+
+    def test_data_center_diffstat_accepts_complete_exact_limit_page(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9",
+            _dc_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9/changes",
+            {
+                "values": [
+                    {
+                        "type": "MODIFY",
+                        "path": {"toString": "new.py"},
+                        "srcPath": {"toString": "old.py"},
+                    }
+                ],
+                "isLastPage": True,
+                "limit": 1,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                deployment=DeploymentType.DATA_CENTER,
+                base_url="https://bitbucket.internal.test",
+            ),
+            transport=transport,
+        )
+
+        result = connector.execute(
+            read_action(
+                "bitbucket.pull_request.diffstat",
+                system="bitbucket",
+                resource_type="pull_request",
+                resource_id="9",
+                parameters={"project": "CORE", "repository": "widget", "limit": 1},
+            )
+        )
+
+        self.assertEqual(result.after["returned"], 1)
+
+    def test_data_center_diffstat_rejects_nonterminal_page(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9",
+            _dc_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9/changes",
+            {
+                "values": [
+                    {
+                        "type": "MODIFY",
+                        "path": {"toString": "new.py"},
+                        "srcPath": {"toString": "old.py"},
+                    }
+                ],
+                "isLastPage": False,
+                "limit": 1,
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                deployment=DeploymentType.DATA_CENTER,
+                base_url="https://bitbucket.internal.test",
+            ),
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "exact requested limit"):
+            connector.execute(
+                read_action(
+                    "bitbucket.pull_request.diffstat",
+                    system="bitbucket",
+                    resource_type="pull_request",
+                    resource_id="9",
+                    parameters={
+                        "project": "CORE",
+                        "repository": "widget",
+                        "limit": 5,
+                    },
+                )
+            )
+
+    def test_diffstat_rejects_non_string_commit_identities(self) -> None:
+        cases = (
+            (DeploymentType.CLOUD, "source"),
+            (DeploymentType.CLOUD, "destination"),
+            (DeploymentType.DATA_CENTER, "source"),
+            (DeploymentType.DATA_CENTER, "destination"),
+        )
+        for deployment, identity in cases:
+            with self.subTest(deployment=deployment, identity=identity):
+                transport = ScriptedTransport()
+                if deployment is DeploymentType.CLOUD:
+                    pull_request = _cloud_pull_request()
+                    reference = pull_request[identity]
+                    assert isinstance(reference, dict)
+                    reference["commit"] = {"hash": 123}
+                    path = "/2.0/repositories/acme/widget/pullrequests/7"
+                    base_url = "https://api.bitbucket.org/2.0"
+                    resource_id = "7"
+                    parameters = {
+                        "workspace": "acme",
+                        "repository": "widget",
+                        "limit": 5,
+                    }
+                else:
+                    pull_request = _dc_pull_request()
+                    reference_key = "fromRef" if identity == "source" else "toRef"
+                    reference = pull_request[reference_key]
+                    assert isinstance(reference, dict)
+                    reference["latestCommit"] = 123
+                    path = "/rest/api/latest/projects/CORE/repos/widget/pull-requests/9"
+                    base_url = "https://bitbucket.internal.test"
+                    resource_id = "9"
+                    parameters = {
+                        "project": "CORE",
+                        "repository": "widget",
+                        "limit": 5,
+                    }
+                transport.add_json("GET", path, pull_request)
+                connector = BitbucketConnector(
+                    resolved_config(
+                        "bitbucket",
+                        deployment=deployment,
+                        base_url=base_url,
+                    ),
+                    transport=transport,
+                )
+
+                with self.assertRaisesRegex(
+                    ConnectorError,
+                    "no exact source and destination commits",
+                ) as raised:
+                    connector.execute(
+                        read_action(
+                            "bitbucket.pull_request.diffstat",
+                            system="bitbucket",
+                            resource_type="pull_request",
+                            resource_id=resource_id,
+                            parameters=parameters,
+                        )
+                    )
+                self.assertNotIn("123", str(raised.exception))
+
+    def test_diffstat_verification_rejects_pull_request_commit_drift(self) -> None:
+        changed = _cloud_pull_request()
+        source = changed["source"]
+        destination = changed["destination"]
+        assert isinstance(source, dict) and isinstance(destination, dict)
+        source["commit"] = {"hash": "new-source"}
+        destination["commit"] = {"hash": "new-destination"}
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7",
+            _cloud_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7",
+            changed,
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/diffstat/abc123..def456",
+            {"values": [], "next": None},
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/diffstat/new-source..new-destination",
+            {"values": [], "next": None},
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+        action = read_action(
+            "bitbucket.pull_request.diffstat",
+            system="bitbucket",
+            resource_type="pull_request",
+            resource_id="7",
+            parameters={"workspace": "acme", "repository": "widget", "limit": 5},
+        )
+
+        result = connector.execute(action)
+        verification = connector.verify(action, result)
+
+        self.assertFalse(verification.verified)
+        self.assertIn("changed between retrieval", verification.message)
+
+    def test_diffstat_fails_closed_when_exact_limit_has_more_results(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7",
+            _cloud_pull_request(),
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/diffstat/abc123..def456",
+            {
+                "values": [{"status": "modified", "new": {"path": "one.py"}}],
+                "next": (
+                    "https://api.bitbucket.org/2.0/repositories/acme/widget/"
+                    "diffstat/abc123..def456?page=2"
+                ),
+            },
+        )
+        connector = BitbucketConnector(
+            resolved_config(
+                "bitbucket",
+                base_url="https://api.bitbucket.org/2.0",
+            ),
+            transport=transport,
+        )
+
+        with self.assertRaisesRegex(ConnectorError, "exact requested limit"):
+            connector.execute(
+                read_action(
+                    "bitbucket.pull_request.diffstat",
+                    system="bitbucket",
+                    resource_type="pull_request",
+                    resource_id="7",
+                    parameters={
+                        "workspace": "acme",
+                        "repository": "widget",
+                        "limit": 1,
+                    },
+                )
+            )
+
     def test_nested_enrichment_shares_one_global_request_budget(self) -> None:
         transport = ScriptedTransport()
         transport.add_json(
@@ -1204,7 +1575,10 @@ def _cloud_pull_request() -> dict[str, object]:
             "branch": {"name": "feature/status"},
             "commit": {"hash": "abc123"},
         },
-        "destination": {"branch": {"name": "main"}},
+        "destination": {
+            "branch": {"name": "main"},
+            "commit": {"hash": "def456"},
+        },
         "participants": [],
         "reviewers": [{"display_name": "Don"}],
         "links": {
@@ -1227,7 +1601,7 @@ def _dc_pull_request() -> dict[str, object]:
             "displayId": "feature/status",
             "latestCommit": "abc123",
         },
-        "toRef": {"displayId": "main"},
+        "toRef": {"displayId": "main", "latestCommit": "def456"},
         "reviewers": [],
         "createdDate": 1,
         "updatedDate": 2,

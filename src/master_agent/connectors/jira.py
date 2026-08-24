@@ -690,8 +690,8 @@ def _bitbucket_relation(
         action.parameters.get("bitbucket_origin"),
         "bitbucket_origin",
     )
-    owner = string_parameter(action.parameters, "bitbucket_owner", required=True)
-    repository = string_parameter(
+    string_parameter(action.parameters, "bitbucket_owner", required=True)
+    string_parameter(
         action.parameters,
         "bitbucket_repository",
         required=True,
@@ -701,17 +701,30 @@ def _bitbucket_relation(
         accepted_origins.update({"https://api.bitbucket.org", "https://bitbucket.org"})
     if origin not in accepted_origins:
         return None
+    owner_or_project = ""
+    repository = ""
     pull_request_id = ""
-    if len(segments) == 4 and segments[:3] == (owner, repository, "pull-requests"):
+    if len(segments) == 4 and segments[2] == "pull-requests":
+        owner_or_project = segments[0]
+        repository = segments[1]
         pull_request_id = segments[3]
     elif (
         len(segments) == 6
-        and segments[:5] == ("2.0", "repositories", owner, repository, "pullrequests")
-    ) or (
+        and segments[:2] == ("2.0", "repositories")
+        and segments[4] == "pullrequests"
+    ):
+        owner_or_project = segments[2]
+        repository = segments[3]
+        pull_request_id = segments[5]
+    elif (
         len(segments) in {6, 7}
-        and segments[:5] == ("projects", owner, "repos", repository, "pull-requests")
+        and segments[0] == "projects"
+        and segments[2] == "repos"
+        and segments[4] == "pull-requests"
         and (len(segments) == 6 or segments[6] == "overview")
     ):
+        owner_or_project = segments[1]
+        repository = segments[3]
         pull_request_id = segments[5]
     if (
         not pull_request_id.isdecimal()
@@ -723,7 +736,7 @@ def _bitbucket_relation(
         "provider": "bitbucket",
         "resource_type": "pull_request",
         "canonical_origin": expected_origin,
-        "owner_or_project": owner,
+        "owner_or_project": owner_or_project,
         "repository": repository,
         "pull_request_id": pull_request_id,
     }
@@ -739,13 +752,20 @@ def _confluence_relation(
         action.parameters.get("confluence_origin"),
         "confluence_origin",
     )
-    space = string_parameter(action.parameters, "confluence_space_key")
+    configured_space = string_parameter(action.parameters, "confluence_space_key")
     if origin != expected_origin:
         return None
+    observed_space = configured_space
     page_id = ""
-    if len(segments) >= 5 and segments[:4] == ("wiki", "spaces", space, "pages"):
+    if (
+        len(segments) >= 5
+        and segments[:2] == ("wiki", "spaces")
+        and segments[3] == "pages"
+    ):
+        observed_space = segments[2]
         page_id = segments[4]
-    elif len(segments) >= 4 and segments[:3] == ("spaces", space, "pages"):
+    elif len(segments) >= 4 and segments[0] == "spaces" and segments[2] == "pages":
+        observed_space = segments[1]
         page_id = segments[3]
     elif len(segments) == 2 and segments[0] == "pages":
         page_id = segments[1]
@@ -755,6 +775,6 @@ def _confluence_relation(
         "provider": "confluence",
         "resource_type": "page",
         "canonical_origin": expected_origin,
-        "space": space,
+        "space": observed_space,
         "page_id": page_id,
     }

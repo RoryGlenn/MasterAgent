@@ -40,6 +40,8 @@ description = "Create and verify a Bitbucket pull request; recovery requires a m
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+target_resource_types = ["pull_request"]
+parameter_schema = { workspace = "string?", project = "string?", repository = "string", limit = "integer?" }
 
 [capabilities."bitbucket.pull_request.merge"]
 enabled = false
@@ -720,7 +722,7 @@ metadata = ["system", "deployment", "returned", "source_urls"]
 [read_result_contracts."bitbucket.pull_request.diffstat"]
 schema = "master-agent/bitbucket-diffstat@1"
 resources = { changes = "object_list", summary = "object" }
-metadata = ["system", "deployment", "pull_request_id", "returned", "source_urls"]
+metadata = ["system", "deployment", "pull_request_id", "source_commit", "destination_commit", "returned", "source_urls"]
 
 [read_result_contracts."bitbucket.pull_request.read"]
 schema = "master-agent/bitbucket-pull-request@1"
