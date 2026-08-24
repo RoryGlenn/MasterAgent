@@ -456,6 +456,7 @@ discoverable.
 - [Connector plugin development](docs/plugin-development.md)
 - [Semantic router](docs/semantic-index.md)
 - [Semantic router measurements](docs/semantic-router-metrics.md)
+- [Tier-1 Engineering Work Item Review plan](docs/tier-1-engineering-work-item-review-plan.md)
 
 ### Phase contracts
 

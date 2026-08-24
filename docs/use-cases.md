@@ -21,6 +21,20 @@ can satisfy the same connector contract. See
 [Native-first enterprise purpose](native-first-enterprise.md) and
 [Live connector contracts](live-connectors.md).
 
+## Review one engineering work item
+
+The first proposed Tier-1 workflow is case `T1-EWIR-001`: start with one Jira
+work item, inspect its bounded related Bitbucket pull request and build state,
+read up to three linked Confluence requirements or decisions, and produce one
+private cited local review package. It performs no provider writes,
+communications, merges, or automatic implementation fallback.
+
+The workflow is planned behavior, not a current certification claim. Its exact
+fixture IDs, native identities, permissions, proxy/CA profile, recovery cases,
+and managed-workstation evidence are controlled through the
+[Tier-1 workflow plan](tier-1-engineering-work-item-review-plan.md) and the
+protected #94/#172 test path.
+
 ## Choose an outcome
 
 | Outcome | Provider credential | Approval | External write |
