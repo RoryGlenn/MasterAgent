@@ -258,14 +258,15 @@ absent.
 
 ### Tier-1 workflow certification (#169-#172)
 
-The first prioritized employee workflow is the proposed `T1-EWIR-001`
+The first prioritized employee workflow is the implemented `T1-EWIR-001`
 Engineering Work Item Review in [the Tier-1 workflow plan](tier-1-engineering-work-item-review-plan.md).
 It is a read-only Jira, Bitbucket, and Confluence workflow that produces a
-private cited local package through native connectors. The plan and its
-provisional p50/p95 objectives take priority over increasing raw capability
-count; #164 instrumentation, #170 implementation identity, #94 protected
-fixtures, and #172 managed-workstation runs provide the evidence before any
-workflow is presented as certified.
+private cited local package through native connectors. The exact command,
+profile-selected scope, cited renderer, and deterministic tests are complete;
+the checked-in safe profile remains disabled. The plan and its provisional
+p50/p95 objectives take priority over increasing raw capability count; #94
+protected fixtures and #172 managed-workstation runs still provide the evidence
+required before the workflow is presented as certified.
 
 The content-free schema, deterministic regression command, and the boundary
 between baseline-ineligible CI evidence and #172 managed evidence are described

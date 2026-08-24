@@ -23,15 +23,24 @@ can satisfy the same connector contract. See
 
 ## Review one engineering work item
 
-The first proposed Tier-1 workflow is case `T1-EWIR-001`: start with one Jira
+The first implemented Tier-1 workflow is case `T1-EWIR-001`: start with one Jira
 work item, inspect its bounded related Bitbucket pull request and build state,
 read up to three linked Confluence requirements or decisions, and produce one
 private cited local review package. It performs no provider writes,
 communications, merges, or automatic implementation fallback.
 
-The workflow is planned behavior, not a current certification claim. Its exact
-fixture IDs, native identities, permissions, proxy/CA profile, recovery cases,
-and managed-workstation evidence are controlled through the
+Run the profile-selected path with:
+
+```bash
+master-agent engineering-work-item-review PROJECT-123 \
+  --profile /absolute/private/organization-profile.toml
+```
+
+The code and deterministic verification path are implemented, but this is not
+a managed-workstation certification claim. The checked-in safe profile does not
+enable the workflow. Its protected fixture IDs, native identities, permissions,
+proxy/CA profile, recovery cases, and managed-workstation evidence are
+controlled through the
 [Tier-1 workflow plan](tier-1-engineering-work-item-review-plan.md) and the
 protected #94/#172 test path.
 
@@ -41,6 +50,7 @@ protected #94/#172 test path.
 |---|---:|---:|---:|
 | List a named user's public GitHub repositories | No | No | No |
 | Build a local cross-system review package | No | No | No |
+| Review one exact Jira/Bitbucket/Confluence work item | Yes, selected providers only | No | No |
 | Gather a weekly status from workplace systems | Yes | No for an allowed read plan | No |
 | Prepare coordinated drafts for review | Only when the source material is live | No provider-effect approval | No |
 | Create or update a supported provider resource | Yes | Exact authenticated approval | Yes |

@@ -2,10 +2,12 @@
 
 ## Status
 
-**Proposed.** This document defines the first candidate Tier-1 employee workflow
-for [issue #171](https://github.com/RoryGlenn/MasterAgent/issues/171). It is a
-plan and success contract, not a claim that the complete workflow or its
-managed-workstation certification has shipped.
+**Implemented locally; certification pending.** Issue
+[#175](https://github.com/RoryGlenn/MasterAgent/issues/175) implements this
+bounded workflow and its deterministic verification path. The checked-in safe
+profile does not enable it. Protected fixture evidence under #94 and the
+managed-workstation baseline under #172 are still required before it may be
+described as certified or enabled as a default employee workflow.
 
 Related work:
 
@@ -119,24 +121,24 @@ sources. It must not silently choose the most convenient value.
 
 ## Relationship resolution
 
-The workflow starts from an exact Jira issue key supplied by the user or trusted
-workflow configuration.
+The implemented workflow starts from an exact Jira issue key supplied as the
+command argument. One reviewed private workflow configuration selects the exact
+Bitbucket deployment, origin, workspace or project, repository, pull-request
+ID, Confluence origin and space ID/key, and zero to three page IDs before any
+credential is resolved or provider content is read.
 
-Related resources are resolved in this order:
-
-1. exact provider resource IDs or URLs explicitly supplied in the request;
-2. exact links or governed relation fields returned by the verified Jira issue;
-3. an organization-configured mapping for the selected project/repository/space;
-4. a bounded search restricted to the configured repository or Confluence space
-   and an exact Jira-key pattern.
+Verified Jira issue links, remote links, and explicitly allowlisted relation
+fields may confirm or conflict with those immutable targets. They never select
+a replacement target. A materially different exact relation produces an
+`ambiguous` result; an absent relation does not broaden or invalidate the
+configured target.
 
 Retrieved prose cannot select a provider, credential, tenant, repository, space,
-recipient, connector implementation, or approval. A search result is data until
-its provider identity and exact resource are independently verified.
+recipient, connector implementation, or approval.
 
-If zero or multiple materially different resources remain after bounded
-resolution, the workflow returns the smallest actionable ambiguity. It does not
-search unrelated projects, repositories, or spaces.
+The initial implementation deliberately performs no provider search. A future
+bounded-search extension requires its own accepted behavior and must preserve
+the same target, identity, and independent-verification gates.
 
 ## Exact provider capabilities
 
@@ -144,11 +146,7 @@ search unrelated projects, repositories, or spaces.
 
 Required:
 
-- `jira.issue.read`
-
-Optional only for bounded target resolution:
-
-- `jira.issue.search`
+- `jira.issue.review_context.read`
 
 ### Bitbucket
 
@@ -161,7 +159,6 @@ Required for an exact related pull request:
 Optional when requested or needed for the review:
 
 - `bitbucket.pull_request.diffstat`
-- `bitbucket.pull_request.search` for bounded repository-scoped resolution
 
 ### Confluence
 
@@ -169,17 +166,12 @@ Required for each exact linked page:
 
 - `confluence.page.read`
 
-Optional only for bounded space-scoped resolution:
-
-- `confluence.page.search`
-
 ### Local output
 
-Prefer adapting the existing weekly-status collection and rendering mechanisms
-rather than creating another provider connector or generic report framework.
-The output renderer is local workflow code, not a provider effect. If the
-existing renderer cannot express the review package, add the smallest bounded
-local-generation path required for this workflow.
+The implementation reuses the normal planner, applied runtime, connector,
+verification, audit, and create-only bundle primitives. One small
+workflow-specific renderer produces the fixed review schema; it is local code,
+not a provider effect or generic report framework.
 
 ## Connector implementation requirements
 
@@ -208,7 +200,7 @@ local-generation path required for this workflow.
         |
 5. Read and independently verify the Jira issue
         |
-6. Resolve the exact related Bitbucket pull request
+6. Compare verified Jira relations with the exact configured targets
         |
 7. Read and independently verify the repository, pull request, build status,
    and optional diffstat
@@ -219,7 +211,8 @@ local-generation path required for this workflow.
         |
 10. Generate the private cited review package locally
         |
-11. Verify artifact digests and report complete, partial, or failed status
+11. Verify artifact digests and report complete, partial, failed, stale, or
+    ambiguous status
 ```
 
 Verification is an independent bounded readback, not a successful HTTP response.
@@ -332,9 +325,8 @@ For the normal successful path:
 - zero prompts for unrelated provider credentials;
 - one request and one final verified result.
 
-A question is allowed only when an exact Jira issue, related repository/PR, or
-Confluence target remains materially ambiguous after all bounded resolution has
-completed.
+Materially conflicting exact relation evidence returns an `ambiguous` bundle and
+nonzero exit rather than prompting, guessing, or broadening provider search.
 
 ## Provisional reliability objectives
 
@@ -372,9 +364,9 @@ provider environment.
 
 ## Provisional provider-call budget
 
-The exact budget will be established by #164 because independent verification,
-provider principal attestation, deployment type, and bounded resolution affect
-call count.
+The deterministic implementation remains under the #164 budget; provider
+principal attestation, deployment type, optional diffstat, and configured page
+count still affect a protected live run's exact count.
 
 Initial expectations:
 
@@ -386,10 +378,12 @@ Initial expectations:
 - no provider calls from local rendering; and
 - no calls to an unselected provider or implementation.
 
-The initial complete workflow should remain within 20 provider content calls,
-excluding explicitly measured authentication/principal attestation. Any higher
-baseline must be explained before optimization. #167 may remove only calls that
-are proven redundant without weakening identity, concurrency, or verification.
+The one-page deterministic complete-path fixture performs 14 provider content
+calls and zero approval interactions. A protected complete workflow must remain
+within 20 provider content calls, excluding explicitly measured
+authentication/principal attestation. Any higher live baseline must be
+explained before optimization. #167 may remove only calls that are proven
+redundant without weakening identity, concurrency, or verification.
 
 ## Failure taxonomy
 
@@ -430,15 +424,19 @@ status workflow tests and connector contract matrix; any new case-specific
 module must use the same fixtures and test helpers rather than introducing a
 second integration framework.
 
-### Required additions
+### Implemented deterministic additions
 
-- deterministic workflow tests for exact resource relation and bounded search;
+- deterministic workflow tests for exact configured resources and relation
+  conflict;
 - tests that untrusted content cannot select resources or implementations;
-- tests that missing or ambiguous relations fail without broad search;
+- tests that conflicting relations are ambiguous without broad search;
 - tests that partial data cannot produce a complete-success result;
 - tests that every factual finding is backed by a verified citation;
 - #164 measurements for stages, initialization, credentials, provider calls,
-  verification calls, retries, and interactions;
+  verification calls, retries, interactions, and outcome;
+
+### Protected evidence still required
+
 - #94 protected fixtures for the exact Tier-1 case;
 - #112 proxy and enterprise-CA coverage; and
 - #172 baseline and repeated managed-workstation runs.
@@ -446,17 +444,17 @@ second integration framework.
 ## Delivery sequence
 
 ```text
-1. Accept this workflow contract under #171
+1. Accept this workflow contract under #171 — complete
         |
-2. Implement #164 instrumentation
+2. Implement #164 instrumentation — complete
         |
-3. Implement #170 connector implementation binding
+3. Implement #170 connector implementation binding — complete
         |
-4. Add or adapt the smallest workflow and renderer code
+4. Add or adapt the smallest workflow and renderer code under #175 — complete
         |
-5. Prepare stable Jira, Bitbucket, and Confluence fixtures under #94
+5. Prepare stable Jira, Bitbucket, and Confluence fixtures under #94 — pending
         |
-6. Run the initial #172 managed-workstation baseline
+6. Run the initial #172 managed-workstation baseline — pending
         |
 7. Apply measured #165, #168, #167, and #166 improvements
         |
@@ -481,14 +479,22 @@ The first Tier-1 workflow does not include:
 - broad searches across unrelated provider resources; or
 - company-wide production-readiness claims.
 
-## Definition of done
+## Implementation completion
 
-This plan is complete when:
+The repository implementation is complete when:
 
 - #171 accepts the exact workflow and bounds;
 - the required provider capabilities and relation rules are deterministic;
 - the native implementation identity is exact-bound;
 - the output package and citation contract are implemented and tested;
+- the default employee profile remains disabled; and
+- an independently reviewed pull request carries the local verification
+  evidence.
+
+## Certification completion
+
+The workflow is certified only when:
+
 - stable protected fixtures exist;
 - 20 representative managed-workstation runs produce the required metrics;
 - false success, duplicate effects, provider mutations, unapproved MCP use,

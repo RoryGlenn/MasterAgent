@@ -233,9 +233,9 @@ Review the complete [Threat model](docs/threat-model.md).
 
 ## Capability surface
 
-The catalog contains **96 typed capabilities**:
+The catalog contains **97 typed capabilities**:
 
-- 52 read-only capabilities;
+- 53 read-only capabilities;
 - 13 local-generation capabilities;
 - 20 reversible-write definitions;
 - 8 external-communication capabilities;
@@ -296,6 +296,23 @@ master-agent connect \
 Reuse the exact connector URL during context binding and apply so the
 destination remains approval-bound. See [Configuration](docs/configuration.md)
 and [GitHub connector quickstart](docs/github-connector-quickstart.md).
+
+## Review one engineering work item
+
+An organization-reviewed profile can run the exact read-only `T1-EWIR-001`
+workflow across one Jira issue, one configured Bitbucket pull request and its
+head-commit build evidence, and up to three configured Confluence pages:
+
+```bash
+master-agent engineering-work-item-review PROJECT-123 \
+  --profile /absolute/private/organization-profile.toml
+```
+
+The command uses only first-party native connectors and publishes one private,
+cited, digest-verified three-file bundle. The packaged safe profile does not
+enable it, and local implementation evidence is not the protected #94/#172
+managed-workstation certification. See the
+[Tier-1 workflow plan](docs/tier-1-engineering-work-item-review-plan.md).
 
 ## Exact-plan approval and effects
 

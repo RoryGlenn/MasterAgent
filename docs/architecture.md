@@ -202,6 +202,22 @@ surface includes the original organization-profile binding. High-impact work
 retains its existing mandatory controls and disabled-at-rest posture. The
 low-level commands remain available and reach the same implementations.
 
+`engineering-work-item-review` is a registered-workflow adapter over this same
+bound apply path. It captures one private workflow configuration, builds the
+code-owned `T1-EWIR-001` read plan in memory, validates native connector
+deployment/origin/limit identity, and then uses the ordinary execution-context,
+catalog, governance, policy, provider-egress, orchestrator, independent-read,
+audit, and result pipeline. Native connector failure has no fallback path.
+
+The workflow-specific renderer is an outcome observer, not another execution
+engine. It receives the already pinned run artifact descriptor and revalidates
+the workflow fingerprint, exact actions, configuration digest, connector and
+egress bindings, result integrity, and output-root identity before publishing.
+Only independently verified evidence with the exact configured provider
+identity can enter the cited JSON/Markdown bundle. Foreign or stale payloads are
+quarantined, and the fixed `complete`, `partial`, `failed`, `stale`, or
+`ambiguous` outcome cannot grant execution authority.
+
 Employee mode cannot turn a capability gap into executable code. Trusted
 developer mode may expose explicit scaffolding in the development plane, but
 generated effect code remains untrusted and quarantined until its independent

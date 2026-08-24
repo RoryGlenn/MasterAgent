@@ -77,6 +77,41 @@ belongs in a separate trusted developer change. Generated effects stay
 quarantined until independent review, tests, specification archival, signing,
 deployment, and normal runtime admission complete.
 
+## Run one Engineering Work Item Review
+
+After the private profile, workflow scope, connector configuration, and selected
+provider credentials are installed, run one exact Jira item:
+
+```bash
+master-agent engineering-work-item-review PROJECT-123 \
+  --profile /absolute/private/organization-profile.toml
+```
+
+The command validates the Jira key and complete workflow scope before run
+allocation, then performs only the configured Jira, Bitbucket, and optional
+Confluence reads through first-party native connectors. It creates no approval
+request and performs no provider write. A successful terminal summary prints
+the `complete` outcome and the three artifact paths beneath the new private
+`state_root/runs/<opaque>/artifacts/` directory:
+
+- `engineering-work-item-review.json`;
+- `engineering-work-item-review.md`; and
+- `manifest.json`.
+
+Inspect the Markdown for the human review and retain the JSON/manifest together
+when machine evidence is needed. Publication is create-only, mode `0600`, and
+digest-readback verified. Do not move individual report files without also
+preserving the manifest and the organization's selected retention boundary.
+
+Exit zero means every configured source and artifact verified as `complete`.
+The command exits nonzero for `partial`, `failed`, `stale`, or `ambiguous` even
+when it safely produced a diagnostic bundle. Treat the bundle's explicit
+missing/conflicting stage as the recovery instruction: correct trusted
+configuration or provider state, then start a fresh run. Do not edit the bundle,
+reuse its plan, broaden search, switch implementations, or add an approval to
+force completion. Protected #94/#172 fixture and managed-workstation evidence
+is still required before enabling this command as a default employee workflow.
+
 ## Persistent work memory
 
 Use persistent work memory when work needs to survive separate terminal or

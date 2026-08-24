@@ -116,6 +116,7 @@ _CONFIGURATION_NAMES = frozenset(
         "capabilities",
         "communication_context",
         "draft_package",
+        "engineering_work_item_review",
         "governance",
         "identities",
         "integrations",

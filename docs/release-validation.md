@@ -126,7 +126,7 @@ certification evidence.
   reconciliation, dry-run isolation, and rejection of `--force` and legacy
   workflow-name execution. Release language must describe local claims as
   single-host only.
-- All 96 typed capabilities have governance coverage.
+- All 97 typed capabilities have governance coverage.
 - GitHub administration without provider concurrency, Jira mutations without
   atomic read-check-write support, local/remote Git mutation, and high-impact
   Bitbucket merge remain explicitly prohibited.

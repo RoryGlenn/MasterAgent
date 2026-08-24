@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0175-tier1-engineering-work-item-review"
+title = "Implement Tier-1 Engineering Work Item Review"
+status = "archived"
+github_issue = 175
+created = "2026-08-24"
+updated = "2026-08-24"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-TIER1-EWIR-001"
+destination = "workflows/MA-TIER1-EWIR-001.md"
+source = "current/MA-TIER1-EWIR-001.md"

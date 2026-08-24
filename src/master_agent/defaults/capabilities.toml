@@ -13,6 +13,8 @@ description = "Disabled until every local Git metadata transaction is descriptor
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+target_resource_types = ["build_status", "commit", "pull_request"]
+parameter_schema = { workspace = "string?", project = "string?", repository = "string?", commit = "string?", pull_request_id = "string?", limit = "integer?" }
 
 [capabilities."bitbucket.instance.read"]
 enabled = true
@@ -38,6 +40,8 @@ description = "Create and verify a Bitbucket pull request; recovery requires a m
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+target_resource_types = ["pull_request"]
+parameter_schema = { workspace = "string?", project = "string?", repository = "string", limit = "integer?" }
 
 [capabilities."bitbucket.pull_request.merge"]
 enabled = false
@@ -95,6 +99,7 @@ description = "Render a local Confluence page-create proposal."
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+parameter_schema = { space_id = "string?", space_key = "string?" }
 
 [capabilities."confluence.page.search"]
 enabled = true
@@ -367,6 +372,13 @@ description = "Disabled until Jira exposes or the adapter implements a provider-
 enabled = true
 authentication = "configured_connector"
 risk = "read_only"
+
+[capabilities."jira.issue.review_context.read"]
+enabled = true
+authentication = "configured_connector"
+risk = "read_only"
+target_resource_types = ["issue"]
+parameter_schema = { fields = "string_list", workflow_configuration_sha256 = "string?", bitbucket_origin = "string?", bitbucket_owner = "string?", bitbucket_repository = "string?", bitbucket_pull_request_id = "string?", confluence_origin = "string?", confluence_space_id = "string?", confluence_space_key = "string?", confluence_page_ids = "string_list?" }
 
 [capabilities."jira.issue.search"]
 enabled = true
@@ -695,7 +707,7 @@ risk = "read_only"
 [read_result_contracts."bitbucket.build_status.read"]
 schema = "master-agent/bitbucket-build-status@1"
 resources = { statuses = "object_list", summary = "object" }
-metadata = ["system", "deployment", "commit", "returned", "source_urls"]
+metadata = ["system", "deployment", "commit", "pull_request_id", "returned", "source_urls"]
 
 [read_result_contracts."bitbucket.instance.read"]
 schema = "master-agent/bitbucket-instance@1"
@@ -710,7 +722,7 @@ metadata = ["system", "deployment", "returned", "source_urls"]
 [read_result_contracts."bitbucket.pull_request.diffstat"]
 schema = "master-agent/bitbucket-diffstat@1"
 resources = { changes = "object_list", summary = "object" }
-metadata = ["system", "deployment", "pull_request_id", "returned", "source_urls"]
+metadata = ["system", "deployment", "pull_request_id", "source_commit", "destination_commit", "returned", "source_urls"]
 
 [read_result_contracts."bitbucket.pull_request.read"]
 schema = "master-agent/bitbucket-pull-request@1"
@@ -784,6 +796,11 @@ metadata = ["system", "retention", "source_urls"]
 
 [read_result_contracts."jira.issue.read"]
 schema = "master-agent/jira-issue@1"
+resources = { issue = "object" }
+metadata = ["system", "deployment", "source_urls"]
+
+[read_result_contracts."jira.issue.review_context.read"]
+schema = "master-agent/jira-issue-review-context@1"
 resources = { issue = "object" }
 metadata = ["system", "deployment", "source_urls"]
 

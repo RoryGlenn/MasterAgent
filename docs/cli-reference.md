@@ -24,6 +24,7 @@ checks; this does not relax publication rules for other output paths.
 | `doctor` | Report capability-scoped installation, read, draft, effect, and enterprise readiness | Offline and content-free; optional credentials are level-specific gaps, not installation failures |
 | `support-bundle` | Create one redacted doctor artifact for an approved helpdesk case | Offline, private, and create-only; collects no provider content, credentials, environment values, local paths, host/user identity, logs, or command history, and never uploads the artifact |
 | `execute` | Run an unbound plan or resume its exact approval request through one governed front door | Reads stay stateless when eligible; effects use the existing bound runtime and cannot run without all normal gates and authenticated approval |
+| `engineering-work-item-review ISSUE_KEY [--profile PATH]` | Run the exact profile-selected `T1-EWIR-001` Jira/Bitbucket/Confluence review | Read-only native connectors plus private local generation; rejects mock/non-native routes, scope drift, any approval handoff, and incomplete evidence as a successful exit |
 | `demo` | Run the credential-free Phase 3 demonstration | Creates a fresh private local workspace; no provider access |
 | `sample-plan` | Write a synthetic weekly-status plan | Writes only the selected local JSON output |
 | `inspect` | Validate and display a plan and fingerprint | Read-only local inspection |
@@ -209,6 +210,20 @@ Existing `readiness`, `run
 --direct-read`, `bind-context`, `inspect`, `run --apply`, and
 `resume-approval` commands remain the exact low-level interface for automation
 and debugging.
+
+`engineering-work-item-review` is the registered high-level command; invoke it
+as `master-agent engineering-work-item-review PROJECT-123 --profile PATH` for
+case `T1-EWIR-001`. The selected profile must use
+`connector_mode = "live"`, explicitly select an
+`engineering_work_item_review` workflow file, admit every capability in that
+exact configuration, and select enabled first-party `native` Jira, Bitbucket,
+and—when pages are configured—Confluence connectors. The workflow rejects a
+configuration/connector origin, deployment, or item-limit mismatch before run
+allocation and provider access. A complete verified three-file bundle exits
+zero. `partial`, `failed`, `stale`, or `ambiguous` bundles remain available for
+diagnosis but exit nonzero. The command never accepts an output override or an
+approval artifact: its create-only files stay beneath the new descriptor-bound
+private run selected by the profile.
 
 Employee mode admits only installed, reviewed capabilities on the profile's
 allowlist. It cannot scaffold or promote code. Developer mode does not expand
