@@ -1,0 +1,88 @@
+name: Apply issue 164 instrumentation
+
+on:
+  push:
+    branches:
+      - codex/164-governance-performance-instrumentation
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install project and validation tools
+        run: python -m pip install -e '.[dev,drafts]'
+      - name: Apply instrumentation change
+        run: python scripts/apply_0164.py
+      - name: Remove branch-only patch machinery
+        run: rm -rf scripts/apply_0164.py scripts/.apply_0164_payload .github/workflows/apply-164.yml
+      - name: Generate semantic routing
+        run: |
+          python scripts/semantic_router.py generate
+          python scripts/semantic_router.py validate
+      - name: Format and lint
+        run: |
+          ruff format src tests scripts
+          ruff check src tests scripts
+      - name: Type check
+        run: mypy
+      - name: Validate active behavioral change
+        run: python scripts/specs.py validate
+      - name: Run focused and affected tests
+        run: >-
+          python -m unittest
+          tests.test_performance
+          tests.test_orchestrator
+          tests.test_direct_read
+          tests.test_http_lifecycle_budget
+          tests.test_execution_context
+          tests.test_connector_contract_matrix
+          -v
+      - name: Run deterministic benchmark
+        run: python scripts/benchmark_governance.py --iterations 20 --case-id T1-EWIR-001 --output /tmp/performance-benchmark.json
+      - name: Archive verified behavioral change
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          source = Path('specs/changes/0164-governance-performance-instrumentation')
+          destination = Path('specs/archive/0164-governance-performance-instrumentation')
+          if destination.exists():
+              shutil.rmtree(destination)
+          text = (source / 'change.toml').read_text(encoding='utf-8')
+          text = text.replace('status = "draft"', 'status = "archived"')
+          (source / 'change.toml').write_text(text, encoding='utf-8')
+          tasks = (source / 'tasks.md').read_text(encoding='utf-8')
+          tasks = tasks.replace('- [ ] Run formatting', '- [x] Run formatting')
+          tasks = tasks.replace('- [ ] Archive the verified', '- [x] Archive the verified')
+          (source / 'tasks.md').write_text(tasks, encoding='utf-8')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          shutil.move(str(source), str(destination))
+          PY
+          python scripts/specs.py validate
+      - name: Validate release source
+        run: python scripts/validate_release.py
+      - name: Inspect final diff
+        run: |
+          git diff --check
+          git status --short
+      - name: Commit validated change
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Instrument governance performance for Tier-1 baselines' -m 'Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+          git push origin "HEAD:${BRANCH_NAME}"
