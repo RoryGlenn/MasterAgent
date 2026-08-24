@@ -82,6 +82,29 @@ The workflow is limited to read-only provider actions and local generation. It
 performs no provider mutation, send, publish, merge, permission change, or
 scheduled execution.
 
+## Tier-1 case and fixture contract
+
+The first pilot case is `T1-EWIR-001` (Engineering Work Item Review). #94 must
+bind this case to one dedicated nonproduction Jira issue, one Bitbucket
+workspace/repository and pull request, and zero to three Confluence pages. The
+exact provider IDs and URLs are recorded only in protected environment
+configuration; they are not committed to this repository.
+
+The protected case record must contain, without provider bodies or secrets:
+
+- the stable case ID and MasterAgent commit;
+- the Jira issue ID/key and its source-of-truth classification;
+- the Bitbucket workspace, repository, and pull-request IDs;
+- the Confluence space and page IDs, when pages are in scope;
+- the approved principal and scope class for each selected connector;
+- the proxy and enterprise-CA profile required by the managed workstation; and
+- the cleanup owner and retention boundary.
+
+The case is invalid when any required identifier is absent, ambiguous, outside
+the dedicated nonproduction boundary, or classified unknown in employee mode.
+More than three linked Confluence pages is an explicit bounded-scope failure;
+the workflow does not silently select a subset.
+
 ## Source-of-truth rules
 
 | Information | Authoritative source |
@@ -198,6 +221,17 @@ local-generation path required for this workflow.
 11. Verify artifact digests and report complete, partial, or failed status
 ```
 
+Verification is an independent bounded readback, not a successful HTTP response.
+For each provider, the verifier confirms the expected provider identity and
+resource ID, re-reads the normalized fields needed by the report, and compares
+the result with the collected evidence before a factual finding is emitted.
+Jira verification covers the issue key and requested work-item fields;
+Bitbucket verification covers the repository, pull-request identity, commit
+heads, and build/check state; Confluence verification covers each page ID,
+space, version, and requested content fields. A changed identity, version,
+commit head, or schema fails the affected source closed and is reported as
+stale or indeterminate rather than inferred successful.
+
 ## Review package
 
 The initial package contains:
@@ -253,6 +287,22 @@ but it must:
 A failed or ambiguous provider effect is impossible in the initial scope because
 there are no provider effects. Provider timeouts or uncertain reads fail or
 remain explicitly unresolved; they never become reassuring inferred results.
+
+Recovery is bounded and user-actionable:
+
+| Failure class | Recovery requirement |
+|---|---|
+| installation, Windows, proxy, DNS, TLS, or CA | report the failing stage and environment prerequisite; retry only after the operator repairs that prerequisite |
+| credential, authentication, principal, scope, consent, or permission | identify the selected system and required scope class without exposing secrets; do not prompt for unselected providers |
+| target or relation ambiguity, provider schema, consistency, or rate limit | return the exact unresolved resource or field; do not broaden search; retry only with corrected configuration or an eligible provider retry |
+| native connector implementation | fail closed with the selected system and implementation identity; never fall back to MCP |
+| governance, source-of-truth, data policy, verification, or citation integrity | discard affected conclusions and return the smallest incomplete or indeterminate result for review |
+| performance budget | preserve the partial/failed classification, record content-free timing, and require measured #164/#172 triage before retesting |
+| user-facing setup or error behavior | retain the stable case ID and failing stage, correct the local setup, and rerun the same bounded case |
+
+No provider cleanup is required for this read/local-generation workflow. Local
+artifacts are discarded or retained according to the selected retention rule;
+uncertain reads never trigger compensating provider writes.
 
 ## Expected user experience
 
@@ -356,6 +406,11 @@ Ambiguous failures remain explicit until evidence resolves them.
   cross-provider collection and local package rendering; and
 - the existing capability catalog, provider-data boundary, orchestrator,
   verification, citation, and artifact-digest mechanisms.
+
+The deterministic workflow regression coverage belongs with the reused weekly
+status workflow tests and connector contract matrix; any new case-specific
+module must use the same fixtures and test helpers rather than introducing a
+second integration framework.
 
 ### Required additions
 
