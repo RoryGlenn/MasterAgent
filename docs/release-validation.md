@@ -140,10 +140,17 @@ certification evidence.
   attestation, idempotency, version checks, verification, compensation, and
   audit-chain behavior are covered by contract and adversarial tests.
 - The static credentialed-live-workflow contract proves manual-only triggering,
-  exact default-branch binding, the three protected environment names,
-  privilege-specific secret mapping, opt-in gates, private materialization,
-  pinned actions, same-job recovery, and the absence of recovery artifact
-  upload. Missing provider setup is not replaced by mock or anonymous evidence.
+  exact default-branch binding, the default-disabled mutually exclusive Tier-1
+  selector, the three protected environment names, privilege-specific secret
+  mapping, opt-in gates, private materialization, pinned actions, same-job
+  recovery, and the absence of provider/recovery artifact upload. The selected
+  Tier-1 path must independently read back one complete production run with
+  three native/bound connector initializations and credential resolutions, six
+  bind/apply principal attestations, no unselected-provider activity, and no
+  more than 14 provider content calls. Missing provider setup is not replaced
+  by mock or anonymous evidence. A hosted Ubuntu selector pass is
+  baseline-ineligible #94 evidence and cannot satisfy #172's external Windows
+  11 standard-user baseline.
 - The resumable approval handoff is tested from missing approval through
   private request inspection, trusted signing, exact-run resume, and partial
   dual approval. Tampered, stale, symlinked, permission-unsafe, or

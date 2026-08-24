@@ -6,6 +6,8 @@ import json
 import os
 import re
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -55,23 +57,43 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
             "run_effects and run_github_admin are mutually exclusive",
             self.workflow,
         )
-        self.assertEqual(self.workflow.count("needs: validate-selection"), 3)
+        self.assertIn("test_case:", self.workflow)
+        self.assertIn("default: disabled", self.workflow)
+        self.assertIn("- T1-EWIR-001", self.workflow)
+        self.assertIn(
+            "a protected test case cannot overlap effect or administration modes",
+            self.workflow,
+        )
+        self.assertEqual(self.workflow.count("needs: validate-selection"), 4)
         self.assertEqual(
             self.workflow.count(
                 "github.ref == format('refs/heads/{0}', "
                 "github.event.repository.default_branch)"
             ),
-            3,
+            4,
         )
+        self.assertEqual(self.workflow.count("inputs.test_case == 'disabled'"), 3)
+        self.assertEqual(self.workflow.count("inputs.test_case == 'T1-EWIR-001'"), 1)
 
     def test_jobs_pin_least_privilege_github_permissions_and_tokens(self) -> None:
-        read_job = _job_source(self.workflow, "credentialed-read", "sandbox-effects")
+        read_job = _job_source(
+            self.workflow,
+            "credentialed-read",
+            "tier1-engineering-work-item-review",
+        )
+        tier1_job = _job_source(
+            self.workflow,
+            "tier1-engineering-work-item-review",
+            "sandbox-effects",
+        )
         effect_job = _job_source(
             self.workflow, "sandbox-effects", "github-admin-sandbox"
         )
         admin_job = _job_source(self.workflow, "github-admin-sandbox", None)
         self.assertIn("permissions:\n      contents: read", read_job)
         self.assertNotIn("issues: write", read_job)
+        self.assertIn("permissions:\n      contents: read", tier1_job)
+        self.assertNotIn("issues: write", tier1_job)
         self.assertIn(
             "permissions:\n      contents: read\n      issues: write",
             effect_job,
@@ -90,6 +112,8 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
             "secrets.MASTER_AGENT_GITHUB_TOKEN",
             self.workflow,
         )
+        self.assertNotIn("MASTER_AGENT_GITHUB_TOKEN", tier1_job)
+        self.assertNotIn("github.token", tier1_job)
         self.assertGreaterEqual(
             admin_job.count("secrets.MASTER_AGENT_LIVE_GITHUB_ADMIN_TOKEN"),
             2,
@@ -103,7 +127,10 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
             "connector-integration-admin",
         ):
             with self.subTest(environment=environment):
-                self.assertEqual(self.workflow.count(f"environment: {environment}"), 1)
+                expected = 2 if environment == "connector-integration-read" else 1
+                self.assertEqual(
+                    self.workflow.count(f"environment: {environment}"), expected
+                )
         for gate in (
             "MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED",
             "MASTER_AGENT_LIVE_EFFECT_TESTS_ENABLED",
@@ -135,8 +162,17 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
         self.assertNotIn("MASTER_AGENT_BITBUCKET_USERNAME", self.workflow)
-        self.assertEqual(self.workflow.count("MASTER_AGENT_BITBUCKET_EMAIL:"), 3)
-        read_job = _job_source(self.workflow, "credentialed-read", "sandbox-effects")
+        self.assertEqual(self.workflow.count("MASTER_AGENT_BITBUCKET_EMAIL:"), 5)
+        read_job = _job_source(
+            self.workflow,
+            "credentialed-read",
+            "tier1-engineering-work-item-review",
+        )
+        tier1_job = _job_source(
+            self.workflow,
+            "tier1-engineering-work-item-review",
+            "sandbox-effects",
+        )
         effect_job = _job_source(
             self.workflow, "sandbox-effects", "github-admin-sandbox"
         )
@@ -150,6 +186,12 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
             "MASTER_AGENT_PROXY_PASSWORD: "
             "${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_PASSWORD }}",
             read_job,
+        )
+        self.assertGreaterEqual(
+            tier1_job.count("secrets.MASTER_AGENT_LIVE_READ_PROXY_USERNAME"), 2
+        )
+        self.assertGreaterEqual(
+            tier1_job.count("secrets.MASTER_AGENT_LIVE_READ_PROXY_PASSWORD"), 2
         )
         for source in (effect_job, admin_job):
             self.assertNotIn("MASTER_AGENT_LIVE_READ_PROXY_USERNAME", source)
@@ -198,10 +240,124 @@ class LiveConnectorWorkflowContractTests(unittest.TestCase):
         self.assertLess(reversible, recovery)
         self.assertLess(recovery, communications)
 
+    def test_tier1_selector_is_exact_private_and_content_free(self) -> None:
+        read_job = _job_source(
+            self.workflow,
+            "credentialed-read",
+            "tier1-engineering-work-item-review",
+        )
+        tier1_job = _job_source(
+            self.workflow,
+            "tier1-engineering-work-item-review",
+            "sandbox-effects",
+        )
+        for condition in (
+            "inputs.test_case == 'disabled'",
+            "!inputs.run_effects",
+            "!inputs.run_github_admin",
+        ):
+            with self.subTest(read_condition=condition):
+                self.assertIn(condition, read_job)
+        for condition in (
+            "inputs.test_case == 'T1-EWIR-001'",
+            "!inputs.run_effects",
+            "!inputs.run_github_admin",
+            "vars.MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED == 'true'",
+            "environment: connector-integration-read",
+        ):
+            with self.subTest(tier1_condition=condition):
+                self.assertIn(condition, tier1_job)
+        self.assertEqual(tier1_job.count('test "$(git rev-parse HEAD)"'), 2)
+        self.assertIn(
+            "secrets.MASTER_AGENT_LIVE_READ_T1_EWIR_WORKFLOW_TOML",
+            tier1_job,
+        )
+        self.assertIn(
+            "vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID",
+            tier1_job,
+        )
+        self.assertEqual(
+            tier1_job.count("python -m tests.test_connector_integration_matrix"),
+            2,
+        )
+        self.assertEqual(
+            self.workflow.count("python -m tests.test_connector_integration_matrix"),
+            4,
+        )
+        self.assertNotIn(
+            "python tests/test_connector_integration_matrix.py", self.workflow
+        )
+        self.assertIn("prepare-t1-ewir --root", tier1_job)
+        self.assertIn("verify-t1-ewir", tier1_job)
+        self.assertIn(
+            "master-agent engineering-work-item-review",
+            tier1_job,
+        )
+        self.assertIn(
+            '--profile "$MASTER_AGENT_LIVE_T1_EWIR_PROFILE"',
+            tier1_job,
+        )
+        self.assertIn('>> "$GITHUB_STEP_SUMMARY"', tier1_job)
+        self.assertIn('> "$MASTER_AGENT_LIVE_T1_EWIR_COMMAND_OUTPUT" 2>&1', tier1_job)
+        for forbidden in (
+            "GRAPH_TOKEN",
+            "MASTER_AGENT_GITHUB_TOKEN",
+            "MASTER_AGENT_LIVE_GITHUB_",
+            "MASTER_AGENT_LIVE_MICROSOFT_",
+            "MASTER_AGENT_ENTRA_",
+            "MASTER_AGENT_RUN_LIVE_CONNECTOR_TESTS",
+            "upload-artifact",
+            "download-artifact",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, tier1_job)
+        for harness_contract in (
+            "_t1_ewir_plan_dimensions",
+            "len(settings.confluence_page_ids) != 1",
+            "if settings.include_diffstat:",
+            "provider_calls <= 14",
+            "PerformanceCounter.GOVERNANCE_INTERACTIONS",
+            "PerformanceCounter.APPROVAL_INTERACTIONS",
+            "protected Tier-1 unselected-provider activity found",
+            "T1-EWIR-001 protected preflight failed",
+            "T1-EWIR-001 protected evidence verification failed",
+        ):
+            with self.subTest(harness_contract=harness_contract):
+                self.assertIn(harness_contract, self.harness)
+
+    def test_tier1_harness_module_entrypoint_resolves_without_pythonpath(self) -> None:
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        canary = "protected-environment-value-must-not-appear"
+        environment["MASTER_AGENT_JIRA_TOKEN"] = canary
+
+        completed = subprocess.run(
+            (
+                sys.executable,
+                "-m",
+                "tests.test_connector_integration_matrix",
+                "prepare-t1-ewir",
+                "--help",
+            ),
+            cwd=_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn(
+            "Prepare or verify the protected T1-EWIR-001 live case.",
+            completed.stdout,
+        )
+        self.assertNotIn(canary, completed.stdout + completed.stderr)
+
     def test_no_credential_artifacts_or_mutable_actions_are_used(self) -> None:
         self.assertNotIn("upload-artifact", self.workflow)
         self.assertNotIn("download-artifact", self.workflow)
-        self.assertEqual(self.workflow.count("persist-credentials: false"), 3)
+        self.assertEqual(self.workflow.count("persist-credentials: false"), 4)
         uses = re.findall(r"^\s*- uses:\s+([^\s#]+)", self.workflow, re.MULTILINE)
         self.assertTrue(uses)
         for action in uses:

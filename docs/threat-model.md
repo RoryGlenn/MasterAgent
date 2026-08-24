@@ -755,8 +755,12 @@ Controls:
   release certification: the skip-intolerant adversarial registry also keeps
   managed-host organization ACL, endpoint-security, and application-control
   cases explicitly blocked on #106, and enterprise-network cases on #112. The
-  protected workflow remains unproven until those cases and an enrolled clean
-  standard-user Windows 11 x64 runner complete it. Operations
+  default-disabled protected Ubuntu `T1-EWIR-001` selector can produce only
+  baseline-ineligible repository-side #94 evidence. It does not complete #172;
+  the protected workflow remains unproven until those cases and an enrolled
+  clean standard-user Windows 11 x64 runner complete it. The selector retains
+  only content-free counters and discards its private provider artifacts with
+  ephemeral runner state. Operations
   also remain unavailable where another required runtime or credential-broker
   contract is absent. Expiration
   quarantine intentionally retains orphaned bytes until an

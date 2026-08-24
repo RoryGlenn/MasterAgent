@@ -39,6 +39,12 @@ from master_agent.workflows.engineering_work_item_review import (
 )
 from tests.fakes import ScriptedTransport
 from tests.helpers import govern_test_plan
+from tests.test_connector_integration_matrix import (
+    _prepare_t1_ewir_live_case,
+    _t1_ewir_test_integrations,
+    _t1_ewir_test_workflow,
+    _verify_t1_ewir_live_case,
+)
 
 _APPROVAL_SECRET = "operating-approval-secret-" + "a" * 32
 
@@ -1302,84 +1308,29 @@ enabled = true
         credential_canary = "provider-token-must-not-appear"
         with TemporaryDirectory() as raw:
             root = Path(raw).resolve()
-            integrations = root / "integrations.toml"
-            integrations.write_text(
-                """
-[connectors.jira]
-enabled = true
-deployment = "cloud"
-implementation = "native"
-base_url = "https://acme.atlassian.net"
-web_base_url = "https://acme.atlassian.net"
-auth_mode = "basic"
-username_env = "MASTER_AGENT_JIRA_USERNAME"
-secret_env = "MASTER_AGENT_JIRA_TOKEN"
-review_acceptance_field_ids = ["customfield_10001"]
-
-[connectors.confluence]
-enabled = true
-deployment = "cloud"
-implementation = "native"
-base_url = "https://acme.atlassian.net"
-web_base_url = "https://acme.atlassian.net"
-auth_mode = "basic"
-username_env = "MASTER_AGENT_CONFLUENCE_USERNAME"
-secret_env = "MASTER_AGENT_CONFLUENCE_TOKEN"
-
-[connectors.bitbucket]
-enabled = true
-deployment = "cloud"
-implementation = "native"
-base_url = "https://api.bitbucket.org/2.0"
-web_base_url = "https://bitbucket.org"
-auth_mode = "basic"
-username_env = "MASTER_AGENT_BITBUCKET_EMAIL"
-secret_env = "MASTER_AGENT_BITBUCKET_TOKEN"
-max_items = 100
-""".lstrip(),
-                encoding="utf-8",
-            )
-            integrations.chmod(0o600)
-            workflow = root / "engineering-work-item-review.toml"
-            workflow.write_text(
-                """
-[case]
-id = "T1-EWIR-001"
-data_classification = "internal"
-
-[bitbucket]
-deployment = "cloud"
-origin = "https://bitbucket.org"
-workspace = "acme"
-repository = "widget"
-pull_request_id = "7"
-build_status_limit = 50
-diffstat_limit = 50
-include_diffstat = false
-
-[confluence]
-origin = "https://acme.atlassian.net"
-space_id = "space-1"
-space_key = "ENG"
-page_ids = ["11"]
-""".lstrip(),
-                encoding="utf-8",
-            )
-            workflow.chmod(0o600)
-            profile = _install_profile(
-                root,
-                capabilities=(
-                    "jira.issue.review_context.read",
-                    "bitbucket.repository.read",
-                    "bitbucket.pull_request.read",
-                    "bitbucket.build_status.read",
-                    "confluence.page.read",
-                ),
-                configuration={
-                    "engineering_work_item_review": workflow,
-                    "integrations": integrations,
-                },
-            )
+            case_root = root / "master-agent-live-t1-ewir-123-1"
+            integrations_payload = _t1_ewir_test_integrations()
+            workflow_payload = _t1_ewir_test_workflow()
+            selector_environment = {
+                "RUNNER_TEMP": str(root),
+                "GITHUB_RUN_ID": "123",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_SHA": "a" * 40,
+                "LIVE_INTEGRATIONS_TOML": integrations_payload,
+                "T1_EWIR_WORKFLOW_TOML": workflow_payload,
+                "ENTERPRISE_CA_BUNDLE_PEM": "",
+                "MASTER_AGENT_LIVE_JIRA_ISSUE_ID": "ENG-1",
+                "MASTER_AGENT_JIRA_USERNAME": "rory@example.test",
+                "MASTER_AGENT_JIRA_TOKEN": credential_canary,
+                "MASTER_AGENT_CONFLUENCE_USERNAME": "rory@example.test",
+                "MASTER_AGENT_CONFLUENCE_TOKEN": credential_canary,
+                "MASTER_AGENT_BITBUCKET_EMAIL": "rory@example.test",
+                "MASTER_AGENT_BITBUCKET_TOKEN": credential_canary,
+                "MASTER_AGENT_PROXY_USERNAME": "",
+                "MASTER_AGENT_PROXY_PASSWORD": "",
+            }
+            _prepare_t1_ewir_live_case(case_root, environ=selector_environment)
+            profile = case_root / "organization-profile.toml"
 
             def build_with_transport(*args: object, **kwargs: object) -> object:
                 kwargs["transport"] = transport
@@ -1388,14 +1339,7 @@ page_ids = ["11"]
             with (
                 patch.dict(
                     os.environ,
-                    {
-                        "MASTER_AGENT_JIRA_USERNAME": "rory@example.test",
-                        "MASTER_AGENT_JIRA_TOKEN": credential_canary,
-                        "MASTER_AGENT_CONFLUENCE_USERNAME": "rory@example.test",
-                        "MASTER_AGENT_CONFLUENCE_TOKEN": credential_canary,
-                        "MASTER_AGENT_BITBUCKET_EMAIL": "rory@example.test",
-                        "MASTER_AGENT_BITBUCKET_TOKEN": credential_canary,
-                    },
+                    selector_environment,
                     clear=True,
                 ),
                 patch(
@@ -1415,7 +1359,18 @@ page_ids = ["11"]
             self.assertEqual(status, 0, stderr)
             self.assertIn("engineering review outcome: complete", stdout)
             self.assertNotIn(credential_canary, stdout + stderr)
-            runs = tuple((root / "state" / "runs").iterdir())
+            command_output = root / f"{case_root.name}-command-output.log"
+            command_output.write_text(stdout + stderr, encoding="utf-8")
+            command_output.chmod(0o600)
+            summary = _verify_t1_ewir_live_case(
+                case_root,
+                command_exit_code=status,
+                environ=selector_environment,
+            )
+            self.assertIn("complete: `true`", summary)
+            self.assertIn("provider content calls: `14`", summary)
+            self.assertNotIn(credential_canary, summary)
+            runs = tuple((case_root / "state" / "runs").iterdir())
             self.assertEqual(len(runs), 1)
             run = runs[0]
             self.assertTrue((run / "plan.json").is_file())
@@ -1455,7 +1410,94 @@ page_ids = ["11"]
                 result["performance"]["counters"]["approval_interactions"],
                 0,
             )
+            self.assertEqual(
+                result["performance"]["counters"]["principal_attestations"],
+                6,
+            )
+            for provider in ("jira", "bitbucket", "confluence"):
+                self.assertEqual(
+                    result["performance"]["provider_activity"][provider][
+                        "principal_attestations"
+                    ],
+                    2,
+                )
             self.assertEqual(len(transport.requests), 14)
+
+            foreign_environment = {
+                **selector_environment,
+                "MASTER_AGENT_LIVE_JIRA_ISSUE_ID": "ENG-2",
+            }
+            with self.assertRaisesRegex(AssertionError, "Jira target is foreign"):
+                _verify_t1_ewir_live_case(
+                    case_root,
+                    command_exit_code=status,
+                    environ=foreign_environment,
+                )
+
+            manifest_path = artifacts / "manifest.json"
+            original_manifest = manifest_path.read_bytes()
+            manifest = json.loads(original_manifest)
+            manifest["artifacts"][0]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            manifest_path.chmod(0o600)
+            with self.assertRaisesRegex(AssertionError, "readback digest differs"):
+                _verify_t1_ewir_live_case(
+                    case_root,
+                    command_exit_code=status,
+                    environ=selector_environment,
+                )
+            manifest_path.write_bytes(original_manifest)
+            manifest_path.chmod(0o600)
+
+            result_path = run / "results" / "result.json"
+            original_result = result_path.read_bytes()
+            duplicate_result = json.loads(original_result)
+            duplicate_result["actions"].append(duplicate_result["actions"][0])
+            duplicate_result["performance"]["outcomes"]["verified"] += 1
+            result_path.write_text(json.dumps(duplicate_result, indent=2) + "\n")
+            result_path.chmod(0o600)
+            with self.assertRaises(AssertionError) as duplicate_error:
+                _verify_t1_ewir_live_case(
+                    case_root,
+                    command_exit_code=status,
+                    environ=selector_environment,
+                )
+            self.assertEqual(
+                str(duplicate_error.exception),
+                "protected Tier-1 result is incomplete or foreign",
+            )
+            result_path.write_bytes(original_result)
+            result_path.chmod(0o600)
+
+            result["performance"]["provider_activity"]["jira"][
+                "principal_attestations"
+            ] = 5
+            result["performance"]["counters"]["principal_attestations"] = 9
+            result_path.write_text(json.dumps(result, indent=2) + "\n")
+            result_path.chmod(0o600)
+            with self.assertRaisesRegex(AssertionError, "attestation count differs"):
+                _verify_t1_ewir_live_case(
+                    case_root,
+                    command_exit_code=status,
+                    environ=selector_environment,
+                )
+            result_path.write_bytes(original_result)
+            result_path.chmod(0o600)
+            result = json.loads(original_result)
+            result["performance"]["provider_activity"]["github"][
+                "credential_resolutions"
+            ] = 1
+            result["performance"]["counters"]["credential_resolutions"] = 4
+            result_path.write_text(json.dumps(result, indent=2) + "\n")
+            result_path.chmod(0o600)
+            with self.assertRaisesRegex(
+                AssertionError, "selected-provider count differs"
+            ):
+                _verify_t1_ewir_live_case(
+                    case_root,
+                    command_exit_code=status,
+                    environ=selector_environment,
+                )
 
     def test_engineering_review_rejects_provider_limit_before_allocation(self) -> None:
         settings = EngineeringWorkItemReviewSettings.from_toml(

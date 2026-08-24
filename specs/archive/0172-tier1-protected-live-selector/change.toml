@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0172-tier1-protected-live-selector"
+title = "Add the protected Tier-1 live selector"
+status = "archived"
+github_issue = 172
+created = "2026-08-24"
+updated = "2026-08-24"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-LIVE-INTEGRATION-001"
+destination = "security/MA-LIVE-INTEGRATION-001.md"
+source = "current/MA-LIVE-INTEGRATION-001.md"
