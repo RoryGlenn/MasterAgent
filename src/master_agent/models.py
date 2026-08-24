@@ -1478,6 +1478,7 @@ class ConnectorExecutionBinding:
     config_identity_sha256: str
     resolved_base_url: str
     resolved_origin: str
+    implementation: str = "native"
     authentication_mode: str = "none"
     credential_scopes: tuple[str, ...] = ()
     credential_identity: str | None = None
@@ -1491,12 +1492,17 @@ class ConnectorExecutionBinding:
         for name, value in (
             ("system", self.system),
             ("deployment", self.deployment),
+            ("implementation", self.implementation),
             ("resolved_base_url", self.resolved_base_url),
             ("resolved_origin", self.resolved_origin),
             ("authentication_mode", self.authentication_mode),
         ):
             if not value.strip():
                 raise ValidationError(f"connector execution binding {name} is empty")
+        if self.implementation != "native":
+            raise ValidationError(
+                "connector execution binding implementation is unsupported"
+            )
         _validate_sha256(
             self.config_identity_sha256,
             "connector execution binding config_identity_sha256",
@@ -1564,6 +1570,7 @@ class ConnectorExecutionBinding:
         payload: dict[str, Any] = {
             "system": self.system,
             "deployment": self.deployment,
+            "implementation": self.implementation,
             "config_identity_sha256": self.config_identity_sha256,
             "resolved_base_url": self.resolved_base_url,
             "resolved_origin": self.resolved_origin,
@@ -1583,6 +1590,10 @@ class ConnectorExecutionBinding:
     def from_dict(cls, data: Mapping[str, Any]) -> ConnectorExecutionBinding:
         """Parse a connector binding."""
 
+        if "implementation" not in data:
+            raise ValidationError(
+                "connector execution binding implementation is required"
+            )
         raw_scopes = data.get("credential_scopes", [])
         if not isinstance(raw_scopes, list) or not all(
             isinstance(item, str) for item in raw_scopes
@@ -1593,6 +1604,7 @@ class ConnectorExecutionBinding:
         return cls(
             system=str(data["system"]),
             deployment=str(data["deployment"]),
+            implementation=str(data["implementation"]),
             config_identity_sha256=str(data["config_identity_sha256"]),
             resolved_base_url=str(data["resolved_base_url"]),
             resolved_origin=str(data["resolved_origin"]),
@@ -2236,10 +2248,10 @@ class ExecutionContext:
     plugins: tuple[PluginExecutionBinding, ...] = ()
     capsules: tuple[CapabilityCapsuleExecutionBinding, ...] = ()
     runtime: RuntimeExecutionBinding | None = None
-    schema: str = "master-agent/execution-context@1"
+    schema: str = "master-agent/execution-context@2"
 
     def __post_init__(self) -> None:
-        if self.schema != "master-agent/execution-context@1":
+        if self.schema != "master-agent/execution-context@2":
             raise ValidationError("unsupported execution context schema")
         _validate_sha256(
             self.integrations_sha256,
@@ -2295,6 +2307,8 @@ class ExecutionContext:
     def from_dict(cls, data: Mapping[str, Any]) -> ExecutionContext:
         """Parse an execution context."""
 
+        if data.get("schema") != "master-agent/execution-context@2":
+            raise ValidationError("unsupported execution context schema")
         connectors = data.get("connectors")
         plugins = data.get("plugins")
         capsules = data.get("capsules", [])

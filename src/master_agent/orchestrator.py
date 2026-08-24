@@ -52,6 +52,7 @@ from master_agent.performance import (
     PerformanceSnapshot,
     PerformanceStage,
     TransportPhase,
+    bounded_system,
     current_performance_recorder,
     ensure_performance_run,
     performance_stage,
@@ -365,6 +366,28 @@ class WorkflowOrchestrator:
                     "systems_complexity_score": systems_decision.complexity_score,
                     **(
                         {
+                            "connector_implementations": [
+                                {
+                                    "system": system,
+                                    "implementation": implementation,
+                                }
+                                for system, implementation in sorted(
+                                    {
+                                        (
+                                            bounded_system(item.system),
+                                            item.implementation,
+                                        )
+                                        for item in plan.execution_context.connectors
+                                    }
+                                )
+                            ]
+                        }
+                        if plan.execution_context is not None
+                        and plan.execution_context.connectors
+                        else {}
+                    ),
+                    **(
+                        {
                             "capsule_bindings": [
                                 item.to_dict()
                                 for item in plan.execution_context.capsules
@@ -537,11 +560,12 @@ class WorkflowOrchestrator:
                         action.capability,
                     )
                     performance = current_performance_recorder()
-                    if (
-                        performance is not None
-                        and self._selects_provider_implementation(action)
-                    ):
-                        performance.record_connector_implementation(connector.system)
+                    binding = self._execution_connector_binding(plan, action)
+                    if performance is not None and binding is not None:
+                        performance.record_connector_implementation(
+                            binding.system,
+                            binding.implementation,
+                        )
                 with performance_stage(PerformanceStage.GOVERNANCE_VALIDATION):
                     execution_ok, execution_reason = self._validate_execution_contract(
                         plan,
@@ -1221,14 +1245,6 @@ class WorkflowOrchestrator:
                 if not allowed:
                     return False, reason
         return True, "capability passed catalog and governance checks"
-
-    def _selects_provider_implementation(self, action: AgentAction) -> bool:
-        """Return whether issue #170 owns this action's connector identity."""
-
-        if self._capabilities is None:
-            return action.risk is not RiskLevel.LOCAL_GENERATION
-        definition = self._capabilities.definition(action.capability)
-        return definition.authentication not in {"local", "local_git"}
 
     def _validate_execution_contract(
         self,

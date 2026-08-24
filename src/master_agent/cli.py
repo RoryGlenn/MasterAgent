@@ -124,6 +124,7 @@ from master_agent.execution_context import (
     capture_connector_executions,
     capture_runtime_execution_paths,
     enforce_execution_context,
+    preflight_connector_implementations,
 )
 from master_agent.governance import ApprovalTier, EnvironmentKind, GovernanceProfile
 from master_agent.http import HttpTransport
@@ -1624,6 +1625,7 @@ def _doctor_assessment(
                 "enterprise readiness requires organization trust controls"
             ),
             "capabilities": [],
+            "connector_implementations": [],
             "issues": [issue.to_dict()],
         }
     else:
@@ -3289,6 +3291,11 @@ def _bind_context(
         connector_urls,
         selected_configurations=configurations,
     )
+    if connector_mode == "live":
+        preflight_connector_implementations(
+            integrations,
+            systems=live_systems,
+        )
     if approval_authorities is None and _plan_requires_authenticated_approval(
         plan,
         policy_source=configuration_sources["policy"],
@@ -3825,6 +3832,12 @@ def _run(
             connector_urls,
             selected_configurations=configurations,
         )
+        if connector_mode == "live":
+            preflight_connector_implementations(
+                integration_config,
+                systems=live_systems,
+                approved_execution_context=approved_context,
+            )
         credential_store = _load_credential_store(
             credentials_file,
             integrations=integration_config,
@@ -4392,6 +4405,7 @@ def _run_direct_read(
         integrations=integrations,
         catalog=catalog,
     )
+    preflight_connector_implementations(integrations, systems=systems)
     credential_store = (
         None
         if anonymous
@@ -5276,6 +5290,8 @@ def _load_credential_store(
 ) -> CredentialStoreSnapshot | None:
     """Load one reviewed JSON override or configured native credential source."""
 
+    if connector_mode == "live":
+        preflight_connector_implementations(integrations, systems=systems)
     if credential_mappings and path is None:
         raise ConfigurationError("--credential-map requires --credentials-file")
     if connector_mode != "live" and path is not None:
@@ -5411,6 +5427,7 @@ def _readiness(
         integrations=integrations,
         egress_checks=parsed_egress_checks,
     )
+    preflight_connector_implementations(integrations)
     credential_store = (
         None
         if policy_denials
@@ -6520,6 +6537,7 @@ def _discover(
             systems=systems,
             data_classification=data_classification,
         )
+    preflight_connector_implementations(config, systems=systems)
     credential_store = _load_credential_store(
         credentials_file,
         integrations=config,
@@ -6647,6 +6665,7 @@ def _connect(
         systems=systems,
         data_classification=data_classification,
     )
+    preflight_connector_implementations(effective, systems=systems)
 
     credential_compatibility = _atlassian_credential_compatibility(
         effective,
@@ -7154,6 +7173,18 @@ def _github_repositories(
         sources=SourceOfTruthRegistry(()),
     )
 
+    selected_github = (
+        replace(github, auth_mode=AuthMode.NONE, secret_env=None)
+        if public_username is not None
+        else github
+    )
+    preflight_connector_implementations(
+        replace(
+            integrations,
+            connectors={**integrations.connectors, "github": selected_github},
+        ),
+        systems={"github"},
+    )
     if public_username is not None:
         environ = dict(os.environ)
     elif credentials_file is not None:
@@ -7173,11 +7204,6 @@ def _github_repositories(
     else:
         environ = dict(os.environ)
 
-    selected_github = (
-        replace(github, auth_mode=AuthMode.NONE, secret_env=None)
-        if public_username is not None
-        else github
-    )
     target = selected_github.capture_execution_target(environ)
     resolved = selected_github.resolve(
         environ,
@@ -7337,6 +7363,13 @@ def _bitbucket_repositories(
         sources=SourceOfTruthRegistry(()),
     )
 
+    preflight_connector_implementations(
+        replace(
+            integrations,
+            connectors={**integrations.connectors, "bitbucket": bitbucket},
+        ),
+        systems={"bitbucket"},
+    )
     target = bitbucket.capture_execution_target({})
     resolved = bitbucket.resolve(
         {},
@@ -7409,6 +7442,7 @@ def _standalone_connector_binding(
     return ConnectorExecutionBinding(
         system=config.system,
         deployment=str(config.deployment),
+        implementation=str(target.implementation),
         config_identity_sha256=target.config_identity,
         resolved_base_url=target_base_url,
         resolved_origin=f"https://{rendered_host}",

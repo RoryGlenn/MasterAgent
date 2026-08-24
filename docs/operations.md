@@ -155,12 +155,13 @@ master-agent support-bundle \
 The command is offline and succeeds even when the profile is missing or a
 readiness level is false. It prints the same support ID stored in the artifact.
 The JSON contains only bounded MasterAgent/Python version facts, the redacted
-doctor assessment, and canonical byte counts and SHA-256 digests for its two
-embedded sections. It omits the profile path and does not collect credentials,
-provider content, environment values, hostnames, usernames, logs, or command
-history. Parser-controlled error text is replaced with fixed category guidance,
-and any remaining path-bearing string is redacted as a whole. It performs no
-automatic upload.
+doctor assessment, selected connector pairs whose implementation is exactly
+`native`, and canonical byte counts and SHA-256 digests for its two embedded
+sections. It omits the profile path and does not collect credentials, provider
+content, environment values, hostnames, usernames, logs, or command history.
+Parser-controlled error text is replaced with fixed category guidance, and any
+remaining path-bearing string is redacted as a whole. It performs no automatic
+upload.
 
 Before attaching the artifact, confirm that the ticket's access and retention
 match the organization's support policy. Do not post it to public issues,
@@ -186,21 +187,26 @@ access, retention, and secure deletion procedure before a pilot begins.
 ## Low-level run lifecycle
 
 1. Generate or receive a plan.
-2. For live execution, bind the trusted integrations bundle, resolved
-   destinations/CA identities, and any flow-enforced or provider-verified
-   credential principals required by the selected capabilities into the plan.
-   A capability whose authentication class is `none` has no credential
-   principal and must not resolve one. Plugin identities may be bound for
-   review, but raw plugin execution remains disabled. An enabled pure capsule
-   must contribute its complete signed identity to the same execution context.
-   Before any provider-read attestation or content request, also preflight the
-   action's explicit classification against the reviewed model-context
-   destination, tenancy, output contract, limits, audit, and DLP rule.
+2. For live execution, select the exact `native` implementation from the
+   trusted integrations bundle, then bind it with resolved destinations/CA
+   identities and any flow-enforced or provider-verified credential principals
+   required by the selected capabilities into the plan. Selection and drift
+   checks occur before credentials, principal attestation, provider access, or
+   connector construction. A capability whose authentication class is `none`
+   has no credential principal and must not resolve one. Plugin identities may
+   be bound for review, but raw plugin execution remains disabled. An enabled
+   pure capsule must contribute its complete signed identity to the same
+   execution context. Before any provider-read attestation or content request,
+   also preflight the action's explicit classification against the reviewed
+   model-context destination, tenancy, output contract, limits, audit, and DLP
+   rule.
 3. Bind the explicit approval-authority configuration before any plan whose
    policy or governance tier requires human approval. Binding does not read its
    secret.
 4. Inspect the bound plan and fingerprint.
-5. Run policy-only dry run, then apply using only required connector classes.
+5. Run policy-only dry run, then apply using only required native connector
+   facets. If construction or execution fails, preserve the typed failure and
+   do not retry through or fall back to another implementation.
 6. If the run returns `approval_required`, inspect the private request written
    under the approved artifact root. A trusted operator signs it with
    `approve-request`; the agent then uses `resume-approval` instead of

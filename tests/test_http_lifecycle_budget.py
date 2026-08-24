@@ -52,6 +52,7 @@ class _LifecycleConnector:
             max_response_bytes=4096,
             auth=SimpleNamespace(mode="bearer"),
             config_identity="a" * 64,
+            implementation="native",
             base_url="https://example.test/api",
             ca_bundle=None,
             ca_bundle_sha256=None,

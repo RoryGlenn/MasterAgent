@@ -298,7 +298,10 @@ class DirectReadSession:
                     risk_tiers=(action.risk for action in plan.actions),
                     systems=(action.target.system for action in plan.actions),
                 )
-                performance.record_connector_implementation(self._connector.system)
+                performance.record_connector_implementation(
+                    self._execution_binding.system,
+                    self._execution_binding.implementation,
+                )
             report = self._execute_internal(plan)
             performance.record_outcome(
                 PerformanceOutcome.VERIFIED,
@@ -747,6 +750,14 @@ def _validate_connector_endpoint(
     config = getattr(connector, "_config", None)
     if config is None:
         raise ConfigurationError("direct read connector has no resolved configuration")
+    runtime_implementation = getattr(config, "implementation", None)
+    if (
+        runtime_implementation is None
+        or str(runtime_implementation) != binding.implementation
+    ):
+        raise ConfigurationError(
+            "resolved connector implementation drifted from the direct read binding"
+        )
     base_url = getattr(config, "base_url", None)
     if not isinstance(base_url, str) or not base_url:
         raise ConfigurationError(

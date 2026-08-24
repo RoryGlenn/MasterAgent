@@ -69,17 +69,7 @@ class OrchestratorTests(unittest.TestCase):
                 report.performance.summary()["total_wall_seconds"],
                 0.0,
             )
-            self.assertTrue(report.performance.connector_implementations)
-            self.assertTrue(
-                all(
-                    item.implementation == "unbound_pending_170" and item.bound is False
-                    for item in report.performance.connector_implementations
-                )
-            )
-            self.assertEqual(
-                {item.system for item in report.performance.connector_implementations},
-                {"bitbucket", "confluence", "jira"},
-            )
+            self.assertEqual(report.performance.connector_implementations, ())
 
     def test_fingerprint_bound_observer_closes_the_applied_run_loop(self) -> None:
         class Provider:

@@ -35,16 +35,20 @@ initial attempt is not a retry. Execution, verification, principal attestation,
 reconciliation, and compensation remain separate phases, and principal
 attestation is excluded from the provider-content-call total.
 
-Connector implementation identity remains deliberately unresolved in this
-change. Every selected implementation is serialized as:
+Every selected live provider configuration records its exact trusted
+implementation identity as:
 
 ```json
-{"bound":false,"implementation":"unbound_pending_170","system":"jira"}
+{"bound":true,"implementation":"native","system":"jira"}
 ```
 
-Issue #170 owns the trusted configuration binding needed to replace that
-placeholder. Do not rename it to `native` or infer an implementation from a
-connector class.
+The identity comes from trusted configuration or the approved execution
+binding, never from a connector class or arbitrary runtime content. Selection
+is recorded once per provider configuration, and initialization is counted once
+when that selected implementation is successfully constructed, even if it
+exposes several capability-specific connector objects. Readers accept the
+historical `unbound_pending_170`/`bound = false` pair only to parse reports
+emitted before implementation binding; new evidence never emits it.
 
 ## Deterministic regression benchmark
 
@@ -80,7 +84,7 @@ The provisional `T1-EWIR-001` gates are:
 - 20 iterations in stable order;
 - p50 end-to-end time at most 30 seconds and p95 at most 60 seconds;
 - p95 local-governance overhead below 5 percent;
-- exactly three selected connector implementations, initializations,
+- exactly three selected native connector implementations, initializations,
   credential resolutions, and principal attestations for Jira, Bitbucket, and
   Confluence;
 - fewer than 20 provider-content transport calls, excluding principal

@@ -1267,6 +1267,7 @@ class _AuditReadConnector(ReadOnlyConnector):
         self._config = SimpleNamespace(
             auth=SimpleNamespace(mode="bearer"),
             config_identity="a" * 64,
+            implementation="native",
             base_url="https://provider.example/items",
             max_pages=4,
             max_response_bytes=4096,

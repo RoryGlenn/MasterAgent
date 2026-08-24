@@ -689,6 +689,12 @@ def _connector_execution_binding_error(
 ) -> str | None:
     """Return endpoint or CA drift against one captured execution binding."""
 
+    runtime_implementation = getattr(runtime_config, "implementation", None)
+    if (
+        runtime_implementation is None
+        or str(runtime_implementation) != binding.implementation
+    ):
+        return "implementation drifted from its execution binding"
     base_url = getattr(runtime_config, "base_url", None)
     if not isinstance(base_url, str) or not base_url:
         return "has no resolved provider endpoint"

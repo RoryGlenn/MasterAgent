@@ -24,6 +24,7 @@ from types import MappingProxyType
 PERFORMANCE_SCHEMA = "master-agent/performance@1"
 PERFORMANCE_BENCHMARK_SCHEMA = "master-agent/performance-benchmark@1"
 PENDING_CONNECTOR_IMPLEMENTATION = "unbound_pending_170"
+NATIVE_CONNECTOR_IMPLEMENTATION = "native"
 _OTHER = "other"
 _UNBOUND = "unbound"
 _MAX_COUNT = 1_000_000
@@ -203,14 +204,14 @@ _VERSION_PATTERN = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}(?:[A-Za-z0-9.+-]{0,16})?
 
 @dataclass(frozen=True, slots=True)
 class ConnectorImplementationDimension:
-    """One selected system with the explicit issue #170 placeholder."""
+    """One selected system with a fixed, content-free implementation identity."""
 
     system: str
-    implementation: str = PENDING_CONNECTOR_IMPLEMENTATION
-    bound: bool = False
+    implementation: str = NATIVE_CONNECTOR_IMPLEMENTATION
+    bound: bool = True
 
     def __post_init__(self) -> None:
-        """Reject any premature or arbitrary implementation identity."""
+        """Admit current native evidence and the fixed historical #164 pair."""
 
         if not isinstance(self.system, str):
             raise TypeError("connector implementation system must be a string")
@@ -220,14 +221,15 @@ class ConnectorImplementationDimension:
             raise TypeError("connector implementation identity must be a string")
         if not isinstance(self.bound, bool):
             raise TypeError("connector implementation binding must be boolean")
-        if (
-            self.implementation != PENDING_CONNECTOR_IMPLEMENTATION
-            or self.bound is not False
-        ):
-            raise ValueError("issue #164 cannot claim a bound connector implementation")
+        accepted = {
+            (NATIVE_CONNECTOR_IMPLEMENTATION, True),
+            (PENDING_CONNECTOR_IMPLEMENTATION, False),
+        }
+        if (self.implementation, self.bound) not in accepted:
+            raise ValueError("connector implementation identity is not fixed")
 
     def to_dict(self) -> dict[str, object]:
-        """Return the fixed placeholder representation."""
+        """Return the fixed implementation representation."""
 
         return {
             "system": self.system,
@@ -722,7 +724,7 @@ class PerformanceRecorder:
         self._capabilities: set[str] = set()
         self._risks: set[str] = set()
         self._systems: set[str] = set()
-        self._implementations: set[str] = set()
+        self._implementations: dict[str, str] = {}
         self._credential_resolution_systems: set[str] = set()
         self._total_started: tuple[float, float] | None = None
         self._sealed = False
@@ -825,20 +827,39 @@ class PerformanceRecorder:
         self._risks.update(bounded_risk(value) for value in risk_tiers)
         self._systems.update(bounded_system(value) for value in systems)
 
-    def record_connector_implementation(self, system: object) -> None:
-        """Record only the explicit unbound issue #170 placeholder."""
+    def record_connector_implementation(
+        self,
+        system: object,
+        implementation: object,
+    ) -> None:
+        """Record one exact native implementation selected by trusted config."""
 
         self._ensure_mutable()
         selected = bounded_system(system)
+        if not isinstance(implementation, str):
+            raise TypeError("connector implementation identity must be a string")
+        if implementation != NATIVE_CONNECTOR_IMPLEMENTATION:
+            raise ValueError("connector implementation identity is unsupported")
         self._systems.add(selected)
-        self._implementations.add(selected)
+        previous = self._implementations.get(selected)
+        if previous is not None and previous != implementation:
+            raise ValueError("connector implementation identity changed within the run")
+        self._implementations[selected] = implementation
 
-    def record_connector_initialization(self, system: object) -> None:
-        """Count one successfully initialized connector for a bounded system."""
+    def record_connector_initialization(
+        self,
+        system: object,
+        implementation: object,
+    ) -> None:
+        """Count one initialized implementation for a bounded provider config."""
 
         self._ensure_mutable()
         selected = bounded_system(system)
-        self.record_connector_implementation(selected)
+        if not isinstance(implementation, str):
+            raise TypeError("connector implementation identity must be a string")
+        if implementation != NATIVE_CONNECTOR_IMPLEMENTATION:
+            raise ValueError("connector implementation identity is unsupported")
+        self._systems.add(selected)
         self.increment(PerformanceCounter.CONNECTOR_INITIALIZATIONS)
         self._increment_provider(selected, ProviderActivity.CONNECTOR_INITIALIZATIONS)
 
@@ -935,7 +956,11 @@ class PerformanceRecorder:
             self._implementations
         )
         implementations = tuple(
-            ConnectorImplementationDimension(system=system)
+            ConnectorImplementationDimension(
+                system=system,
+                implementation=self._implementations[system],
+                bound=True,
+            )
             for system in sorted(self._implementations)
         )
         return PerformanceSnapshot(

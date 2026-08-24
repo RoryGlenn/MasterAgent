@@ -8,7 +8,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from master_agent.capabilities import CapabilityCatalog
-from master_agent.config import ConnectorConfig, IntegrationConfig
+from master_agent.config import (
+    ConnectorConfig,
+    ConnectorImplementation,
+    IntegrationConfig,
+)
 from master_agent.connectors.base import Connector
 from master_agent.connectors.bitbucket import BitbucketConnector
 from master_agent.connectors.bitbucket_write import BitbucketWriteConnector
@@ -51,6 +55,7 @@ from master_agent.errors import ConfigurationError
 from master_agent.execution_context import (
     CapturedConnectorExecution,
     capture_connector_executions,
+    preflight_connector_implementations,
 )
 from master_agent.http import HttpTransport
 from master_agent.models import ConnectorExecutionBinding, ExecutionContext
@@ -281,10 +286,15 @@ def build_live_connectors(
         Deterministically ordered connector instances.
     """
 
-    source = dict(environ if environ is not None else os.environ)
     selected = set(_READ_SYSTEMS) | {"repository"} if systems is None else set(systems)
+    preflight_connector_implementations(
+        config,
+        systems=selected,
+        approved_execution_context=approved_execution_context,
+    )
     connectors: list[Connector] = []
     if captured_executions is None:
+        source = dict(environ if environ is not None else os.environ)
         captured = capture_connector_executions(
             config,
             environ=source,
@@ -345,6 +355,10 @@ def build_live_connectors(
             "reddit",
         }:
             continue
+        if unresolved.implementation is not ConnectorImplementation.NATIVE:
+            raise ConfigurationError(
+                f"connector {unresolved.system} implementation is unsupported"
+            )
         resolved = resolved_configs[unresolved.system]
 
         if name == "jira" and "jira" in selected:
@@ -487,7 +501,7 @@ def build_live_registry(
         )
     registry = ConnectorRegistry()
     with performance_stage(PerformanceStage.CONNECTOR_INITIALIZATION):
-        for connector in build_live_connectors(
+        constructed = build_live_connectors(
             config,
             environ=environ,
             transport=transport,
@@ -499,11 +513,20 @@ def build_live_registry(
             artifact_directory=artifact_directory,
             approved_execution_context=approved_execution_context,
             captured_executions=selected_executions,
-        ):
-            performance = current_performance_recorder()
-            if performance is not None:
-                performance.record_connector_initialization(connector.system)
+        )
+        for connector in constructed:
             registry.register(connector)
+        constructed_bindings = {
+            _configuration_system(connector.system) for connector in constructed
+        }
+        performance = current_performance_recorder()
+        if performance is not None:
+            for item in selected_executions:
+                if item.binding.system in constructed_bindings:
+                    performance.record_connector_initialization(
+                        item.binding.system,
+                        item.binding.implementation,
+                    )
     return registry
 
 
@@ -606,7 +629,9 @@ def _verify_approved_execution_context(
     for system in sorted(observed):
         actual = observed[system]
         reviewed = expected[system]
-        if actual.deployment != reviewed.deployment:
+        if actual.implementation != reviewed.implementation:
+            detail = "implementation"
+        elif actual.deployment != reviewed.deployment:
             detail = "deployment"
         elif actual.config_identity_sha256 != reviewed.config_identity_sha256:
             detail = "config identity"
@@ -661,6 +686,10 @@ def _verify_supplied_captured_executions(
             detail = "configuration"
         elif target.system != system or target.config_identity != configured.identity:
             detail = "target identity"
+        elif target.implementation is not configured.implementation:
+            detail = "target implementation"
+        elif binding.implementation != str(configured.implementation):
+            detail = "bound implementation"
         elif binding.config_identity_sha256 != target.config_identity:
             detail = "config identity"
         elif binding.deployment != str(configured.deployment):
@@ -675,6 +704,8 @@ def _verify_supplied_captured_executions(
             detail = "resolved credentials"
         elif resolved.system != system or resolved.base_url != target.base_url:
             detail = "resolved target"
+        elif resolved.implementation is not configured.implementation:
+            detail = "resolved implementation"
         elif str(resolved.auth.mode) != binding.authentication_mode:
             detail = "resolved authentication mode"
         elif resolved.config_identity != binding.config_identity_sha256:
@@ -742,6 +773,14 @@ def _network_binding_difference(
     if actual.proxy_origin != reviewed.proxy_origin:
         return "proxy origin"
     return None
+
+
+def _configuration_system(system: str) -> str:
+    """Return the trusted integration owner for one runtime connector system."""
+
+    if system in {"microsoft", "sharepoint", "outlook", "teams", "onenote"}:
+        return "microsoft"
+    return system
 
 
 def _captured_origin(base_url: str) -> str:

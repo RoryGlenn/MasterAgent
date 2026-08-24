@@ -10,6 +10,7 @@ mode = "direct"
 network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
+implementation = "native"
 base_url = "https://example.atlassian.net"
 # Browser references are kept separate from a scoped-token API gateway root.
 web_base_url = "https://example.atlassian.net"
@@ -29,6 +30,7 @@ write_enabled = false
 network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
+implementation = "native"
 base_url = "https://example.atlassian.net"
 web_base_url = "https://example.atlassian.net"
 auth_mode = "basic"
@@ -47,6 +49,7 @@ write_enabled = false
 network_profile = "direct"
 enabled = true
 deployment = "cloud" # cloud | data_center
+implementation = "native"
 # Cloud API root. For Data Center, use the server/context root.
 base_url = "https://api.bitbucket.org/2.0"
 auth_mode = "basic"
@@ -70,6 +73,7 @@ write_enabled = false
 network_profile = "direct"
 enabled = true
 deployment = "cloud"
+implementation = "native"
 base_url = "https://api.github.com"
 auth_mode = "bearer"
 # Bind and apply verify this token through GET /user and approval-bind its
@@ -89,6 +93,7 @@ write_enabled = false
 network_profile = "direct"
 enabled = true
 deployment = "cloud"
+implementation = "native"
 base_url = "https://oauth.reddit.com"
 web_base_url = "https://www.reddit.com"
 auth_mode = "oauth_delegated"
@@ -113,6 +118,7 @@ deletes_enabled = false
 network_profile = "direct"
 enabled = true
 deployment = "cloud"
+implementation = "native"
 # Change this root for a supported Microsoft national cloud.
 base_url = "https://graph.microsoft.com/v1.0"
 auth_mode = "oauth_delegated" # oauth_delegated | oauth_application | bearer

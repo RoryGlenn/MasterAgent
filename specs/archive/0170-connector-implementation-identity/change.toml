@@ -1,0 +1,20 @@
+schema = "master-agent/change@1"
+id = "0170-connector-implementation-identity"
+title = "Bind connector implementation identity"
+status = "archived"
+github_issue = 170
+created = "2026-08-24"
+updated = "2026-08-24"
+design_required = true
+
+[[deltas]]
+operation = "add"
+requirement_id = "MA-CONNECTOR-IMPLEMENTATION-001"
+destination = "connectors/MA-CONNECTOR-IMPLEMENTATION-001.md"
+source = "current/MA-CONNECTOR-IMPLEMENTATION-001.md"
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-PERFORMANCE-001"
+destination = "runtime/MA-PERFORMANCE-001.md"
+source = "current/MA-PERFORMANCE-001.md"

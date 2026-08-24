@@ -1,5 +1,11 @@
 # Integration Matrix
 
+Every first-party provider row below uses the exact trusted `native` connector
+implementation. Several capability-specific objects may be facets of that one
+provider implementation. The `Default` column describes activation and effect
+gates, not implementation selection; there is no automatic implementation
+fallback.
+
 | System | Deployment/auth modes | Read-only | Draft/local | Approved mutation | Compensation/verification | Default |
 |---|---|---|---|---|---|---|
 | Jira | Cloud basic/API token at exact tenant root or `api.atlassian.com/ex/jira/{cloudId}`; Data Center bearer/basic | server info, search, issue read | update/comment/transition proposal | comment creation; update/transition disabled pending CAS | independent read; manual comment deletion recovery | disabled |

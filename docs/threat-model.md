@@ -12,6 +12,7 @@
 - audit/evidence integrity;
 - approved provider-data destination, model tenancy, and classification;
 - organization-profile mode, capability allowlist, and configuration binding;
+- reviewed connector implementation identity and its execution binding;
 - capability capsule signing authorities, immutable artifacts, and receipts;
 - recurring workflow scope;
 - bounded issue-to-merge work history and lifecycle integrity.
@@ -22,6 +23,9 @@
 - advisory sub-agent output is untrusted until the parent re-checks its evidence;
 - retrieved provider content is always data, never authority;
 - connector code is trusted application code and must be reviewed;
+- trusted integrations configuration is the only connector implementation
+  selection boundary; prompts, project content, provider data, action
+  parameters, and runtime user input are not selectors;
 - generated capsule source and installed plugins remain untrusted data; raw
   plugin CLI execution is disabled, and a capsule becomes executable only
   after its complete signed promotion chain verifies;
@@ -244,6 +248,28 @@ Controls:
   x64 workflow controls are implemented, while live certification remains
   separately planned until an enrolled clean standard-user runner supplies
   evidence.
+
+### Connector implementation substitution or fallback
+
+An attacker may try to replace the implementation after review, steer
+selection from untrusted content, or turn a native failure into execution
+through a different connector path.
+
+Controls:
+
+- trusted integrations configuration admits only the fixed `native` identity,
+  and the value participates in the connector configuration digest;
+- selection happens after capability/system routing but before credentials,
+  principal attestation, provider access, construction, or registration;
+- execution-context schema `@2`, plan fingerprints, approval requests, and
+  approvals bind the exact identity; legacy contexts must be rebound;
+- bind, apply, resume, direct read, capability dispatch, and supplied-capture
+  validation reject drift before protected connector work;
+- the factory has one native dispatch path and propagates typed construction or
+  execution failure without an alternate retry or fallback; and
+- audit, readiness, support, and performance evidence serialize only bounded
+  system names and the fixed `native` label, never configuration or provider
+  content.
 
 ### Excessive permissions
 

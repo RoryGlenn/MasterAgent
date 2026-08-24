@@ -191,8 +191,9 @@ local-generation path required for this workflow.
   failure.
 - Only the three selected provider systems may initialize or resolve
   credentials.
-- The exact implementation identity must be bound through #170 before the
-  managed-workstation baseline is considered complete.
+- The exact implementation identity is bound through the trusted integration
+  snapshot, execution context, plan, and approval; the managed-workstation
+  baseline must preserve that identity.
 
 ## Execution sequence
 
@@ -275,14 +276,15 @@ update is outside the initial pilot.
 The #164 deterministic harness exercises this exact `T1-EWIR-001` shape for 20
 stable iterations. It checks the provisional p50, p95, local-governance,
 provider-call, interaction, and selected-provider budgets while keeping the
-connector implementation identity at `unbound_pending_170` until #170 supplies
-a trusted binding. It also proves that unselected systems perform no
+connector implementation identity at `native` with `bound = true` from the
+trusted selection boundary. It also proves that unselected systems perform no
 provider-specific credential, construction, attestation, transport, or
 verification work.
 
-This evidence is baseline-ineligible: it does not certify native connector
-identity, live-provider latency, Windows behavior, corporate networking, or a
-managed workstation. Use the command and interpretation rules in the
+This evidence is baseline-ineligible: it verifies the binding and attribution
+mechanism but does not certify live-provider latency, Windows behavior,
+corporate networking, or a managed workstation. Use the command and
+interpretation rules in the
 [governance-performance evidence guide](governance-performance.md). #172 owns
 the live managed-workstation baseline.
 
@@ -361,7 +363,7 @@ are recalibrated only from #164/#172 evidence:
 | p95 end-to-end latency | 60 seconds or less |
 | Local governance overhead | Less than 5% of total wall-clock time under the representative workload |
 | Connector initializations | Exactly 3 |
-| Selected connector implementations | Exactly 3; #164 records `unbound_pending_170`, and #170 must bind the managed-pilot identity |
+| Selected connector implementations | Exactly 3; each is `native` with `bound = true` from the trusted integration binding |
 | User interactions caused by governance | 0 |
 
 The latency limits are initial user-experience targets, not provider guarantees.
