@@ -210,6 +210,24 @@ master-agent bitbucket-repositories --workspace WORKSPACE
 This route must ignore ambient Bitbucket credentials and reject any repository
 not explicitly marked public.
 
+For the protected Tier-1 pilot, first install the exact private
+`engineering_work_item_review` configuration and capability allowlist described
+in [Configuration](configuration.md#engineering-work-item-review-configuration).
+Run only the dedicated #94 nonproduction fixture:
+
+```bash
+master-agent engineering-work-item-review PROJECT-123 \
+  --profile /trusted/config/organization-profile.toml
+```
+
+Require an exit-zero `complete` bundle, exactly three create-only private
+artifacts, native implementation identity for each selected connector, zero
+approval interactions, no unselected-provider credential or network activity,
+and the content-free `T1-EWIR-001` performance record. A local or CI pass is
+baseline-ineligible; preserve the protected run metadata for #172 and do not
+enable the workflow by default until managed-workstation certification is
+complete.
+
 ## 8. Validate draft-only output
 
 Install the optional draft-rendering extra, then run `master-agent demo` for a

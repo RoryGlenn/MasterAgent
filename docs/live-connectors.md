@@ -52,6 +52,16 @@ shared same-origin pagination boundary. Authenticated Cloud API-token
 configuration uses the Atlassian account email; a private legacy app-password
 configuration may retain its explicit username.
 
+The registered `T1-EWIR-001` route adds a separate
+`jira.issue.review_context.read` projection so existing Jira issue callers keep
+their schema. Only reviewed `customfield_<digits>` acceptance/relation fields
+join the fixed standard projection; plain text and ADF are bounded, and exact
+links are evidence rather than selectors. Its Bitbucket build read first
+re-reads the exact pull request, extracts the current head, and reads statuses
+from that commit endpoint. Malformed/oversized status evidence, repository or PR
+identity mismatch, head drift, and Confluence page/space mismatch fail closed
+instead of being normalized from the request or silently truncated.
+
 The Reddit connector sends refresh-token exchanges only to Reddit's fixed token
 origin and bearer requests only to the fixed OAuth API origin. It attests the
 immutable account ID through `/api/v1/me`, binds granted scopes, and exposes

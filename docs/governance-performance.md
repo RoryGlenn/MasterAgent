@@ -50,6 +50,14 @@ exposes several capability-specific connector objects. Readers accept the
 historical `unbound_pending_170`/`bound = false` pair only to parse reports
 emitted before implementation binding; new evidence never emits it.
 
+The production `engineering-work-item-review` command selects
+`case_id = "T1-EWIR-001"` before profile or credential work begins. Its normal
+complete deterministic fixture exercises the bound applied runtime, exact
+native connectors, independent verification, pinned three-file renderer, and
+zero-approval path. That local evidence validates attribution and behavior but
+remains baseline-ineligible; only the protected #172 managed-workstation route
+may establish the live latency/reliability baseline.
+
 ## Deterministic regression benchmark
 
 Run the default Tier-1 Engineering Work Item Review case:

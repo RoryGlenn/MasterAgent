@@ -69,6 +69,7 @@ from master_agent.compensation import build_compensation_plan
 from master_agent.config import (
     ConnectorConfig,
     ConnectorCredentialProvider,
+    ConnectorImplementation,
     DeploymentType,
     IntegrationConfig,
     ResolvedExecutionTarget,
@@ -163,6 +164,8 @@ from master_agent.operating import (
 )
 from master_agent.orchestrator import RunReport, WorkflowOrchestrator
 from master_agent.performance import (
+    PerformanceCase,
+    PerformanceOutcome,
     PerformanceSnapshot,
     PerformanceStage,
     current_performance_recorder,
@@ -253,6 +256,16 @@ from master_agent.workflows.draft_package import (
     build_draft_package_plan,
     render_draft_package,
 )
+from master_agent.workflows.engineering_work_item_review import (
+    WORKFLOW_ID as ENGINEERING_WORK_ITEM_REVIEW_WORKFLOW_ID,
+)
+from master_agent.workflows.engineering_work_item_review import (
+    EngineeringReviewOutcome,
+    EngineeringWorkItemReviewArtifacts,
+    EngineeringWorkItemReviewSettings,
+    build_engineering_work_item_review_plan,
+    render_engineering_work_item_review,
+)
 from master_agent.workflows.weekly_operating_review import (
     WeeklyOperatingReviewSettings,
     build_weekly_operating_review_plan,
@@ -292,6 +305,11 @@ _CONNECT_CONFIGURATION_BY_SYSTEM = {
 }
 _MAX_DIRECT_READ_TERMINAL_PAYLOAD_CHARACTERS = 8 * 1024
 
+_ArtifactObserver = Callable[
+    [RunReport, ChangePlan, PinnedDirectory],
+    None,
+]
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line interface."""
@@ -322,6 +340,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile_path=args.profile,
                 request_path=args.resume,
                 approval_paths=args.approval,
+            )
+        if args.command == "engineering-work-item-review":
+            return _engineering_work_item_review(
+                issue_key=args.issue_key,
+                profile_path=args.profile,
             )
         if args.command == "demo":
             return _demo()
@@ -702,7 +725,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         TypeError,
         ValueError,
     ) as error:
-        if args.command in {"setup", "doctor", "execute"}:
+        if args.command in {
+            "setup",
+            "doctor",
+            "execute",
+            "engineering-work-item-review",
+        }:
             category = OperatingFailureCategory.RUNTIME_DEFECT
             if isinstance(error, AuthenticationError):
                 category = OperatingFailureCategory.MISSING_USER_AUTHENTICATION
@@ -804,6 +832,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         help="authenticated approval artifact; repeat for dual approval",
     )
+
+    engineering_review = subparsers.add_parser(
+        "engineering-work-item-review",
+        help="run the exact private Tier-1 engineering review workflow",
+    )
+    engineering_review.add_argument("issue_key")
+    engineering_review.add_argument("--profile", type=Path)
 
     subparsers.add_parser(
         "demo",
@@ -1840,6 +1875,197 @@ def _filesystem_backed_read_capabilities(
     return frozenset(selected)
 
 
+@performance_entrypoint
+def _engineering_work_item_review(
+    *,
+    issue_key: str,
+    profile_path: Path | None,
+) -> int:
+    """Run the exact profile-selected `T1-EWIR-001` workflow."""
+
+    require_platform_contract(PlatformContract.SECURE_FILESYSTEM)
+    performance = current_performance_recorder()
+    if performance is not None:
+        performance.set_case(PerformanceCase.T1_EWIR_001)
+
+    selected_profile = profile_path or default_organization_profile_path()
+    profile, profile_source = _capture_active_organization_profile(selected_profile)
+    if profile.connector_mode is not ConnectorMode.LIVE:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.BLOCKED_POLICY,
+                    "the Tier-1 engineering review requires live first-party native "
+                    "connectors",
+                ),
+            )
+        )
+    if profile.configuration_path("engineering_work_item_review") is None:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                    "the organization profile must explicitly select the private "
+                    "engineering_work_item_review configuration",
+                ),
+            )
+        )
+    workflow_source = _resolve_operating_configuration(
+        profile,
+        "engineering_work_item_review",
+        "engineering-work-item-review.toml",
+    )
+    settings = EngineeringWorkItemReviewSettings.from_toml(workflow_source)
+    plan = build_engineering_work_item_review_plan(issue_key, settings)
+    captured_sources = _capture_operating_execution_sources(
+        profile,
+        profile_source,
+        plan=plan,
+        applied=True,
+    )
+    integrations = IntegrationConfig.from_toml(captured_sources["integrations"])
+    _validate_engineering_review_integrations(settings, integrations)
+
+    rendered: list[EngineeringWorkItemReviewArtifacts] = []
+
+    def observe_artifacts(
+        report: RunReport,
+        bound_plan: ChangePlan,
+        output_root: PinnedDirectory,
+    ) -> None:
+        if rendered:
+            raise ValidationError("engineering review rendered more than once")
+        artifacts = render_engineering_work_item_review(
+            report,
+            bound_plan,
+            settings,
+            output_root=output_root,
+        )
+        rendered.append(artifacts)
+        recorder = current_performance_recorder()
+        if (
+            recorder is not None
+            and report.successful
+            and artifacts.outcome is not EngineeringReviewOutcome.COMPLETE
+        ):
+            recorder.record_outcome(PerformanceOutcome.PARTIAL)
+
+    status = _execute_prepared_operating_plan(
+        plan=plan,
+        source_plan_path=None,
+        profile=profile,
+        profile_source=profile_source,
+        captured_configuration_sources=captured_sources,
+        artifact_observer=observe_artifacts,
+        forbid_approval=True,
+    )
+    if not rendered:
+        if status:
+            return status
+        raise ValidationError("engineering review completed without its private bundle")
+    artifacts = rendered[0]
+    print(f"engineering review outcome: {artifacts.outcome}")
+    print(f"engineering review JSON: {artifacts.review_json}")
+    print(f"engineering review Markdown: {artifacts.review_markdown}")
+    print(f"engineering review manifest: {artifacts.manifest_json}")
+    return (
+        0
+        if status == 0 and artifacts.outcome is EngineeringReviewOutcome.COMPLETE
+        else 2
+    )
+
+
+def _validate_engineering_review_integrations(
+    settings: EngineeringWorkItemReviewSettings,
+    integrations: IntegrationConfig,
+) -> None:
+    """Fail before allocation when the protected case and native routes differ."""
+
+    selected_systems = ("jira", "bitbucket") + (
+        ("confluence",) if settings.confluence_page_ids else ()
+    )
+    try:
+        selected = {
+            system: integrations.connector(system) for system in selected_systems
+        }
+    except ConfigurationError as error:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                    str(error),
+                ),
+            )
+        ) from error
+    invalid = [
+        system
+        for system, connector in selected.items()
+        if not connector.enabled
+        or connector.implementation is not ConnectorImplementation.NATIVE
+    ]
+    if invalid:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.BLOCKED_POLICY,
+                    "the Tier-1 engineering review requires enabled first-party "
+                    "native connectors for: " + ", ".join(sorted(invalid)),
+                ),
+            )
+        )
+    bitbucket = selected["bitbucket"]
+    if bitbucket.deployment is not settings.bitbucket_deployment:
+        _raise_engineering_review_scope_mismatch("Bitbucket deployment")
+    if settings.build_status_limit > bitbucket.max_items:
+        _raise_engineering_review_scope_mismatch("build-status limit")
+    bitbucket_origins = _connector_origins(bitbucket)
+    if (
+        bitbucket.deployment is DeploymentType.CLOUD
+        and "https://api.bitbucket.org" in bitbucket_origins
+    ):
+        bitbucket_origins.add("https://bitbucket.org")
+    if settings.bitbucket_origin not in bitbucket_origins:
+        _raise_engineering_review_scope_mismatch("Bitbucket origin")
+    confluence = selected.get("confluence")
+    if confluence is not None and settings.confluence_origin not in _connector_origins(
+        confluence
+    ):
+        _raise_engineering_review_scope_mismatch("Confluence origin")
+
+
+def _connector_origins(connector: ConnectorConfig) -> set[str]:
+    values = (
+        connector.effective_base_url(os.environ),
+        connector.web_base_url or "",
+    )
+    origins: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        if parsed.scheme != "https" or not hostname:
+            continue
+        port = parsed.port
+        rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+        if port not in {None, 443}:
+            rendered_host = f"{rendered_host}:{port}"
+        origins.add(f"https://{rendered_host}")
+    return origins
+
+
+def _raise_engineering_review_scope_mismatch(name: str) -> None:
+    raise OperatingValidationError(
+        (
+            OperatingIssue(
+                OperatingFailureCategory.MISSING_ORGANIZATION_SETUP,
+                f"the private engineering review {name} differs from the selected "
+                "native connector configuration",
+            ),
+        )
+    )
+
+
 def _execute(
     *,
     plan_path: Path | None,
@@ -1870,12 +2096,42 @@ def _execute(
     selected_profile = profile_path or default_organization_profile_path()
     profile, profile_source = _capture_active_organization_profile(selected_profile)
     plan = _load_operating_plan(plan_path)
-    direct_read_candidate = _eligible_direct_operating_read(plan, profile=profile)
-    captured_sources = _capture_operating_execution_sources(
-        profile,
-        profile_source,
+    return _execute_prepared_operating_plan(
         plan=plan,
-        applied=not direct_read_candidate,
+        source_plan_path=plan_path,
+        profile=profile,
+        profile_source=profile_source,
+    )
+
+
+def _execute_prepared_operating_plan(
+    *,
+    plan: ChangePlan,
+    source_plan_path: Path | None,
+    profile: OrganizationProfile,
+    profile_source: ConfigSnapshot,
+    captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
+    artifact_observer: _ArtifactObserver | None = None,
+    forbid_approval: bool = False,
+) -> int:
+    """Prepare and execute one already parsed profile-admitted plan."""
+
+    direct_read_candidate = (
+        artifact_observer is None
+        and _eligible_direct_operating_read(
+            plan,
+            profile=profile,
+        )
+    )
+    captured_sources = (
+        dict(captured_configuration_sources)
+        if captured_configuration_sources is not None
+        else _capture_operating_execution_sources(
+            profile,
+            profile_source,
+            plan=plan,
+            applied=not direct_read_candidate,
+        )
     )
     catalog = CapabilityCatalog.from_toml(captured_sources["capabilities"])
     integrations = IntegrationConfig.from_toml(captured_sources["integrations"])
@@ -1944,8 +2200,16 @@ def _execute(
             ) from error
     configuration = profile.configuration_path
     if direct_read:
+        if source_plan_path is None:
+            raise ValidationError(
+                "a prepared direct read requires its exact source plan path"
+            )
+        if artifact_observer is not None:
+            raise ValidationError(
+                "a registered artifact workflow cannot use direct-read execution"
+            )
         return _run(
-            plan_path=plan_path,
+            plan_path=source_plan_path,
             apply=False,
             direct_read=True,
             approval_paths=[],
@@ -1982,6 +2246,17 @@ def _execute(
         policy_source=captured_sources["policy"],
         governance=operating_governance,
     )
+    if forbid_approval and approval_required:
+        raise OperatingValidationError(
+            (
+                OperatingIssue(
+                    OperatingFailureCategory.BLOCKED_POLICY,
+                    "the Tier-1 engineering review requires automatic read admission; "
+                    "authenticated approval handoff is not supported for this exact "
+                    "generated workflow",
+                ),
+            )
+        )
     selected_approval_authorities = configuration("approval_authorities")
     if approval_required and selected_approval_authorities is None:
         raise OperatingValidationError(
@@ -2077,6 +2352,7 @@ def _execute(
         expected_profile_fingerprint=profile.fingerprint,
         organization_run_root=run_paths.run_root,
         captured_configuration_sources=captured_sources,
+        artifact_observer=artifact_observer,
     )
 
 
@@ -3626,6 +3902,7 @@ def _run(
     captured_configuration_sources: Mapping[str, ConfigSnapshot] | None = None,
     pre_effect_guard: Callable[[AgentAction], None] | None = None,
     report_observer: Callable[[RunReport, ApprovalRequest | None], None] | None = None,
+    artifact_observer: _ArtifactObserver | None = None,
     recurring_occurrence_path: Path | None = None,
     recurring_fingerprint: str | None = None,
     recurring_claim_generation: int | None = None,
@@ -3634,6 +3911,10 @@ def _run(
     """Evaluate or execute an immutable plan through explicitly selected layers."""
 
     if direct_read:
+        if artifact_observer is not None:
+            raise ValidationError(
+                "artifact rendering is unavailable in a direct-read session"
+            )
         return _run_direct_read(
             plan_path=plan_path,
             apply=apply,
@@ -3694,6 +3975,8 @@ def _run(
         _require_plan_fingerprint(plan, expected_plan_fingerprint)
     performance = current_performance_recorder()
     if performance is not None:
+        if plan.workflow_id == ENGINEERING_WORK_ITEM_REVIEW_WORKFLOW_ID:
+            performance.set_case(PerformanceCase.T1_EWIR_001)
         performance.record_dimensions(
             capabilities=(action.capability for action in plan.actions),
             risk_tiers=(action.risk for action in plan.actions),
@@ -4138,6 +4421,9 @@ def _run(
         # Result-emission pins remain live for the intentionally excluded
         # performance-bearing evidence write below.
         operational_resources.close()
+        if artifact_observer is not None and not pending_approvals:
+            with performance_stage(PerformanceStage.RENDER):
+                artifact_observer(report, plan, artifact_directory)
         if report_observer is not None:
             report_observer(report, approval_request)
         report, report_payload, report_lines = _finalize_cli_run_report(report)

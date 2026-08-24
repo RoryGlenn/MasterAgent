@@ -1,5 +1,12 @@
 # Changelog
 
+- Add the disabled-by-default `T1-EWIR-001` Engineering Work Item Review: one
+  profile-selected, read-only native Jira/Bitbucket/Confluence plan; exact Jira
+  review-context fields and PR-head commit status evidence; independent
+  verification; honest complete/partial/failed/stale/ambiguous outcomes; and a
+  private cited three-file bundle. Protected fixture and managed-workstation
+  certification remain pending under #94/#172.
+
 - Add bounded persistent issue-to-merge work memory with explicit local
   `work-memory start`, `record`, `show`, and `verify` commands. Owner-private
   pinned SQLite, serialized append-only global hash chaining, deterministic
@@ -240,7 +247,7 @@
 
 - Phase 2C deployment-readiness assessment, OAuth profile configuration, Microsoft delegated device-code acquisition, restricted token files, token/scope inspection, and safe connector probes;
 - organization governance profiles with capability ownership, environment constraints, data classifications, and automatic/single/dual/prohibited approval tiers;
-- a 96-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
+- a 97-capability catalog spanning read, local generation, reversible writes, external communication, and high-impact operations;
 - a governed Reddit OAuth connector with purpose-separated read and communication credentials, provider-reported scope enforcement, bounded reads, local drafts, exact approved post/comment/reply operations, zero write retries, and catalog-quarantined non-atomic edit/delete adapters;
 - a bounded GitHub Cloud read connector for authenticated-user repository
   listing, repository metadata, pull-request search/read, and commit check-run

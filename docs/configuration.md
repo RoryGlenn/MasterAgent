@@ -97,7 +97,7 @@ The schema is exact:
 
 `[configuration]` accepts only `approval_authorities`, `capabilities`,
 `communication_context`, `draft_package`, `governance`, `identities`,
-`integrations`, `oauth`, `policy`, `recurring`, `retention`,
+`engineering_work_item_review`, `integrations`, `oauth`, `policy`, `recurring`, `retention`,
 `sources_of_truth`, and `weekly_status`. Paths may be absolute or relative to
 the organization-profile file. A deployed profile should use reviewed absolute
 paths so relocating the profile cannot silently select a different file. The
@@ -167,6 +167,78 @@ plugins, constructs connectors, resolves credentials, or creates runtime
 state. Developer mode does not widen provider authority; generated effect code
 remains quarantined until independent review, tests, specification archival,
 signing, deployment, and normal runtime admission.
+
+## Engineering Work Item Review configuration
+
+`engineering-work-item-review` is disabled in the packaged safe profile. A
+reviewed private profile enables the exact `T1-EWIR-001` path by selecting its
+workflow file and admitting only the capabilities that the configured shape
+uses:
+
+```toml
+capabilities = [
+  "jira.issue.review_context.read",
+  "bitbucket.repository.read",
+  "bitbucket.pull_request.read",
+  "bitbucket.build_status.read",
+  "bitbucket.pull_request.diffstat",
+  "confluence.page.read",
+]
+
+[configuration]
+engineering_work_item_review = "/private/config/engineering-work-item-review.toml"
+integrations = "/private/config/integrations.toml"
+```
+
+The workflow file is exact and secret-free. Keep fixture IDs in the protected
+private configuration, not in the repository:
+
+```toml
+[case]
+id = "T1-EWIR-001"
+data_classification = "internal"
+
+[bitbucket]
+deployment = "cloud"
+origin = "https://bitbucket.org"
+workspace = "approved-workspace"
+repository = "approved-repository"
+pull_request_id = "7"
+build_status_limit = 50
+include_diffstat = true
+
+[confluence]
+origin = "https://example.atlassian.net"
+space_id = "123456"
+space_key = "ENG"
+page_ids = ["111", "222"]
+```
+
+Cloud requires `workspace` and forbids `project`; Data Center requires
+`project` and forbids `workspace`. Pull-request and page IDs are canonical
+positive-integer strings, page IDs are unique, and at most three pages are
+allowed. `data_classification` cannot be `unknown`. The Bitbucket deployment
+and origins must match the selected native connector configuration, and
+`build_status_limit` must not exceed that connector's `max_items`. Any mismatch
+fails before run allocation, credential resolution, or provider access.
+
+The Jira connector may project acceptance criteria and exact provider relations
+from reviewed custom fields. At most 16 unique, non-overlapping
+`customfield_<digits>` IDs are allowed:
+
+```toml
+[connectors.jira]
+# ...normal native connector settings...
+review_acceptance_field_ids = ["customfield_10001"]
+
+[connectors.jira.review_relation_field_kinds]
+customfield_10002 = "bitbucket_pull_request_url"
+customfield_10003 = "confluence_page_url"
+```
+
+Those fields are data only. The configured repository, pull request, space,
+page IDs, implementation, credentials, and output root remain immutable even
+when Jira content names something else.
 
 ## Retention and expiry
 

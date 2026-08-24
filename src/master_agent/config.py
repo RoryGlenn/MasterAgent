@@ -37,6 +37,11 @@ _ATLASSIAN_CLOUD_ID_PATTERN = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
 _DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
+_JIRA_CUSTOM_FIELD_PATTERN = re.compile(r"customfield_[1-9][0-9]{0,11}")
+_JIRA_REVIEW_RELATION_KINDS = frozenset(
+    {"bitbucket_pull_request_url", "confluence_page_url"}
+)
+_MAX_JIRA_REVIEW_CUSTOM_FIELDS = 16
 
 
 def is_placeholder_provider_url(value: str | None) -> bool:
@@ -86,6 +91,77 @@ class NetworkMode(StrEnum):
     DIRECT = "direct"
     PROXY = "proxy"
     AMBIENT_PROXY = "ambient_proxy"
+
+
+@dataclass(frozen=True, slots=True)
+class JiraReviewFieldConfiguration:
+    """Exact Jira custom fields admitted to the review-context contract."""
+
+    acceptance_field_ids: tuple[str, ...] = ()
+    relation_field_kinds: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        acceptance = tuple(self.acceptance_field_ids)
+        relations = dict(self.relation_field_kinds)
+        all_fields = (*acceptance, *relations)
+        if len(all_fields) > _MAX_JIRA_REVIEW_CUSTOM_FIELDS:
+            raise ConfigurationError(
+                "Jira review custom fields exceed the 16-field limit"
+            )
+        if len(set(all_fields)) != len(all_fields):
+            raise ConfigurationError(
+                "Jira review custom fields must be unique and non-overlapping"
+            )
+        if any(
+            not isinstance(field_id, str)
+            or _JIRA_CUSTOM_FIELD_PATTERN.fullmatch(field_id) is None
+            for field_id in all_fields
+        ):
+            raise ConfigurationError(
+                "Jira review custom fields must use exact customfield_<digits> IDs"
+            )
+        if any(
+            not isinstance(kind, str) or kind not in _JIRA_REVIEW_RELATION_KINDS
+            for kind in relations.values()
+        ):
+            raise ConfigurationError(
+                "Jira review relation fields use an unsupported relation kind"
+            )
+        object.__setattr__(self, "acceptance_field_ids", tuple(sorted(acceptance)))
+        object.__setattr__(
+            self,
+            "relation_field_kinds",
+            MappingProxyType(dict(sorted(relations.items()))),
+        )
+
+    @classmethod
+    def from_extra(
+        cls,
+        extra: Mapping[str, Any],
+    ) -> JiraReviewFieldConfiguration:
+        """Parse the closed Jira review-field subset from connector extras."""
+
+        raw_acceptance = extra.get("review_acceptance_field_ids", ())
+        if not isinstance(raw_acceptance, (tuple, list)) or not all(
+            isinstance(item, str) for item in raw_acceptance
+        ):
+            raise ConfigurationError(
+                "Jira review_acceptance_field_ids must be a string list"
+            )
+        raw_relations = extra.get("review_relation_field_kinds", {})
+        if not isinstance(raw_relations, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in raw_relations.items()
+        ):
+            raise ConfigurationError(
+                "Jira review_relation_field_kinds must be a string table"
+            )
+        return cls(
+            acceptance_field_ids=tuple(raw_acceptance),
+            relation_field_kinds={
+                str(key): str(value) for key, value in raw_relations.items()
+            },
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +338,8 @@ class ConnectorConfig:
         if self.max_response_bytes <= 0:
             raise ConfigurationError("max_response_bytes must be positive")
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
+        if self.system == "jira":
+            JiraReviewFieldConfiguration.from_extra(self.extra)
         _validate_connector_credential_source(self)
 
     @property
@@ -891,6 +969,8 @@ class ResolvedConnectorConfig:
         ):
             raise ConfigurationError("resolved network profile digest is invalid")
         object.__setattr__(self, "extra", MappingProxyType(dict(self.extra)))
+        if self.system == "jira":
+            JiraReviewFieldConfiguration.from_extra(self.extra)
 
 
 @dataclass(frozen=True, slots=True)

@@ -167,6 +167,21 @@ class ConfluenceConnector(ReadOnlyConnector):
 
     def _read_page_action(self, action: AgentAction) -> RetrievedPayload:
         page, reference = self._read_page(action.target.resource_id)
+        if str(page.get("id", "")) != action.target.resource_id:
+            raise ConnectorError(
+                "Confluence returned a page different from the exact target"
+            )
+        expected_space_id = string_parameter(action.parameters, "space_id")
+        expected_space_key = string_parameter(action.parameters, "space_key")
+        if (
+            expected_space_id and expected_space_id != str(page.get("space_id") or "")
+        ) or (
+            expected_space_key
+            and expected_space_key != str(page.get("space_key") or "")
+        ):
+            raise ConnectorError(
+                "Confluence returned a page outside the exact configured space"
+            )
         enforce_expected_version(action, page.get("version"))
         source_urls = [reference]
         if page.get("web_url"):
@@ -241,19 +256,20 @@ class ConfluenceConnector(ReadOnlyConnector):
         version = version if isinstance(version, Mapping) else {}
         links = page.get("_links")
         links = links if isinstance(links, Mapping) else {}
+        web_url = self._approved_web_url(
+            str(links.get("webui")) if links.get("webui") else None,
+        )
         return {
             "id": str(page.get("id", "")),
             "title": str(page.get("title", "")),
             "status": page.get("status"),
             "version": version.get("number"),
             "space_id": page.get("spaceId"),
-            "space_key": None,
+            "space_key": _cloud_space_key(web_url, page_id=str(page.get("id", ""))),
             "updated_at": version.get("createdAt"),
             "body_text": text,
             "body_excerpt": excerpt(text),
-            "web_url": self._approved_web_url(
-                str(links.get("webui")) if links.get("webui") else None,
-            ),
+            "web_url": web_url,
         }
 
     def _normalize_data_center_page(
@@ -315,3 +331,16 @@ class ConfluenceConnector(ReadOnlyConnector):
             netloc=approved.netloc,
             fragment="",
         ).geturl()
+
+
+def _cloud_space_key(web_url: str | None, *, page_id: str) -> str | None:
+    """Extract the exact Cloud space key from one approved page URL shape."""
+
+    if web_url is None or not page_id:
+        return None
+    segments = tuple(item for item in urlparse(web_url).path.split("/") if item)
+    if len(segments) >= 4 and segments[:1] == ("spaces",):
+        return segments[1] if segments[2:4] == ("pages", page_id) else None
+    if len(segments) >= 5 and segments[:2] == ("wiki", "spaces"):
+        return segments[2] if segments[3:5] == ("pages", page_id) else None
+    return None

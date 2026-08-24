@@ -34,6 +34,9 @@ from master_agent.models import (
 )
 from master_agent.operating import install_organization_profile
 from master_agent.platform_runtime import platform_runtime_status
+from master_agent.workflows.engineering_work_item_review import (
+    EngineeringWorkItemReviewSettings,
+)
 from tests.fakes import ScriptedTransport
 from tests.helpers import govern_test_plan
 
@@ -1186,6 +1189,334 @@ enabled = true
             )
             self.assertNotIn(ambient_token, stdout + stderr)
             self.assertEqual(tuple((root / "runs").iterdir()), ())
+
+    def test_engineering_work_item_review_runs_bound_live_workflow_once(self) -> None:
+        transport = ScriptedTransport()
+        transport.add_json(
+            "GET",
+            "/rest/api/3/issue/ENG-1",
+            {
+                "id": "10001",
+                "key": "ENG-1",
+                "fields": {
+                    "summary": "Implement exact engineering review",
+                    "status": {
+                        "name": "In Progress",
+                        "statusCategory": {"name": "In Progress"},
+                    },
+                    "assignee": {"displayName": "Rory"},
+                    "priority": {"name": "High"},
+                    "issuetype": {"name": "Story"},
+                    "project": {"key": "ENG"},
+                    "labels": [],
+                    "updated": "2026-08-24T12:00:00.000+0000",
+                    "resolutiondate": None,
+                    "description": "One bounded native review.",
+                    "issuelinks": [],
+                    "customfield_10001": "Produce cited private artifacts.",
+                },
+            },
+        )
+        transport.add_json(
+            "GET",
+            "/rest/api/3/issue/ENG-1/remotelink",
+            [
+                {
+                    "id": "pr-7",
+                    "object": {
+                        "url": "https://bitbucket.org/acme/widget/pull-requests/7"
+                    },
+                },
+                {
+                    "id": "page-11",
+                    "object": {
+                        "url": (
+                            "https://acme.atlassian.net/wiki/spaces/ENG/"
+                            "pages/11/Requirement"
+                        )
+                    },
+                },
+            ],
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget",
+            {
+                "uuid": "{repo-1}",
+                "name": "Widget",
+                "slug": "widget",
+                "full_name": "acme/widget",
+                "is_private": True,
+                "scm": "git",
+                "mainbranch": {"name": "main"},
+                "updated_on": "2026-08-24T12:00:00Z",
+                "links": {"html": {"href": "https://bitbucket.org/acme/widget"}},
+            },
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/pullrequests/7",
+            {
+                "id": 7,
+                "title": "ENG-1 implement exact engineering review",
+                "description": "Implements ENG-1.",
+                "state": "OPEN",
+                "author": {"display_name": "Rory"},
+                "source": {
+                    "branch": {"name": "feature/eng-1"},
+                    "commit": {"hash": "abc123"},
+                },
+                "destination": {"branch": {"name": "main"}},
+                "participants": [],
+                "reviewers": [],
+                "links": {
+                    "html": {
+                        "href": ("https://bitbucket.org/acme/widget/pull-requests/7")
+                    }
+                },
+                "created_on": "2026-08-24T10:00:00Z",
+                "updated_on": "2026-08-24T12:00:00Z",
+            },
+        )
+        transport.add_json(
+            "GET",
+            "/2.0/repositories/acme/widget/commit/abc123/statuses",
+            {
+                "values": [{"key": "tests", "name": "Tests", "state": "SUCCESSFUL"}],
+                "next": None,
+            },
+        )
+        transport.add_json(
+            "GET",
+            "/wiki/api/v2/pages/11",
+            {
+                "id": "11",
+                "title": "Engineering review requirement",
+                "status": "current",
+                "spaceId": "space-1",
+                "version": {"number": 3, "createdAt": "2026-08-24T11:00:00Z"},
+                "body": {"storage": {"value": "<p>The review must fail closed.</p>"}},
+                "_links": {"webui": "/spaces/ENG/pages/11/Requirement"},
+            },
+        )
+        credential_canary = "provider-token-must-not-appear"
+        with TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            integrations = root / "integrations.toml"
+            integrations.write_text(
+                """
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://acme.atlassian.net"
+web_base_url = "https://acme.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_JIRA_USERNAME"
+secret_env = "MASTER_AGENT_JIRA_TOKEN"
+review_acceptance_field_ids = ["customfield_10001"]
+
+[connectors.confluence]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://acme.atlassian.net"
+web_base_url = "https://acme.atlassian.net"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_CONFLUENCE_USERNAME"
+secret_env = "MASTER_AGENT_CONFLUENCE_TOKEN"
+
+[connectors.bitbucket]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://api.bitbucket.org/2.0"
+web_base_url = "https://bitbucket.org"
+auth_mode = "basic"
+username_env = "MASTER_AGENT_BITBUCKET_EMAIL"
+secret_env = "MASTER_AGENT_BITBUCKET_TOKEN"
+max_items = 100
+""".lstrip(),
+                encoding="utf-8",
+            )
+            integrations.chmod(0o600)
+            workflow = root / "engineering-work-item-review.toml"
+            workflow.write_text(
+                """
+[case]
+id = "T1-EWIR-001"
+data_classification = "internal"
+
+[bitbucket]
+deployment = "cloud"
+origin = "https://bitbucket.org"
+workspace = "acme"
+repository = "widget"
+pull_request_id = "7"
+build_status_limit = 50
+include_diffstat = false
+
+[confluence]
+origin = "https://acme.atlassian.net"
+space_id = "space-1"
+space_key = "ENG"
+page_ids = ["11"]
+""".lstrip(),
+                encoding="utf-8",
+            )
+            workflow.chmod(0o600)
+            profile = _install_profile(
+                root,
+                capabilities=(
+                    "jira.issue.review_context.read",
+                    "bitbucket.repository.read",
+                    "bitbucket.pull_request.read",
+                    "bitbucket.build_status.read",
+                    "confluence.page.read",
+                ),
+                configuration={
+                    "engineering_work_item_review": workflow,
+                    "integrations": integrations,
+                },
+            )
+
+            def build_with_transport(*args: object, **kwargs: object) -> object:
+                kwargs["transport"] = transport
+                return real_build_live_registry(*args, **kwargs)  # type: ignore[arg-type]
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "MASTER_AGENT_JIRA_USERNAME": "rory@example.test",
+                        "MASTER_AGENT_JIRA_TOKEN": credential_canary,
+                        "MASTER_AGENT_CONFLUENCE_USERNAME": "rory@example.test",
+                        "MASTER_AGENT_CONFLUENCE_TOKEN": credential_canary,
+                        "MASTER_AGENT_BITBUCKET_EMAIL": "rory@example.test",
+                        "MASTER_AGENT_BITBUCKET_TOKEN": credential_canary,
+                    },
+                    clear=True,
+                ),
+                patch(
+                    "master_agent.cli.build_live_registry",
+                    side_effect=build_with_transport,
+                ),
+            ):
+                status, stdout, stderr = _run_cli(
+                    [
+                        "engineering-work-item-review",
+                        "ENG-1",
+                        "--profile",
+                        str(profile),
+                    ]
+                )
+
+            self.assertEqual(status, 0, stderr)
+            self.assertIn("engineering review outcome: complete", stdout)
+            self.assertNotIn(credential_canary, stdout + stderr)
+            runs = tuple((root / "state" / "runs").iterdir())
+            self.assertEqual(len(runs), 1)
+            run = runs[0]
+            self.assertTrue((run / "plan.json").is_file())
+            self.assertTrue((run / "bound-plan.json").is_file())
+            artifacts = run / "artifacts"
+            self.assertEqual(
+                {item.name for item in artifacts.iterdir()},
+                {
+                    "engineering-work-item-review.json",
+                    "engineering-work-item-review.md",
+                    "manifest.json",
+                },
+            )
+            review = json.loads(
+                (artifacts / "engineering-work-item-review.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            bound = ChangePlan.from_dict(
+                json.loads((run / "bound-plan.json").read_text(encoding="utf-8"))
+            )
+            self.assertEqual(review["outcome"], "complete")
+            self.assertTrue(review["complete"])
+            self.assertEqual(review["scope"]["jira_issue_key"], "ENG-1")
+            self.assertEqual(review["plan_fingerprint"], bound.fingerprint)
+            self.assertTrue(
+                all(
+                    stat.S_IMODE(item.stat().st_mode) == 0o600
+                    for item in artifacts.iterdir()
+                )
+            )
+            result = json.loads(
+                (run / "results" / "result.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(result["performance"]["case_id"], "T1-EWIR-001")
+            self.assertEqual(
+                result["performance"]["counters"]["approval_interactions"],
+                0,
+            )
+            self.assertEqual(len(transport.requests), 14)
+
+    def test_engineering_review_rejects_provider_limit_before_allocation(self) -> None:
+        settings = EngineeringWorkItemReviewSettings.from_toml(
+            ConfigSnapshot(
+                display_path=Path("/private/test/engineering-review.toml"),
+                payload=b"""
+[case]
+id = "T1-EWIR-001"
+data_classification = "internal"
+
+[bitbucket]
+deployment = "cloud"
+origin = "https://bitbucket.org"
+workspace = "acme"
+repository = "widget"
+pull_request_id = "7"
+build_status_limit = 50
+
+[confluence]
+origin = "https://acme.atlassian.net"
+space_id = "space-1"
+space_key = "ENG"
+page_ids = []
+""".lstrip(),
+            )
+        )
+        integrations = IntegrationConfig.from_toml(
+            ConfigSnapshot(
+                display_path=Path("/private/test/integrations.toml"),
+                payload=b"""
+[connectors.jira]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://acme.atlassian.net"
+auth_mode = "none"
+
+[connectors.bitbucket]
+enabled = true
+deployment = "cloud"
+implementation = "native"
+base_url = "https://api.bitbucket.org/2.0"
+web_base_url = "https://bitbucket.org"
+auth_mode = "none"
+max_items = 1
+""".lstrip(),
+            )
+        )
+
+        with (
+            patch("master_agent.cli.allocate_operating_run") as allocate,
+            self.assertRaisesRegex(
+                cli_module.OperatingValidationError,
+                "build-status limit",
+            ),
+        ):
+            cli_module._validate_engineering_review_integrations(
+                settings,
+                integrations,
+            )
+
+        allocate.assert_not_called()
 
     def test_local_generation_allocates_one_private_governed_run(self) -> None:
         with TemporaryDirectory() as raw:

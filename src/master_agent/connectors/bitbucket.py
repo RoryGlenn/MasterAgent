@@ -232,6 +232,7 @@ class BitbucketConnector(ReadOnlyConnector):
         data, response = self._client.request_json("GET", path)
         if not isinstance(data, Mapping):
             raise ConnectorError("Bitbucket repository response must be an object")
+        self._validate_repository_identity(data, owner, repository)
         repository_data = self._normalize_repository(data, owner, repository)
         enforce_expected_version(
             action,
@@ -247,6 +248,31 @@ class BitbucketConnector(ReadOnlyConnector):
             },
             connector_reference=response.url,
         )
+
+    def _validate_repository_identity(
+        self,
+        repository_data: Mapping[str, Any],
+        owner: str,
+        repository: str,
+    ) -> None:
+        """Require provider-returned identity for an exact repository read."""
+
+        slug = repository_data.get("slug")
+        if slug != repository:
+            raise ConnectorError(
+                "Bitbucket returned a repository different from the exact target"
+            )
+        if self._config.deployment is DeploymentType.CLOUD:
+            if repository_data.get("full_name") != f"{owner}/{repository}":
+                raise ConnectorError(
+                    "Bitbucket returned a repository different from the exact target"
+                )
+            return
+        project = repository_data.get("project")
+        if not isinstance(project, Mapping) or project.get("key") != owner:
+            raise ConnectorError(
+                "Bitbucket returned a repository different from the exact target"
+            )
 
     def _search_pull_requests(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
@@ -343,11 +369,11 @@ class BitbucketConnector(ReadOnlyConnector):
     def _read_pull_request(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
         pull_request_id = action.target.resource_id
-        path = self._pull_request_path(owner, repository, pull_request_id)
-        data, response = self._client.request_json("GET", path)
-        if not isinstance(data, Mapping):
-            raise ConnectorError("Bitbucket pull-request response must be an object")
-        normalized = self._normalize_pull_request(data, owner, repository)
+        _raw, normalized, reference = self._fetch_pull_request(
+            owner=owner,
+            repository=repository,
+            pull_request_id=pull_request_id,
+        )
         version = normalized.get("version") or normalized.get("updated_at")
         enforce_expected_version(action, version)
         return RetrievedPayload(
@@ -356,9 +382,9 @@ class BitbucketConnector(ReadOnlyConnector):
                 "system": "bitbucket",
                 "deployment": self._config.deployment,
                 "pull_request": normalized,
-                "source_urls": [response.url, *normalized.get("source_urls", [])],
+                "source_urls": [reference, *normalized.get("source_urls", [])],
             },
-            connector_reference=response.url,
+            connector_reference=reference,
         )
 
     def _read_diffstat(self, action: AgentAction) -> RetrievedPayload:
@@ -384,30 +410,97 @@ class BitbucketConnector(ReadOnlyConnector):
 
     def _read_build_status(self, action: AgentAction) -> RetrievedPayload:
         owner, repository = self._coordinates(action.parameters)
-        commit = string_parameter(
+        limit = integer_parameter(
             action.parameters,
-            "commit",
-            default=action.target.resource_id,
-            required=True,
+            "limit",
+            default=self._config.max_items,
+            maximum=self._config.max_items,
         )
+        pull_request_id = string_parameter(action.parameters, "pull_request_id")
+        explicit_commit = string_parameter(action.parameters, "commit")
+        strict_limit = bool(pull_request_id) or "limit" in action.parameters
+        source_urls: list[str] = []
+        if pull_request_id:
+            if (
+                not pull_request_id.isdecimal()
+                or str(int(pull_request_id)) != pull_request_id
+                or int(pull_request_id) <= 0
+                or action.target.resource_type != "pull_request"
+                or action.target.resource_id != pull_request_id
+            ):
+                raise ConnectorError(
+                    "Bitbucket build-status pull_request_id must exactly match a "
+                    "canonical positive pull-request target"
+                )
+            if explicit_commit:
+                raise ConnectorError(
+                    "Bitbucket build-status read accepts either pull_request_id or "
+                    "commit, not both"
+                )
+            _, pull_request, pull_request_reference = self._fetch_pull_request(
+                owner=owner,
+                repository=repository,
+                pull_request_id=pull_request_id,
+            )
+            commit_value = pull_request.get("source_commit")
+            if not isinstance(commit_value, str) or not commit_value.strip():
+                raise ConnectorError(
+                    "Bitbucket pull request has no exact source commit for build status"
+                )
+            commit = commit_value.strip()
+            enforce_expected_version(
+                action,
+                pull_request.get("version") or pull_request.get("updated_at"),
+            )
+            source_urls.extend(
+                [pull_request_reference, *pull_request.get("source_urls", [])]
+            )
+        else:
+            commit = explicit_commit or action.target.resource_id.strip()
+            if not commit:
+                raise ConnectorError(
+                    "Bitbucket build-status read requires a commit or pull-request ID"
+                )
         statuses, reference = self._statuses_for_commit(
             owner=owner,
             repository=repository,
             commit=commit,
+            limit=limit,
+            strict_limit=strict_limit,
         )
+        source_urls.append(reference)
         return RetrievedPayload(
             data={
                 "schema": "master-agent/bitbucket-build-status@1",
                 "system": "bitbucket",
                 "deployment": self._config.deployment,
                 "commit": commit,
+                **({"pull_request_id": pull_request_id} if pull_request_id else {}),
                 "returned": len(statuses),
                 "statuses": statuses,
                 "summary": _summarize_statuses(statuses),
-                "source_urls": [reference],
+                "source_urls": list(dict.fromkeys(str(item) for item in source_urls)),
             },
             connector_reference=reference,
         )
+
+    def _fetch_pull_request(
+        self,
+        *,
+        owner: str,
+        repository: str,
+        pull_request_id: str,
+    ) -> tuple[Mapping[str, Any], dict[str, Any], str]:
+        path = self._pull_request_path(owner, repository, pull_request_id)
+        data, response = self._client.request_json("GET", path)
+        if not isinstance(data, Mapping):
+            raise ConnectorError("Bitbucket pull-request response must be an object")
+        normalized = self._normalize_pull_request(data, owner, repository)
+        if str(normalized.get("id", "")) != pull_request_id:
+            raise ConnectorError(
+                "Bitbucket returned a pull request different from the exact target"
+            )
+        return data, normalized, response.url
 
     def _coordinates(self, parameters: Mapping[str, Any]) -> tuple[str, str]:
         if self._config.deployment is DeploymentType.CLOUD:
@@ -511,13 +604,19 @@ class BitbucketConnector(ReadOnlyConnector):
         repository: str,
         raw_pull_request: Mapping[str, Any],
         pull_request_id: str,
+        limit: int | None = None,
+        strict_limit: bool = False,
     ) -> tuple[list[dict[str, Any]], str]:
         if self._config.deployment is DeploymentType.CLOUD:
             path = (
                 f"{self._pull_request_path(owner, repository, pull_request_id)}"
                 "/statuses"
             )
-            return self._list_status_endpoint(path)
+            return self._list_status_endpoint(
+                path,
+                limit=limit,
+                strict_limit=strict_limit,
+            )
         source = raw_pull_request.get("fromRef")
         source = source if isinstance(source, Mapping) else {}
         commit = str(source.get("latestCommit", ""))
@@ -527,6 +626,8 @@ class BitbucketConnector(ReadOnlyConnector):
             owner=owner,
             repository=repository,
             commit=commit,
+            limit=limit,
+            strict_limit=strict_limit,
         )
 
     def _statuses_for_commit(
@@ -535,6 +636,8 @@ class BitbucketConnector(ReadOnlyConnector):
         owner: str,
         repository: str,
         commit: str,
+        limit: int | None = None,
+        strict_limit: bool = False,
     ) -> tuple[list[dict[str, Any]], str]:
         if self._config.deployment is DeploymentType.CLOUD:
             path = (
@@ -543,24 +646,45 @@ class BitbucketConnector(ReadOnlyConnector):
             )
         else:
             path = f"rest/build-status/latest/commits/{quote_segment(commit)}"
-        return self._list_status_endpoint(path)
+        return self._list_status_endpoint(
+            path,
+            limit=limit,
+            strict_limit=strict_limit,
+        )
 
     def _list_status_endpoint(
         self,
         path: str,
+        *,
+        limit: int | None = None,
+        strict_limit: bool = False,
     ) -> tuple[list[dict[str, Any]], str]:
+        requested_limit = limit or self._config.max_items
+        if requested_limit <= 0 or requested_limit > self._config.max_items:
+            raise ConnectorError("Bitbucket build-status limit is invalid")
         statuses: list[dict[str, Any]] = []
         next_url: str | None = None
         start = 0
         reference = ""
+        has_more = False
         for _ in range(self._config.max_pages):
+            remaining = requested_limit - len(statuses)
+            if strict_limit and remaining <= 0:
+                if has_more:
+                    raise ConnectorError(
+                        "Bitbucket build statuses exceed the exact requested limit"
+                    )
+                break
             if next_url:
                 data, response = self._client.request_json("GET", next_url)
             else:
                 query = (
-                    {"pagelen": 50}
+                    {"pagelen": min(remaining, 50) if strict_limit else 50}
                     if self._config.deployment is DeploymentType.CLOUD
-                    else {"limit": 100, "start": start}
+                    else {
+                        "limit": min(remaining, 100) if strict_limit else 100,
+                        "start": start,
+                    }
                 )
                 data, response = self._client.request_json(
                     "GET",
@@ -576,14 +700,50 @@ class BitbucketConnector(ReadOnlyConnector):
             if not isinstance(page, list):
                 raise ConnectorError("Bitbucket build statuses must be a list")
             mapped = [item for item in page if isinstance(item, Mapping)]
-            statuses.extend(self._normalize_status(item) for item in mapped)
+            if strict_limit and len(mapped) != len(page):
+                raise ConnectorError(
+                    "Bitbucket build-status response has an invalid status schema"
+                )
+            normalized = [self._normalize_status(item) for item in mapped]
+            if strict_limit and any(
+                not isinstance(item.get(field), str) or not str(item[field]).strip()
+                for item in normalized
+                for field in ("key", "state")
+            ):
+                raise ConnectorError(
+                    "Bitbucket build-status response has an invalid status schema"
+                )
+            statuses.extend(normalized)
+            if strict_limit and len(statuses) > requested_limit:
+                raise ConnectorError(
+                    "Bitbucket build statuses exceed the exact requested limit"
+                )
             if self._config.deployment is DeploymentType.CLOUD:
                 next_value = data.get("next")
                 next_url = str(next_value) if next_value else None
-                if not mapped or not next_url:
+                has_more = next_url is not None
+                if strict_limit and not mapped and has_more:
+                    raise ConnectorError(
+                        "Bitbucket build statuses contain an empty nonterminal page"
+                    )
+                if strict_limit and len(statuses) >= requested_limit and has_more:
+                    raise ConnectorError(
+                        "Bitbucket build statuses exceed the exact requested limit"
+                    )
+                if not mapped or not has_more:
                     break
             else:
-                if bool(data.get("isLastPage")) or not mapped:
+                provider_has_more = not bool(data.get("isLastPage"))
+                if strict_limit and not mapped and provider_has_more:
+                    raise ConnectorError(
+                        "Bitbucket build statuses contain an empty nonterminal page"
+                    )
+                has_more = provider_has_more and bool(mapped)
+                if strict_limit and len(statuses) >= requested_limit and has_more:
+                    raise ConnectorError(
+                        "Bitbucket build statuses exceed the exact requested limit"
+                    )
+                if not has_more:
                     break
                 next_start = data.get("nextPageStart")
                 start = (
@@ -591,7 +751,14 @@ class BitbucketConnector(ReadOnlyConnector):
                     if isinstance(next_start, int)
                     else start + len(mapped)
                 )
-        return statuses[: self._config.max_items], reference
+        else:
+            if strict_limit and has_more:
+                raise ConnectorError(
+                    "Bitbucket build statuses exceed the configured page limit"
+                )
+        if strict_limit:
+            return sorted(statuses, key=_status_sort_key), reference
+        return statuses[:requested_limit], reference
 
     def _diffstat_for_pull_request(
         self,
@@ -904,6 +1071,13 @@ def _summarize_statuses(statuses: list[dict[str, Any]]) -> dict[str, int]:
         else:
             summary["other"] += 1
     return summary
+
+
+def _status_sort_key(status: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(status.get(name) or "")
+        for name in ("key", "name", "state", "url", "updated_at", "created_at")
+    )
 
 
 def _summarize_changes(changes: list[dict[str, Any]]) -> dict[str, int | None]:

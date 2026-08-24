@@ -17,6 +17,7 @@ into an issue or chat while troubleshooting.
 | A public GitHub or Bitbucket read asks for credentials | Confirm the anonymous command form | A public named-user/workspace route must not resolve ambient credentials. |
 | An effect returns an approval request | Inspect the request; do not re-plan | Policy requires an authenticated artifact bound to that exact plan. |
 | A write stops on stale state | Re-read and prepare a new plan | Provider state changed after review; the old approval must not be reused. |
+| Engineering review exits nonzero but prints artifact paths | Open the Markdown outcome and missing/conflicting evidence | A safe `partial`, `failed`, `stale`, or `ambiguous` bundle was produced; it is intentionally not a complete success. |
 | A capsule cannot run on macOS | Check the platform report | Pure capsule execution currently needs Linux bubblewrap or Windows AppContainer. |
 | A recurring occurrence is indeterminate | Use inspect/reconcile; never force | The runtime cannot prove whether an earlier process crossed the effect boundary. |
 
@@ -119,6 +120,37 @@ A version or content precondition failure protects against overwriting newer
 provider state. Re-read the target, prepare and inspect a new plan, and obtain
 new approval if the effect-bearing fingerprint changed. Do not weaken the
 precondition or reuse the old approval.
+
+## Engineering Work Item Review does not complete
+
+Run the exact command again only after fixing the reported trusted input or
+provider state:
+
+```bash
+master-agent engineering-work-item-review PROJECT-123 \
+  --profile /absolute/private/organization-profile.toml
+```
+
+- `missing_organization_setup` means the profile does not select the private
+  `engineering_work_item_review` or required integration configuration.
+- `blocked_policy` before artifact paths usually means the profile omitted a
+  required capability, selected mock/non-native connectors, or the workflow's
+  Bitbucket deployment, origin, or status limit differs from the connector.
+- `missing_user_authentication` names only the selected provider whose governed
+  credential is unavailable. Do not add credentials for an unselected system.
+- A `stale` bundle means an independent read saw a changed issue, repository,
+  pull-request head, build set, or page version.
+- An `ambiguous` bundle means verified Jira relation evidence conflicts with the
+  exact protected target; retrieved prose is not a substitute selector.
+- A `partial` bundle means optional diffstat or a configured Confluence page did
+  not verify; a `failed` bundle means required Jira/Bitbucket evidence did not
+  verify.
+
+Do not edit the private workflow file merely to obtain exit zero unless the
+organization owner has reviewed a new protected fixture scope. There is no MCP
+fallback, output override, approval bypass, or broad provider search. Preserve
+the three-file bundle together if it is needed for incident evidence; never
+paste provider content or private paths into a public ticket.
 
 ## Platform capability is unavailable
 
