@@ -2,12 +2,15 @@
 
 ## Status
 
-**Implemented locally; certification pending.** Issue
+**Implemented locally, including the protected selector; certification
+pending.** Issue
 [#175](https://github.com/RoryGlenn/MasterAgent/issues/175) implements this
-bounded workflow and its deterministic verification path. The checked-in safe
-profile does not enable it. Protected fixture evidence under #94 and the
-managed-workstation baseline under #172 are still required before it may be
-described as certified or enabled as a default employee workflow.
+bounded workflow and its deterministic verification path. The repository-side
+#94 selector now supplies the default-disabled protected Ubuntu execution path,
+but no credentialed run has been performed. The checked-in safe profile does
+not enable it. Provider-provisioned #94 fixture evidence and the Windows 11
+standard-user managed-workstation baseline under #172 are still required before
+it may be described as certified or enabled as a default employee workflow.
 
 Related work:
 
@@ -91,6 +94,12 @@ bind this case to one dedicated nonproduction Jira issue, one Bitbucket
 workspace/repository and pull request, and zero to three Confluence pages. The
 exact provider IDs and URLs are recorded only in protected environment
 configuration; they are not committed to this repository.
+
+The initial repository-side #94 selector is narrower than that general
+production contract. Its protected `T1-EWIR-001` configuration must select
+exactly one Confluence page and must set `include_diffstat = false`. This fixed
+shape is the already-proven 14-provider-content-call case; the production
+runtime remains capable of zero to three pages and optional diffstat.
 
 The protected case record must contain, without provider bodies or secrets:
 
@@ -281,6 +290,12 @@ interpretation rules in the
 [governance-performance evidence guide](governance-performance.md). #172 owns
 the live managed-workstation baseline.
 
+That deterministic setup records exactly three principal attestations, one for
+each selected provider. The installed high-level command has a stronger
+two-phase boundary: it attests each provider while binding the immutable
+execution context and re-attests before applied execution, for exactly six
+attestations (two per provider) in the protected selector run.
+
 ## Completion and partial-success semantics
 
 A **complete success** requires every configured source to return verified data
@@ -370,7 +385,9 @@ count still affect a protected live run's exact count.
 
 Initial expectations:
 
-- one provider-principal attestation per selected provider when required;
+- one provider-principal attestation per selected provider in each bind/apply
+  phase, for six total in the protected high-level run; the deterministic
+  setup-only harness records three;
 - two content calls for an exact Jira issue read and verification;
 - bounded Bitbucket calls for repository, pull request, build status, optional
   diffstat, and independent verification;
@@ -437,9 +454,15 @@ second integration framework.
 
 ### Protected evidence still required
 
-- #94 protected fixtures for the exact Tier-1 case;
+- one successful default-branch run of the repository-side #94 protected
+  selector against provisioned exact Tier-1 fixtures;
 - #112 proxy and enterprise-CA coverage; and
-- #172 baseline and repeated managed-workstation runs.
+- #172 Windows 11 standard-user baseline and repeated managed-workstation runs.
+
+The GitHub-hosted Ubuntu selector is `local_runtime` evidence and therefore
+baseline-ineligible. It demonstrates the repository-owned fixture boundary for
+#94 but does not complete #172 or substitute for its external managed Windows
+baseline.
 
 ## Delivery sequence
 
@@ -452,9 +475,11 @@ second integration framework.
         |
 4. Add or adapt the smallest workflow and renderer code under #175 — complete
         |
-5. Prepare stable Jira, Bitbucket, and Confluence fixtures under #94 — pending
+5. Add the protected #94 selector — complete locally; provision fixtures and
+   run it on reviewed default-branch code — pending
         |
-6. Run the initial #172 managed-workstation baseline — pending
+6. Run the initial Windows 11 standard-user #172 managed-workstation baseline
+   — pending
         |
 7. Apply measured #165, #168, #167, and #166 improvements
         |

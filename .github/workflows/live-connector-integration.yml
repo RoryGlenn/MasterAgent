@@ -3,6 +3,14 @@ name: Credentialed connector integration
 on:
   workflow_dispatch:
     inputs:
+      test_case:
+        description: Select one exact protected case, or leave disabled for the broad matrix
+        required: true
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - T1-EWIR-001
       run_effects:
         description: Run protected sandbox writes and test communications
         required: false
@@ -32,14 +40,27 @@ jobs:
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Reject simultaneous effect and administration modes
+      - name: Reject overlapping live selections
         env:
+          TEST_CASE: ${{ inputs.test_case }}
           RUN_EFFECTS: ${{ inputs.run_effects }}
           RUN_GITHUB_ADMIN: ${{ inputs.run_github_admin }}
         run: |
           set -euo pipefail
+          case "$TEST_CASE" in
+            disabled|T1-EWIR-001) ;;
+            *)
+              echo "unsupported protected test case" >&2
+              exit 1
+              ;;
+          esac
           if test "$RUN_EFFECTS" = "true" && test "$RUN_GITHUB_ADMIN" = "true"; then
             echo "run_effects and run_github_admin are mutually exclusive" >&2
+            exit 1
+          fi
+          if test "$TEST_CASE" != "disabled" && \
+             { test "$RUN_EFFECTS" = "true" || test "$RUN_GITHUB_ADMIN" = "true"; }; then
+            echo "a protected test case cannot overlap effect or administration modes" >&2
             exit 1
           fi
 
@@ -49,6 +70,9 @@ jobs:
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       github.event_name == 'workflow_dispatch' &&
+      inputs.test_case == 'disabled' &&
+      !inputs.run_effects &&
+      !inputs.run_github_admin &&
       vars.MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -133,12 +157,113 @@ jobs:
           tests.test_connector_integration_matrix.CredentialedReadConnectorIntegrationTests
           -v
 
+  tier1-engineering-work-item-review:
+    name: Protected T1-EWIR-001 Engineering Work Item Review
+    needs: validate-selection
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.test_case == 'T1-EWIR-001' &&
+      !inputs.run_effects &&
+      !inputs.run_github_admin &&
+      vars.MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: connector-integration-read
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Seal hosted Python runtime
+        run: |
+          test -n "${RUNNER_TOOL_CACHE:-}"
+          test -n "${pythonLocation:-}"
+          case "$pythonLocation" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) exit 1 ;;
+          esac
+          sudo chmod -R go-w -- "$pythonLocation"
+      - name: Install reviewed project
+        run: |
+          umask 077
+          runtime_env="$RUNNER_TEMP/master-agent-live-t1-ewir-runtime"
+          python -m venv "$runtime_env"
+          "$runtime_env/bin/python" -m pip install .
+          echo "$runtime_env/bin" >> "$GITHUB_PATH"
+      - name: Materialize and preflight the private Tier-1 case
+        env:
+          LIVE_INTEGRATIONS_TOML: ${{ secrets.MASTER_AGENT_LIVE_READ_INTEGRATIONS_TOML }}
+          T1_EWIR_WORKFLOW_TOML: ${{ secrets.MASTER_AGENT_LIVE_READ_T1_EWIR_WORKFLOW_TOML }}
+          ENTERPRISE_CA_BUNDLE_PEM: ${{ secrets.MASTER_AGENT_ENTERPRISE_CA_BUNDLE_PEM }}
+          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_USERNAME }}
+          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_TOKEN }}
+          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_USERNAME }}
+          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_TOKEN }}
+          MASTER_AGENT_BITBUCKET_EMAIL: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_EMAIL }}
+          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_TOKEN }}
+          MASTER_AGENT_PROXY_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_USERNAME }}
+          MASTER_AGENT_PROXY_PASSWORD: ${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_PASSWORD }}
+          MASTER_AGENT_LIVE_JIRA_ISSUE_ID: ${{ vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          case_root="$RUNNER_TEMP/master-agent-live-t1-ewir-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python -m tests.test_connector_integration_matrix \
+            prepare-t1-ewir --root "$case_root"
+          ca_file=""
+          if test -n "$ENTERPRISE_CA_BUNDLE_PEM"; then
+            ca_file="$case_root-enterprise-ca.pem"
+          fi
+          {
+            printf 'MASTER_AGENT_LIVE_T1_EWIR_ROOT=%s\n' "$case_root"
+            printf 'MASTER_AGENT_LIVE_T1_EWIR_PROFILE=%s\n' \
+              "$case_root/organization-profile.toml"
+            printf 'MASTER_AGENT_LIVE_INTEGRATIONS_FILE=%s\n' \
+              "$case_root/integrations.toml"
+            printf 'MASTER_AGENT_LIVE_T1_EWIR_COMMAND_OUTPUT=%s\n' \
+              "$case_root-command-output.log"
+            printf 'MASTER_AGENT_ENTERPRISE_CA_BUNDLE=%s\n' "$ca_file"
+          } >> "$GITHUB_ENV"
+      - name: Run and verify the production Tier-1 command
+        env:
+          MASTER_AGENT_JIRA_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_USERNAME }}
+          MASTER_AGENT_JIRA_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_JIRA_TOKEN }}
+          MASTER_AGENT_CONFLUENCE_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_USERNAME }}
+          MASTER_AGENT_CONFLUENCE_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_CONFLUENCE_TOKEN }}
+          MASTER_AGENT_BITBUCKET_EMAIL: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_EMAIL }}
+          MASTER_AGENT_BITBUCKET_TOKEN: ${{ secrets.MASTER_AGENT_LIVE_READ_BITBUCKET_TOKEN }}
+          MASTER_AGENT_PROXY_USERNAME: ${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_USERNAME }}
+          MASTER_AGENT_PROXY_PASSWORD: ${{ secrets.MASTER_AGENT_LIVE_READ_PROXY_PASSWORD }}
+          MASTER_AGENT_LIVE_JIRA_ISSUE_ID: ${{ vars.MASTER_AGENT_LIVE_JIRA_ISSUE_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          command_status=0
+          master-agent engineering-work-item-review \
+            "$MASTER_AGENT_LIVE_JIRA_ISSUE_ID" \
+            --profile "$MASTER_AGENT_LIVE_T1_EWIR_PROFILE" \
+            > "$MASTER_AGENT_LIVE_T1_EWIR_COMMAND_OUTPUT" 2>&1 || command_status=$?
+          python -m tests.test_connector_integration_matrix \
+            verify-t1-ewir \
+            --root "$MASTER_AGENT_LIVE_T1_EWIR_ROOT" \
+            --command-exit-code "$command_status" \
+            >> "$GITHUB_STEP_SUMMARY"
+
   sandbox-effects:
     name: Protected connector effects
     needs: validate-selection
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       github.event_name == 'workflow_dispatch' &&
+      inputs.test_case == 'disabled' &&
       inputs.run_effects &&
       !inputs.run_github_admin &&
       vars.MASTER_AGENT_LIVE_EFFECT_TESTS_ENABLED == 'true'
@@ -260,7 +385,7 @@ jobs:
           MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID: ${{ vars.MASTER_AGENT_LIVE_SHAREPOINT_ITEM_ID }}
           MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT: ${{ vars.MASTER_AGENT_LIVE_OUTLOOK_RECIPIENT }}
           MASTER_AGENT_LIVE_TEAMS_CHAT_ID: ${{ vars.MASTER_AGENT_LIVE_TEAMS_CHAT_ID }}
-        run: python tests/test_connector_integration_matrix.py recover --mode effects
+        run: python -m tests.test_connector_integration_matrix recover --mode effects
       - name: Send dedicated test communications last
         env:
           MASTER_AGENT_RUN_LIVE_COMMUNICATION_TESTS: "1"
@@ -282,6 +407,7 @@ jobs:
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       github.event_name == 'workflow_dispatch' &&
+      inputs.test_case == 'disabled' &&
       inputs.run_github_admin &&
       !inputs.run_effects &&
       vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_TESTS_ENABLED == 'true'
@@ -360,4 +486,4 @@ jobs:
           MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_OWNER }}
           MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_REPOSITORY }}
           MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING: ${{ vars.MASTER_AGENT_LIVE_GITHUB_ADMIN_SETTING }}
-        run: python tests/test_connector_integration_matrix.py recover --mode admin
+        run: python -m tests.test_connector_integration_matrix recover --mode admin

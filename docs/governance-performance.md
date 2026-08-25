@@ -58,6 +58,12 @@ zero-approval path. That local evidence validates attribution and behavior but
 remains baseline-ineligible; only the protected #172 managed-workstation route
 may establish the live latency/reliability baseline.
 
+The installed high-level command records one principal attestation per selected
+provider during immutable binding and another during applied execution: six for
+the three-provider protected case. The deterministic benchmark below records
+only its setup-phase three attestations. Compare each result with the bound for
+its own execution boundary.
+
 ## Deterministic regression benchmark
 
 Run the default Tier-1 Engineering Work Item Review case:

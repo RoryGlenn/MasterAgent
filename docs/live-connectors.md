@@ -196,6 +196,16 @@ administration credentials across protected GitHub environments. Ordinary
 GitHub read/effect coverage uses the job-scoped `github.token`; only the admin
 job receives its separate personal access token and configuration.
 
+That same workflow has a default-disabled exact `T1-EWIR-001` selector. Its
+dedicated read-environment job invokes the installed high-level production
+command with only Jira, Bitbucket, and Confluence credentials, one Confluence
+page, and diffstat disabled. It accepts exactly three native/bound connector
+initializations and credential resolutions, six bind/apply principal
+attestations, no unselected-provider activity, and a digest-valid private
+three-artifact complete result. Only content-free bounded evidence is retained;
+the GitHub-hosted Ubuntu run is repository-side #94 evidence, not the pending
+#172 Windows managed-workstation baseline.
+
 Before an effect begins, the harness checks every fixture and gate plus the
 delegated Microsoft token's exact scopes and remaining lifetime. Reversible
 tests record private runner-temporary recovery entries, verify in-process

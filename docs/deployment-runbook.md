@@ -60,6 +60,14 @@ Before enabling a repository variable, complete the environment's reviewer and
 exact-default-branch restriction, least-privilege provider credentials, tenant
 consent, stable fixtures, and dedicated nonproduction targets.
 
+The `test_case` selector defaults to `disabled`. Select `T1-EWIR-001` only by
+itself; it cannot overlap the broad read, effect, or administration modes. The
+named case reuses the read integrations secret and Jira issue variable, requires
+`MASTER_AGENT_LIVE_READ_T1_EWIR_WORKFLOW_TOML`, and maps only Jira, Bitbucket,
+Confluence, optional read-proxy, and optional enterprise-CA credentials. Its
+initial protected workflow must contain exactly one Confluence page and must
+disable diffstat.
+
 For this repository, all three environments currently require reviewer
 `RoryGlenn` and allow only the exact `main` branch. Self-review prevention is
 off because that account is the sole eligible collaborator. No enablement
@@ -221,12 +229,17 @@ master-agent engineering-work-item-review PROJECT-123 \
 ```
 
 Require an exit-zero `complete` bundle, exactly three create-only private
-artifacts, native implementation identity for each selected connector, zero
+artifacts, native/bound implementation identity for each selected connector,
+exactly three connector initializations and credential resolutions, six
+principal attestations (bind and apply for each provider), zero governance or
 approval interactions, no unselected-provider credential or network activity,
-and the content-free `T1-EWIR-001` performance record. A local or CI pass is
-baseline-ineligible; preserve the protected run metadata for #172 and do not
-enable the workflow by default until managed-workstation certification is
-complete.
+no more than 14 provider content calls, and the content-free `T1-EWIR-001`
+performance record. The deterministic setup harness records three attestations;
+that is not the high-level run boundary. A local or GitHub-hosted Ubuntu pass is
+baseline-ineligible repository-side #94 evidence. Retain only its content-free
+summary, let private provider artifacts expire with runner state, and do not
+claim #172 complete until the external Windows 11 standard-user baseline and
+repeat runs pass.
 
 ## 8. Validate draft-only output
 

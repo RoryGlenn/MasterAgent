@@ -119,7 +119,10 @@ GitHub-only lifecycle for routine repository-scoped coverage.
 `.github/workflows/live-connector-integration.yml` has only
 `workflow_dispatch`. It has no pull-request, push, or schedule trigger, and
 every provider job checks that it is running from the repository's current
-default branch. `run_effects` and `run_github_admin` are mutually exclusive.
+default branch. The `test_case` choice defaults to `disabled`; its only named
+case is `T1-EWIR-001`. A named case, `run_effects`, and `run_github_admin` are
+mutually exclusive, and the broad read job runs only while all three privileged
+selections are disabled.
 
 The jobs use three protected environments:
 
@@ -138,6 +141,46 @@ Repository variables gate them independently:
 Set a gate to the literal string `true` only after its environment,
 least-privilege credentials, consent, fixtures, dedicated targets, default-
 branch restriction, and reviewer rules are complete.
+
+### Protected `T1-EWIR-001` selector
+
+The named selector reuses `connector-integration-read` and
+`MASTER_AGENT_LIVE_CONNECTOR_TESTS_ENABLED`. It exposes only Jira, Bitbucket,
+and Confluence credentials plus the optional read-proxy and enterprise-CA
+inputs. GitHub and Microsoft credentials, Graph token files, and artifact
+upload/download actions are absent from the job.
+
+Preparation creates a fresh mode-`0700` directory in `RUNNER_TEMP` and three
+distinct create-only regular mode-`0600` files: the existing protected read
+integrations TOML, `MASTER_AGENT_LIVE_READ_T1_EWIR_WORKFLOW_TOML`, and a locally
+generated employee/live profile. The profile disables writes and
+communications, uses private paths, and allows only
+`jira.issue.review_context.read`, `bitbucket.repository.read`,
+`bitbucket.pull_request.read`, `bitbucket.build_status.read`, and
+`confluence.page.read`. The initial protected fixture is intentionally narrower
+than the general production command: it requires exactly one Confluence page,
+Bitbucket Cloud, and `include_diffstat = false`.
+
+After provider-free typed preflight, the job runs the installed production
+command for `MASTER_AGENT_LIVE_JIRA_ISSUE_ID`. Normal output remains in a
+private runner-temporary file. The readback accepts only one exit-zero complete
+run, three create-only private review artifacts with valid manifest digests,
+three native/bound connector initializations and credential resolutions, six
+principal attestations (one per provider during bind and again during apply),
+zero governance or approval interactions, no unselected-provider activity, and
+at most 14 provider content calls (always below the fixed outer bound of 20).
+The deterministic performance harness records three setup attestations instead;
+that is a different execution boundary, not missing high-level evidence.
+
+Only the checked-out commit, completion boolean, artifact count/mode, fixed
+implementation dimensions, and bounded counters enter the step summary. It
+contains no provider payload, fixture identifier, URL, local path, credential,
+or exception text, and no provider artifact leaves ephemeral runner state.
+
+A successful GitHub-hosted Ubuntu selector run is baseline-ineligible
+repository-side evidence for #94. It is a prerequisite for, not completion of,
+#172. The Windows 11 standard-user managed-workstation baseline and repeat runs
+remain external and pending.
 
 ### Current repository setup
 
@@ -167,6 +210,8 @@ bundle.
 ### Read environment
 
 - `MASTER_AGENT_LIVE_READ_INTEGRATIONS_TOML`
+- `MASTER_AGENT_LIVE_READ_T1_EWIR_WORKFLOW_TOML` (required only for the named
+  Tier-1 selector)
 - `MASTER_AGENT_LIVE_READ_GRAPH_TOKEN_FILE_JSON`
 - `MASTER_AGENT_LIVE_READ_JIRA_USERNAME`
 - `MASTER_AGENT_LIVE_READ_JIRA_TOKEN`
