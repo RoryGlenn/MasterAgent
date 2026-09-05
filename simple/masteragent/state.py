@@ -106,7 +106,9 @@ class TaskStore:
             self._db.commit()
 
     def _task(self, task_id: str) -> sqlite3.Row:
-        row = self._db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        row = self._db.execute(
+            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
         if row is None:
             raise KeyError(f"Unknown task: {task_id}")
         return row
@@ -114,12 +116,18 @@ class TaskStore:
     def _active(self, task_id: str) -> sqlite3.Row:
         task = self._task(task_id)
         if task["status"] == "cancelled":
-            raise TaskCancelledError(f"Task {task_id} is cancelled; resume it explicitly.")
+            raise TaskCancelledError(
+                f"Task {task_id} is cancelled; resume it explicitly."
+            )
         if task["status"] != "running":
-            raise TaskStateError(f"Task {task_id} is {task['status']}; resume it first.")
+            raise TaskStateError(
+                f"Task {task_id} is {task['status']}; resume it first."
+            )
         generation = self._generations.get(task_id)
         if generation is not None and generation != task["generation"]:
-            raise TaskStateError("This worker was superseded; reopen the task before continuing.")
+            raise TaskStateError(
+                "This worker was superseded; reopen the task before continuing."
+            )
         return task
 
     @staticmethod
@@ -127,7 +135,9 @@ class TaskStore:
         result = dict(row)
         result.pop("claim", None)
         result["is_write"] = bool(result["is_write"])
-        result["result"] = json.loads(row["result"]) if row["result"] is not None else None
+        result["result"] = (
+            json.loads(row["result"]) if row["result"] is not None else None
+        )
         return result
 
     def create(self, workflow: str, inputs: dict[str, Any]) -> str:
@@ -171,7 +181,9 @@ class TaskStore:
         task = dict(self._task(task_id))
         task.pop("generation")
         task["inputs"] = json.loads(task["inputs"])
-        task["result"] = json.loads(task["result"]) if task["result"] is not None else None
+        task["result"] = (
+            json.loads(task["result"]) if task["result"] is not None else None
+        )
         rows = self._db.execute(
             "SELECT * FROM steps WHERE task_id = ? ORDER BY position", (task_id,)
         )
@@ -198,7 +210,9 @@ class TaskStore:
         ).fetchall()
         return [self.get(row["id"]) for row in ids]
 
-    def begin_step(self, task_id: str, name: str, is_write: bool = False) -> dict[str, Any]:
+    def begin_step(
+        self, task_id: str, name: str, is_write: bool = False
+    ) -> dict[str, Any]:
         """Claim a step, or return its completed checkpoint without executing it.
 
         Parameters
@@ -230,7 +244,9 @@ class TaskStore:
             ).fetchone()
             if row is not None:
                 if bool(row["is_write"]) != is_write:
-                    raise TaskStateError("A step's write classification cannot change on resume.")
+                    raise TaskStateError(
+                        "A step's write classification cannot change on resume."
+                    )
                 if row["status"] == "completed":
                     return self._step_dict(row)
                 if row["is_write"] and row["status"] in {"running", "uncertain"}:
@@ -244,13 +260,22 @@ class TaskStore:
                     "INSERT INTO steps VALUES (?, ?, "
                     "(SELECT COUNT(*) FROM steps WHERE task_id = ?), ?, 'running', "
                     "NULL, NULL, 1, ?, ?, ?)",
-                    (task_id, name, task_id, int(is_write), claim, timestamp, timestamp),
+                    (
+                        task_id,
+                        name,
+                        task_id,
+                        int(is_write),
+                        claim,
+                        timestamp,
+                        timestamp,
+                    ),
                 )
             else:
                 self._db.execute(
                     "UPDATE steps SET status = 'running', result = NULL, error = NULL, "
                     "attempt = attempt + 1, claim = ?, updated_at = ? "
-                    "WHERE task_id = ? AND name = ?", (claim, timestamp, task_id, name),
+                    "WHERE task_id = ? AND name = ?",
+                    (claim, timestamp, task_id, name),
                 )
             self._db.execute(
                 "UPDATE tasks SET updated_at = ? WHERE id = ?", (timestamp, task_id)
@@ -262,7 +287,12 @@ class TaskStore:
             return self._step_dict(current)
 
     def _save_step(
-        self, task_id: str, name: str, status: str, result: Any = None, error: str | None = None
+        self,
+        task_id: str,
+        name: str,
+        status: str,
+        result: Any = None,
+        error: str | None = None,
     ) -> None:
         encoded = _encode(result)
         with self._transaction():
@@ -276,16 +306,22 @@ class TaskStore:
             )
             if cursor.rowcount != 1:
                 raise TaskStateError("This worker no longer owns the running step.")
-            self._db.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (_now(), task_id))
+            self._db.execute(
+                "UPDATE tasks SET updated_at = ? WHERE id = ?", (_now(), task_id)
+            )
         self._claims.pop((task_id, name), None)
 
     def complete_step(self, task_id: str, name: str, result: Any) -> None:
         """Save a JSON-serializable result for a step claimed by this instance."""
         self._save_step(task_id, name, "completed", result=result)
 
-    def fail_step(self, task_id: str, name: str, error: str, uncertain: bool = False) -> None:
+    def fail_step(
+        self, task_id: str, name: str, error: str, uncertain: bool = False
+    ) -> None:
         """Save an error; mark ambiguous write outcomes uncertain to prevent replay."""
-        self._save_step(task_id, name, "uncertain" if uncertain else "failed", error=error)
+        self._save_step(
+            task_id, name, "uncertain" if uncertain else "failed", error=error
+        )
 
     def finish(self, task_id: str, result: Any) -> None:
         """Complete an active task once every started step has a saved result."""
@@ -300,7 +336,8 @@ class TaskStore:
                 raise TaskStateError(f"Step '{unfinished['name']}' is not complete.")
             self._db.execute(
                 "UPDATE tasks SET status = 'completed', result = ?, error = NULL, "
-                "updated_at = ? WHERE id = ?", (encoded, _now(), task_id),
+                "updated_at = ? WHERE id = ?",
+                (encoded, _now(), task_id),
             )
 
     def wait(self, task_id: str, result: Any) -> None:
@@ -310,7 +347,8 @@ class TaskStore:
             self._active(task_id)
             self._db.execute(
                 "UPDATE tasks SET status = 'waiting', result = ?, error = NULL, "
-                "updated_at = ? WHERE id = ?", (encoded, _now(), task_id),
+                "updated_at = ? WHERE id = ?",
+                (encoded, _now(), task_id),
             )
 
     def fail(self, task_id: str, error: str, result: Any = None) -> None:
@@ -332,12 +370,14 @@ class TaskStore:
                 raise TaskStateError("A completed task cannot be cancelled.")
             self._db.execute(
                 "UPDATE tasks SET status = 'cancelled', generation = generation + 1, "
-                "updated_at = ? WHERE id = ?", (_now(), task_id),
+                "updated_at = ? WHERE id = ?",
+                (_now(), task_id),
             )
             self._db.execute(
                 "UPDATE steps SET status = CASE WHEN is_write = 1 THEN 'uncertain' "
                 "ELSE 'failed' END, error = 'Task cancelled during step', claim = NULL, "
-                "updated_at = ? WHERE task_id = ? AND status = 'running'", (_now(), task_id),
+                "updated_at = ? WHERE task_id = ? AND status = 'running'",
+                (_now(), task_id),
             )
 
     def resume(self, task_id: str) -> None:
@@ -349,7 +389,8 @@ class TaskStore:
             generation = task["generation"] + 1
             self._db.execute(
                 "UPDATE tasks SET status = 'running', error = NULL, generation = ?, "
-                "updated_at = ? WHERE id = ?", (generation, _now(), task_id),
+                "updated_at = ? WHERE id = ?",
+                (generation, _now(), task_id),
             )
         self._generations[task_id] = generation
 
@@ -375,8 +416,12 @@ class TaskStore:
                 (encoded, _now(), task_id, name),
             )
             if cursor.rowcount != 1:
-                raise TaskStateError("Only an interrupted or uncertain write can be resolved.")
-            self._db.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (_now(), task_id))
+                raise TaskStateError(
+                    "Only an interrupted or uncertain write can be resolved."
+                )
+            self._db.execute(
+                "UPDATE tasks SET updated_at = ? WHERE id = ?", (_now(), task_id)
+            )
 
     def retry_step(self, task_id: str, name: str) -> None:
         """Allow a later retry after the caller confirms no remote write was applied.
@@ -403,7 +448,9 @@ class TaskStore:
                 (_now(), task_id, name),
             )
             if cursor.rowcount != 1:
-                raise TaskStateError("Only an interrupted or uncertain write can be retried.")
+                raise TaskStateError(
+                    "Only an interrupted or uncertain write can be retried."
+                )
             generation = task["generation"] + 1
             self._db.execute(
                 "UPDATE tasks SET generation = ?, updated_at = ? WHERE id = ?",
@@ -417,5 +464,6 @@ class TaskStore:
         with self._transaction():
             self._task(task_id)
             self._db.execute(
-                "UPDATE tasks SET note = ?, updated_at = ? WHERE id = ?", (text, _now(), task_id)
+                "UPDATE tasks SET note = ?, updated_at = ? WHERE id = ?",
+                (text, _now(), task_id),
             )

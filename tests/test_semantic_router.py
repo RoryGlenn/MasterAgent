@@ -727,7 +727,10 @@ class SemanticRouterTests(unittest.TestCase):
         manifest = load_manifest(self.root)
         inventory = collect_inventory(self.root)
         for agent_id in (
-            "read-researcher", "plan-reviewer", "docs-contract", "deterministic-runtime"
+            "read-researcher",
+            "plan-reviewer",
+            "docs-contract",
+            "deterministic-runtime",
         ):
             original = manifest.agents_by_id[agent_id]
             cases = (

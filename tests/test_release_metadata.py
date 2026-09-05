@@ -534,7 +534,9 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(checks, [])
             self.assertTrue(any("missing or unreadable" in error for error in errors))
 
-    def test_separate_simple_profile_passes_without_changing_advisory_rules(self) -> None:
+    def test_separate_simple_profile_passes_without_changing_advisory_rules(
+        self,
+    ) -> None:
         root = Path(__file__).resolve().parents[1]
         checks: list[str] = []
         errors: list[str] = []
@@ -601,7 +603,8 @@ class ReleaseMetadataTests(unittest.TestCase):
             ),
             (
                 source.replace(
-                    "name: MasterAgent Simple", "model: unknown\nname: MasterAgent Simple"
+                    "name: MasterAgent Simple",
+                    "model: unknown\nname: MasterAgent Simple",
                 ),
                 "unreviewed frontmatter keys",
             ),

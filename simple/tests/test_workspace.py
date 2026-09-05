@@ -70,7 +70,9 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkspaceError, "different branch"):
             prepare_worktree(self.repository, self.destination, "task/different")
         with self.assertRaises(WorkspaceError):
-            prepare_worktree(self.repository, self.destination / "subdirectory", "task/example")
+            prepare_worktree(
+                self.repository, self.destination / "subdirectory", "task/example"
+            )
 
     def test_existing_branch_is_reused_without_resetting(self) -> None:
         self.git(self.repository, "branch", "task/example")
@@ -95,7 +97,9 @@ class WorkspaceTests(unittest.TestCase):
                 prepare_worktree(self.repository, self.destination, branch)
         for base in ("", "--all", "missing-reference", "x\x00y"):
             with self.subTest(base=base), self.assertRaises(WorkspaceError):
-                prepare_worktree(self.repository, self.destination, "task/example", base=base)
+                prepare_worktree(
+                    self.repository, self.destination, "task/example", base=base
+                )
         with self.assertRaisesRegex(WorkspaceError, "separate directory"):
             prepare_worktree(self.repository, self.repository, "main")
         self.assertFalse(self.destination.exists())
@@ -114,15 +118,25 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(state["branch"], "task/example")
         self.assertEqual(state["head"], self.initial_head)
         self.assertTrue(state["dirty"])
-        self.assertEqual(set(state["changed_files"]), {"source renamed.py", "new file.txt"})
+        self.assertEqual(
+            set(state["changed_files"]), {"source renamed.py", "new file.txt"}
+        )
 
     def test_checks_capture_failures_and_use_workspace_directory(self) -> None:
         self.prepare()
         results = run_checks(
             self.destination,
             [
-                [sys.executable, "-c", "from pathlib import Path; print(Path('source.py').read_text())"],
-                [sys.executable, "-c", "import sys; print('failed', file=sys.stderr); sys.exit(3)"],
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; print(Path('source.py').read_text())",
+                ],
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; print('failed', file=sys.stderr); sys.exit(3)",
+                ],
             ],
         )
         self.assertEqual([result["exit_code"] for result in results], [0, 3])
@@ -132,7 +146,11 @@ class WorkspaceTests(unittest.TestCase):
     def test_checks_reject_shell_strings_and_validate_before_running(self) -> None:
         self.prepare()
         marker = self.destination / "marker"
-        command = [sys.executable, "-c", "from pathlib import Path; Path('marker').touch()"]
+        command = [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('marker').touch()",
+        ]
         for commands in ([], "echo test", [[]], ["echo test"], [command, []]):
             with self.subTest(commands=commands), self.assertRaises(WorkspaceError):
                 run_checks(self.destination, commands)  # type: ignore[arg-type]
@@ -142,7 +160,13 @@ class WorkspaceTests(unittest.TestCase):
         self.prepare()
         result = run_checks(
             self.destination,
-            [[sys.executable, "-c", "import time; print('started', flush=True); time.sleep(10)"]],
+            [
+                [
+                    sys.executable,
+                    "-c",
+                    "import time; print('started', flush=True); time.sleep(10)",
+                ]
+            ],
             timeout=0.1,
         )[0]
         self.assertEqual(result["exit_code"], 124)
@@ -167,7 +191,13 @@ class WorkspaceTests(unittest.TestCase):
         self.prepare()
         result = run_checks(
             self.destination,
-            [[sys.executable, "-c", "print('https://name:private@host/path?token=secret'); print('a' * 30000)"]],
+            [
+                [
+                    sys.executable,
+                    "-c",
+                    "print('https://name:private@host/path?token=secret'); print('a' * 30000)",
+                ]
+            ],
         )[0]
         self.assertNotIn("private", result["output"])
         self.assertNotIn("token=secret", result["output"])
@@ -188,13 +218,23 @@ class WorkspaceTests(unittest.TestCase):
         self.git(self.destination, "config", "push.followTags", "true")
         state = inspect_worktree(self.destination)
         result = publish_branch(self.destination)
-        self.assertEqual(result, {"branch": "task/example", "commit": state["head"], "remote": "origin"})
-        self.assertEqual(self.git(remote, "rev-parse", "refs/heads/task/example"), state["head"])
-        self.assertEqual(self.git(remote, "for-each-ref", "--format=%(refname)"), "refs/heads/task/example")
+        self.assertEqual(
+            result,
+            {"branch": "task/example", "commit": state["head"], "remote": "origin"},
+        )
+        self.assertEqual(
+            self.git(remote, "rev-parse", "refs/heads/task/example"), state["head"]
+        )
+        self.assertEqual(
+            self.git(remote, "for-each-ref", "--format=%(refname)"),
+            "refs/heads/task/example",
+        )
 
     def test_publish_refuses_dirty_detached_and_unknown_remote(self) -> None:
         self.prepare()
-        (self.destination / "untracked.txt").write_text("not committed\n", encoding="utf-8")
+        (self.destination / "untracked.txt").write_text(
+            "not committed\n", encoding="utf-8"
+        )
         with self.assertRaisesRegex(WorkspaceError, "remaining worktree changes"):
             publish_branch(self.destination)
         (self.destination / "untracked.txt").unlink()
@@ -239,7 +279,10 @@ class WorkspaceTests(unittest.TestCase):
         self.git(self.destination, "commit", "-am", "Divergent version")
         with self.assertRaises(WorkspaceError):
             publish_branch(self.destination)
-        self.assertEqual(self.git(remote, "rev-parse", "refs/heads/task/example"), published["commit"])
+        self.assertEqual(
+            self.git(remote, "rev-parse", "refs/heads/task/example"),
+            published["commit"],
+        )
 
 
 if __name__ == "__main__":

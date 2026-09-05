@@ -1878,10 +1878,12 @@ def render_semantic_index(manifest: SemanticManifest) -> str:
             "",
             "## Agent topology",
             "",
-            ("The legacy parent owns its four child nodes. Each child receives only "
-            "its parent, scoped contract, allowed tools, and return path; children "
-            "do not receive sibling prompts. MasterAgent Simple is an independent "
-            "user-invoked profile with no delegation."),
+            (
+                "The legacy parent owns its four child nodes. Each child receives only "
+                "its parent, scoped contract, allowed tools, and return path; children "
+                "do not receive sibling prompts. MasterAgent Simple is an independent "
+                "user-invoked profile with no delegation."
+            ),
             "",
             "| Agent | Kind | Parent | Tools | Depth | Fallback | Profile |",
             "| --- | --- | --- | --- | ---: | --- | --- |",

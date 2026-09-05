@@ -79,10 +79,16 @@ def validate_url(url: str, base_url: str) -> str:
             ):
                 raise ValueError
         context = base.path.rstrip("/")
-        if context and target.path != context and not target.path.startswith(context + "/"):
+        if (
+            context
+            and target.path != context
+            and not target.path.startswith(context + "/")
+        ):
             raise ValueError
     except (TypeError, ValueError):
-        raise ProviderError("URL must use the configured HTTPS provider and context path.") from None
+        raise ProviderError(
+            "URL must use the configured HTTPS provider and context path."
+        ) from None
     return url
 
 
@@ -101,7 +107,10 @@ class _ScopedRedirect(HTTPRedirectHandler):
                 uncertain=req.get_method() not in {"GET", "HEAD"},
             ) from None
         if req.get_method() not in {"GET", "HEAD"}:
-            raise ProviderError("Write redirect was not followed; check the provider result.", uncertain=True)
+            raise ProviderError(
+                "Write redirect was not followed; check the provider result.",
+                uncertain=True,
+            )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -142,9 +151,13 @@ class HttpTransport:
             context = ssl.create_default_context()
             if ca_bundle:
                 context.load_verify_locations(cafile=ca_bundle)
-            self._opener = opener or build_opener(HTTPSHandler(context=context), _ScopedRedirect(self.base_url))
+            self._opener = opener or build_opener(
+                HTTPSHandler(context=context), _ScopedRedirect(self.base_url)
+            )
         except (OSError, ssl.SSLError):
-            raise ProviderError("Could not load the configured provider CA bundle.") from None
+            raise ProviderError(
+                "Could not load the configured provider CA bundle."
+            ) from None
 
     def request(self, method: str, path: str, data: Any = None) -> Any:
         """Send JSON and return decoded JSON, retrying only safe reads.
@@ -177,20 +190,26 @@ class HttpTransport:
                 with self._opener.open(request, timeout=self.timeout) as response:
                     raw = response.read(8 * 1024 * 1024 + 1)
                     if len(raw) > 8 * 1024 * 1024:
-                        raise ProviderError("Provider response exceeded 8 MiB.", uncertain=not read)
+                        raise ProviderError(
+                            "Provider response exceeded 8 MiB.", uncertain=not read
+                        )
                     return json.loads(raw) if raw else {}
             except HTTPError as error:
                 code = error.code
-                retry_after = error.headers.get("Retry-After", "") if error.headers else ""
+                retry_after = (
+                    error.headers.get("Retry-After", "") if error.headers else ""
+                )
                 error.close()
                 if read and attempt < 2 and code in {429, 502, 503, 504}:
                     try:
                         delay = min(5, max(0, float(retry_after)))
                     except ValueError:
-                        delay = float(2 ** attempt)
+                        delay = float(2**attempt)
                     self._sleep(delay)
                     continue
-                uncertain = not read and (code >= 500 or code == 408 or 300 <= code < 400)
+                uncertain = not read and (
+                    code >= 500 or code == 408 or 300 <= code < 400
+                )
                 if code in {401, 403}:
                     message = f"Provider returned HTTP {code}; check credentials and account permissions."
                 elif code == 429:
@@ -200,9 +219,14 @@ class HttpTransport:
                 raise ProviderError(message, uncertain=uncertain) from None
             except (URLError, OSError, HTTPException):
                 if read and attempt < 2:
-                    self._sleep(float(2 ** attempt))
+                    self._sleep(float(2**attempt))
                     continue
-                raise ProviderError("Provider connection failed; check the network and configured URL.", uncertain=not read) from None
+                raise ProviderError(
+                    "Provider connection failed; check the network and configured URL.",
+                    uncertain=not read,
+                ) from None
             except (ValueError, UnicodeError):
-                raise ProviderError("Provider returned invalid JSON.", uncertain=not read) from None
+                raise ProviderError(
+                    "Provider returned invalid JSON.", uncertain=not read
+                ) from None
         raise ProviderError("Provider request did not complete.")

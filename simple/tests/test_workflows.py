@@ -25,8 +25,14 @@ class FakeProviders:
     page_url = "https://docs.example/pages/123/design"
     issue_url = "https://jira.example/browse/APP-42"
     build_url = "https://builds.example/runs/88"
-    created_pr: ClassVar[dict[str, Any]] = {"id": 18, "url": "https://bitbucket.example/projects/APP/repos/backend/pull-requests/18"}
-    created_comment: ClassVar[dict[str, Any]] = {"id": "101", "url": "https://jira.example/browse/APP-42?focusedCommentId=101"}
+    created_pr: ClassVar[dict[str, Any]] = {
+        "id": 18,
+        "url": "https://bitbucket.example/projects/APP/repos/backend/pull-requests/18",
+    }
+    created_comment: ClassVar[dict[str, Any]] = {
+        "id": "101",
+        "url": "https://jira.example/browse/APP-42?focusedCommentId=101",
+    }
 
     def __init__(self) -> None:
         self.calls: Counter[str] = Counter()
@@ -60,7 +66,11 @@ class FakeProviders:
 
     def page(self, url: str) -> dict[str, Any]:
         self._call("page")
-        return {"url": url, "title": "Caching design", "body": "Invalidate on configuration changes."}
+        return {
+            "url": url,
+            "title": "Caching design",
+            "body": "Invalidate on configuration changes.",
+        }
 
     def create_pull_request(
         self,
@@ -106,7 +116,13 @@ class WorkflowTests(unittest.TestCase):
                 "APP": {
                     "repository": str(self.repository),
                     "bitbucket_repository": "APP/backend",
-                    "checks": [[sys.executable, "-c", "from pathlib import Path; assert Path('source.py').exists()"]],
+                    "checks": [
+                        [
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; assert Path('source.py').exists()",
+                        ]
+                    ],
                 }
             },
         }
@@ -130,27 +146,43 @@ class WorkflowTests(unittest.TestCase):
         return task
 
     def publish(self, task: dict[str, Any]) -> dict[str, Any]:
-        return self.workflows.publish(task["id"], title="Improve caching", description="Cache query results.")
+        return self.workflows.publish(
+            task["id"], title="Improve caching", description="Cache query results."
+        )
 
     def assert_no_publication(self) -> None:
         self.assertEqual(self.providers.calls["create_pull_request"], 0)
         self.assertEqual(self.providers.calls["comment_issue"], 0)
-        self.assertEqual(self.git(self.remote, "for-each-ref", "--format=%(refname)"), "")
+        self.assertEqual(
+            self.git(self.remote, "for-each-ref", "--format=%(refname)"), ""
+        )
 
     def test_review_collects_sources_and_resumes_only_failed_reads(self) -> None:
-        self.providers.failures["page"] = RuntimeError("Documentation temporarily unavailable")
+        self.providers.failures["page"] = RuntimeError(
+            "Documentation temporarily unavailable"
+        )
         task = self.workflows.review("app-42")
         self.assertEqual(task["status"], "failed")
         self.assertEqual(task["result"]["issue"]["key"], "APP-42")
         self.assertEqual(len(task["result"]["pull_requests"]), 1)
-        self.assertEqual(task["result"]["pull_requests"][0]["builds"][0]["state"], "SUCCESSFUL")
+        self.assertEqual(
+            task["result"]["pull_requests"][0]["builds"][0]["state"], "SUCCESSFUL"
+        )
         self.assertEqual(len(task["result"]["errors"]), 1)
         resumed = self.workflows.resume(task["id"])
         self.assertEqual(resumed["status"], "completed")
         self.assertEqual(resumed["result"]["errors"], [])
-        self.assertEqual(self.providers.calls, {"issue": 1, "pull_request": 1, "builds": 1, "page": 2})
+        self.assertEqual(
+            self.providers.calls,
+            {"issue": 1, "pull_request": 1, "builds": 1, "page": 2},
+        )
         artifact = Path(resumed["result"]["artifact"]).read_text(encoding="utf-8")
-        for source in (self.providers.issue_url, self.providers.pr_url, self.providers.build_url, self.providers.page_url):
+        for source in (
+            self.providers.issue_url,
+            self.providers.pr_url,
+            self.providers.build_url,
+            self.providers.page_url,
+        ):
             self.assertIn(source, artifact)
 
     def test_review_build_retry_reuses_successful_pull_request(self) -> None:
@@ -158,24 +190,33 @@ class WorkflowTests(unittest.TestCase):
         task = self.workflows.review("APP-42")
         resumed = self.workflows.resume(task["id"])
         self.assertEqual(resumed["status"], "completed")
-        self.assertEqual(self.providers.calls, {"issue": 1, "pull_request": 1, "builds": 2, "page": 1})
+        self.assertEqual(
+            self.providers.calls,
+            {"issue": 1, "pull_request": 1, "builds": 2, "page": 1},
+        )
 
     def test_develop_waits_for_host_in_isolated_worktree(self) -> None:
-        (self.repository / "source.py").write_text("original uncommitted work\n", encoding="utf-8")
+        (self.repository / "source.py").write_text(
+            "original uncommitted work\n", encoding="utf-8"
+        )
         (self.repository / "untracked.txt").write_text("keep this\n", encoding="utf-8")
         task = self.workflows.develop("APP-42")
         self.assertEqual(task["status"], "waiting")
         worktree = Path(task["result"]["workspace"]["path"])
         self.assertNotEqual(worktree, self.repository)
         self.assertEqual((worktree / "source.py").read_text(), "answer = 42\n")
-        self.assertEqual((self.repository / "source.py").read_text(), "original uncommitted work\n")
+        self.assertEqual(
+            (self.repository / "source.py").read_text(), "original uncommitted work\n"
+        )
         self.assertTrue((self.repository / "untracked.txt").exists())
         self.assertEqual(self.git(self.repository, "branch", "--show-current"), "main")
         self.assertIn(str(worktree), Path(task["result"]["artifact"]).read_text())
         self.assert_no_publication()
 
     def test_failed_checks_prevent_any_publication(self) -> None:
-        self.config["projects"]["APP"]["checks"] = [[sys.executable, "-c", "raise SystemExit(2)"]]
+        self.config["projects"]["APP"]["checks"] = [
+            [sys.executable, "-c", "raise SystemExit(2)"]
+        ]
         task = self.workflows.develop("APP-42")
         checks = self.workflows.checks(task["id"])
         self.assertFalse(checks["evidence"]["passed"])
@@ -188,7 +229,9 @@ class WorkflowTests(unittest.TestCase):
         task = self.ready_task()
         self.assertEqual(task["status"], "waiting")
         self.assertTrue(task["result"]["review"]["errors"])
-        self.providers.failures["page"] = RuntimeError("Documentation still unavailable")
+        self.providers.failures["page"] = RuntimeError(
+            "Documentation still unavailable"
+        )
         with self.assertRaisesRegex(WorkflowError, "source reads still fail"):
             self.publish(task)
         self.assert_no_publication()
@@ -211,7 +254,9 @@ class WorkflowTests(unittest.TestCase):
             self.publish(task)
         self.assert_no_publication()
 
-    def test_different_branch_at_tested_commit_blocks_checks_and_publication(self) -> None:
+    def test_different_branch_at_tested_commit_blocks_checks_and_publication(
+        self,
+    ) -> None:
         task = self.ready_task()
         worktree = Path(task["result"]["workspace"]["path"])
         tested_commit = self.git(worktree, "rev-parse", "HEAD")
@@ -223,7 +268,9 @@ class WorkflowTests(unittest.TestCase):
             self.publish(task)
         self.assert_no_publication()
 
-    def test_changed_provider_target_blocks_write_but_credential_updates_allow_resume(self) -> None:
+    def test_changed_provider_target_blocks_write_but_credential_updates_allow_resume(
+        self,
+    ) -> None:
         self.config["bitbucket"] = {
             "url": "https://bitbucket.example",
             "deployment": "server",
@@ -246,11 +293,19 @@ class WorkflowTests(unittest.TestCase):
     def test_interrupted_artifact_replace_preserves_previous_files(self) -> None:
         task = self.ready_task()
         directory = self.home / "outputs" / task["id"]
-        self.workflows._artifact(task["id"], "publication.json", '{"title": "Original title"}')
+        self.workflows._artifact(
+            task["id"], "publication.json", '{"title": "Original title"}'
+        )
         for name in ("checks.json", "publication.json"):
             with self.subTest(name=name):
                 before = (directory / name).read_bytes()
-                with patch("masteragent.workflows.os.replace", side_effect=OSError("Interrupted replacement")), self.assertRaisesRegex(OSError, "Interrupted replacement"):
+                with (
+                    patch(
+                        "masteragent.workflows.os.replace",
+                        side_effect=OSError("Interrupted replacement"),
+                    ),
+                    self.assertRaisesRegex(OSError, "Interrupted replacement"),
+                ):
                     self.workflows._artifact(task["id"], name, '{"new": "replacement"}')
                 self.assertEqual((directory / name).read_bytes(), before)
                 self.assertEqual(list(directory.glob(name + "-*")), [])
@@ -261,7 +316,11 @@ class WorkflowTests(unittest.TestCase):
             self.publish(task)
         self.assert_no_publication()
         self.workflows.checks(task["id"])
-        with patch.object(self.providers, "create_pull_request", wraps=self.providers.create_pull_request) as create_pr:
+        with patch.object(
+            self.providers,
+            "create_pull_request",
+            wraps=self.providers.create_pull_request,
+        ) as create_pr:
             completed = self.workflows.publish(
                 task["id"],
                 title="Corrected title",
@@ -269,21 +328,37 @@ class WorkflowTests(unittest.TestCase):
                 target="release",
             )
         self.assertEqual(completed["status"], "completed")
-        self.assertEqual(create_pr.call_args.args[2:5], ("release", "Corrected title", "Corrected description"))
+        self.assertEqual(
+            create_pr.call_args.args[2:5],
+            ("release", "Corrected title", "Corrected description"),
+        )
 
     def test_publish_resume_after_jira_failure_does_not_repeat_push_or_pr(self) -> None:
         task = self.ready_task()
-        self.providers.failures["comment_issue"] = RuntimeError("Jira rejected the request before writing")
-        with patch("masteragent.workflows.publish_branch", wraps=publish_branch) as push:
+        self.providers.failures["comment_issue"] = RuntimeError(
+            "Jira rejected the request before writing"
+        )
+        with patch(
+            "masteragent.workflows.publish_branch", wraps=publish_branch
+        ) as push:
             with self.assertRaisesRegex(WorkflowError, "Jira rejected"):
                 self.publish(task)
             failed = self.store.get(task["id"])
             self.assertEqual(failed["status"], "failed")
-            self.assertEqual(next(step for step in failed["steps"] if step["name"] == "bitbucket.create_pr")["status"], "completed")
+            self.assertEqual(
+                next(
+                    step
+                    for step in failed["steps"]
+                    if step["name"] == "bitbucket.create_pr"
+                )["status"],
+                "completed",
+            )
             # Later local work must not block the outstanding Jira update or
             # change the commit recorded for the already-published PR.
             worktree = Path(task["result"]["workspace"]["path"])
-            (worktree / "later-untracked-work.txt").write_text("still editing\n", encoding="utf-8")
+            (worktree / "later-untracked-work.txt").write_text(
+                "still editing\n", encoding="utf-8"
+            )
             resumed = self.workflows.resume(task["id"])
             self.assertEqual(resumed["status"], "completed")
             self.assertEqual(push.call_count, 1)
@@ -291,16 +366,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.providers.calls["create_pull_request"], 1)
         self.assertEqual(self.providers.calls["comment_issue"], 2)
         self.assertEqual(resumed["result"]["pull_request"], self.providers.created_pr)
-        self.assertEqual(self.providers.comment_arguments[2], f"masteragent:{task['id']}")
-        self.assertIn(resumed["result"]["published_commit"], self.providers.comment_arguments[1])
+        self.assertEqual(
+            self.providers.comment_arguments[2], f"masteragent:{task['id']}"
+        )
+        self.assertIn(
+            resumed["result"]["published_commit"], self.providers.comment_arguments[1]
+        )
 
-    def assert_uncertain_write_requires_resolution(self, operation: str, step: str, result: dict[str, Any]) -> None:
+    def assert_uncertain_write_requires_resolution(
+        self, operation: str, step: str, result: dict[str, Any]
+    ) -> None:
         task = self.ready_task()
-        self.providers.failures[operation] = UncertainProviderError("Response lost after request was sent")
-        with patch("masteragent.workflows.publish_branch", wraps=publish_branch) as push:
+        self.providers.failures[operation] = UncertainProviderError(
+            "Response lost after request was sent"
+        )
+        with patch(
+            "masteragent.workflows.publish_branch", wraps=publish_branch
+        ) as push:
             with self.assertRaises(WorkflowError):
                 self.publish(task)
-            self.assertEqual(next(item for item in self.store.get(task["id"])["steps"] if item["name"] == step)["status"], "uncertain")
+            self.assertEqual(
+                next(
+                    item
+                    for item in self.store.get(task["id"])["steps"]
+                    if item["name"] == step
+                )["status"],
+                "uncertain",
+            )
             with self.assertRaisesRegex(WorkflowError, "resolve"):
                 self.workflows.resume(task["id"])
             self.assertEqual(self.providers.calls[operation], 1)
@@ -312,10 +404,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.providers.calls["comment_issue"], 1)
 
     def test_uncertain_pr_requires_observed_result_before_resume(self) -> None:
-        self.assert_uncertain_write_requires_resolution("create_pull_request", "bitbucket.create_pr", self.providers.created_pr)
+        self.assert_uncertain_write_requires_resolution(
+            "create_pull_request", "bitbucket.create_pr", self.providers.created_pr
+        )
 
-    def test_uncertain_jira_comment_requires_observed_result_before_resume(self) -> None:
-        self.assert_uncertain_write_requires_resolution("comment_issue", "jira.comment", self.providers.created_comment)
+    def test_uncertain_jira_comment_requires_observed_result_before_resume(
+        self,
+    ) -> None:
+        self.assert_uncertain_write_requires_resolution(
+            "comment_issue", "jira.comment", self.providers.created_comment
+        )
 
     def test_cancelled_development_task_cannot_publish(self) -> None:
         task = self.ready_task()
@@ -335,7 +433,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(status["result"]["sent"])
         self.assertEqual(status["result"]["task_count"], 1)
         text = Path(status["result"]["artifact"]).read_text()
-        for expected in ("saved local task history", "provider states have not been refreshed", "APP-42", "waiting", "invalidation timing", "nothing has been sent"):
+        for expected in (
+            "saved local task history",
+            "provider states have not been refreshed",
+            "APP-42",
+            "waiting",
+            "invalidation timing",
+            "nothing has been sent",
+        ):
             self.assertIn(expected, text)
 
     def test_early_failed_task_has_clear_checks_and_publish_errors(self) -> None:

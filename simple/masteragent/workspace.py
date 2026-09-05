@@ -107,7 +107,9 @@ def _git(
         )
     except subprocess.TimeoutExpired as exc:
         detail = _output(exc.stderr or exc.stdout).strip()
-        raise WorkspaceError(f"Git timed out after {_GIT_TIMEOUT}s. {detail}".strip()) from None
+        raise WorkspaceError(
+            f"Git timed out after {_GIT_TIMEOUT}s. {detail}".strip()
+        ) from None
     except OSError as exc:
         raise WorkspaceError(f"Could not run Git: {_redact(str(exc))}") from None
     if check and result.returncode:
@@ -119,7 +121,9 @@ def _git(
 def _root(path: Path) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_dir():
-        raise WorkspaceError(f"Workspace directory does not exist: {_redact(str(resolved))}")
+        raise WorkspaceError(
+            f"Workspace directory does not exist: {_redact(str(resolved))}"
+        )
     result = _git(resolved, "rev-parse", "--show-toplevel")
     return Path(result.stdout.strip()).resolve()
 
@@ -208,11 +212,18 @@ def prepare_worktree(
             if _common_directory(repository) != _common_directory(destination):
                 raise WorkspaceError("The destination belongs to another repository.")
             if inspect_worktree(destination)["branch"] != branch:
-                raise WorkspaceError("The destination is checked out on a different branch.")
+                raise WorkspaceError(
+                    "The destination is checked out on a different branch."
+                )
             return {"path": str(destination), "branch": branch, "base": commit}
 
     exists = _git(
-        repository, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False
+        repository,
+        "show-ref",
+        "--verify",
+        "--quiet",
+        f"refs/heads/{branch}",
+        check=False,
     )
     if exists.returncode == 0:
         _git(repository, "worktree", "add", "--", str(destination), branch)
@@ -229,7 +240,9 @@ def prepare_worktree(
             commit,
         )
     else:
-        raise WorkspaceError(f"Could not inspect the branch: {_output(exists.stderr).strip()}")
+        raise WorkspaceError(
+            f"Could not inspect the branch: {_output(exists.stderr).strip()}"
+        )
     return {"path": str(destination), "branch": branch, "base": commit}
 
 
@@ -249,12 +262,18 @@ def inspect_worktree(path: Path) -> dict[str, Any]:
         unstaged, and untracked files; ignored files are omitted.
     """
     path = _root(path)
-    branch_result = _git(path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    branch_result = _git(
+        path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
+    )
     if branch_result.returncode not in (0, 1):
-        raise WorkspaceError(f"Could not inspect HEAD: {_output(branch_result.stderr).strip()}")
+        raise WorkspaceError(
+            f"Could not inspect HEAD: {_output(branch_result.stderr).strip()}"
+        )
     branch = branch_result.stdout.strip() if branch_result.returncode == 0 else None
     head = _git(path, "rev-parse", "--verify", "HEAD").stdout.strip()
-    status = _git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
+    status = _git(
+        path, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    ).stdout
     records = iter(status.split("\x00"))
     changed_files: list[str] = []
     for record in records:
@@ -312,10 +331,15 @@ def run_checks(
         if (
             not isinstance(command, list)
             or not command
-            or any(not isinstance(argument, str) or "\x00" in argument for argument in command)
+            or any(
+                not isinstance(argument, str) or "\x00" in argument
+                for argument in command
+            )
             or not command[0]
         ):
-            raise WorkspaceError("Each check must be a nonempty list of string arguments.")
+            raise WorkspaceError(
+                "Each check must be a nonempty list of string arguments."
+            )
     path = _root(path)
     results: list[dict[str, Any]] = []
     for command in commands:
@@ -331,7 +355,9 @@ def run_checks(
             exit_code = 124
             output = _output(exc.stdout) + f"\nCheck timed out after {timeout:g}s."
         except OSError as exc:
-            raise WorkspaceError(f"Could not start check: {_redact(str(exc))}") from None
+            raise WorkspaceError(
+                f"Could not start check: {_redact(str(exc))}"
+            ) from None
         results.append(
             {
                 "command": [_redact(argument) for argument in command],
@@ -366,7 +392,9 @@ def publish_branch(path: Path, remote: str = "origin") -> dict[str, Any]:
     path = _root(path)
     state = inspect_worktree(path)
     if state["dirty"]:
-        raise WorkspaceError("Commit or remove the remaining worktree changes before publishing.")
+        raise WorkspaceError(
+            "Commit or remove the remaining worktree changes before publishing."
+        )
     if state["branch"] is None:
         raise WorkspaceError("Check out a branch before publishing; HEAD is detached.")
     if (

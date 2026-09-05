@@ -40,7 +40,11 @@ def home_path(value: str | None = None) -> Path:
     pathlib.Path
         Absolute data directory.
     """
-    return Path(value or os.environ.get("MASTERAGENT_HOME", "~/.masteragent")).expanduser().resolve()
+    return (
+        Path(value or os.environ.get("MASTERAGENT_HOME", "~/.masteragent"))
+        .expanduser()
+        .resolve()
+    )
 
 
 def initialize(home: Path) -> None:
@@ -83,24 +87,41 @@ def save_config(home: Path, config: dict[str, Any]) -> None:
 
 
 def configure_provider(
-    config: dict[str, Any], name: str, url: str, *, deployment: str | None = None,
-    token_env: str | None = None, username_env: str | None = None,
+    config: dict[str, Any],
+    name: str,
+    url: str,
+    *,
+    deployment: str | None = None,
+    token_env: str | None = None,
+    username_env: str | None = None,
     ca_bundle: str | None = None,
 ) -> None:
     """Remember a provider URL and credential environment variable names."""
     if name not in PROVIDERS:
         raise ValueError(f"Unknown provider: {name}")
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ValueError("Use an HTTPS provider URL without embedded credentials.")
     if parsed.query or parsed.fragment:
         raise ValueError("Use the provider base URL without a query or fragment.")
-    mode = deployment or ("cloud" if parsed.hostname.endswith(".atlassian.net") or parsed.hostname == "bitbucket.org" else "server")
+    mode = deployment or (
+        "cloud"
+        if parsed.hostname.endswith(".atlassian.net")
+        or parsed.hostname == "bitbucket.org"
+        else "server"
+    )
     if mode not in ("cloud", "server"):
         raise ValueError("Deployment must be cloud or server.")
     section: dict[str, Any] = dict(config.get(name, {}))
     section.update(url=url.rstrip("/"), deployment=mode)
-    section["token_env"] = token_env or section.get("token_env", f"MASTERAGENT_{name.upper()}_TOKEN")
+    section["token_env"] = token_env or section.get(
+        "token_env", f"MASTERAGENT_{name.upper()}_TOKEN"
+    )
     if username_env:
         section["username_env"] = username_env
     elif mode == "cloud":
@@ -108,16 +129,24 @@ def configure_provider(
     else:
         section.pop("username_env", None)
     for field in ("token_env", "username_env"):
-        if field in section and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", section[field]):
-            raise ValueError(f"{field} must be an environment variable name, not a credential value.")
+        if field in section and not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", section[field]
+        ):
+            raise ValueError(
+                f"{field} must be an environment variable name, not a credential value."
+            )
     if ca_bundle:
         section["ca_bundle"] = str(Path(ca_bundle).expanduser().resolve())
     config[name] = section
 
 
 def configure_project(
-    config: dict[str, Any], key: str, *, repository: str | None = None,
-    bitbucket_repository: str | None = None, pages: list[str] | None = None,
+    config: dict[str, Any],
+    key: str,
+    *,
+    repository: str | None = None,
+    bitbucket_repository: str | None = None,
+    pages: list[str] | None = None,
     checks: list[list[str]] | None = None,
 ) -> None:
     """Save a project mapping and explicit command argument lists."""
@@ -128,13 +157,20 @@ def configure_project(
         project["repository"] = str(Path(repository).expanduser().resolve())
     if bitbucket_repository is not None:
         if not re.fullmatch(r"[A-Za-z0-9_.~-]+/[A-Za-z0-9_.~-]+", bitbucket_repository):
-            raise ValueError("Bitbucket repository must be workspace/repo or PROJECT/repo.")
+            raise ValueError(
+                "Bitbucket repository must be workspace/repo or PROJECT/repo."
+            )
         project["bitbucket_repository"] = bitbucket_repository
     if pages is not None:
         project["confluence_pages"] = list(dict.fromkeys(pages))
     if checks is not None:
-        if any(not command or any(not isinstance(arg, str) or not arg for arg in command) for command in checks):
-            raise ValueError("Each check must be a nonempty JSON array of command arguments.")
+        if any(
+            not command or any(not isinstance(arg, str) or not arg for arg in command)
+            for command in checks
+        ):
+            raise ValueError(
+                "Each check must be a nonempty JSON array of command arguments."
+            )
         project["checks"] = checks
     config["projects"][key.upper()] = project
 
@@ -147,6 +183,18 @@ def readiness(config: dict[str, Any]) -> dict[str, Any]:
         if not section:
             providers[name] = {"status": "not_configured"}
             continue
-        missing = [section[field] for field in ("token_env", "username_env") if section.get(field) and not os.environ.get(section[field])]
-        providers[name] = {"status": "missing_credentials" if missing else "configured", "missing_environment": missing, "url": section["url"]}
-    return {"providers": providers, "projects": sorted(config.get("projects", {})), "network_checked": False}
+        missing = [
+            section[field]
+            for field in ("token_env", "username_env")
+            if section.get(field) and not os.environ.get(section[field])
+        ]
+        providers[name] = {
+            "status": "missing_credentials" if missing else "configured",
+            "missing_environment": missing,
+            "url": section["url"],
+        }
+    return {
+        "providers": providers,
+        "projects": sorted(config.get("projects", {})),
+        "network_checked": False,
+    }

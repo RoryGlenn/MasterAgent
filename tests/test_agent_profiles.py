@@ -46,7 +46,9 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(checks), 2)
 
-    def test_simple_root_can_coexist_but_cannot_be_selected_by_legacy_broker(self) -> None:
+    def test_simple_root_can_coexist_but_cannot_be_selected_by_legacy_broker(
+        self,
+    ) -> None:
         """A separate host profile never becomes a legacy advisory specialist."""
 
         simple = Path(".github/agents/MasterAgent-Simple.agent.md")
@@ -57,7 +59,11 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
             self.assertEqual(validate_profile_inventory(root), ())
             inventory = load_agent_inventory(root)
             self.assertEqual(
-                {inventory.parent.path, inventory.researcher.path, inventory.reviewer.path},
+                {
+                    inventory.parent.path,
+                    inventory.researcher.path,
+                    inventory.reviewer.path,
+                },
                 EXPECTED_PROFILE_PATHS,
             )
             self.assertNotIn(simple, EXPECTED_PROFILE_PATHS)
@@ -80,7 +86,9 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
             for relative in (*EXPECTED_PROFILE_PATHS, simple)
         }
 
-        with self.assertRaisesRegex(ProfileValidationError, "unreviewed agent profiles"):
+        with self.assertRaisesRegex(
+            ProfileValidationError, "unreviewed agent profiles"
+        ):
             load_agent_inventory_from_texts(texts)
 
     def test_parent_routes_before_broad_search_and_minimizes_child_context(

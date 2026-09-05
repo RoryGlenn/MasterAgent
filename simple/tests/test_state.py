@@ -41,7 +41,9 @@ class TaskStoreTests(unittest.TestCase):
             task = restarted.get(task_id)
             self.assertEqual(task["status"], "completed")
             self.assertEqual(task["inputs"], {"issue": "MA-1"})
-            self.assertEqual([step["name"] for step in task["steps"]], ["issue", "pull_requests"])
+            self.assertEqual(
+                [step["name"] for step in task["steps"]], ["issue", "pull_requests"]
+            )
             json.dumps(task)
 
     def test_interrupted_write_requires_observed_result(self) -> None:
@@ -72,8 +74,12 @@ class TaskStoreTests(unittest.TestCase):
             failed = store.get(task_id)
             self.assertEqual(failed["result"], {"pull_request": 17})
             store.resume(task_id)
-            self.assertEqual(store.begin_step(task_id, "open_pr", True)["result"], {"id": 17})
-            self.assertEqual(store.begin_step(task_id, "update_jira", True)["attempt"], 2)
+            self.assertEqual(
+                store.begin_step(task_id, "open_pr", True)["result"], {"id": 17}
+            )
+            self.assertEqual(
+                store.begin_step(task_id, "update_jira", True)["attempt"], 2
+            )
             store.complete_step(task_id, "update_jira", {"updated": True})
             store.finish(task_id, {"pull_request": 17, "jira_updated": True})
 
@@ -108,7 +114,9 @@ class TaskStoreTests(unittest.TestCase):
             controller.resolve_step(task_id, "open_pr", {"id": 17})
             controller.finish(task_id, {"id": 17})
 
-    def test_confirmed_absent_write_is_retriable_only_after_explicit_resume(self) -> None:
+    def test_confirmed_absent_write_is_retriable_only_after_explicit_resume(
+        self,
+    ) -> None:
         with TaskStore(self.path) as store:
             task_id = store.create("publish", {})
             store.begin_step(task_id, "open_pr", True)
@@ -190,7 +198,9 @@ class TaskStoreTests(unittest.TestCase):
             with self.assertRaises(TaskStateError):
                 old.complete_step(task_id, "issue", {"summary": "stale"})
             new.complete_step(task_id, "issue", {"summary": "current"})
-            self.assertEqual(new.get(task_id)["steps"][0]["result"], {"summary": "current"})
+            self.assertEqual(
+                new.get(task_id)["steps"][0]["result"], {"summary": "current"}
+            )
 
     def test_waiting_handoff_and_editable_note_survive_restart(self) -> None:
         with TaskStore(self.path) as store:
