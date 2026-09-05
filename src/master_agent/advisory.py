@@ -24,6 +24,11 @@ PLAN_REVIEWER_PROFILE_PATH = Path(".github/agents/MasterAgent-Plan-Reviewer.agen
 EXPECTED_PROFILE_PATHS = frozenset(
     {PARENT_PROFILE_PATH, RESEARCHER_PROFILE_PATH, PLAN_REVIEWER_PROFILE_PATH}
 )
+# This separately selected root is checked by release and semantic validation.
+# Its presence never adds it to the legacy broker's loaded profile inventory.
+_SEPARATELY_SELECTED_PROFILE_PATHS = frozenset(
+    {Path(".github/agents/MasterAgent-Simple.agent.md")}
+)
 
 _PARENT_TOOLS = ("read", "search", "edit", "execute")
 _CHILD_TOOLS = ("read", "search")
@@ -752,7 +757,9 @@ def validate_profile_inventory(root: Path) -> tuple[str, ...]:
     }
     if missing := sorted(EXPECTED_PROFILE_PATHS - observed):
         errors.append("missing agent profiles: " + ", ".join(map(str, missing)))
-    if unexpected := sorted(observed - EXPECTED_PROFILE_PATHS):
+    if unexpected := sorted(
+        observed - EXPECTED_PROFILE_PATHS - _SEPARATELY_SELECTED_PROFILE_PATHS
+    ):
         errors.append("unreviewed agent profiles: " + ", ".join(map(str, unexpected)))
 
     profiles: dict[Path, AgentProfile] = {}

@@ -1,5 +1,11 @@
 # Architecture
 
+This document describes the governed `master-agent` runtime in
+`src/master_agent/`. The standalone `simple/` package, `masteragent` command,
+and **MasterAgent Simple** Copilot profile have their own
+[architecture and workflow guide](masteragent-simple.md). They do not import
+or disable the governed runtime's policy, approval, or capsule machinery.
+
 ## Design objective
 
 MasterAgent is a governed workflow runtime, not one omnipotent model process. The planning layer proposes typed work. Deterministic code decides whether that work is permitted, executes only registered capabilities, verifies the resulting state, and records evidence.

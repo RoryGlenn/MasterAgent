@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import stat
 import tarfile
 import tomllib
@@ -16,6 +17,7 @@ from scripts.validate_release import (
     _FIRST_RUN_DOCUMENT_REQUIREMENTS,
     _PUBLIC_READ_DOCUMENT_REQUIREMENTS,
     _RETENTION_PRUNE_DOCUMENT_REQUIREMENTS,
+    _validate_advisory_agents,
     _validate_copilot_agent,
     _validate_demo_powerpoint,
     _validate_demo_readiness,
@@ -24,6 +26,7 @@ from scripts.validate_release import (
     _validate_public_read_contract,
     _validate_retention_prune_contract,
     _validate_semantic_router,
+    _validate_simple_copilot_agent,
     _validate_supply_chain,
     validate_archive,
     validate_project,
@@ -530,6 +533,92 @@ class ReleaseMetadataTests(unittest.TestCase):
 
             self.assertEqual(checks, [])
             self.assertTrue(any("missing or unreadable" in error for error in errors))
+
+    def test_separate_simple_profile_passes_without_changing_advisory_rules(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        checks: list[str] = []
+        errors: list[str] = []
+
+        _validate_simple_copilot_agent(root, checks, errors)
+        _validate_advisory_agents(root, checks, errors)
+
+        self.assertEqual(errors, [])
+        self.assertIn(
+            "Copilot Simple agent is separately user-invocable and tool-constrained",
+            checks,
+        )
+        self.assertIn(
+            "Copilot advisory profiles are non-invocable, read/search-only, and fail-closed",
+            checks,
+        )
+
+    def test_simple_profile_does_not_admit_another_unreviewed_profile(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Path(__file__).resolve().parents[1] / ".github/agents"
+            destination = root / ".github/agents"
+            shutil.copytree(source, destination)
+            shutil.copyfile(
+                destination / "MasterAgent-Simple.agent.md",
+                destination / "Extra-Simple.agent.md",
+            )
+            checks: list[str] = []
+            errors: list[str] = []
+
+            _validate_advisory_agents(root, checks, errors)
+
+            self.assertEqual(checks, [])
+            self.assertIn(
+                "Copilot advisory-agent inventory has unreviewed profiles: "
+                ".github/agents/Extra-Simple.agent.md",
+                errors,
+            )
+
+    def test_simple_profile_rejects_invalid_frontmatter(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1]
+            / ".github/agents/MasterAgent-Simple.agent.md"
+        ).read_text(encoding="utf-8")
+        cases = (
+            ("# Missing frontmatter\n", "frontmatter"),
+            (
+                source.replace("  - execute\n", "  - execute\n  - agent\n"),
+                "tools must be exactly",
+            ),
+            (
+                source.replace("user-invocable: true", "user-invocable: false"),
+                "must remain user-invocable",
+            ),
+            (
+                source.replace(
+                    "disable-model-invocation: true", "disable-model-invocation: false"
+                ),
+                "must not be invoked automatically",
+            ),
+            (
+                source.replace("name: MasterAgent Simple", "name: MasterAgent Extra"),
+                "name must be MasterAgent Simple",
+            ),
+            (
+                source.replace(
+                    "name: MasterAgent Simple", "model: unknown\nname: MasterAgent Simple"
+                ),
+                "unreviewed frontmatter keys",
+            ),
+        )
+        for text, message in cases:
+            with self.subTest(message=message), TemporaryDirectory() as directory:
+                root = Path(directory)
+                agent = root / ".github/agents/MasterAgent-Simple.agent.md"
+                agent.parent.mkdir(parents=True)
+                agent.write_text(text, encoding="utf-8")
+                checks: list[str] = []
+                errors: list[str] = []
+
+                _validate_simple_copilot_agent(root, checks, errors)
+
+                self.assertEqual(checks, [])
+                self.assertTrue(any(message in error for error in errors), errors)
 
     def test_copilot_agent_rejects_malformed_frontmatter(self) -> None:
         with TemporaryDirectory() as directory:

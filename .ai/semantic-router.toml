@@ -71,6 +71,19 @@ input_contract = "validated exact ChangePlan and execution context"
 output_contract = "verified RunReport and content-free evidence"
 return_path = "master-agent"
 
+[[agents]]
+id = "masteragent-simple"
+kind = "profile"
+profile = ".github/agents/MasterAgent-Simple.agent.md"
+parent = ""
+tools = ["read", "search", "edit", "execute"]
+max_delegation_depth = 0
+fallback = "complete in MasterAgent Simple"
+sibling_awareness = false
+input_contract = "operator goal and remembered project context"
+output_contract = "completed tools, task checkpoint, and useful result links"
+return_path = ""
+
 [[routes]]
 id = "semantic-router"
 title = "Semantic router and exact ownership"
@@ -407,7 +420,32 @@ dependencies = ["packaging-release", "platform-runtime"]
 aliases = ["windows certification", "windows.certification", "windows hosted certification"]
 agent = "master-agent"
 
+[[routes]]
+id = "masteragent-simple"
+title = "MasterAgent Simple standalone runtime"
+lifecycle = "released"
+summary = "Run ordinary Python tools, reuse project configuration, and resume SQLite task checkpoints through the Simple Copilot profile."
+authority = ["simple/AGENTS.md", "docs/masteragent-simple.md", "specs/current/runtime/MA-SIMPLE-001.md"]
+implementation = ["simple/run.py", "simple/masteragent/__init__.py", "simple/masteragent/__main__.py", "simple/masteragent/cli.py", "simple/masteragent/demo.py", "simple/masteragent/settings.py", "simple/masteragent/state.py", "simple/masteragent/transport.py", "simple/masteragent/providers.py", "simple/masteragent/workspace.py", "simple/masteragent/workflows.py"]
+configuration = ["simple/pyproject.toml"]
+tests = ["simple/tests/test_cli.py", "simple/tests/test_providers.py", "simple/tests/test_state.py", "simple/tests/test_workflows.py", "simple/tests/test_workspace.py"]
+release_gates = [".github/workflows/simple.yml"]
+dependencies = []
+aliases = ["masteragent simple", "masteragent-simple", "simple runtime", "usability first", "simplified workflow", "simple task journal"]
+agent = "masteragent-simple"
+
 [ownership.production_modules]
+"simple/masteragent/demo.py" = "masteragent-simple"
+"simple/masteragent/workspace.py" = "masteragent-simple"
+"simple/run.py" = "masteragent-simple"
+"simple/masteragent/workflows.py" = "masteragent-simple"
+"simple/masteragent/providers.py" = "masteragent-simple"
+"simple/masteragent/transport.py" = "masteragent-simple"
+"simple/masteragent/state.py" = "masteragent-simple"
+"simple/masteragent/settings.py" = "masteragent-simple"
+"simple/masteragent/cli.py" = "masteragent-simple"
+"simple/masteragent/__main__.py" = "masteragent-simple"
+"simple/masteragent/__init__.py" = "masteragent-simple"
 "examples/generate_communication_demo.py" = "local-workflows"
 "examples/generate_demo_package.py" = "local-workflows"
 "examples/generate_phase2b_demo.py" = "local-workflows"
@@ -544,6 +582,11 @@ agent = "master-agent"
 "src/master_agent/workflows/weekly_operating_review.py" = "local-workflows"
 
 [ownership.tests]
+"simple/tests/test_cli.py" = "masteragent-simple"
+"simple/tests/test_providers.py" = "masteragent-simple"
+"simple/tests/test_state.py" = "masteragent-simple"
+"simple/tests/test_workflows.py" = "masteragent-simple"
+"simple/tests/test_workspace.py" = "masteragent-simple"
 "tests/__init__.py" = "governed-applied-run"
 "tests/fakes.py" = "governed-applied-run"
 "tests/fixtures/advisory/source.py" = "agent-topology"
@@ -650,6 +693,7 @@ agent = "master-agent"
 "tests/test_write_connectors.py" = "governed-applied-run"
 
 [ownership.current_requirements]
+"specs/current/runtime/MA-SIMPLE-001.md" = "masteragent-simple"
 "specs/current/connectors/MA-CONNECTOR-IMPLEMENTATION-001.md" = "governed-applied-run"
 "specs/current/connectors/MA-REDDIT-001.md" = "reddit-connectors"
 "specs/current/development/MA-DOCS-001.md" = "specification-lifecycle"
@@ -691,6 +735,7 @@ agent = "master-agent"
 "specs/current/security/MA-TRUST-PROFILES-001.md" = "operating-modes"
 
 [ownership.configurations]
+"simple/pyproject.toml" = "masteragent-simple"
 ".ai/semantic-router.toml" = "semantic-router"
 "config/capabilities.toml" = "governed-applied-run"
 "config/communication-context.toml" = "local-workflows"
@@ -907,6 +952,7 @@ agent = "master-agent"
 "src/master_agent/connectors/utils.py" = "provider-security"
 
 [ownership.agent_profiles]
+".github/agents/MasterAgent-Simple.agent.md" = "masteragent-simple"
 ".github/agents/MasterAgent.agent.md" = "agent-topology"
 ".github/agents/MasterAgent-Read-Researcher.agent.md" = "agent-topology"
 ".github/agents/MasterAgent-Plan-Reviewer.agent.md" = "agent-topology"
@@ -1047,3 +1093,11 @@ route = "windows-capsules"
 [[routing_cases]]
 query = "windows certification"
 route = "windows-certification"
+
+[[routing_cases]]
+query = "implement masteragent simple"
+route = "masteragent-simple"
+
+[[routing_cases]]
+query = "resume a simple task journal"
+route = "masteragent-simple"

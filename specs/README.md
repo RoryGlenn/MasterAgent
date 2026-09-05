@@ -28,7 +28,16 @@ and archival.
 
 **Specifications govern changes to MasterAgent.**
 
-**`ChangePlan` governs actions performed by MasterAgent.**
+**`ChangePlan` governs actions performed by the governed MasterAgent runtime.**
+
+The standalone `simple/` package and **MasterAgent Simple** profile have a
+separate behavioral contract documented in
+[MasterAgent Simple](../docs/masteragent-simple.md). They use direct Python
+tools and SQLite task state, without a `ChangePlan`, signed capability capsule,
+or authenticated approval artifact. Existing governed-runtime requirements
+continue to apply to `src/master_agent/` and its `master-agent` entrypoint;
+Simple requirements do not modify those contracts. The specification lifecycle
+and repository development checks apply to changes in either runtime.
 
 Specifications never grant capabilities, provide credentials, satisfy
 approval, or override policy, governance, source-of-truth, verification,

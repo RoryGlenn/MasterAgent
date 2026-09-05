@@ -30,7 +30,7 @@ _DELTA_HEADING = re.compile(r"### (MA-(?:[A-Z][A-Z0-9]*-)+[0-9]{3,}) — (\S.*)\
 _CHANGE_ID = re.compile(r"[0-9]{4,}-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _TASK = re.compile(r"^- \[([ xX])\] \S.*$")
 _PATH_REFERENCE = re.compile(
-    r"`((?:(?:src|tests|scripts|docs|config|specs|\.ai|\.github)/[^`]+)"
+    r"`((?:(?:src|simple|tests|scripts|docs|config|specs|\.ai|\.github)/[^`]+)"
     r"|(?:AGENTS|README|CHANGELOG|MANIFEST)\.md|pyproject\.toml)`"
 )
 _REQUIRED_CURRENT_SECTIONS = (

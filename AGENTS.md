@@ -1,5 +1,24 @@
 # Agent Bootstrap
 
+## Select the runtime
+
+This repository has two separately selected entrypoints:
+
+- **MasterAgent Simple** uses [`simple/AGENTS.md`](simple/AGENTS.md) and
+  [`docs/masteragent-simple.md`](docs/masteragent-simple.md). Start there for
+  the Simple profile or work confined to `simple/`. Its standalone runtime
+  uses ordinary Python tools and SQLite; it does not load the governed
+  runtime's bootstrap, approval, capsule, or policy machinery.
+- **MasterAgent** uses the governed runtime in `src/master_agent/` and the
+  bootstrap below. Its existing execution and approval contracts still apply.
+
+For changes spanning both, apply each runtime's contract to its own files.
+Repository-level specification, documentation, ownership, and release checks
+still cover both entrypoints. Neither entrypoint changes host permissions or
+workplace access requirements.
+
+## Governed runtime bootstrap
+
 The authoritative agent policy is [`.ai/MASTER_AGENT.md`](.ai/MASTER_AGENT.md).
 The bounded local setup and nontechnical response contract is
 [`.ai/FIRST_RUN.md`](.ai/FIRST_RUN.md).
