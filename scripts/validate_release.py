@@ -37,6 +37,7 @@ else:
 _MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 _AGENT_FRONTMATTER_KEY = re.compile(r"([a-z][a-z0-9-]*):(?:\s*(.*))?")
 _COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent.agent.md")
+_SIMPLE_COPILOT_AGENT_PATH = Path(".github/agents/MasterAgent-Simple.agent.md")
 _RESEARCH_AGENT_PATH = Path(".github/agents/MasterAgent-Read-Researcher.agent.md")
 _PLAN_REVIEW_AGENT_PATH = Path(".github/agents/MasterAgent-Plan-Reviewer.agent.md")
 _FIRST_RUN_CONTRACT_PATH = Path(".ai/FIRST_RUN.md")
@@ -602,6 +603,7 @@ def validate_project(root: Path) -> ValidationReport:
     _validate_packaged_defaults(root, checks, errors)
     _validate_capabilities(root, checks, errors)
     _validate_copilot_agent(root, checks, errors)
+    _validate_simple_copilot_agent(root, checks, errors)
     _validate_advisory_agents(root, checks, errors)
     _validate_advisory_contract(root, checks, errors)
     _validate_semantic_router(root, checks, errors)
@@ -1305,6 +1307,57 @@ def _validate_copilot_agent(
         )
 
 
+def _validate_simple_copilot_agent(
+    root: Path,
+    checks: list[str],
+    errors: list[str],
+) -> None:
+    """Validate the separately selected Simple entry point and its host tools."""
+
+    starting_errors = len(errors)
+    path = root / _SIMPLE_COPILOT_AGENT_PATH
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        errors.append(f"Copilot Simple agent is missing or unreadable: {path}: {error}")
+        return
+    metadata, _body, frontmatter_errors = _parse_agent_frontmatter(text)
+    errors.extend(
+        f"Copilot Simple agent frontmatter: {error}" for error in frontmatter_errors
+    )
+    if frontmatter_errors:
+        return
+    unexpected = sorted(set(metadata) - _COPILOT_AGENT_KEYS)
+    missing = sorted(_COPILOT_AGENT_KEYS - set(metadata))
+    if unexpected:
+        errors.append(
+            "Copilot Simple agent has unreviewed frontmatter keys: "
+            + ", ".join(unexpected)
+        )
+    if missing:
+        errors.append(
+            "Copilot Simple agent is missing frontmatter keys: " + ", ".join(missing)
+        )
+    if metadata.get("name") != "MasterAgent Simple":
+        errors.append("Copilot Simple agent name must be MasterAgent Simple")
+    description = metadata.get("description")
+    if not isinstance(description, str) or not description.strip():
+        errors.append("Copilot Simple agent description must be a non-empty string")
+    if metadata.get("user-invocable") is not True:
+        errors.append("Copilot Simple agent must remain user-invocable")
+    if metadata.get("disable-model-invocation") is not True:
+        errors.append("Copilot Simple agent must not be invoked automatically")
+    if metadata.get("tools") != _COPILOT_AGENT_TOOLS:
+        errors.append(
+            "Copilot Simple agent tools must be exactly: "
+            + ", ".join(_COPILOT_AGENT_TOOLS)
+        )
+    if len(errors) == starting_errors:
+        checks.append(
+            "Copilot Simple agent is separately user-invocable and tool-constrained"
+        )
+
+
 def _validate_advisory_agents(
     root: Path,
     checks: list[str],
@@ -1324,7 +1377,10 @@ def _validate_advisory_agents(
         else set()
     )
     missing_profiles = sorted(_EXPECTED_COPILOT_AGENT_PATHS - observed)
-    unexpected_profiles = sorted(observed - _EXPECTED_COPILOT_AGENT_PATHS)
+    # Simple is a separately validated root, never an advisory specialist.
+    unexpected_profiles = sorted(
+        observed - _EXPECTED_COPILOT_AGENT_PATHS - {_SIMPLE_COPILOT_AGENT_PATH}
+    )
     if missing_profiles:
         errors.append(
             "Copilot advisory-agent inventory is missing profiles: "

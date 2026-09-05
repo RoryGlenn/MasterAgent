@@ -82,6 +82,32 @@ class SpecificationTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertTrue(any("does-not-exist.py" in error for error in report.errors))
 
+    def test_simple_verification_paths_are_checked_for_existence(self) -> None:
+        test_path = self.root / "simple/tests/test_state.py"
+        test_path.parent.mkdir(parents=True)
+        test_path.write_text("# Verification fixture\n", encoding="utf-8")
+        current = self._write_current(
+            "MA-SPEC-001", verification="- `simple/tests/test_state.py`"
+        )
+        self._write_change(
+            "0075-native-specification-lifecycle",
+            status="archived",
+            requirement_id="MA-SPEC-001",
+            source_content=current.read_text(encoding="utf-8"),
+            destination="development/MA-SPEC-001.md",
+            location="archive",
+        )
+
+        report = specs.validate_repository(self.root)
+
+        self.assertTrue(report.ok, report.errors)
+        test_path.unlink()
+        report = specs.validate_repository(self.root)
+        self.assertFalse(report.ok)
+        self.assertTrue(
+            any("simple/tests/test_state.py" in error for error in report.errors)
+        )
+
     def test_symlink_in_specification_tree_is_rejected(self) -> None:
         target = self.root / "outside.md"
         target.write_text("outside\n", encoding="utf-8")
@@ -679,7 +705,7 @@ class RepositorySpecificationIntegrationTests(unittest.TestCase):
         report = specs.validate_repository(root)
 
         self.assertTrue(report.ok, report.errors)
-        self.assertIn("validated 39 current behavioral requirements", report.checks)
+        self.assertIn("validated 40 current behavioral requirements", report.checks)
 
     def test_source_manifest_includes_specification_tree(self) -> None:
         root = Path(__file__).resolve().parents[1]

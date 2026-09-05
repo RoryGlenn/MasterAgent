@@ -22,6 +22,7 @@ from scripts.semantic_router import (
     ManifestError,
     SemanticManifest,
     _same_file_state,
+    _validate_topology,
     collect_inventory,
     generate_index,
     load_manifest,
@@ -353,6 +354,25 @@ class SemanticRouterTests(unittest.TestCase):
             )
         )
 
+    def test_simple_inventory_keeps_test_fixtures_out_of_production(self) -> None:
+        fixture = self.root / "simple/tests/fixtures/example.py"
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        fixture.write_text("VALUE = 1\n", encoding="utf-8")
+
+        inventory = collect_inventory(self.root)
+
+        self.assertIn("simple/masteragent/state.py", inventory["production_modules"])
+        self.assertIn("simple/run.py", inventory["production_modules"])
+        self.assertIn("simple/tests/test_state.py", inventory["tests"])
+        self.assertIn("simple/tests/fixtures/example.py", inventory["tests"])
+        self.assertFalse(
+            any(
+                path.startswith("simple/tests/")
+                for path in inventory["production_modules"]
+            )
+        )
+        self.assertFalse(inventory["production_modules"] & inventory["tests"])
+
     def test_unmapped_production_module_fails(self) -> None:
         fixture_directory = self.root / "maintenance_fixture"
         fixture_directory.mkdir()
@@ -645,6 +665,117 @@ class SemanticRouterTests(unittest.TestCase):
         _manifest, errors = self._manifest_and_errors()
 
         self.assertIn("agent read-researcher must have parent master-agent", errors)
+
+    def test_simple_profile_is_an_independent_root_with_its_own_route(self) -> None:
+        manifest = load_manifest(self.root)
+        inventory = collect_inventory(self.root)
+
+        self.assertEqual(_validate_topology(self.root, manifest, inventory), [])
+        self.assertEqual(
+            {agent.id for agent in manifest.agents if not agent.parent},
+            {"master-agent", "masteragent-simple"},
+        )
+        match = select_route(manifest, "masteragent-simple")
+        self.assertEqual(match.route.id, "masteragent-simple")
+        self.assertEqual(match.route.agent, "masteragent-simple")
+        self.assertEqual(manifest.agents_by_id["master-agent"].max_delegation_depth, 1)
+
+    def test_simple_profile_cannot_gain_delegation_or_join_legacy_tree(self) -> None:
+        manifest = load_manifest(self.root)
+        inventory = collect_inventory(self.root)
+        simple = manifest.agents_by_id["masteragent-simple"]
+        cases = (
+            ({"parent": "master-agent"}, "must be an independent root"),
+            ({"return_path": "master-agent"}, "must be an independent root"),
+            ({"max_delegation_depth": 1}, "must not delegate"),
+            ({"sibling_awareness": True}, "must not have sibling awareness"),
+            ({"fallback": "master-agent"}, "fallback must remain independent"),
+            (
+                {"tools": (*simple.tools, "agent")},
+                "tools must be read, search, edit, execute",
+            ),
+        )
+        for mutation, message in cases:
+            with self.subTest(mutation=mutation):
+                changed = replace(simple, **mutation)
+                candidate = replace(
+                    manifest,
+                    agents=tuple(
+                        changed if agent.id == simple.id else agent
+                        for agent in manifest.agents
+                    ),
+                )
+                errors = _validate_topology(self.root, candidate, inventory)
+                self.assertIn(f"agent masteragent-simple {message}", errors)
+
+    def test_simple_profile_does_not_allow_arbitrary_additional_roots(self) -> None:
+        manifest = load_manifest(self.root)
+        simple = manifest.agents_by_id["masteragent-simple"]
+        candidate = replace(
+            manifest, agents=(*manifest.agents, replace(simple, id="extra-root"))
+        )
+
+        errors = _validate_topology(self.root, candidate, collect_inventory(self.root))
+
+        self.assertIn("topology has unexpected agents: extra-root", errors)
+        self.assertIn(
+            "topology roots must be exactly master-agent and masteragent-simple", errors
+        )
+        self.assertIn("topology must contain exactly six nodes", errors)
+
+    def test_simple_root_does_not_relax_legacy_specialist_constraints(self) -> None:
+        manifest = load_manifest(self.root)
+        inventory = collect_inventory(self.root)
+        for agent_id in (
+            "read-researcher",
+            "plan-reviewer",
+            "docs-contract",
+            "deterministic-runtime",
+        ):
+            original = manifest.agents_by_id[agent_id]
+            cases = (
+                ({"parent": "masteragent-simple"}, "must have parent master-agent"),
+                ({"max_delegation_depth": 1}, "must not delegate"),
+                ({"sibling_awareness": True}, "must not have sibling awareness"),
+                ({"fallback": "masteragent-simple"}, "fallback must be master-agent"),
+                (
+                    {"return_path": "masteragent-simple"},
+                    "return_path must be master-agent",
+                ),
+            )
+            for mutation, message in cases:
+                with self.subTest(agent=agent_id, mutation=mutation):
+                    changed = replace(original, **mutation)
+                    candidate = replace(
+                        manifest,
+                        agents=tuple(
+                            changed if agent.id == agent_id else agent
+                            for agent in manifest.agents
+                        ),
+                    )
+                    errors = _validate_topology(self.root, candidate, inventory)
+                    self.assertIn(f"agent {agent_id} {message}", errors)
+
+    def test_legacy_specialists_still_cannot_be_invoked_directly(self) -> None:
+        for profile in (
+            ".github/agents/MasterAgent-Read-Researcher.agent.md",
+            ".github/agents/MasterAgent-Plan-Reviewer.agent.md",
+        ):
+            self._rewrite(
+                profile,
+                lambda content: content.replace(
+                    "user-invocable: false", "user-invocable: true"
+                ),
+            )
+        manifest = load_manifest(self.root)
+        errors = _validate_topology(self.root, manifest, collect_inventory(self.root))
+
+        self.assertIn(
+            "specialist profile read-researcher must not be user invocable", errors
+        )
+        self.assertIn(
+            "specialist profile plan-reviewer must not be user invocable", errors
+        )
 
     def test_profile_tool_inventory_drift_fails(self) -> None:
         marker = 'tools = ["read", "search"]'

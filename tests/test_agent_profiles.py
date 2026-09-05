@@ -12,6 +12,11 @@ from master_agent.advisory import (
     PARENT_PROFILE_PATH,
     PLAN_REVIEWER_PROFILE_PATH,
     RESEARCHER_PROFILE_PATH,
+    AdvisoryBroker,
+    ProfileValidationError,
+    RepositoryFixture,
+    load_agent_inventory,
+    load_agent_inventory_from_texts,
     validate_profile_inventory,
 )
 from scripts.validate_release import (
@@ -40,6 +45,51 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(len(checks), 2)
+
+    def test_simple_root_can_coexist_but_cannot_be_selected_by_legacy_broker(
+        self,
+    ) -> None:
+        """A separate host profile never becomes a legacy advisory specialist."""
+
+        simple = Path(".github/agents/MasterAgent-Simple.agent.md")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy((*EXPECTED_PROFILE_PATHS, simple), root)
+
+            self.assertEqual(validate_profile_inventory(root), ())
+            inventory = load_agent_inventory(root)
+            self.assertEqual(
+                {
+                    inventory.parent.path,
+                    inventory.researcher.path,
+                    inventory.reviewer.path,
+                },
+                EXPECTED_PROFILE_PATHS,
+            )
+            self.assertNotIn(simple, EXPECTED_PROFILE_PATHS)
+            self.assertEqual(inventory.researcher.tools, ("read", "search"))
+            self.assertEqual(inventory.reviewer.tools, ("read", "search"))
+            broker = AdvisoryBroker(inventory, RepositoryFixture({}))
+            for by_user in (True, False):
+                with (
+                    self.subTest(by_user=by_user),
+                    self.assertRaisesRegex(ProfileValidationError, "unknown profile"),
+                ):
+                    broker.select_profile("MasterAgent Simple", by_user=by_user)
+
+    def test_simple_profile_cannot_enter_immutable_advisory_inventory(self) -> None:
+        """Bound worker inputs continue to accept only the three legacy profiles."""
+
+        simple = Path(".github/agents/MasterAgent-Simple.agent.md")
+        texts = {
+            relative: (self.source_root / relative).read_text(encoding="utf-8")
+            for relative in (*EXPECTED_PROFILE_PATHS, simple)
+        }
+
+        with self.assertRaisesRegex(
+            ProfileValidationError, "unreviewed agent profiles"
+        ):
+            load_agent_inventory_from_texts(texts)
 
     def test_parent_routes_before_broad_search_and_minimizes_child_context(
         self,
@@ -240,7 +290,7 @@ class AdvisoryAgentProfileTests(unittest.TestCase):
             )
 
     def test_unreviewed_agent_profile_is_rejected(self) -> None:
-        """A fourth profile cannot silently widen the host inventory."""
+        """An unknown profile cannot silently widen the host inventory."""
 
         with TemporaryDirectory() as directory:
             root = Path(directory)

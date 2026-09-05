@@ -102,6 +102,7 @@ REQUIRED_PLANNED_PLATFORM_CAPABILITIES: Final = tuple(
 )
 REQUIRED_AGENT_PROFILES: Final = {
     "master-agent": ("profile", ".github/agents/MasterAgent.agent.md"),
+    "masteragent-simple": ("profile", ".github/agents/MasterAgent-Simple.agent.md"),
     "read-researcher": (
         "profile",
         ".github/agents/MasterAgent-Read-Researcher.agent.md",
@@ -995,7 +996,9 @@ def collect_inventory(root: Path) -> dict[str, set[str]]:
         ".py",
         excluded_first_parts=frozenset({"tests"}),
     )
-    tests = _bounded_file_inventory(trusted_root, "tests", ".py")
+    simple_tests = _bounded_file_inventory(trusted_root, "simple/tests", ".py")
+    production.difference_update(simple_tests)
+    tests = _bounded_file_inventory(trusted_root, "tests", ".py") | simple_tests
     requirements = _bounded_file_inventory(trusted_root, "specs/current", ".md")
     configurations = _bounded_file_inventory(
         trusted_root,
@@ -1094,19 +1097,37 @@ def _validate_topology(
             errors.append(
                 f"agent {agent_id} must use kind {expected_kind} at {expected_profile}"
             )
-    roots = [agent for agent in manifest.agents if not agent.parent]
-    if len(roots) != 1:
-        errors.append("topology must contain exactly one parent agent")
+    root_ids = {agent.id for agent in manifest.agents if not agent.parent}
+    expected_root_ids = {"master-agent", "masteragent-simple"}
+    if root_ids != expected_root_ids:
+        errors.append(
+            "topology roots must be exactly master-agent and masteragent-simple"
+        )
+    parent = agents.get("master-agent")
+    if parent is None:
         return errors
-    parent = roots[0]
     if parent.kind != "profile":
         errors.append("topology parent must be a checked-in profile")
     if parent.max_delegation_depth != 1:
         errors.append("topology parent max_delegation_depth must be 1")
     if parent.return_path:
         errors.append("topology parent return_path must be empty")
-    if len(manifest.agents) != 5:
-        errors.append("topology must contain exactly five nodes")
+    if len(manifest.agents) != 6:
+        errors.append("topology must contain exactly six nodes")
+    simple = agents.get("masteragent-simple")
+    if simple is not None:
+        if simple.parent or simple.return_path:
+            errors.append("agent masteragent-simple must be an independent root")
+        if simple.max_delegation_depth != 0:
+            errors.append("agent masteragent-simple must not delegate")
+        if simple.sibling_awareness:
+            errors.append("agent masteragent-simple must not have sibling awareness")
+        if set(simple.tools) != {"read", "search", "edit", "execute"}:
+            errors.append(
+                "agent masteragent-simple tools must be read, search, edit, execute"
+            )
+        if simple.fallback != "complete in MasterAgent Simple":
+            errors.append("agent masteragent-simple fallback must remain independent")
     profile_paths = {
         agent.profile for agent in manifest.agents if agent.kind == "profile"
     }
@@ -1124,7 +1145,7 @@ def _validate_topology(
         except ManifestError as exc:
             errors.append(f"agent {agent.id}: {exc}")
             continue
-        if agent.id == parent.id:
+        if agent.id in expected_root_ids:
             pass
         else:
             if agent.parent != parent.id:
@@ -1153,13 +1174,20 @@ def _validate_topology(
                 )
             if not model_disabled:
                 errors.append(f"agent {agent.id} must disable model invocation")
-            if agent.id == parent.id and not user_invocable:
-                errors.append("topology parent profile must be user invocable")
-            if agent.id != parent.id and user_invocable:
+            if agent.id in expected_root_ids and not user_invocable:
+                if agent.id == parent.id:
+                    errors.append("topology parent profile must be user invocable")
+                else:
+                    errors.append(
+                        "agent masteragent-simple profile must be user invocable"
+                    )
+            if agent.id not in expected_root_ids and user_invocable:
                 errors.append(
                     f"specialist profile {agent.id} must not be user invocable"
                 )
-    child_kinds = [agent.kind for agent in manifest.agents if agent.id != parent.id]
+    child_kinds = [
+        agent.kind for agent in manifest.agents if agent.id not in expected_root_ids
+    ]
     if child_kinds.count("profile") != 2:
         errors.append("topology must contain exactly two specialist profiles")
     if child_kinds.count("contract") != 1:
@@ -1848,9 +1876,14 @@ def render_semantic_index(manifest: SemanticManifest) -> str:
     lines.extend(
         [
             "",
-            "## Hub-and-spoke topology",
+            "## Agent topology",
             "",
-            "The parent owns the complete registry. Each child receives only its parent, scoped contract, allowed tools, and return path; children do not receive sibling prompts.",
+            (
+                "The legacy parent owns its four child nodes. Each child receives only "
+                "its parent, scoped contract, allowed tools, and return path; children "
+                "do not receive sibling prompts. MasterAgent Simple is an independent "
+                "user-invoked profile with no delegation."
+            ),
             "",
             "| Agent | Kind | Parent | Tools | Depth | Fallback | Profile |",
             "| --- | --- | --- | --- | ---: | --- | --- |",

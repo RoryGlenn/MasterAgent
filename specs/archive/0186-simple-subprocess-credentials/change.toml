@@ -1,0 +1,14 @@
+schema = "master-agent/change@1"
+id = "0186-simple-subprocess-credentials"
+title = "Keep provider credentials out of repository subprocesses"
+status = "archived"
+github_issue = 186
+created = "2026-09-05"
+updated = "2026-09-05"
+design_required = true
+
+[[deltas]]
+operation = "modify"
+requirement_id = "MA-SIMPLE-001"
+destination = "runtime/MA-SIMPLE-001.md"
+source = "current/MA-SIMPLE-001.md"

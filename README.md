@@ -9,6 +9,45 @@
 [![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-7c7cff.svg)](CHANGELOG.md)
 [![License: Proprietary](https://img.shields.io/badge/license-proprietary-334155.svg)](LICENSE)
 
+## MasterAgent Simple
+
+[![Simple CI](https://github.com/RoryGlenn/MasterAgent/actions/workflows/simple.yml/badge.svg)](https://github.com/RoryGlenn/MasterAgent/actions/workflows/simple.yml)
+
+**Ask for an outcome, reuse your project context, and resume work without
+repeating setup.** MasterAgent Simple is the usability-first rebuild: one
+Copilot agent, ordinary Python tools, native Jira/Bitbucket/Confluence
+connections, and a SQLite task journal. It is a standalone Python 3.12+
+package with no runtime dependencies.
+
+**Ubuntu or macOS, from the repository root:**
+
+```bash
+python3 simple/run.py demo
+```
+
+**Windows PowerShell, from the repository root:**
+
+```powershell
+py -3.12 simple/run.py demo
+```
+
+The demo runs locally without credentials. For conversational work, select
+**MasterAgent Simple** in GitHub Copilot. Follow the
+[Simple setup and workflow guide](simple/README.md) to configure connections
+and use your own work items. An optional package installation with
+`python3 -m pip install ./simple` provides the `masteragent` command.
+
+[Simple architecture and supported workflows](docs/masteragent-simple.md) ·
+[Simple agent instructions](simple/AGENTS.md)
+
+## Governed MasterAgent runtime
+
+The rest of this overview describes the existing `master-agent` runtime in
+`src/master_agent/`, selected through the **MasterAgent** profile. Its
+enterprise approval and execution contracts remain in place. The Simple
+runtime is selected separately; both use the permissions available in their
+host and connected accounts.
+
 **Coordinate work across your stack without handing the model a master key.**
 
 **Ask for the outcome. Keep policy, approval, execution, and verification in

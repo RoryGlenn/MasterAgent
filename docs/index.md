@@ -1,5 +1,11 @@
 # MasterAgent documentation
 
+For the usability-first **MasterAgent Simple** entrypoint, start with the
+[Simple quickstart](../simple/README.md) and
+[Simple architecture and workflows](masteragent-simple.md). The reference
+sections below describe the existing governed **MasterAgent** runtime unless
+explicitly labeled otherwise.
+
 MasterAgent coordinates work across many systems without giving a model
 unrestricted access. Start with the outcome you want; use the deeper references
 only when you need to configure, operate, extend, or audit the runtime.
@@ -19,6 +25,8 @@ maintained in several places.
 
 ## Start here
 
+- [MasterAgent Simple](masteragent-simple.md) — the standalone Python tools,
+  remembered project context, task recovery, and Copilot profile.
 - [Project overview](../README.md) — the product promise, capability summary,
   safety model, and shortest paths into the project.
 - [Native-first enterprise purpose](native-first-enterprise.md) — why
