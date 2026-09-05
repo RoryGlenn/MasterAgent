@@ -37,7 +37,7 @@ jobs:
       - name: Enforce Ruff lint and formatting
         run: |
           ruff check .
-          ruff format --check .
+          ruff format --check . --diff
       - name: Enforce strict mypy checks
         run: mypy
       - name: Verify dependency lock, licenses, SBOM, and notices
@@ -388,7 +388,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows test dependency installation failed" }
           & $ruff check .
           if ($LASTEXITCODE -ne 0) { throw "Windows Ruff lint failed" }
-          & $ruff format --check .
+          & $ruff format --check . --diff
           if ($LASTEXITCODE -ne 0) { throw "Windows Ruff format check failed" }
           & $testPython scripts\run_windows_adversarial.py --group hosted
           if ($LASTEXITCODE -ne 0) { throw "hosted-safe Windows adversarial tests failed" }

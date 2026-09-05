@@ -9,7 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .settings import PROVIDERS, configure_project, configure_provider, home_path, initialize, load_config, readiness, save_config
+from .settings import (
+    PROVIDERS,
+    configure_project,
+    configure_provider,
+    home_path,
+    initialize,
+    load_config,
+    readiness,
+    save_config,
+)
 from .state import TaskStore
 from .workflows import Workflows
 

@@ -126,12 +126,12 @@ class Workflows:
                 pr = dict(pr)
                 pr["builds"] = self._step(task_id, f"bitbucket.builds.{index}", lambda pr=pr: self._provider(task_id, "bitbucket", lambda: self.providers.builds(pr)))
                 prs.append(pr)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - Record partial source failures in the review artifact.
                 errors.append(f"PR {index + 1}: {exc}")
         for index, url in enumerate(page_urls[:3]):
             try:
                 pages.append(self._step(task_id, f"confluence.page.{index}", lambda url=url: self._provider(task_id, "confluence", lambda: self.providers.page(url))))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - Record partial source failures in the review artifact.
                 errors.append(f"Page {index + 1}: {exc}")
         result = {"issue": issue, "pull_requests": prs, "pages": pages, "errors": errors, "omitted_prs": max(0, len(pr_urls) - 5), "omitted_pages": max(0, len(page_urls) - 3)}
         lines = [f"# {_label(issue.get('key', inputs['issue']))}: {_label(issue.get('title', ''))}", "", f"Status: {_label(issue.get('status', 'Unknown'))}", f"Source: {_link(issue.get('key', inputs['issue']), issue.get('url'))}", "", "## Work item", "", str(issue.get("description", "No description returned."))[:6000], "", "## Pull requests and builds", ""]

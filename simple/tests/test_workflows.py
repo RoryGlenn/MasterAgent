@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 from masteragent.state import TaskStore
@@ -25,8 +25,8 @@ class FakeProviders:
     page_url = "https://docs.example/pages/123/design"
     issue_url = "https://jira.example/browse/APP-42"
     build_url = "https://builds.example/runs/88"
-    created_pr = {"id": 18, "url": "https://bitbucket.example/projects/APP/repos/backend/pull-requests/18"}
-    created_comment = {"id": "101", "url": "https://jira.example/browse/APP-42?focusedCommentId=101"}
+    created_pr: ClassVar[dict[str, Any]] = {"id": 18, "url": "https://bitbucket.example/projects/APP/repos/backend/pull-requests/18"}
+    created_comment: ClassVar[dict[str, Any]] = {"id": "101", "url": "https://jira.example/browse/APP-42?focusedCommentId=101"}
 
     def __init__(self) -> None:
         self.calls: Counter[str] = Counter()
@@ -250,9 +250,8 @@ class WorkflowTests(unittest.TestCase):
         for name in ("checks.json", "publication.json"):
             with self.subTest(name=name):
                 before = (directory / name).read_bytes()
-                with patch("masteragent.workflows.os.replace", side_effect=OSError("Interrupted replacement")):
-                    with self.assertRaisesRegex(OSError, "Interrupted replacement"):
-                        self.workflows._artifact(task["id"], name, '{"new": "replacement"}')
+                with patch("masteragent.workflows.os.replace", side_effect=OSError("Interrupted replacement")), self.assertRaisesRegex(OSError, "Interrupted replacement"):
+                    self.workflows._artifact(task["id"], name, '{"new": "replacement"}')
                 self.assertEqual((directory / name).read_bytes(), before)
                 self.assertEqual(list(directory.glob(name + "-*")), [])
 

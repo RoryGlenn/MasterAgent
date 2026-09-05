@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import sqlite3
-from typing import Any, Iterator
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Self
 from uuid import uuid4
 
 
@@ -25,7 +26,7 @@ class TaskCancelledError(TaskStateError):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _encode(value: Any) -> str:
@@ -83,10 +84,10 @@ class TaskStore:
         self._claims: dict[tuple[str, str], str] = {}
         self._generations: dict[str, int] = {}
 
-    def __enter__(self) -> TaskStore:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def close(self) -> None:

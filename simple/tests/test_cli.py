@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from masteragent.cli import main
-from masteragent.settings import configure_project, configure_provider, load_config, readiness
+from masteragent.settings import (
+    configure_project,
+    configure_provider,
+    load_config,
+    readiness,
+)
 from masteragent.state import TaskStore
 
 
@@ -100,7 +105,7 @@ class CliTests(unittest.TestCase):
 
     def test_module_entrypoint_and_no_legacy_imports(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        process = subprocess.run([sys.executable, "-c", "import sys; from masteragent.cli import main; main(['--json','demo']); assert not any(k == 'master_agent' or k.startswith('master_agent.') for k in sys.modules)"], cwd=root, capture_output=True, text=True)
+        process = subprocess.run([sys.executable, "-c", "import sys; from masteragent.cli import main; main(['--json','demo']); assert not any(k == 'master_agent' or k.startswith('master_agent.') for k in sys.modules)"], cwd=root, capture_output=True, text=True, check=False)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertTrue(json.loads(process.stdout)["demo"])
 

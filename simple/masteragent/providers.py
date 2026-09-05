@@ -86,9 +86,8 @@ class Providers:
     def _base(self, name: str) -> str:
         base = str(self._settings(name)["url"]).rstrip("/")
         validate_url(base, base)
-        if name == "bitbucket" and self._cloud(name):
-            if base != "https://bitbucket.org":
-                raise ProviderError("Set Bitbucket Cloud URL to https://bitbucket.org.")
+        if name == "bitbucket" and self._cloud(name) and base != "https://bitbucket.org":
+            raise ProviderError("Set Bitbucket Cloud URL to https://bitbucket.org.")
         if name == "confluence" and self._cloud(name) and not urlsplit(base).path:
             base += "/wiki"
         return base

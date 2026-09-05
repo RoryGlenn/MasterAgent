@@ -12,7 +12,12 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
 from masteragent.providers import MAX_PAGES, Providers
-from masteragent.transport import HttpTransport, ProviderError, _ScopedRedirect, validate_url
+from masteragent.transport import (
+    HttpTransport,
+    ProviderError,
+    _ScopedRedirect,
+    validate_url,
+)
 
 
 class FakeTransport:

@@ -8,11 +8,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from master_agent.advisory import (
-    AdvisoryBroker,
     EXPECTED_PROFILE_PATHS,
     PARENT_PROFILE_PATH,
     PLAN_REVIEWER_PROFILE_PATH,
     RESEARCHER_PROFILE_PATH,
+    AdvisoryBroker,
     ProfileValidationError,
     RepositoryFixture,
     load_agent_inventory,

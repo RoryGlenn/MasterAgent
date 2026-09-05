@@ -90,7 +90,7 @@ def _execute(
                     process.stdout.close()
                 if process.stderr is not None:
                     process.stderr.close()
-            raise exc
+            raise
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 

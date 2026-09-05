@@ -53,7 +53,7 @@ class WorkspaceTests(unittest.TestCase):
         (self.repository / "untracked.txt").write_text("keep me\n", encoding="utf-8")
         result = self.prepare()
         self.assertEqual(result["base"], self.initial_head)
-        self.assertEqual(result["path"], str(self.destination))
+        self.assertEqual(result["path"], str(self.destination.resolve()))
         self.assertEqual((self.destination / "source.py").read_text(), "answer = 42\n")
         self.assertFalse((self.destination / "untracked.txt").exists())
         self.assertEqual((self.repository / "source.py").read_text(), "uncommitted\n")

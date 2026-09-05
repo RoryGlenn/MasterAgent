@@ -65,7 +65,7 @@ def load_config(home: Path) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise ValueError(f"Cannot read {path}; restore a valid JSON object.") from exc
     if not isinstance(config, dict) or not isinstance(config.get("projects", {}), dict):
-        raise ValueError("config.json must contain an object with a projects object.")
+        raise ValueError("config.json must contain an object with a projects object.")  # noqa: TRY004 - Invalid parsed JSON value, not a caller argument type.
     return config
 
 

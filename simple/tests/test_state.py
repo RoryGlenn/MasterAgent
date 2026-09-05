@@ -1,12 +1,12 @@
 """Exercise recovery and duplicate prevention using real SQLite connections."""
 
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
-from pathlib import Path
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from masteragent.state import (
     TaskCancelledError,
