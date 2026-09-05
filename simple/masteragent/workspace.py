@@ -6,11 +6,51 @@ import os
 import re
 import signal
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from .settings import PROVIDERS
+
 _OUTPUT_LIMIT = 12_000
 _GIT_TIMEOUT = 60
+_CREDENTIAL_NAMES: ContextVar[frozenset[str]] = ContextVar(
+    "workspace_credential_names", default=frozenset()
+)
+
+
+@contextmanager
+def workspace_credentials(config: dict[str, Any]) -> Iterator[None]:
+    """Scope credential variable names for child filtering without changing env."""
+    names = set(_CREDENTIAL_NAMES.get())
+    for provider in PROVIDERS:
+        section = config.get(provider, {})
+        for field in ("token_env", "username_env"):
+            if name := section.get(field):
+                names.add(name)
+    token = _CREDENTIAL_NAMES.set(frozenset(names))
+    try:
+        yield
+    finally:
+        _CREDENTIAL_NAMES.reset(token)
+
+
+def _child_environment() -> dict[str, str]:
+    names = set(_CREDENTIAL_NAMES.get())
+    names.update(
+        f"{provider.upper()}_{suffix}"
+        for provider in PROVIDERS
+        for suffix in ("TOKEN", "USERNAME")
+    )
+    if os.name == "nt":
+        names = {name.upper() for name in names}
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if (key.upper() if os.name == "nt" else key) not in names
+    }
 
 
 class WorkspaceError(RuntimeError):
@@ -59,6 +99,7 @@ def _execute(
         errors="replace",
         start_new_session=os.name != "nt",
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        env=_child_environment(),
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -71,6 +112,7 @@ def _execute(
                         stderr=subprocess.DEVNULL,
                         timeout=10,
                         check=False,
+                        env=_child_environment(),
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     pass

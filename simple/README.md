@@ -64,6 +64,8 @@ python3 simple/run.py context
 
 Use your actual provider URLs, project key, repository path, and Bitbucket
 repository. For Bitbucket Server, use `PROJECT/repo` as the repository mapping.
+Build-status reads use the repository API available in Server/Data Center 7.14
+and later; see the [Atlassian API changelog](https://developer.atlassian.com/server/bitbucket/reference/api-changelog/).
 A server example is `--deployment server --url https://jira.example.com
 --token-env JIRA_TOKEN`. Confluence is optional; add it
 with `--provider confluence` when the issue review needs its pages. Use
@@ -85,7 +87,11 @@ Python example into every project.
 Project settings, including checks, are captured when a development task is
 created. Set them before `develop`; changing setup does not rewrite existing
 tasks. Git push uses your existing Git credentials or SSH configuration,
-separately from the API token used to create the pull request.
+separately from the API token used to create the pull request. Project checks
+and Git hooks do not inherit configured provider credential variables or the
+standard Jira/Bitbucket/Confluence `TOKEN` and `USERNAME` variables. Other build
+and Git/SSH settings remain available; provider requests keep credentials in
+the parent process. This environment filtering is not an OS sandbox.
 
 **Machine: Ubuntu or macOS development computer**
 

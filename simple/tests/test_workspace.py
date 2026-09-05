@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from masteragent.workspace import (
     WorkspaceError,
@@ -16,6 +17,7 @@ from masteragent.workspace import (
     prepare_worktree,
     publish_branch,
     run_checks,
+    workspace_credentials,
 )
 
 
@@ -47,6 +49,20 @@ class WorkspaceTests(unittest.TestCase):
 
     def prepare(self) -> dict[str, object]:
         return prepare_worktree(self.repository, self.destination, "task/example")
+
+    def test_credential_scope_resets_after_failure(self) -> None:
+        command = [sys.executable, "-c", "import os; print('CUSTOM_API' in os.environ)"]
+        with patch.dict(os.environ, {"CUSTOM_API": "fixture"}):
+            with (
+                self.assertRaisesRegex(RuntimeError, "interrupted"),
+                workspace_credentials({"jira": {"token_env": "CUSTOM_API"}}),
+            ):
+                result = run_checks(self.repository, [command])
+                self.assertEqual(result[0]["output"].strip(), "False")
+                raise RuntimeError("interrupted")
+            result = run_checks(self.repository, [command])
+            self.assertEqual(result[0]["output"].strip(), "True")
+            self.assertEqual(os.environ["CUSTOM_API"], "fixture")
 
     def test_new_worktree_keeps_dirty_original_and_uses_current_head(self) -> None:
         (self.repository / "source.py").write_text("uncommitted\n", encoding="utf-8")

@@ -155,3 +155,16 @@ runner even when the launch command is documented on Linux.
 Evaluate future changes by completed useful tasks, elapsed time, avoidable
 interruptions, repeated configuration questions, and successful recovery after
 failure. Collect simple evidence before adding another framework.
+
+## Repository subprocess environment
+
+Git operations and project checks receive a copy of the environment with
+configured provider credential variable names and standard provider
+`TOKEN`/`USERNAME` names removed. Ordinary build settings and Git/SSH
+configuration remain available. Parent provider clients keep their credentials;
+Simple never clears or rewrites the process environment. This boundary does
+not isolate same-user filesystem access or replace an operating-system sandbox.
+
+Bitbucket Server/Data Center build-status reads require the repository builds
+API introduced in 7.14. The implementation retains this documented endpoint
+rather than switching to the deprecated global commit build-status resource.

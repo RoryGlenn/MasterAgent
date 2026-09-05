@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -156,6 +157,40 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(
             self.git(self.remote, "for-each-ref", "--format=%(refname)"), ""
         )
+
+    def test_checks_and_git_hooks_do_not_inherit_provider_credentials(self) -> None:
+        credentials = {}
+        for provider in ("jira", "bitbucket", "confluence"):
+            section = self.config.setdefault(provider, {"url": "https://work.example"})
+            for suffix, field in (("TOKEN", "token_env"), ("USERNAME", "username_env")):
+                name = f"CUSTOM_{provider.upper()}_{suffix}"
+                section[field] = name
+                credentials[name] = "fixture-provider-value"
+                credentials[f"{provider.upper()}_{suffix}"] = "fixture-default-value"
+        hooks = self.repository / ".git" / "hooks"
+        hook_text = "#!/bin/sh\n"
+        for name in credentials:
+            hook_text += f'if [ -n "${{{name}+x}}" ]; then exit 9; fi\n'
+        hook_text += 'test "$BUILD_SETTING" = keep || exit 8\ntouch "$0.ran"\n'
+        for name in ("post-checkout", "pre-push"):
+            hook = hooks / name
+            hook.write_text(hook_text, encoding="utf-8")
+            hook.chmod(0o755)
+        script = (
+            f"import os; assert not set({list(credentials)!r}) & set(os.environ); "
+            "assert os.environ['BUILD_SETTING'] == 'keep'"
+        )
+        self.config["projects"]["APP"]["checks"] = [[sys.executable, "-c", script]]
+        with patch.dict(os.environ, {**credentials, "BUILD_SETTING": "keep"}):
+            task = self.ready_task()
+            result = self.publish(task)
+            self.assertEqual(result["status"], "completed")
+            for name, value in credentials.items():
+                self.assertEqual(os.environ[name], value)
+        for name in ("post-checkout", "pre-push"):
+            self.assertTrue((hooks / f"{name}.ran").is_file())
+        self.assertEqual(self.providers.calls["create_pull_request"], 1)
+        self.assertEqual(self.providers.calls["comment_issue"], 1)
 
     def test_review_collects_sources_and_resumes_only_failed_reads(self) -> None:
         self.providers.failures["page"] = RuntimeError(

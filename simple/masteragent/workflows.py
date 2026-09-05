@@ -13,7 +13,13 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .state import TaskStore
-from .workspace import inspect_worktree, prepare_worktree, publish_branch, run_checks
+from .workspace import (
+    inspect_worktree,
+    prepare_worktree,
+    publish_branch,
+    run_checks,
+    workspace_credentials,
+)
 
 
 class ProviderTools(Protocol):
@@ -90,7 +96,7 @@ class Workflows:
             return step["result"]
         self.progress(f"Running {name}.")
         try:
-            result = action()
+            result = self._workspace(action)
         except Exception as exc:
             self.store.fail_step(
                 task_id,
@@ -101,6 +107,10 @@ class Workflows:
             raise
         self.store.complete_step(task_id, name, result)
         return result
+
+    def _workspace(self, action: Callable[[], Any]) -> Any:
+        with workspace_credentials(self.config):
+            return action()
 
     def _artifact(self, task_id: str, name: str, text: str) -> str:
         directory = self.home / "outputs" / task_id
@@ -365,13 +375,13 @@ class Workflows:
             raise WorkflowError(
                 "No checks configured. Add an explicit --check-json command with setup, then create a development task; checks are snapshotted per task."
             )
-        before = inspect_worktree(Path(workspace["path"]))
+        before = self._workspace(lambda: inspect_worktree(Path(workspace["path"])))
         if before["branch"] != workspace["branch"]:
             raise WorkflowError(
                 "The worktree is on another branch. Switch back to this task's branch before running checks."
             )
-        results = run_checks(Path(workspace["path"]), commands)
-        after = inspect_worktree(Path(workspace["path"]))
+        results = self._workspace(lambda: run_checks(Path(workspace["path"]), commands))
+        after = self._workspace(lambda: inspect_worktree(Path(workspace["path"])))
         evidence = {
             "head": before["head"],
             "clean": not before["dirty"] and not after["dirty"],
@@ -462,7 +472,7 @@ class Workflows:
                 if not check_path.exists():
                     raise WorkflowError(f"Run checks {task_id} before publishing.")
                 evidence = json.loads(check_path.read_text(encoding="utf-8"))
-                current = inspect_worktree(path)
+                current = self._workspace(lambda: inspect_worktree(path))
                 if current["branch"] != workspace["branch"]:
                     raise WorkflowError(
                         "The worktree is on another branch. Switch back to this task's branch before publishing."
